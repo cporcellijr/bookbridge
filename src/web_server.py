@@ -63,6 +63,7 @@ from src.utils.logging_utils import get_persistent_condition_logger
 from src.services.diagnostics import setup_diagnostics_logging
 from src.services.aligned_shelf import defer_shelf_add, shelf_add_waits_for_alignment
 from src.services.job_queue_view import build_job_queue_view
+from src.services.transcription_preflight import pair_key as transcription_preflight_pair_key
 from src.services import whats_new
 from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server, signal_manifest_rebuild
@@ -7691,6 +7692,13 @@ def job_queue_page():
         *database_service.get_latest_jobs(kind=JOB_KIND_ALIGNMENT).values(),
         *database_service.get_latest_jobs(kind=JOB_KIND_READALONG).values(),
     ]
+    evidence = database_service.get_transcription_preflights(
+        user_id, [book.abs_id for book in books],
+    ) if user_id is not None else {}
+    for book in books:
+        row = evidence.get(book.abs_id)
+        if row and row["pairing_key"] != transcription_preflight_pair_key(book):
+            del evidence[book.abs_id]
     alignment_queue = database_service.get_pending_alignment_queue()
     alignment_movable_ids = {
         book.abs_id for book in books
@@ -7700,6 +7708,7 @@ def job_queue_page():
         _load_match_queue(), batches, books, jobs, active_readalong,
         alignment_queue=alignment_queue,
         alignment_movable_ids=alignment_movable_ids,
+        preflights=evidence,
     )
     return render_template(ui_template('job_queue.html'), queue_view=snapshot)
 
@@ -7725,6 +7734,29 @@ def job_queue_reorder():
         elif result == 'ambiguous':
             flash("That book couldn't be identified; refresh and try again.", "warning")
     return redirect(url_for('job_queue_page'))
+
+
+def job_queue_preflight_ack():
+    """Acknowledge current per-reader evidence; never override match refusal."""
+    user = current_user()
+    if user is None:
+        abort(401)
+    abs_id = request.form.get("abs_id", "")
+    identity = request.form.get("identity", "")
+    book = next(
+        (b for b in database_service.get_all_books(user_id=user.id) if b.abs_id == abs_id),
+        None,
+    )
+    if book is None:
+        abort(404)
+    evidence = database_service.get_transcription_preflights(user.id, [abs_id]).get(abs_id)
+    if (not evidence or evidence["pairing_key"] != transcription_preflight_pair_key(book)
+            or evidence["identity"] != identity):
+        abort(409)
+    if not database_service.acknowledge_transcription_preflight(user.id, abs_id, identity):
+        abort(409)
+    flash("Pre-flight advisory acknowledged. The final content-match guard remains active.", "success")
+    return redirect(url_for("job_queue_page"))
 
 
 def shelfmark() -> object:
@@ -16555,6 +16587,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/books/<abs_id>/current-chapter', 'api_current_audio_chapter', api_current_audio_chapter, methods=['GET'])
     app.add_url_rule('/job-queue', 'job_queue_page', job_queue_page, methods=['GET'])
     app.add_url_rule('/job-queue/reorder', 'job_queue_reorder', job_queue_reorder, methods=['POST'])
+    app.add_url_rule('/job-queue/preflight/ack', 'job_queue_preflight_ack', job_queue_preflight_ack, methods=['POST'])
     app.add_url_rule('/whats-new', 'whats_new_page', whats_new_page, methods=['GET'])
     app.add_url_rule('/whats-new/dismiss', 'whats_new_dismiss', whats_new_dismiss, methods=['POST'])
     app.add_url_rule('/shelfmark', 'shelfmark', shelfmark)

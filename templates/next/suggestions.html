@@ -18,6 +18,12 @@
         {% endif %}
     </div>
 
+    <p class="subtitle">
+        {{ _('If an audiobook needs Whisper transcription, its uncalibrated EPUB/audio measurements are shown on') }}
+        <a href="{{ url_for('job_queue_page') }}">{{ _('Processing') }}</a>.
+        {{ _('Review the edition before a long run; no unsupported mismatch threshold blocks unattended work.') }}
+    </p>
+
     {% if discover_process_summary %}
     <div class="discover-process-summary" role="status">
         {{ _('Adding %(added)s to your Library and %(sent)s to Processing in the background', added=discover_process_summary.added, sent=discover_process_summary.sent) }}

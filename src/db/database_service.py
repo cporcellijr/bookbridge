@@ -46,6 +46,7 @@ from .models import (
     User,
     UserCredential,
     UserBook,
+    TranscriptionPreflight,
     UserBookFusionLink,
     UserBookOrbitLink,
     Base,
@@ -2661,6 +2662,82 @@ class DatabaseService:
             count = query.count()
             query.delete()
             return count
+
+    # Pre-transcription length advisory (never changes Job.last_error or status).
+    def save_transcription_preflight(
+        self, abs_id: str, user_id: int, identity: str,
+        pairing_key: str, evidence: dict,
+    ) -> bool:
+        """Upsert evidence for one claimed book, resetting ack if its pair changed."""
+        import json
+        with self.get_session() as session:
+            claimed = session.query(UserBook.id).filter(
+                UserBook.user_id == user_id, UserBook.abs_id == abs_id
+            ).first()
+            if not claimed:
+                return False
+            row = session.get(TranscriptionPreflight, (user_id, abs_id))
+            if row is None:
+                row = TranscriptionPreflight(user_id=user_id, abs_id=abs_id)
+                session.add(row)
+            if row.identity != identity:
+                row.acknowledged_at = None
+            row.identity = identity
+            row.pairing_key = pairing_key
+            row.evidence_json = json.dumps(evidence, allow_nan=False)
+            row.updated_at = time.time()
+            return True
+
+    def get_transcription_preflights(
+        self, user_id: int, abs_ids: list[str],
+    ) -> dict[str, dict]:
+        """Return only the user's claimed pairing evidence (no other reader's rows)."""
+        import json
+        if user_id is None or not abs_ids:
+            return {}
+        with self.get_session() as session:
+            rows = (
+                session.query(TranscriptionPreflight)
+                .join(UserBook, (UserBook.user_id == TranscriptionPreflight.user_id)
+                      & (UserBook.abs_id == TranscriptionPreflight.abs_id))
+                .filter(TranscriptionPreflight.user_id == user_id,
+                        TranscriptionPreflight.abs_id.in_(abs_ids))
+                .all()
+            )
+            return {
+                row.abs_id: {
+                    **json.loads(row.evidence_json),
+                    "identity": row.identity,
+                    "pairing_key": row.pairing_key,
+                    "acknowledged": row.acknowledged_at is not None,
+                }
+                for row in rows
+            }
+
+    def acknowledge_transcription_preflight(
+        self, user_id: int, abs_id: str, identity: str,
+    ) -> bool:
+        """Acknowledge only current evidence belonging to this user and pair."""
+        if user_id is None or not identity:
+            return False
+        with self.get_session() as session:
+            row = (
+                session.query(TranscriptionPreflight)
+                .join(UserBook, (UserBook.user_id == TranscriptionPreflight.user_id)
+                      & (UserBook.abs_id == TranscriptionPreflight.abs_id))
+                .filter(TranscriptionPreflight.user_id == user_id,
+                        TranscriptionPreflight.abs_id == abs_id,
+                        TranscriptionPreflight.identity == identity)
+                .first()
+            )
+            if row is None:
+                return False
+            from src.services.transcription_preflight import pair_key
+            book = session.get(Book, abs_id)
+            if book is None or row.pairing_key != pair_key(book):
+                return False
+            row.acknowledged_at = time.time()
+            return True
 
     # Job operations
     def get_latest_job(self, abs_id: str, kind: Optional[str] = None) -> Optional[Job]:
