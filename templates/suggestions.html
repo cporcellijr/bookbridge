@@ -173,7 +173,6 @@
     .ebook-grid-empty.hidden { display: none; }
     .source-badge.linked { background: rgba(54,211,153,0.18); color: #6ee7b7; text-transform: none; }
     .ebook-card.audio-only-card, .sugg-row.ghost-row { border-style: dashed; background: transparent; }
-    .readalong-option { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 13px; color: rgba(255,255,255,0.75); cursor: pointer; }
     .queue-action-note { font-size: 12px; color: var(--muted); }
     .reader-docs-wrap { margin-top: 20px; }
     /* Forge staging modal (shared .modal-overlay/.modal visuals, page-toggled) */
@@ -395,10 +394,6 @@
                             <div id="ebookCardGrid" class="ebook-grid"></div>
                         </div>
                         <p id="ebookGridEmpty" class="ebook-grid-empty hidden"></p>
-                        <label class="readalong-option" id="readalongEpubOption" for="readalongEpubCheckbox" hidden>
-                            <input type="checkbox" id="readalongEpubCheckbox" name="readalong_epub_requested" value="true" disabled>
-                            {{ _('Also generate a read-along EPUB for BookOrbit once this book finishes forging') }}
-                        </label>
                         <button type="submit" class="btn btn-success w-100" id="addToQueueBtn" disabled>➕ {{ _('Add to Queue') }}</button>
                     </form>
                     <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
@@ -754,16 +749,6 @@
         document.getElementById('addToQueueBtn').disabled = !(hasEbook || hasStoryteller || (audioOnly && hasAudio));
     }
 
-    // The per-item read-along EPUB needs a BookOrbit audiobook to deliver into; a disabled
-    // box never submits, so an ineligible selection can't carry the flag.
-    function updateReadalongOption(audioSource) {
-        const option = document.getElementById('readalongEpubOption');
-        const checkbox = document.getElementById('readalongEpubCheckbox');
-        const on = audioSource === 'BookOrbit';
-        option.hidden = !on;
-        checkbox.disabled = !on;
-        if (!on) checkbox.checked = false;
-    }
 
     function clearSelectedStorytellerCards() {
         document.querySelectorAll('#storytellerCardGrid .st-card').forEach((card) => card.classList.remove('selected'));
@@ -1006,7 +991,6 @@
         selectedSuggestionId = null;
         selectedSearchIndex = null;
         setAudioOnly(false);
-        updateReadalongOption('');
         document.querySelectorAll('.sugg-row.reviewing').forEach((row) => row.classList.remove('reviewing'));
         document.getElementById('selectionDetails').classList.add('hidden');
         document.getElementById('selectionPlaceholder').style.display = 'block';
@@ -1056,7 +1040,6 @@
         document.getElementById('selectedAuthor').textContent = suggestion.audio_author || suggestion.abs_author || '';
         document.getElementById('selectedCover').src = suggestion.audio_cover_url || suggestion.cover_url || '';
         renderStorytellerOptions(suggestion);
-        updateReadalongOption(suggestion.audio_source || '');
 
         const matches = [...suggestion.matches].sort((a, b) => (b.score || 0) - (a.score || 0));
         const grid = document.getElementById('ebookCardGrid');
@@ -1109,7 +1092,6 @@
         document.getElementById('selectedTitle').textContent = book ? book.title : T.ebookOnlyRow;
         document.getElementById('selectedAuthor').textContent = book ? book.authors : T.ebookOnlyRowSub;
         document.getElementById('selectedCover').src = book ? book.cover_url : '';
-        updateReadalongOption(source);
 
         const { grid: stGrid, emptyLabel: stEmpty } = resetStorytellerGrid();
         if (!view.storyteller_enabled) {
