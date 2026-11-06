@@ -81,6 +81,17 @@ class JobQueueSnapshotTests(unittest.TestCase):
         data = build_job_queue_view([], [], [book], [stranger_job], {"private"})
         self.assertNotIn("private", str(data))
 
+    def test_completed_alignment_row_has_no_preflight(self):
+        book = Book(abs_id="completed", abs_title="Completed Book", status="active")
+        job = Job(abs_id="completed", last_attempt=time.time(), kind="alignment", progress=1.0)
+        preflights = {"completed": {"assessment": "uncalibrated", "epub_tokens_per_audio_hour": 7000}}
+        data = build_job_queue_view([], [], [book], [job], set(), preflights=preflights)
+        recent = data.get("recent", [])
+        self.assertEqual(len(recent), 1)
+        entry = recent[0]
+        self.assertEqual(entry["title"], "Completed Book")
+        self.assertNotIn("preflight", entry)
+
 
 class JobQueueRouteTests(unittest.TestCase):
     def setUp(self):
@@ -186,7 +197,7 @@ class JobQueueRouteTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             html_page = response.get_data(as_text=True)
             self.assertIn("EPUB/audio pre-flight", html_page)
-            self.assertIn("Continue anyway", html_page)
+            self.assertIn(">Dismiss</button>", html_page)
             self.assertIn("EPUB tokens per audio hour", html_page)
             self.assertIn("not a mismatch verdict", html_page)
             self.assertNotIn("Private pairing", html_page)
@@ -210,7 +221,7 @@ class JobQueueRouteTests(unittest.TestCase):
         )
         page = self.client.get("/job-queue").get_data(as_text=True)
         self.assertIn("Advisory acknowledged", page)
-        self.assertNotIn("Continue anyway", page)
+        self.assertNotIn(">Dismiss</button>", page)
         self.assertIsNone(self.db.get_latest_job(a.abs_id).last_error)
         self.assertEqual(self.db.get_latest_job(a.abs_id).progress, .4)
         self.db.set_user_credential(self.alice.id, "UI_MODE", "new")
@@ -253,8 +264,76 @@ class JobQueueRouteTests(unittest.TestCase):
             markup = page.get_data(as_text=True)
             self.assertIn("Unspaced script", markup)
             self.assertIn("inconclusive", markup.lower())
-            self.assertIn("Continue anyway", markup)
+            self.assertIn(">Dismiss</button>", markup)
             self.assertNotIn("EPUB tokens per audio hour</span>", markup)
+
+    def test_library_comparison_shown_with_sufficient_baseline_and_hidden_with_fewer(self):
+        from src.services.transcription_preflight import evidence_identity, pair_key
+        rates = [7000, 7200, 7400, 7600, 8000]
+        for i, rate in enumerate(rates, 1):
+            abs_id = f"lib{i}"
+            book = Book(
+                abs_id=abs_id,
+                abs_title=f"Active {i}",
+                status="active",
+                user_id=self.alice.id,
+                audio_source="ABS",
+                audio_source_id=abs_id,
+                ebook_filename="book.epub",
+                audio_duration=3600,
+            )
+            self.db.save_book(book)
+            evidence = {
+                "assessment": "uncalibrated",
+                "token_count": rate,
+                "duration_seconds": 3600.0,
+                "epub_tokens_per_audio_hour": rate,
+            }
+            identity = evidence_identity(book, "dummy")
+            self.db.save_transcription_preflight(abs_id, self.alice.id, identity, pair_key(book), evidence)
+
+        proc_abs_id = "proc"
+        proc_book = Book(
+            abs_id=proc_abs_id,
+            abs_title="Processing Book",
+            status="processing",
+            user_id=self.alice.id,
+            audio_source="ABS",
+            audio_source_id=proc_abs_id,
+            ebook_filename="book.epub",
+            audio_duration=3600,
+        )
+        self.db.save_book(proc_book)
+        self.db.save_job(Job(abs_id=proc_abs_id, last_attempt=time.time(), progress=0.4))
+        evidence_proc = {
+            "assessment": "uncalibrated",
+            "token_count": 14900,
+            "duration_seconds": 3600.0,
+            "epub_tokens_per_audio_hour": 14900,
+        }
+        identity_proc = evidence_identity(proc_book, "dummy")
+        self.db.save_transcription_preflight(proc_abs_id, self.alice.id, identity_proc, pair_key(proc_book), evidence_proc)
+
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        for interface in ("classic", "new"):
+            self.db.set_user_credential(self.alice.id, "UI_MODE", interface)
+            page = self.client.get("/job-queue")
+            self.assertEqual(page.status_code, 200)
+            markup = html.unescape(page.get_data(as_text=True))
+            self.assertIn("Processing Book", markup)
+            self.assertIn("Not calibrated", markup)
+            self.assertIn("2.01× your library median", markup)
+            self.assertIn("7,000–8,000 across 5 books", markup)
+
+        # Reduce baseline below threshold
+        book_to_change = self.db.get_book("lib1")
+        book_to_change.status = "pending"
+        self.db.save_book(book_to_change)
+
+        self.db.set_user_credential(self.alice.id, "UI_MODE", "classic")
+        page = self.client.get("/job-queue")
+        markup = html.unescape(page.get_data(as_text=True))
+        self.assertNotIn("your library median", markup)
 
     def test_running_job_queue_page_enables_auto_refresh(self):
         import src.web_server as ws

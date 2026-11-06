@@ -108,15 +108,16 @@
                     <tr>
                         <td colspan="6">
                             <aside class="job-queue-preflight" aria-label="{{ _('EPUB/audio pre-flight') }}">
-                                <strong>{{ _('EPUB/audio pre-flight') }}: {{ job.preflight.assessment|replace('_', ' ')|capitalize }}</strong>
+                                <strong>{{ _('EPUB/audio pre-flight') }}: {{ _('Not calibrated') if job.preflight.assessment == 'uncalibrated' else _('Inconclusive') }}</strong>
                                 <span>{{ '{:,}'.format(job.preflight.token_count) }} {{ _('EPUB word tokens') }}</span>
                                 {% if job.preflight.duration_seconds is not none %}
                                 <span>{{ (job.preflight.duration_seconds / 3600)|round(2) }} {{ _('audio hours') }}</span>
                                 {% if job.preflight.epub_tokens_per_audio_hour is not none %}<span>{{ '{:,.1f}'.format(job.preflight.epub_tokens_per_audio_hour) }} {{ _('EPUB tokens per audio hour') }}</span>{% endif %}
+                                {% if job.preflight.library_ratio is defined %}<span>{{ _('%(ratio)s× your library median', ratio=job.preflight.library_ratio) }} · {{ ngettext('your library: %(low)s–%(high)s across %(num)s book that passed the content check', 'your library: %(low)s–%(high)s across %(num)s books that passed the content check', job.preflight.library_count, low='{:,.0f}'.format(job.preflight.library_min), high='{:,.0f}'.format(job.preflight.library_max), num=job.preflight.library_count) }}</span>{% endif %}
                                 {% else %}
                                 <span>{{ _('Audio duration unavailable') }}</span>
                                 {% endif %}
-                                <small>{{ job.preflight.explanation }}</small>
+                                <small>{{ _('EPUB words per audio hour are not calibrated against transcript word rates, and catalog durations can be wrong. Check the ebook edition or omnibus pairing; this is not a mismatch verdict.') if job.preflight.assessment == 'uncalibrated' else _('The word rate cannot be measured for this book: the EPUB text is empty or unspaced, or the audio duration is missing.') }}</small>
                                 {% if job.preflight.acknowledged %}
                                 <small>{{ _('Advisory acknowledged; final content-match checks still apply.') }}</small>
                                 {% else %}
@@ -124,9 +125,9 @@
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="abs_id" value="{{ job.book_id }}">
                                     <input type="hidden" name="identity" value="{{ job.preflight.identity }}">
-                                    <button type="submit">{{ _('Continue anyway') }}</button>
+                                    <button type="submit">{{ _('Dismiss') }}</button>
                                 </form>
-                                <small>{{ _('Work continues automatically. This only acknowledges the advisory; it cannot override a content mismatch.') }}</small>
+                                <small>{{ _('Work continues automatically. Dismissing only hides this advisory; it cannot override a content mismatch.') }}</small>
                                 {% endif %}
                             </aside>
                         </td>
