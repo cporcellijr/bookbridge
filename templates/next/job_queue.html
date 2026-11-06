@@ -75,30 +75,6 @@
                         <td>
                             <span class="job-queue-status job-queue-status-{{ job.status|replace(' ', '-') }}">{{ job.status|replace('_', ' ')|title }}</span>
                             {% if job.detail %}<small class="job-queue-detail">{{ job.detail }}</small>{% endif %}
-                            {% if job.preflight %}
-                            <aside class="job-queue-preflight" aria-label="{{ _('EPUB/audio pre-flight') }}">
-                                <strong>{{ _('EPUB/audio pre-flight') }}: {{ job.preflight.assessment|replace('_', ' ')|capitalize }}</strong>
-                                <span>{{ '{:,}'.format(job.preflight.token_count) }} {{ _('EPUB word tokens') }}</span>
-                                {% if job.preflight.duration_seconds is not none %}
-                                <span>{{ (job.preflight.duration_seconds / 3600)|round(2) }} {{ _('audio hours') }}</span>
-                                {% if job.preflight.epub_tokens_per_audio_hour is not none %}<span>{{ '{:,.1f}'.format(job.preflight.epub_tokens_per_audio_hour) }} {{ _('EPUB tokens per audio hour') }}</span>{% endif %}
-                                {% else %}
-                                <span>{{ _('Audio duration unavailable') }}</span>
-                                {% endif %}
-                                <small>{{ job.preflight.explanation }}</small>
-                                {% if job.preflight.acknowledged %}
-                                <small>{{ _('Advisory acknowledged; final content-match checks still apply.') }}</small>
-                                {% else %}
-                                <form method="POST" action="{{ url_for('job_queue_preflight_ack') }}">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <input type="hidden" name="abs_id" value="{{ job.book_id }}">
-                                    <input type="hidden" name="identity" value="{{ job.preflight.identity }}">
-                                    <button type="submit">{{ _('Continue anyway') }}</button>
-                                </form>
-                                <small>{{ _('Work continues automatically. This only acknowledges the advisory; it cannot override a content mismatch.') }}</small>
-                                {% endif %}
-                            </aside>
-                            {% endif %}
                             {% if job.timestamp %}<small class="job-queue-detail">{{ _('Last attempt %(ago)s ago', ago=job.timestamp|format_time_ago) }}</small>{% endif %}
                         </td>
                         <td>
@@ -128,6 +104,34 @@
                         {% else %}&mdash;{% endif %}
                         </td>
                     </tr>
+                    {% if job.preflight %}
+                    <tr>
+                        <td colspan="6">
+                            <aside class="job-queue-preflight" aria-label="{{ _('EPUB/audio pre-flight') }}">
+                                <strong>{{ _('EPUB/audio pre-flight') }}: {{ job.preflight.assessment|replace('_', ' ')|capitalize }}</strong>
+                                <span>{{ '{:,}'.format(job.preflight.token_count) }} {{ _('EPUB word tokens') }}</span>
+                                {% if job.preflight.duration_seconds is not none %}
+                                <span>{{ (job.preflight.duration_seconds / 3600)|round(2) }} {{ _('audio hours') }}</span>
+                                {% if job.preflight.epub_tokens_per_audio_hour is not none %}<span>{{ '{:,.1f}'.format(job.preflight.epub_tokens_per_audio_hour) }} {{ _('EPUB tokens per audio hour') }}</span>{% endif %}
+                                {% else %}
+                                <span>{{ _('Audio duration unavailable') }}</span>
+                                {% endif %}
+                                <small>{{ job.preflight.explanation }}</small>
+                                {% if job.preflight.acknowledged %}
+                                <small>{{ _('Advisory acknowledged; final content-match checks still apply.') }}</small>
+                                {% else %}
+                                <form method="POST" action="{{ url_for('job_queue_preflight_ack') }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <input type="hidden" name="abs_id" value="{{ job.book_id }}">
+                                    <input type="hidden" name="identity" value="{{ job.preflight.identity }}">
+                                    <button type="submit">{{ _('Continue anyway') }}</button>
+                                </form>
+                                <small>{{ _('Work continues automatically. This only acknowledges the advisory; it cannot override a content mismatch.') }}</small>
+                                {% endif %}
+                            </aside>
+                        </td>
+                    </tr>
+                    {% endif %}
                 {% endfor %}
                 </tbody>
             </table>

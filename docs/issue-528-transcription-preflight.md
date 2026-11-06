@@ -122,3 +122,10 @@ Duration, race, deletion and unlink regressions were checked with the relevant
 fix reverted; fixed source was restored afterward. Fresh SQLite base-to-head
 reached `b7e528a0c1d2` with all seven expected columns. Later local deployment
 evidence belongs in `BRANCH_STATUS.md`; this is the portable review record.
+
+Live Chromium inspection also found the advisory shrinking the book-title column
+and breaking title words at 1024px. The advisory now occupies a separate row below
+its job, with its width limited to the visible screen on phones. The actual old
+layout fails the saved browser word-wrap check; the proposed layout keeps title
+words intact and the advisory visible at 1024px and 390px. The updated dev suite
+passed **6,900 tests, 12 skipped, 1,094 subtests** (345.81 seconds).
