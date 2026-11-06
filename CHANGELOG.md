@@ -13,7 +13,8 @@ All notable changes to BookBridge will be documented in this file.
   EPUB tokens per audio hour, and an explanation. Find the advisory on **Processing** in
   Classic or New, with a **Continue anyway** acknowledgement linked to that reader and
   exact pairing. It never pauses unattended work, changes job failure status, or bypasses
-  the final content-match guard. As the reporter's reference rates counted **transcript**
+  the final content-match guard. Measurements appear below their job, keeping book
+  titles readable on small screens. As the reporter's reference rates counted **transcript**
   words, not EPUB tokens, measurements are explicitly **uncalibrated** (or inconclusive
   when the input is unreliable), not automatic mismatch verdicts. No threshold is enabled.
   Regression cases cover both transcription paths, invalid duration, user isolation,
