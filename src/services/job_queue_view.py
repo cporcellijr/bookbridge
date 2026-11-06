@@ -139,7 +139,7 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
               and (alignment.last_attempt or 0) >= now - 7 * 86400):
             recent.append(_entry(
                 title, "Forge / Alignment", "completed", detail="Alignment completed",
-                percent=alignment_pct, timestamp=alignment.last_attempt, book_id=abs_id,
+                percent=alignment_pct, timestamp=alignment.last_attempt,
             ))
 
         readalong = latest.get((abs_id, "readalong"))

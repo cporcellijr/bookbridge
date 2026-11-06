@@ -24,7 +24,7 @@ def test_trimmed_versus_omnibus_are_measured_not_falsely_classified():
     assert (trimmed["epub_tokens_per_audio_hour"],
             omnibus["epub_tokens_per_audio_hour"]) == (7500.0, 14900.0)
     assert trimmed["assessment"] == omnibus["assessment"] == "uncalibrated"
-    assert "not a mismatch verdict" in omnibus["explanation"]
+    assert "explanation" not in omnibus
 
 
 def test_plausible_pair_and_unicode_tokenization_without_chapter_heuristics():
@@ -326,3 +326,64 @@ def test_acknowledge_transcription_preflight_identity_race(tmp_path):
             Query.first = original_first
     finally:
         db.db_manager.close()
+
+
+def test_add_library_comparison_baseline_and_outlier():
+    from src.services.transcription_preflight import add_library_comparison
+    evidence = {
+        "id1": {"epub_tokens_per_audio_hour": 7000},
+        "id2": {"epub_tokens_per_audio_hour": 7200},
+        "id3": {"epub_tokens_per_audio_hour": 7400},
+        "id4": {"epub_tokens_per_audio_hour": 7600},
+        "id5": {"epub_tokens_per_audio_hour": 8000},
+        "id6": {"epub_tokens_per_audio_hour": 14900},
+    }
+    passed_ids = {"id1", "id2", "id3", "id4", "id5"}
+    add_library_comparison(evidence, passed_ids)
+    row = evidence["id6"]
+    assert row["library_ratio"] == 2.01
+    assert row["library_min"] == 7000
+    assert row["library_max"] == 8000
+    assert row["library_count"] == 5
+    # also verify a passed row gets ratio
+    assert evidence["id3"]["library_ratio"] == round(7400 / 7400, 2)
+    # baseline median is 7400
+    assert evidence["id1"]["library_min"] == 7000
+
+
+def test_add_library_comparison_insufficient_baseline():
+    from src.services.transcription_preflight import add_library_comparison
+    evidence = {
+        "id1": {"epub_tokens_per_audio_hour": 7000},
+        "id2": {"epub_tokens_per_audio_hour": 7200},
+        "id3": {"epub_tokens_per_audio_hour": 7400},
+        "id4": {"epub_tokens_per_audio_hour": 7600},
+    }
+    passed_ids = {"id1", "id2", "id3", "id4"}
+    add_library_comparison(evidence, passed_ids)
+    for row in evidence.values():
+        assert "library_ratio" not in row
+        assert "library_min" not in row
+
+
+def test_add_library_comparison_rate_none():
+    from src.services.transcription_preflight import add_library_comparison
+    evidence = {
+        "passed1": {"epub_tokens_per_audio_hour": 7000},
+        "passed2": {"epub_tokens_per_audio_hour": 7200},
+        "passed3": {"epub_tokens_per_audio_hour": 7400},
+        "passed4": {"epub_tokens_per_audio_hour": 7600},
+        "passed5": {"epub_tokens_per_audio_hour": 8000},
+        "none_row": {"epub_tokens_per_audio_hour": None},
+        "other": {"epub_tokens_per_audio_hour": 10000},
+    }
+    passed_ids = {"passed1", "passed2", "passed3", "passed4", "passed5", "none_row"}
+    add_library_comparison(evidence, passed_ids)
+    # none_row should have no library keys
+    assert "library_ratio" not in evidence["none_row"]
+    # baseline should be 5, not counting none_row
+    assert evidence["other"]["library_count"] == 5
+    assert evidence["other"]["library_min"] == 7000
+    assert evidence["other"]["library_max"] == 8000
+    # median 7400
+    assert evidence["other"]["library_ratio"] == round(10000 / 7400, 2)

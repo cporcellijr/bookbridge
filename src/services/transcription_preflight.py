@@ -8,9 +8,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import statistics
 from typing import Any
 
 from src.services.map_quality import _letter_token_count, _mostly_unspaced_script, _word_tokens
+
+# Fewer books than this give no stable median to compare against.
+LIBRARY_BASELINE_MINIMUM = 5
 
 
 def pair_key(book: Any) -> str:
@@ -79,33 +83,23 @@ def evaluate_preflight(ebook_text: str, duration_seconds: Any) -> dict:
             "duration_seconds": duration,
             "epub_tokens_per_audio_hour": None,
             "assessment": "inconclusive",
-            "explanation": (
-                "EPUB text is empty or uses predominantly unspaced-script tokens; "
-                "the word-rate measure is not reliable for this text."
-            ),
         }
     if duration is None:
         return {
             "token_count": count, "duration_seconds": None,
             "epub_tokens_per_audio_hour": None, "assessment": "inconclusive",
-            "explanation": "Audiobook duration is missing or unreliable; length cannot be compared.",
         }
     rate = count * 3600.0 / duration
     if not math.isfinite(rate):
         return {
             "token_count": count, "duration_seconds": None,
             "epub_tokens_per_audio_hour": None, "assessment": "inconclusive",
-            "explanation": "Duration or length ratio cannot be measured reliably.",
         }
     return {
         "token_count": count,
         "duration_seconds": round(duration, 2),
         "epub_tokens_per_audio_hour": round(rate, 1),
         "assessment": "uncalibrated",
-        "explanation": (
-            "EPUB tokens per audio hour are not calibrated to transcript word rates. "
-            "Catalog audio duration may also be inaccurate. Review the ebook edition/omnibus pairing; this is not a mismatch verdict."
-        ),
     }
 
 
@@ -122,17 +116,45 @@ def evidence_identity(book: Any, ebook_text: str, item_details: dict | None = No
     return digest.hexdigest()
 
 
+def add_library_comparison(evidence: dict[str, dict], passed_ids: set[str]) -> None:
+    """Compare each row's rate with this reader's books that passed the content-match guard.
+
+    Facts only (ratio to the median, range, count); never a mismatch verdict.
+    """
+    baseline = []
+    for abs_id, row in evidence.items():
+        if abs_id in passed_ids:
+            rate = row.get("epub_tokens_per_audio_hour")
+            if isinstance(rate, (int, float)) and rate > 0:
+                baseline.append(rate)
+    if len(baseline) < LIBRARY_BASELINE_MINIMUM:
+        return
+    median_rate = statistics.median(baseline)
+    min_rate = min(baseline)
+    max_rate = max(baseline)
+    count = len(baseline)
+    for row in evidence.values():
+        rate = row.get("epub_tokens_per_audio_hour")
+        if isinstance(rate, (int, float)) and rate > 0:
+            row["library_ratio"] = round(rate / median_rate, 2)
+            row["library_min"] = min_rate
+            row["library_max"] = max_rate
+            row["library_count"] = count
+
+
 def record_preflight(database_service: Any, book: Any, ebook_text: str,
                      item_details: dict | None = None) -> dict:
     """Compute evidence for every reader who has claimed the shared pairing."""
     evidence = evaluate_preflight(ebook_text, metadata_duration(book, item_details))
     # The book/transcript is catalog-wide, but the advisory and acknowledgement
     # must be independent for each reader who has actually claimed this pair.
+    identity = evidence_identity(book, ebook_text, item_details)
+    pairing_key_val = pair_key(book)
     claimants = database_service.get_book_user_ids(book.abs_id)
     for claimant_id in claimants:
         database_service.save_transcription_preflight(
             abs_id=book.abs_id, user_id=claimant_id,
-            identity=evidence_identity(book, ebook_text, item_details),
-            pairing_key=pair_key(book), evidence=evidence,
+            identity=identity,
+            pairing_key=pairing_key_val, evidence=evidence,
         )
     return evidence

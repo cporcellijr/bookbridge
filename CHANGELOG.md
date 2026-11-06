@@ -9,20 +9,14 @@ All notable changes to BookBridge will be documented in this file.
 ### Added
 
 - **EPUB/audio transcription pre-flight measurements** (#528). Before a full Whisper fallback,
-  BookBridge records the EPUB's Unicode-aware word-token count, catalog audiobook duration,
-  EPUB tokens per audio hour, and an explanation. Find the advisory on **Processing** in
-  Classic or New, with a **Continue anyway** acknowledgement linked to that reader and
-  exact pairing. It never pauses unattended work, changes job failure status, or bypasses
-  the final content-match guard. Measurements appear below their job, keeping book
-  titles readable on small screens. As the reporter's reference rates counted **transcript**
-  words, not EPUB tokens, measurements are explicitly **uncalibrated** (or inconclusive
-  when the input is unreliable), not automatic mismatch verdicts. No threshold is enabled.
-  Regression cases cover both transcription paths, invalid duration, user isolation,
-  duration changes, concurrent acknowledgement, deletion/unlink cleanup, and unchanged
-  final lexical refusal. Review verification on current dev: **6,900 passed,
-  12 skipped, 1,094 subtests passed**.
-  **Deploy requires migration + restart**. EPUB TOC/chapter
-  comparisons, sample audio probes, and calibrated warning thresholds are deferred.
+  BookBridge counts the EPUB's words and divides by the audiobook's catalog duration, and
+  **Processing** (Classic and New) shows the result below the job. Once five of your books
+  have been measured and passed the content check, it also shows how the new book compares
+  with them, for example "2.01× your library median · your library: 7,000–8,000 across 5
+  books", so an omnibus paired with one narrated volume stands out before the long run ends.
+  It is a measurement, not a verdict: work never pauses, **Dismiss** only hides the advisory,
+  and the final content-match check still refuses real mismatches. **Deploy requires
+  migration + restart**. Chapter comparison and audio sampling are not included yet.
 
 - **The New book window shows your current audiobook chapter** (#428). For Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter information, it shows the chapter's title, where it falls in the book (for example 18 of 32) and how far into it you are. Audiobooks without chapters show nothing extra.
 

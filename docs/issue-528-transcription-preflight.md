@@ -18,8 +18,9 @@ warning without interrupting processing.
 Fields: `token_count` (Unicode-aware letter-containing EPUB word tokens from
 the existing `map_quality._word_tokens` tokenizer),
 `duration_seconds` (positive finite value from existing source metadata),
-`epub_tokens_per_audio_hour`, `assessment` (`uncalibrated` or
-`inconclusive`) and `explanation`. Missing, zero, negative, nonfinite or
+`epub_tokens_per_audio_hour` and `assessment` (`uncalibrated` or
+`inconclusive`). The Processing templates word each assessment through
+translations; no English text is stored. Missing, zero, negative, nonfinite or
 unreliable duration means inconclusive; empty/unspaced-script EPUB text
 also means inconclusive. No mismatch threshold is defined or enabled.
 The existing final lexical refusal, transcript caches, quarterly overlap
@@ -34,7 +35,7 @@ the old acknowledgement; unchanged evidence preserves an existing acknowledgemen
 Every read, write and acknowledgement requires the reader's `user_books` claim. When
 the same catalog pairing is shared, the worker publishes independent evidence to
 every current claimant; one reader's acknowledgement never acknowledges it for
-another. `Continue anyway` acknowledges only this advisory; no approval queue is
+another. **Dismiss** acknowledges only this advisory; no approval queue is
 added, transcription continues automatically and `ContentMatchRejected` still refuses
 mismatches. `delete_book` and `unlink_user_book` explicitly remove the related
 `TranscriptionPreflight` rows because SQLite foreign-key enforcement is not guaranteed
@@ -43,6 +44,17 @@ Acknowledgement updates are conditional on the submitted identity and pairing ke
 so a concurrent refresh cannot acknowledge evidence the reader has not seen.
 Evidence does not go into `Job.last_error`. Classic and New Processing pages
 show the advisory; Discover links to Processing. No dependencies or settings.
+
+### Library comparison (review follow-up)
+
+`add_library_comparison` compares each shown row with the reader's own books that
+are `active` (they passed the final content-match guard) and still have current
+evidence: the same tokenizer and the same catalog-duration source, which is the
+precondition the calibration section sets. With at least five such books, a row
+shows its ratio to their median plus their min–max range and count. This is a
+fact, not a cutoff: no threshold is applied and nothing pauses. Completed rows do
+not carry the advisory. The baseline only grows from books that reach the Whisper
+fallback after this feature shipped; books aligned earlier have no evidence rows.
 
 ## Calibration: no defensible cutoff
 

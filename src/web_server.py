@@ -63,7 +63,7 @@ from src.utils.logging_utils import get_persistent_condition_logger
 from src.services.diagnostics import setup_diagnostics_logging
 from src.services.aligned_shelf import defer_shelf_add, shelf_add_waits_for_alignment
 from src.services.job_queue_view import build_job_queue_view
-from src.services.transcription_preflight import pair_key as transcription_preflight_pair_key
+from src.services.transcription_preflight import pair_key as transcription_preflight_pair_key, add_library_comparison
 from src.services import whats_new
 from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server, signal_manifest_rebuild
@@ -7729,6 +7729,7 @@ def job_queue_page():
         row = evidence.get(book.abs_id)
         if row and row["pairing_key"] != transcription_preflight_pair_key(book):
             del evidence[book.abs_id]
+    add_library_comparison(evidence, {book.abs_id for book in books if book.status == "active"})
     alignment_queue = database_service.get_pending_alignment_queue()
     alignment_movable_ids = {
         book.abs_id for book in books
@@ -7773,16 +7774,8 @@ def job_queue_preflight_ack():
         abort(401)
     abs_id = request.form.get("abs_id", "")
     identity = request.form.get("identity", "")
-    book = next(
-        (b for b in database_service.get_all_books(user_id=user.id) if b.abs_id == abs_id),
-        None,
-    )
-    if book is None:
+    if not database_service.is_user_linked(user.id, abs_id):
         abort(404)
-    evidence = database_service.get_transcription_preflights(user.id, [abs_id]).get(abs_id)
-    if (not evidence or evidence["pairing_key"] != transcription_preflight_pair_key(book)
-            or evidence["identity"] != identity):
-        abort(409)
     if not database_service.acknowledge_transcription_preflight(user.id, abs_id, identity):
         abort(409)
     flash("Pre-flight advisory acknowledged. The final content-match guard remains active.", "success")
