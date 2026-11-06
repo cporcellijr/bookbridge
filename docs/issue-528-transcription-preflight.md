@@ -129,3 +129,9 @@ its job, with its width limited to the visible screen on phones. The actual old
 layout fails the saved browser word-wrap check; the proposed layout keeps title
 words intact and the advisory visible at 1024px and 390px. The updated dev suite
 passed **6,900 tests, 12 skipped, 1,094 subtests** (345.81 seconds).
+Inline-size containment keeps the advisory out of column sizing, restoring the
+same title and status widths as a table without an advisory. This uses the
+standard [CSS `contain` property](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/contain);
+MDN's [compatibility data](https://github.com/mdn/browser-compat-data/blob/main/css/properties/contain.json)
+records inline-size containment in Safari/iOS Safari 16 onward. Actual Safari
+device rendering has not been checked.
