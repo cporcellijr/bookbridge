@@ -15,7 +15,7 @@ from typing import Optional
 
 from src.db.models import Book
 from src.utils.ebook_utils import is_comic_ebook_filename
-from src.utils.logging_utils import sanitize_log_data
+from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.series_metadata import resolve_series_for_book
 
 logger = logging.getLogger(__name__)
@@ -207,9 +207,11 @@ class BookMappingService:
             ebook_filename, source_ebook_id, ebook_source, user_id=user_id,
         )
         if not kosync_doc_id:
-            logger.warning(
-                f"Shelf-watch: could not compute kosync id for '{ebook_filename}' "
-                f"(source_id={source_ebook_id}); skipping mapping"
+            # Every shelf-watch pass retries the same candidate, so repeats drop to DEBUG.
+            get_persistent_condition_logger().warn(
+                logger, f"shelf-watch-kosync-id:{ebook_filename}",
+                "Shelf-watch: could not compute kosync id for '%s' (source_id=%s); skipping mapping",
+                ebook_filename, source_ebook_id,
             )
             return None
 
