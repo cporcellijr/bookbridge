@@ -530,6 +530,31 @@ def escape_named_html_entities(content: bytes) -> bytes:
     return text.encode("utf-8")
 
 
+_BODY_START_RE = re.compile(rb"<body[\s>/]")
+_TEXT_BETWEEN_TAGS_RE = re.compile(rb">[^<]*<")
+
+
+def _preserve_carriage_returns(content: bytes) -> bytes:
+    """Keep the body's carriage returns through the XML parse, as ``&#13;``.
+
+    XML end-of-line handling turns every CRLF into LF, but ebooklib's HTML-mode
+    reconstruction, whose text the sentence offsets are counted in, keeps the CR.
+    A CRLF source therefore never matched run for run, and every spine item was
+    refused (diagnostics finding 9177). A character reference survives the
+    parse. Only text after ``<body`` is touched: one in the prolog is not
+    well-formed XML.
+    """
+    if b"\r" not in content:
+        return content
+    body = _BODY_START_RE.search(content)
+    if body is None:
+        return content
+    rest = _TEXT_BETWEEN_TAGS_RE.sub(
+        lambda m: m.group(0).replace(b"\r", b"&#13;"), content[body.start():]
+    )
+    return content[:body.start()] + rest
+
+
 def parse_original_spine_xml(content: bytes) -> Optional[BeautifulSoup]:
     """Parse a spine item's ORIGINAL (un-reconstructed) archive bytes with a
     case- and attribute-preserving XML parser.
@@ -553,7 +578,7 @@ def parse_original_spine_xml(content: bytes) -> Optional[BeautifulSoup]:
     that may not correspond to this one.
     """
     try:
-        return BeautifulSoup(escape_named_html_entities(content), "lxml-xml")
+        return BeautifulSoup(escape_named_html_entities(_preserve_carriage_returns(content)), "lxml-xml")
     except Exception as e:
         logger.warning(
             "Could not parse original spine XML for read-along fidelity: %s",

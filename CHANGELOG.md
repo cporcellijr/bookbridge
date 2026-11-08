@@ -43,6 +43,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Read-along EPUBs now build for books saved with Windows line endings.** About one EPUB in ten
+  stores its text with Windows (CRLF) line endings, and BookBridge refused to build a read-along
+  edition for every one of them ("could not map original XHTML for spine item"). They now build
+  normally.
 - **Adding a book to an Audiobookshelf collection it is already in no longer reports a failure.**
   Audiobookshelf answers a repeated add with "Book already in collection", and BookBridge now treats
   that as done.
