@@ -250,3 +250,27 @@ def test_audio_mapping_does_not_absorb_itself_on_a_re_match():
     # The guard lives in absorb_duplicate_mapping, which is still called -- what
     # must not happen is the field-preservation loop treating the row as stale.
     db.absorb_duplicate_mapping.assert_called_once_with(saved)
+
+
+def test_unhashable_candidate_warns_once_then_repeats_at_debug(caplog):
+    """Diagnostics finding 4401: shelf-watch re-logged this WARNING on every pass
+    for the same unhashable candidate (4,552 occurrences across 10 installs)."""
+    import logging
+    from src.utils.logging_utils import get_persistent_condition_logger
+
+    get_persistent_condition_logger().reset()
+    try:
+        svc, *_ = _build_service()
+        svc._compute_kosync_id = lambda *args, **kwargs: None
+        with caplog.at_level(logging.DEBUG, logger="src.services.book_mapping_service"):
+            for _ in range(3):
+                assert svc.create_audio_mapping_from_match(
+                    audio_source='ABS', audio_source_id='abs-item-1', audio_title='Test Audiobook',
+                    ebook_filename='test.epub', audio_duration=3600.0,
+                ) is None
+
+        message = "Shelf-watch: could not compute kosync id for 'test.epub' (source_id=None); skipping mapping"
+        levels = [r.levelno for r in caplog.records if r.getMessage() == message]
+        assert levels == [logging.WARNING, logging.DEBUG, logging.DEBUG]
+    finally:
+        get_persistent_condition_logger().reset()
