@@ -531,7 +531,11 @@ def escape_named_html_entities(content: bytes) -> bytes:
 
 
 _BODY_START_RE = re.compile(rb"<body[\s>/]")
-_TEXT_BETWEEN_TAGS_RE = re.compile(rb">[^<]*<")
+# Markup whose bytes must pass through untouched: in CDATA, comments and PIs a
+# character reference is literal text (``&#13;`` would corrupt an SVG <style>).
+_MARKUP_RE = re.compile(
+    rb"<!\[CDATA\[.*?\]\]>|<!--.*?-->|<\?.*?\?>|<(?:[^>\"']|\"[^\"]*\"|'[^']*')*>", re.S
+)
 
 
 def _preserve_carriage_returns(content: bytes) -> bytes:
@@ -541,18 +545,21 @@ def _preserve_carriage_returns(content: bytes) -> bytes:
     reconstruction, whose text the sentence offsets are counted in, keeps the CR.
     A CRLF source therefore never matched run for run, and every spine item was
     refused (diagnostics finding 9177). A character reference survives the
-    parse. Only text after ``<body`` is touched: one in the prolog is not
-    well-formed XML.
+    parse. Only ordinary character data after ``<body`` is touched: one in the
+    prolog is not well-formed XML, and markup (see ``_MARKUP_RE``) is copied as is.
     """
     if b"\r" not in content:
         return content
     body = _BODY_START_RE.search(content)
     if body is None:
         return content
-    rest = _TEXT_BETWEEN_TAGS_RE.sub(
-        lambda m: m.group(0).replace(b"\r", b"&#13;"), content[body.start():]
-    )
-    return content[:body.start()] + rest
+    out, pos = [content[:body.start()]], body.start()
+    for markup in _MARKUP_RE.finditer(content, body.start()):
+        out.append(content[pos:markup.start()].replace(b"\r", b"&#13;"))
+        out.append(markup.group(0))
+        pos = markup.end()
+    out.append(content[pos:].replace(b"\r", b"&#13;"))
+    return b"".join(out)
 
 
 def parse_original_spine_xml(content: bytes) -> Optional[BeautifulSoup]:
