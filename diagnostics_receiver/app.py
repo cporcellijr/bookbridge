@@ -241,6 +241,26 @@ def _ensure_columns(db_path: str) -> None:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
                     logger.info("Added column %s.%s", table, col)
 
+        # Create receiver indexes idempotently after columns are ensured
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_batches_manual_received_at ON batches(is_manual, received_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_warnings_finding_recent ON warnings(template, COALESCE(logger,''), COALESCE(level,''), last_seen DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_findings_status_order ON findings(status, instance_count DESC, total_count DESC, last_seen DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_batches_received_at_instance_id ON batches(received_at, instance_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_warnings_batch_template_count_instance_lastseen ON warnings(batch_id, template, count, instance_id, last_seen)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_findings_stale_recurrence_count ON findings(stale_recurrence_count)"
+        )
+
         # Ensure finding_comments table exists for DBs created before Phase 11
         existing_tables = {
             row[0] for row in conn.execute(
@@ -1293,10 +1313,11 @@ def create_receiver_app(db_path: Optional[str] = None) -> Flask:
         totals = db.execute(
             """\
             SELECT
-                (SELECT COUNT(DISTINCT instance_id) FROM batches WHERE received_at > ?) AS instances,
-                (SELECT COUNT(*) FROM batches WHERE received_at > ?) AS batches,
-                (SELECT COALESCE(SUM(w.count), 0) FROM warnings w
-                 JOIN batches b ON w.batch_id = b.id WHERE b.received_at > ?) AS warnings
+                (SELECT COUNT(DISTINCT instance_id) FROM batches INDEXED BY idx_batches_received_at_instance_id WHERE received_at > ?) AS instances,
+                (SELECT COUNT(*) FROM batches INDEXED BY idx_batches_received_at_instance_id WHERE received_at > ?) AS batches,
+                (SELECT COALESCE(SUM(w.count), 0) FROM batches b
+                 CROSS JOIN warnings w INDEXED BY idx_warnings_batch_template_count_instance_lastseen
+                 WHERE w.batch_id = b.id AND b.received_at > ?) AS warnings
             """,
             (since, since, since),
         ).fetchone()
@@ -1308,9 +1329,10 @@ def create_receiver_app(db_path: Optional[str] = None) -> Flask:
                    SUM(w.count) AS total_count,
                    COUNT(DISTINCT w.instance_id) AS distinct_instances,
                    MAX(w.last_seen) AS max_last_seen
-            FROM warnings w
-            JOIN batches b ON w.batch_id = b.id
-            WHERE b.received_at > ?
+            FROM batches b
+            CROSS JOIN warnings w INDEXED BY idx_warnings_batch_template_count_instance_lastseen
+            WHERE w.batch_id = b.id
+              AND b.received_at > ?
             GROUP BY w.template
             ORDER BY total_count DESC
             LIMIT 50
