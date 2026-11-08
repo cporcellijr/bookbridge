@@ -390,6 +390,690 @@ class TestSummary(unittest.TestCase):
         self.assertEqual(top["total_count"], 10)
         self.assertEqual(top["distinct_instances"], 2)
 
+    def test_summary_top_templates_avoids_historical_scan(self) -> None:
+        """Regression: top-templates must not scan all historical warnings.
+
+        Creates many old warnings, requests a recent window that contains no
+        batches, and installs a SQLite VM progress budget that aborts if the
+        query scans the historical rows. The fix drives the join from
+        time-filtered batches, so the query should succeed and return an empty
+        top-templates list.
+        """
+        # Seed the DB with many old warnings directly, bypassing the API.
+        with sqlite3.connect(self._db_path) as conn:
+            # Old batch far in the past
+            cur = conn.execute(
+                "INSERT INTO batches (instance_id, received_at) VALUES (?, ?)",
+                ("old-instance", "2020-01-01T00:00:00+00:00"),
+            )
+            old_batch_id = cur.lastrowid
+            rows = [
+                (
+                    old_batch_id,
+                    "old-instance",
+                    "src.logger",
+                    "WARNING",
+                    f"historical-template-{i}",
+                    "msg",
+                    1,
+                    "2020-01-01T00:00:00+00:00",
+                    "2020-01-01T00:00:00+00:00",
+                    None,
+                    None,
+                )
+                for i in range(5000)
+            ]
+            conn.executemany(
+                """INSERT INTO warnings
+                (batch_id, instance_id, logger, level, template, message,
+                 count, first_seen, last_seen, context_text, traceback_text)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+            conn.commit()
+
+        # Install a progress budget that aborts if the query scans too many VM steps.
+        steps = {"count": 0}
+        def progress_handler() -> int:
+            steps["count"] += 1
+            # A very small budget – scanning 5000 historical rows would exceed it
+            # SQLite returns 0 to continue, non-zero to abort
+            if steps["count"] > 2000:
+                return 1
+            return 0
+
+        # Hook the handler on each request
+        from diagnostics_receiver.app import _get_db
+        @self._app.before_request
+        def _install_progress_limit() -> None:
+            db = _get_db()
+            # Call handler every 1 VM step to keep the budget strict
+            db.set_progress_handler(progress_handler, 1)
+
+        # Request summary for a 1-day window that contains no batches.
+        resp = self._client.get("/api/v1/summary?days=1")
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        # With no recent batches, totals should be zero and top-templates empty
+        self.assertEqual(data["totals"]["instances"], 0)
+        self.assertEqual(data["totals"]["batches"], 0)
+        self.assertEqual(data["totals"]["warnings"], 0)
+        self.assertEqual(data["top_templates"], [])
+        # If the query had scanned the historical warnings the progress budget would have fired
+        self.assertLess(steps["count"], 2000)
+
+    def test_summary_totals_recent_window_with_historical_batches_progress_budget(self) -> None:
+        """Regression: summary totals must not scan all historical batches.
+
+        Seeds 5000 historical automatic batches (each with warnings) far in the past,
+        plus a tiny recent window (1 day) with 2 instances, 3 batches, 7 warnings.
+        Installs a SQLite VM progress budget (2000 steps) that would abort if the
+        query scans the historical rows. Asserts correct recent totals and that the
+        budget is not exceeded. Hook installed before first request.
+        """
+        now = datetime.now(timezone.utc)
+        # Cutoff is 1 day ago; recent batches must be strictly AFTER this to be included (query uses >)
+        cutoff = (now - timedelta(days=1)).isoformat()
+        recent_ts = (now - timedelta(hours=12)).isoformat()  # 12h ago, well within window
+        historical_ts = "2020-01-01T00:00:00+00:00"
+
+        # Seed 5000 historical automatic batches with warnings (direct SQLite)
+        with sqlite3.connect(self._db_path) as conn:
+            for i in range(5000):
+                inst_id = f"hist-inst-{i}"
+                cur = conn.execute(
+                    "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                    (inst_id, historical_ts),
+                )
+                batch_id = cur.lastrowid
+                # 1 warning per historical batch
+                conn.execute(
+                    """INSERT INTO warnings
+                       (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        batch_id,
+                        inst_id,
+                        "src.historical",
+                        "WARNING",
+                        f"historical-template-{i}",
+                        "old msg",
+                        1,
+                        historical_ts,
+                        historical_ts,
+                        None,
+                        None,
+                    ),
+                )
+            # Tiny recent window: 2 instances, 3 batches, 7 warnings total
+            # Instance A: 2 batches, 3 warnings (counts 2+1)
+            cur = conn.execute(
+                "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                ("recent-inst-A", recent_ts),
+            )
+            batch_a1 = cur.lastrowid
+            conn.execute(
+                """INSERT INTO warnings
+                   (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (batch_a1, "recent-inst-A", "src.recent", "WARNING", "recent-tpl-1", "msg", 2, recent_ts, recent_ts, None, None),
+            )
+            cur = conn.execute(
+                "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                ("recent-inst-A", recent_ts),
+            )
+            batch_a2 = cur.lastrowid
+            conn.execute(
+                """INSERT INTO warnings
+                   (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (batch_a2, "recent-inst-A", "src.recent", "WARNING", "recent-tpl-2", "msg", 1, recent_ts, recent_ts, None, None),
+            )
+            # Instance B: 1 batch, 4 warnings (counts 1+1+1+1 = 4)
+            cur = conn.execute(
+                "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                ("recent-inst-B", recent_ts),
+            )
+            batch_b1 = cur.lastrowid
+            for idx in range(4):
+                conn.execute(
+                    """INSERT INTO warnings
+                       (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (batch_b1, "recent-inst-B", "src.recent", "WARNING", f"recent-tpl-b-{idx}", "msg", 1, recent_ts, recent_ts, None, None),
+                )
+            conn.commit()
+
+        # Progress budget: abort after 2000 VM steps (scanning 5000 historical batches would exceed)
+        steps = {"count": 0}
+        def progress_handler() -> int:
+            steps["count"] += 1
+            if steps["count"] > 2000:
+                return 1
+            return 0
+
+        # Install hook BEFORE first request
+        from diagnostics_receiver.app import _get_db
+        @self._app.before_request
+        def _install_progress_limit() -> None:
+            db = _get_db()
+            db.set_progress_handler(progress_handler, 1)
+
+        # Request summary for 1-day window (only recent data)
+        resp = self._client.get("/api/v1/summary?days=1")
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        # Correct recent totals: 2 instances, 3 batches, 7 warnings (2+1+1+1+1+1 = 7)
+        self.assertEqual(data["totals"]["instances"], 2)
+        self.assertEqual(data["totals"]["batches"], 3)
+        self.assertEqual(data["totals"]["warnings"], 7)
+        # Top templates only from recent window
+        self.assertEqual(len(data["top_templates"]), 6)  # 2 from A + 4 from B
+        # Progress budget not exceeded
+        self.assertLess(steps["count"], 2000)
+
+    def test_summary_query_plans_use_covering_indexes(self) -> None:
+        """Regression: summary SELECTs must use covering reads; stale_recurrence SUM must use a covering index.
+
+        Seeds mixed recent/historical data with weighted warnings and stale counts.
+        Registers a trace hook before the first request to capture the actual SQL
+        executed by the endpoint, then runs EXPLAIN QUERY PLAN on those captured
+        statements. Verifies:
+        - warning aggregates and recent batch counts show "USING INDEX" / "COVERING"
+          (no full scans) for alias w in both aggregates, batches in recent counts
+        - stale_recurrence SUM shows index usage (no full table scan on findings)
+        Does not assert specific index names. Verifies explicit results:
+        instances=2, batches=3, warnings=7, stale_recurrences=200.
+        """
+        now = datetime.now(timezone.utc)
+        # Use 12 hours so recent rows fall strictly inside the 1-day window (query uses >)
+        recent_ts = (now - timedelta(hours=12)).isoformat()
+        historical_ts = "2020-01-01T00:00:00+00:00"
+
+        # Seed mixed data: historical + recent, with weighted warnings and stale_recurrence
+        with sqlite3.connect(self._db_path) as conn:
+            # Historical: 100 batches, 200 warnings (weighted counts)
+            for i in range(100):
+                inst_id = f"hist-inst-{i}"
+                cur = conn.execute(
+                    "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                    (inst_id, historical_ts),
+                )
+                batch_id = cur.lastrowid
+                for c in [2, 3]:
+                    conn.execute(
+                        """INSERT INTO warnings
+                           (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (batch_id, inst_id, "src.hist", "WARNING", f"hist-tpl-{i}-{c}", "msg", c, historical_ts, historical_ts, None, None),
+                    )
+            # Recent: 2 instances, 3 batches, 7 warnings total (3+2+1+1)
+            cur = conn.execute(
+                "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                ("recent-inst-A", recent_ts),
+            )
+            batch_a1 = cur.lastrowid
+            conn.execute(
+                """INSERT INTO warnings
+                   (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (batch_a1, "recent-inst-A", "src.recent", "WARNING", "recent-tpl-1", "msg", 3, recent_ts, recent_ts, None, None),
+            )
+            cur = conn.execute(
+                "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                ("recent-inst-A", recent_ts),
+            )
+            batch_a2 = cur.lastrowid
+            conn.execute(
+                """INSERT INTO warnings
+                   (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (batch_a2, "recent-inst-A", "src.recent", "WARNING", "recent-tpl-2", "msg", 2, recent_ts, recent_ts, None, None),
+            )
+            cur = conn.execute(
+                "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                ("recent-inst-B", recent_ts),
+            )
+            batch_b1 = cur.lastrowid
+            for c in [1, 1]:
+                conn.execute(
+                    """INSERT INTO warnings
+                       (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (batch_b1, "recent-inst-B", "src.recent", "WARNING", f"recent-tpl-b-{c}", "msg", 1, recent_ts, recent_ts, None, None),
+                )
+            # Findings with stale_recurrence_count values: 10*10 + 20*5 = 200 total
+            for i in range(50):
+                stale_val = 10 if i < 10 else (5 if i < 30 else 0)
+                conn.execute(
+                    """INSERT INTO findings
+                       (template, logger, level, category, status, first_seen, last_seen,
+                        total_count, instance_count, app_versions_json, sample_message,
+                        stale_recurrence_count, last_stale_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        f"find-tpl-{i}",
+                        "src.find",
+                        "WARNING",
+                        "code-bug",
+                        "fixed" if stale_val > 0 else "open",
+                        historical_ts,
+                        historical_ts,
+                        100 + i,
+                        1,
+                        '["7.2.0"]',
+                        "sample",
+                        stale_val,
+                        historical_ts if stale_val > 0 else None,
+                    ),
+                )
+            conn.commit()
+
+        # Capture the actual SELECT statements executed by the summary endpoint
+        captured_sql: list[str] = []
+
+        def trace_callback(statement: str) -> None:
+            # Only capture SELECT statements from the summary queries
+            stmt = statement.strip()
+            if stmt.upper().startswith("SELECT"):
+                captured_sql.append(stmt)
+
+        # Install trace hook BEFORE first request
+        from diagnostics_receiver.app import _get_db
+        @self._app.before_request
+        def _install_trace() -> None:
+            db = _get_db()
+            db.set_trace_callback(trace_callback)
+
+        # Request summary for 1-day window
+        resp = self._client.get("/api/v1/summary?days=1")
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+
+        # Verify explicit results
+        self.assertEqual(data["totals"]["instances"], 2)
+        self.assertEqual(data["totals"]["batches"], 3)
+        self.assertEqual(data["totals"]["warnings"], 7)
+        self.assertEqual(data["findings"]["stale_recurrences"], 200)
+
+        # Run EXPLAIN QUERY PLAN on the captured SQL strings using a fresh connection
+        db = sqlite3.connect(self._db_path)
+        db.row_factory = sqlite3.Row
+
+        # Identify the three key queries by their structure
+        totals_sql = None
+        top_templates_sql = None
+        stale_sql = None
+
+        for stmt in captured_sql:
+            upper = stmt.upper()
+            if "COUNT(DISTINCT INSTANCE_ID)" in upper and "COUNT(*) FROM BATCHES" in upper and "SUM(W.COUNT)" in upper:
+                totals_sql = stmt
+            elif "SUM(W.COUNT) AS TOTAL_COUNT" in upper and "GROUP BY W.TEMPLATE" in upper:
+                top_templates_sql = stmt
+            elif "SUM(STALE_RECURRENCE_COUNT)" in upper and "FROM FINDINGS" in upper:
+                stale_sql = stmt
+
+        self.assertIsNotNone(totals_sql, "Failed to capture totals query")
+        self.assertIsNotNone(top_templates_sql, "Failed to capture top_templates query")
+        self.assertIsNotNone(stale_sql, "Failed to capture stale_recurrences query")
+
+        # Helper: check a plan shows index usage (not full scan) for the relevant table/alias
+        def _uses_covering_index(plan_rows: list, table_or_alias: str) -> bool:
+            """Return True if the plan shows a covering index read for the given table/alias.
+
+            Matches table/alias references in SEARCH/SCAN lines (e.g., "SEARCH w USING...",
+            "SCAN batches USING...") but avoids false positives from substrings like "ROW".
+            """
+            alias_upper = table_or_alias.upper()
+            for row in plan_rows:
+                detail = row["detail"] if isinstance(row, sqlite3.Row) else row[3]
+                detail_upper = detail.upper()
+                # Look for the table/alias as a whole word in SEARCH/SCAN context
+                # Pattern: "SEARCH <alias> " or "SCAN <alias> " or "SEARCH <alias>USING" etc.
+                import re
+                pattern = rf'(SEARCH|SCAN)\s+{re.escape(alias_upper)}(\s|$)'
+                if re.search(pattern, detail_upper):
+                    return "USING COVERING INDEX" in detail_upper
+            return False
+
+        # 1. Totals query: verify covering index on batches (received_at, instance_id) and warnings (alias w)
+        totals_plan = db.execute("EXPLAIN QUERY PLAN " + totals_sql).fetchall()
+        self.assertTrue(
+            _uses_covering_index(totals_plan, "batches"),
+            f"totals query lacks covering index on batches: {totals_plan}"
+        )
+        self.assertTrue(
+            _uses_covering_index(totals_plan, "w"),
+            f"totals query lacks covering index on warnings alias w: {totals_plan}"
+        )
+
+        # 2. Top templates query: verify covering index on warnings alias w
+        top_plan = db.execute("EXPLAIN QUERY PLAN " + top_templates_sql).fetchall()
+        self.assertTrue(
+            _uses_covering_index(top_plan, "w"),
+            f"top_templates query lacks covering index on warnings alias w: {top_plan}"
+        )
+
+        # 3. Stale recurrences query: verify covering index on findings
+        stale_plan = db.execute("EXPLAIN QUERY PLAN " + stale_sql).fetchall()
+        self.assertTrue(
+            _uses_covering_index(stale_plan, "findings"),
+            f"stale_recurrences query lacks covering index on findings: {stale_plan}"
+        )
+
+        db.close()
+
+    def test_findings_list_feedback_progress_budget(self) -> None:
+        """Regression: findings-list feedback aggregation must not scan automatic batches.
+
+        Direct SQLite setup: 5000 automatic batches, 1 manual feedback batch with
+        matching warning, 9000 ignored findings with varying counts. Request
+        ignored limit=200; verify manual finding ranks first, feedback counts are
+        1, exactly 200 rows returned in descending count order, progress budget
+        (10000 steps) not exceeded.
+        """
+        instance_id = "feedback-budget-instance"
+
+        # Direct SQLite inserts — no HTTP requests, no rebuild_findings
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            # Instance row
+            conn.execute(
+                "INSERT INTO instances (instance_id, first_seen, last_seen) VALUES (?, ?, ?)",
+                (instance_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            )
+
+            # --- 1 manual feedback batch with user_message and matching warning ---
+            cur = conn.execute(
+                "INSERT INTO batches (instance_id, received_at, is_manual, user_message) VALUES (?, ?, 1, ?)",
+                (instance_id, "2026-06-01T00:00:00+00:00", "Please triage this"),
+            )
+            manual_batch_id = cur.lastrowid
+            conn.execute(
+                """INSERT INTO warnings
+                   (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    manual_batch_id,
+                    instance_id,
+                    "sync",
+                    "ERROR",
+                    "Feedback pattern",
+                    "manual feedback warning",
+                    1,
+                    "2026-06-01T00:00:00+00:00",
+                    "2026-06-01T00:00:00+00:00",
+                    None,
+                    None,
+                ),
+            )
+            # Create the matching finding row (status=ignored so it appears in status=ignored query)
+            # Give it the HIGHEST instance_count/total_count so it ranks FIRST in the ORDER BY
+            conn.execute(
+                """INSERT INTO findings
+                   (template, logger, level, category, status, first_seen, last_seen,
+                    total_count, instance_count, app_versions_json, sample_message)
+                   VALUES (?, ?, ?, 'code-bug', 'ignored', ?, ?, ?, ?, ?, ?)""",
+                (
+                    "Feedback pattern",
+                    "sync",
+                    "ERROR",
+                    "2026-06-01T00:00:00+00:00",
+                    "2026-06-01T00:00:00+00:00",
+                    10000,  # highest total_count
+                    100,    # highest instance_count
+                    '["7.2.0"]',
+                    "manual feedback warning",
+                ),
+            )
+            finding_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                "INSERT INTO finding_instances (finding_id, instance_id) VALUES (?, ?)",
+                (finding_id, instance_id),
+            )
+
+            # Automatic batches must be skipped before joining their warnings.
+            auto_batch_ids = [
+                conn.execute(
+                    "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                    (instance_id, "2026-06-02T00:00:00+00:00"),
+                ).lastrowid
+                for _ in range(5000)
+            ]
+            auto_warnings = [
+                (
+                    auto_batch_id,
+                    instance_id,
+                    "sync",
+                    "ERROR",
+                    "Feedback pattern",
+                    f"auto warning {i}",
+                    1,
+                    "2026-06-02T00:00:00+00:00",
+                    "2026-06-02T00:00:00+00:00",
+                    None,
+                    None,
+                )
+                for i, auto_batch_id in enumerate(auto_batch_ids)
+            ]
+            conn.executemany(
+                """INSERT INTO warnings
+                   (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                auto_warnings,
+            )
+
+            # --- 9000 ignored findings with varying instance_count/total_count ---
+            # These should sort by instance_count DESC, total_count DESC, last_seen DESC
+            # All have lower counts than the manual finding so it ranks first
+            ignored_findings = []
+            for i in range(9000):
+                inst_cnt = 1 + (i % 50)  # 1..50 (max 50 < 100 of manual)
+                tot_cnt = 10 + (i % 100)  # 10..109 (max 109 < 10000 of manual)
+                last_seen = f"2026-07-{(i % 28) + 1:02d}T00:00:00+00:00"
+                ignored_findings.append((
+                    f"Ignored template {i}",
+                    "logger",
+                    "WARNING",
+                    "environment",
+                    "ignored",
+                    "2026-01-01T00:00:00+00:00",
+                    last_seen,
+                    tot_cnt,
+                    inst_cnt,
+                    '["7.2.0"]',
+                    f"sample {i}",
+                ))
+            conn.executemany(
+                """INSERT INTO findings
+                   (template, logger, level, category, status, first_seen, last_seen,
+                    total_count, instance_count, app_versions_json, sample_message)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ignored_findings,
+            )
+            conn.commit()
+
+        # Progress budget: 10000 VM steps. Return 0 to continue, non-zero to abort.
+        steps = {"count": 0}
+        def progress_handler() -> int:
+            steps["count"] += 1
+            if steps["count"] > 10000:
+                return 1  # abort
+            return 0  # continue
+
+        # Install hook BEFORE first request
+        @self._app.before_request
+        def _install_progress_limit() -> None:
+            db = _get_db()
+            db.set_progress_handler(progress_handler, 1)
+
+        # Request ignored findings with limit=200
+        resp = self._client.get("/api/v1/findings?status=ignored&limit=200")
+        data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 200)
+        findings = data["findings"]
+        self.assertEqual(len(findings), 200)
+
+        # Manual finding (Feedback pattern) must rank FIRST because it has the
+        # highest instance_count/total_count
+        manual_finding = findings[0]
+        self.assertEqual(manual_finding["template"], "Feedback pattern")
+        self.assertEqual(manual_finding["feedback_count"], 1)
+        self.assertEqual(manual_finding["unanswered_feedback_count"], 1)
+
+        # All 200 rows should be in descending count order (instance_count, then total_count)
+        for i in range(len(findings) - 1):
+            a, b = findings[i], findings[i + 1]
+            if a["instance_count"] != b["instance_count"]:
+                self.assertGreater(a["instance_count"], b["instance_count"])
+            elif a["total_count"] != b["total_count"]:
+                self.assertGreater(a["total_count"], b["total_count"])
+            else:
+                # last_seen DESC
+                self.assertGreaterEqual(a["last_seen"], b["last_seen"])
+
+        # Progress budget not exceeded
+        self.assertLess(steps["count"], 10000)
+
+    def test_finding_detail_latest_evidence_progress_budget(self) -> None:
+        """Regression: detail recent evidence must not scan all matching warnings.
+
+        Direct SQLite setup before first request. Creates a finding with empty
+        logger/level, one batch, 5000 matching warnings where logger/level are
+        NULL or '' (all normalize to the empty key), unique increasing ISO
+        timestamps and messages, plus one newer nonmatching logger row.
+        Progress hook aborts after 2000 VM steps. Asserts exactly five newest
+        matching messages in descending order.
+        """
+        instance_id = "detail-evidence-instance"
+
+        # Direct SQLite setup — no HTTP POST, no rebuild_findings
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            # Instance row
+            conn.execute(
+                "INSERT INTO instances (instance_id, first_seen, last_seen) VALUES (?, ?, ?)",
+                (instance_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            )
+
+            # One batch
+            cur = conn.execute(
+                "INSERT INTO batches (instance_id, received_at, is_manual) VALUES (?, ?, 0)",
+                (instance_id, "2026-06-01T00:00:00+00:00"),
+            )
+            batch_id = cur.lastrowid
+
+            # 5000 matching warnings: logger/level are NULL or '' → all COALESCE to ''
+            # Unique increasing ISO timestamps (seconds precision) and unique messages
+            rows = [
+                (
+                    batch_id,
+                    instance_id,
+                    None if i % 3 == 0 else "",  # NULL, '', '', NULL, '', ''...
+                    "" if i % 3 == 1 else None,  # '', NULL, '', '', NULL, ''...
+                    "Evidence pattern",
+                    f"matching message {i:05d}",
+                    1,
+                    f"2026-07-01T{i // 3600:02d}:{i % 3600 // 60:02d}:{i % 60:02d}+00:00",
+                    f"2026-07-01T{i // 3600:02d}:{i % 3600 // 60:02d}:{i % 60:02d}+00:00",
+                    None,
+                    None,
+                )
+                for i in range(5000)
+            ]
+            conn.executemany(
+                """INSERT INTO warnings
+                   (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+
+            # One newer nonmatching logger row (logger='other', level='INFO')
+            conn.execute(
+                """INSERT INTO warnings
+                   (batch_id, instance_id, logger, level, template, message, count, first_seen, last_seen, context_text, traceback_text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    batch_id,
+                    instance_id,
+                    "other",
+                    "INFO",
+                    "Evidence pattern",
+                    "nonmatching logger message",
+                    1,
+                    "2026-07-02T00:00:00+00:00",
+                    "2026-07-02T00:00:00+00:00",
+                    None,
+                    None,
+                ),
+            )
+
+            # Create the finding with empty logger/level (the normalized key)
+            conn.execute(
+                """INSERT INTO findings
+                   (template, logger, level, category, status, first_seen, last_seen,
+                    total_count, instance_count, app_versions_json, sample_message)
+                   VALUES (?, ?, ?, 'code-bug', 'open', ?, ?, ?, ?, ?, ?)""",
+                (
+                    "Evidence pattern",
+                    "",
+                    "",
+                    "2026-07-01T00:00:00+00:00",
+                    "2026-07-01T00:00:59+00:00",
+                    5000,
+                    1,
+                    '["7.2.0"]',
+                    "matching message 00000",
+                ),
+            )
+            finding_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                "INSERT INTO finding_instances (finding_id, instance_id) VALUES (?, ?)",
+                (finding_id, instance_id),
+            )
+            conn.commit()
+
+        # Progress budget: abort after 2000 VM steps (0=continue, 1=abort)
+        steps = {"count": 0}
+        def progress_handler() -> int:
+            steps["count"] += 1
+            if steps["count"] > 2000:
+                return 1  # abort
+            return 0  # continue
+
+        # Install hook BEFORE first request
+        from diagnostics_receiver.app import _get_db
+        @self._app.before_request
+        def _install_progress_limit() -> None:
+            db = _get_db()
+            db.set_progress_handler(progress_handler, 1)
+
+        resp = self._client.get(f"/api/v1/findings/{finding_id}")
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+
+        recent = data.get("recent_evidence", [])
+        # Exactly five newest MATCHING messages in descending last_seen order
+        self.assertEqual(len(recent), 5)
+        for r in recent:
+            self.assertEqual(r["template"], "Evidence pattern")
+            # logger/level may be '' or None — both normalize to empty key in WHERE
+            self.assertIn(r["logger"], ("", None))
+            self.assertIn(r["level"], ("", None))
+
+        # Messages should be the five newest (i=4999, 4998, 4997, 4996, 4995)
+        expected_messages = [f"matching message {i:05d}" for i in range(4999, 4994, -1)]
+        actual_messages = [r["message"] for r in recent]
+        self.assertEqual(actual_messages, expected_messages)
+
+        # Timestamps should be in descending order
+        last_seens = [r["last_seen"] for r in recent]
+        self.assertEqual(last_seens, sorted(last_seens, reverse=True))
+
+        # Progress budget not exceeded
+        self.assertLess(steps["count"], 2000)
 
 class TestUnexpectedException(unittest.TestCase):
     def setUp(self) -> None:

@@ -174,9 +174,16 @@ cd diagnostics_receiver
 docker compose up -d --build
 ```
 
-The public `DIAGNOSTICS_ENDPOINT_URL` that opted-in instances POST to
-is still TBD; when deployed behind a reverse proxy, the URL will point
-at the proxy's external address (port 20129 on the internal network).
+The receiver copies its source into the image, so source changes require rebuilding
+this standalone container. Updating or restarting the main BookBridge container does
+not update the receiver. Take a SQLite online backup before deployment; startup adds
+missing columns and query indexes automatically while preserving findings and analyses.
+The first startup can take several minutes on a large database while these indexes
+are built; wait for the receiver serving message before checking the public API.
+
+Set `DIAGNOSTICS_ENDPOINT_URL` to the receiver's public HTTPS reverse-proxy
+address. Opted-in instances POST there; the proxy forwards to port 20129 on
+the internal network.
 
 ### Input Sanitization
 
