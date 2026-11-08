@@ -141,6 +141,23 @@ def test_a_sliver_of_trailing_audio_is_not_run():
     assert len(aligner._session.signals) == 1
 
 
+@pytest.mark.parametrize("windows, reason", [
+    ([], "ffmpeg produced no audio samples"),
+    ([np.zeros(100, dtype=np.float32)], "audio too short to align (100 samples)"),
+])
+def test_an_empty_or_sliver_decode_names_the_cause(windows, reason, caplog):
+    """Diagnostics finding 9529: an empty decode logged
+    '❌ CTC emissions failed: need at least one array to concatenate'."""
+    aligner = _aligner_with_fake_session()
+    with patch.object(QuartzNetAligner, "_load"), \
+            patch.object(QuartzNetAligner, "_pcm_windows", return_value=iter(windows)), \
+            caplog.at_level("ERROR"):
+        assert aligner.emissions_for(["book.m4b"]) is None
+
+    assert f"❌ CTC emissions failed: {reason}" in caplog.text
+    assert "need at least one array" not in caplog.text
+
+
 def test_word_starts_apply_the_onset_offset_and_frame_offset():
     aligner = _aligner_with_fake_session()
     log_probs = np.full((1, 40, 29), -10.0, dtype=np.float32)

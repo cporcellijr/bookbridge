@@ -276,8 +276,6 @@ class QuartzNetAligner(ForcedAligner):
                 yield window
 
         emission = self._emissions_from_windows(counted())
-        if not samples:
-            raise ValueError("ffmpeg produced no audio samples")
         logger.info("⚙️ CTC: QuartzNet emissions for %.0fs audio (streamed, CPU)", samples / _SAMPLE_RATE)
         return emission, samples / emission.shape[1] / _SAMPLE_RATE
 
@@ -308,8 +306,10 @@ class QuartzNetAligner(ForcedAligner):
         import numpy as np
 
         parts = []
+        samples = 0
         for window in windows:
             window = np.asarray(window, dtype=np.float32)
+            samples += window.shape[0]
             if window.shape[0] <= _MIN_WINDOW_SAMPLES:
                 continue
             emphasised = np.empty_like(window)
@@ -322,6 +322,12 @@ class QuartzNetAligner(ForcedAligner):
             if window.shape[0] == _WINDOW_SAMPLES:
                 log_probs = log_probs[:_FRAMES_PER_WINDOW]
             parts.append(log_probs)
+        # Checked before concatenating: an empty decode otherwise fails as
+        # "need at least one array to concatenate", which names no cause.
+        if not parts:
+            if not samples:
+                raise ValueError("ffmpeg produced no audio samples")
+            raise ValueError(f"audio too short to align ({samples} samples)")
         return np.concatenate(parts)[None, :, :]
 
     def _alignment_backend(self) -> Tuple[Any, Any]:
