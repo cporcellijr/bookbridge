@@ -1183,19 +1183,22 @@ class ABSClient:
                 return False
 
             collections = r.json().get('collections', [])
-            target_collection = next((c for c in collections if c.get('name') == collection_name), None)
+            # An ABS collection belongs to one library and rejects books from any other,
+            # so a same-name collection in another library is never the target.
+            library_id = self._resolve_collection_library_id(item_id)
+            if not library_id:
+                logger.warning(
+                    "Failed to add item to ABS collection '%s': no library resolved for the item",
+                    collection_name
+                )
+                return False
+            target_collection = next(
+                (c for c in collections
+                 if c.get('name') == collection_name and c.get('libraryId') == library_id),
+                None,
+            )
 
             if not target_collection:
-                # The collection has to be created in the library that actually holds
-                # the item — ABS rejects books from any other one.
-                library_id = self._resolve_collection_library_id(item_id)
-                if not library_id:
-                    logger.warning(
-                        "Failed to add item to ABS collection '%s': no library resolved for the item",
-                        collection_name
-                    )
-                    return False
-
                 r_create = self.session.post(collections_url,
                                              json={"libraryId": library_id, "name": collection_name,
                                                    "books": [item_id]},
@@ -1315,7 +1318,12 @@ class ABSClient:
                 return False
 
             collections = r.json().get('collections', [])
-            target_collection = next((c for c in collections if c.get('name') == collection_name), None)
+            named = [c for c in collections if c.get('name') == collection_name]
+            # Same-name collections can exist in several libraries; take the one holding the item.
+            target_collection = next(
+                (c for c in named if any(b.get('id') == item_id for b in c.get('books') or [])),
+                named[0] if named else None,
+            )
 
             if not target_collection:
                 # Only reached from delete/unlink cleanup, where a missing collection

@@ -46,6 +46,10 @@ All notable changes to BookBridge will be documented in this file.
 - **Adding a book to an Audiobookshelf collection it is already in no longer reports a failure.**
   Audiobookshelf answers a repeated add with "Book already in collection", and BookBridge now treats
   that as done.
+- **Books land in the right Audiobookshelf collection when two libraries share a collection name.**
+  Adding a single book used the first collection with that name on the server, even one in another
+  library, so the add failed; removing a book could miss it the same way. Both now use the
+  collection in the book's own library.
 - **Diagnostics reports no longer include your ebook file names.** Stored ebook file names, and file
   paths containing apostrophes, are now scrubbed from diagnostics, including tracebacks and recent
   log lines.

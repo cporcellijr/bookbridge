@@ -137,14 +137,14 @@ class TestABSCollectionCreation(unittest.TestCase):
         self.client.session.post.assert_not_called()
 
     def test_add_to_existing_collection_treats_duplicate400_as_success(self):
-        self.collections = [{"id": "col-1", "name": "Synced with KOReader"}]
+        self.collections = [{"id": "col-1", "name": "Synced with KOReader", "libraryId": "lib-ebooks"}]
         self.client.session.post.return_value = self._response(400, {}, text="Book already in collection")
         with self.assertNoLogs("src.api.api_clients", level="WARNING"):
             result = self.client.add_to_collection("item-1", "Synced with KOReader")
         self.assertTrue(result)
 
     def test_add_to_existing_collection_fails_on_other_400(self):
-        self.collections = [{"id": "col-1", "name": "Synced with KOReader"}]
+        self.collections = [{"id": "col-1", "name": "Synced with KOReader", "libraryId": "lib-ebooks"}]
         self.client.session.post.return_value = self._response(400, {}, text="Invalid request")
         with self.assertLogs("src.api.api_clients", level="WARNING") as logs:
             result = self.client.add_to_collection("item-1", "Synced with KOReader")
@@ -152,7 +152,7 @@ class TestABSCollectionCreation(unittest.TestCase):
         self.assertTrue(any("add returned 400" in msg for msg in logs.output))
 
     def test_add_to_existing_collection_fails_on_partial_match_body(self):
-        self.collections = [{"id": "col-1", "name": "Synced with KOReader"}]
+        self.collections = [{"id": "col-1", "name": "Synced with KOReader", "libraryId": "lib-ebooks"}]
         self.client.session.post.return_value = self._response(400, {}, text="Book already in collection: item-1")
         with self.assertLogs("src.api.api_clients", level="WARNING") as logs:
             result = self.client.add_to_collection("item-1", "Synced with KOReader")
@@ -160,12 +160,46 @@ class TestABSCollectionCreation(unittest.TestCase):
         self.assertTrue(any("add returned 400" in msg for msg in logs.output))
 
     def test_add_to_existing_collection_fails_on_500_even_with_duplicate_text(self):
-        self.collections = [{"id": "col-1", "name": "Synced with KOReader"}]
+        self.collections = [{"id": "col-1", "name": "Synced with KOReader", "libraryId": "lib-ebooks"}]
         self.client.session.post.return_value = self._response(500, {}, text="Book already in collection")
         with self.assertLogs("src.api.api_clients", level="WARNING") as logs:
             result = self.client.add_to_collection("item-1", "Synced with KOReader")
         self.assertFalse(result)
         self.assertTrue(any("add returned 500" in msg for msg in logs.output))
+
+    def _same_name_collections(self):
+        """Diagnostics finding 9154: one collection name in two libraries."""
+        return [
+            {"id": "col-audio", "name": "Synced with KOReader", "libraryId": "lib-audiobooks",
+             "books": [{"id": "item-1"}]},
+            {"id": "col-ebooks", "name": "Synced with KOReader", "libraryId": "lib-ebooks", "books": []},
+        ]
+
+    def test_add_uses_the_same_name_collection_in_the_items_library(self):
+        self.collections = self._same_name_collections()
+
+        self.assertTrue(self.client.add_to_collection("item-1", "Synced with KOReader"))
+
+        args, _kwargs = self.client.session.post.call_args
+        self.assertEqual(args[0], "http://abs.example/api/collections/col-ebooks/book")
+
+    def test_add_creates_a_collection_when_only_another_library_has_the_name(self):
+        self.collections = self._same_name_collections()[:1]
+
+        self.assertTrue(self.client.add_to_collection("item-1", "Synced with KOReader"))
+
+        payload = self._created_payload()
+        self.assertEqual(payload["libraryId"], "lib-ebooks")
+        self.assertEqual(payload["books"], ["item-1"])
+
+    def test_remove_uses_the_same_name_collection_that_holds_the_item(self):
+        self.collections = list(reversed(self._same_name_collections()))
+        self.client.session.delete.return_value = self._response(200, {})
+        with patch.object(self.client, "is_configured", return_value=True):
+            self.assertTrue(self.client.remove_from_collection("item-1", "Synced with KOReader"))
+
+        args, _kwargs = self.client.session.delete.call_args
+        self.assertEqual(args[0], "http://abs.example/api/collections/col-audio/book/item-1")
 
 
 if __name__ == "__main__":
