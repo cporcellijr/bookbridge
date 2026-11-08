@@ -71,6 +71,39 @@ def test_original_mapping_survives_an_inline_word_join():
     assert resolved is not None
 
 
+def test_original_mapping_survives_crlf_line_endings():
+    """Diagnostics finding 9177: a CRLF source refused every spine item ("could not
+    map original XHTML for spine item N"). ebooklib's reconstruction keeps the CR
+    (serialized as ``&#13;``) while the XML parse of the original normalized CRLF
+    to LF, so no run text matched. A marker after the line break must still land
+    on the right character, which only holds if both sides keep the CR."""
+    canonical = b"<html><body><p>The long winters.&#13;\n   It snowed.</p></body></html>"
+    original = (
+        b'<?xml version="1.0" encoding="utf-8"?>\r\n'
+        b'<html xmlns="http://www.w3.org/1999/xhtml">\r\n<head><title>t</title></head>\r\n'
+        b'<body>\r\n<p>The long winters.\r\n   It snowed.</p>\r\n</body></html>'
+    )
+    soup = BeautifulSoup(canonical, "html.parser")
+    nodes = content_string_nodes(soup)
+    runs = runs_from_nodes(nodes)
+    expected = joined_text(nodes, runs)
+    assert "\r\n" in expected
+    ref = SpineDomMap(1, "OEBPS/ch1.xhtml", 0, len(expected), runs, len(nodes))
+
+    resolved = _resolve_spine_injection_target(original, ref, expected, canonical)
+
+    assert resolved is not None
+    dom_entry, original_soup, original_nodes = resolved
+    run = dom_entry.runs[0]
+    start = run.node_offset_start + run.text.index("It snowed")
+    modified = _inject_markers_into_original(
+        original_soup, original_nodes, [(run.node_index, start, run.node_index, run.node_offset_end, "c1-s1")]
+    )
+    assert b"winters.\r\n" in modified
+    assert modified.index(b"winters.") < modified.index(b"c1-s1") < modified.index(b"It snowed")
+    assert modified.index(b"It snowed") - modified.index(b"c1-s1") < 20
+
+
 def test_original_mapping_refuses_same_text_with_different_structure():
     canonical = b"<html><body><p>Repeat.</p><p>Repeat.</p></body></html>"
     original = b"<html><body><p>Repeat.</p><div><p>Repeat.</p></div></body></html>"
