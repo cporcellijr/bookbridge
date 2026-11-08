@@ -1465,6 +1465,14 @@ class BookOrbitClient:
         """Push track-local audiobook progress through the server's supported API."""
         if self._audiobook_api is None:
             self.get_audiobook_progress(book_id)
+        if self._audiobook_api is None:
+            # Unanswered probe: falling through to the pre-3.2 route asked for a file id
+            # the failed lookup could not supply, and blamed the book instead.
+            logger.error(
+                "BookOrbit audio: cannot update book %s — BookOrbit's audiobook progress API "
+                "did not answer", book_id,
+            )
+            return False
 
         if self._audiobook_api == "playback":
             info = self.get_audiobook_info(book_id) or {}

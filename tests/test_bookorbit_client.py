@@ -221,6 +221,18 @@ def test_playback_api_404_does_not_call_removed_legacy_route(client):
     request.assert_called_once_with("GET", "/api/v1/audiobooks/5/playback-state")
 
 
+def test_unanswered_audio_api_probe_does_not_fall_back_to_legacy_write(client, caplog):
+    """Diagnostics finding 9333: with BookOrbit not answering, the write fell through
+    to the pre-3.2 route and logged 'cannot update book 272 — no currentFileId'."""
+    assert client._audiobook_api is None
+    with patch.object(client, '_make_request', return_value=None) as request,             caplog.at_level("ERROR"):
+        assert client.update_audiobook_progress(272, 120.0, 0.5) is False
+
+    assert all(call.args[0] == "GET" for call in request.call_args_list)
+    assert "did not answer" in caplog.text
+    assert "no currentFileId" not in caplog.text
+
+
 def test_get_audiobook_progress_unstarted_204_is_zero_not_none(client):
     client._audiobook_api = "legacy"
     with patch.object(client, '_make_request', return_value=_Resp(status_code=204)):
