@@ -104,6 +104,27 @@ def test_original_mapping_survives_crlf_line_endings():
     assert modified.index(b"It snowed") - modified.index(b"c1-s1") < 20
 
 
+def test_crlf_preservation_leaves_cdata_and_comments_untouched():
+    """Review finding on the 9177 fix: a character reference inside CDATA is literal
+    text, so rewriting the CR there turned a valid SVG selector
+    ``.outer >\\r\\n.inner`` into ``.outer >&#13;\\n.inner``."""
+    from src.utils.ebook_dom_map import escape_named_html_entities
+
+    original = (
+        b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>\r\n<body>\r\n'
+        b'<svg xmlns="http://www.w3.org/2000/svg"><style><![CDATA[.outer >\r\n.inner { fill: red; }]]>'
+        b'</style></svg>\r\n<!-- a > b\r\n -->\r\n<p>Line one.\r\n   Line two.</p>\r\n</body></html>'
+    )
+    plain = BeautifulSoup(escape_named_html_entities(original), "lxml-xml")
+
+    soup = parse_original_spine_xml(original)
+
+    assert soup.find("style").string == plain.find("style").string
+    assert "&#13;" not in soup.find("style").string
+    assert "\r" in soup.find("p").get_text()
+    assert "&#13;" not in str(soup)
+
+
 def test_original_mapping_refuses_same_text_with_different_structure():
     canonical = b"<html><body><p>Repeat.</p><p>Repeat.</p></body></html>"
     original = b"<html><body><p>Repeat.</p><div><p>Repeat.</p></div></body></html>"
