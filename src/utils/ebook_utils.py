@@ -16,6 +16,7 @@ import re
 import glob
 import posixpath
 import threading
+import urllib.parse
 import rapidfuzz
 import zipfile
 import shutil
@@ -77,6 +78,17 @@ def is_linkable_ebook_filename(name: str | None) -> bool:
 def is_comic_ebook_filename(name: str | None) -> bool:
     """True for comic archive filenames (currently CBZ only)."""
     return str(name or '').strip().lower().endswith(tuple(COMIC_EBOOK_EXTENSIONS))
+
+
+def normalize_href(href) -> str:
+    """Percent-decode a locator/spine href so the two can be compared.
+
+    Readium-based readers (AudioBooth among them) store the chapter href
+    URL-encoded (``Some%20Chapter_split_016.htm``) while the EPUB's spine lists the
+    raw name (``Some Chapter_split_016.htm``). Compared as-is the two never match,
+    and the position drops to the whole-book percentage.
+    """
+    return urllib.parse.unquote(str(href or '')).strip()
 
 
 def is_in_hidden_folder(path, root) -> bool:
@@ -964,9 +976,11 @@ class EbookParser:
             book_path = self.resolve_book_path(filename)
             full_text, spine_map = self.extract_text_and_map(book_path)
 
+            href_norm = normalize_href(href)
             target_item = None
             for item in spine_map:
-                if href in item['href'] or item['href'] in href:
+                item_href = normalize_href(item['href'])
+                if href_norm in item_href or item_href in href_norm:
                     target_item = item
                     break
 
@@ -1042,9 +1056,11 @@ class EbookParser:
             if not full_text or not spine_map:
                 return None
 
+            href_norm = normalize_href(href)
             target_item = None
             for item in spine_map:
-                if href in item['href'] or item['href'] in href:
+                item_href = normalize_href(item['href'])
+                if href_norm in item_href or item_href in href_norm:
                     target_item = item
                     break
 
