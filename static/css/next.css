@@ -183,7 +183,9 @@ summary::-webkit-details-marker { display: none; }
 .book-alert h3 { margin: 0 0 6px; font-size: .95rem; color: var(--warn); }
 .book-alert p { margin: 0; overflow-wrap: anywhere; }
 .book-chips, .book-tools { display: flex; flex-wrap: wrap; gap: 10px; }
-.book-chips > span { border: 1px solid var(--line); padding: 4px 9px; border-radius: 20px; font-size: .8rem; }
+.book-chips > span, .book-chips > a { border: 1px solid var(--line); padding: 4px 9px; border-radius: 20px; font-size: .8rem; }
+.book-chips > a { color: inherit; text-decoration: none; }
+.book-chips > a:hover, .book-chips > a:focus-visible { border-color: var(--text); }
 .book-app-row { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); padding: 16px 0; }
 .book-app-main { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(130px, 1fr) auto; gap: 6px 20px; color: inherit; text-decoration: none; }
 .book-app-main small { opacity: .65; }
