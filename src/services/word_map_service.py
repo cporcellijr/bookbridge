@@ -22,12 +22,17 @@ import threading
 from bisect import bisect_right
 from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from bs4 import BeautifulSoup, CData, NavigableString, Tag
 
-from src.db.models import BookAlignment
 from src.utils.ebook_dom_map import build_dom_anchor_map, content_string_nodes
+
+if TYPE_CHECKING:
+    from src.db.database_service import DatabaseService
+    from src.db.models import Book
+    from src.services.alignment_service import AlignmentService
+    from src.utils.ebook_utils import EbookParser
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +70,18 @@ def _element_steps(element: Tag) -> Optional[List[int]]:
     return steps
 
 
-def text_node_cfi_path(node: NavigableString, offset: int) -> Optional[str]:
-    """The in-document part of a CFI for ``offset`` characters into ``node``.
+def _utf16_len(text: str) -> int:
+    """Length in UTF-16 code units, the unit browser DOM text offsets count in."""
+    return len(text.encode("utf-16-le")) // 2
 
-    Returns e.g. ``"/4/2/6/1:15"``: element steps to the text's parent, then the
-    odd step for the text chunk that holds ``node``, then the character offset
-    within that chunk. A chunk is all the text between two element siblings, so
-    when a parser splits it into several string nodes the earlier ones' lengths
-    are added to the offset. Comments are not text in a browser DOM and are
-    skipped.
+
+def _text_chunk_base(node: NavigableString) -> Optional[Tuple[str, int]]:
+    """``(path, chunk_offset)``: the CFI path to the text chunk holding ``node``,
+    and where ``node`` starts inside that chunk, in UTF-16 units.
+
+    A chunk is all the text between two element siblings, so when a parser
+    splits it into several string nodes the earlier ones' lengths count.
+    Comments are not text in a browser DOM and are skipped.
     """
     parent = node.parent
     if not isinstance(parent, Tag):
@@ -91,12 +99,26 @@ def text_node_cfi_path(node: NavigableString, offset: int) -> Optional[str]:
             elements_before += 1
             counting_chunk = False
         elif counting_chunk and type(sibling) in _TEXT_TYPES:
-            chunk_offset += len(str(sibling))
+            chunk_offset += _utf16_len(str(sibling))
         sibling = sibling.previous_sibling
 
-    text_step = 2 * elements_before + 1
     path = "".join(f"/{step}" for step in steps)
-    return f"{path}/{text_step}:{chunk_offset + max(0, int(offset))}"
+    return f"{path}/{2 * elements_before + 1}", chunk_offset
+
+
+def text_node_cfi_path(node: NavigableString, offset: int) -> Optional[str]:
+    """The in-document part of a CFI for ``offset`` characters into ``node``.
+
+    Returns e.g. ``"/4/2/6/1:15"``: element steps to the text's parent, then the
+    odd step for the text chunk that holds ``node``, then the offset within that
+    chunk. Offsets count UTF-16 units, as browser DOM offsets do, so a character
+    outside the Basic Multilingual Plane (most emoji) counts as two.
+    """
+    base = _text_chunk_base(node)
+    if base is None:
+        return None
+    path, chunk_offset = base
+    return f"{path}:{chunk_offset + _utf16_len(str(node)[:max(0, int(offset))])}"
 
 
 class _ItemIndex:
@@ -146,7 +168,7 @@ def _file_sha256(path: Path) -> Optional[str]:
         return None
 
 
-def build_word_map(parser, epub_filename: str, map_points: List[Dict]) -> Dict:
+def build_word_map(parser: "EbookParser", epub_filename: str, map_points: List[Dict]) -> Dict:
     """Translate alignment ``map_points`` into chapters and in-text CFI paths.
 
     Returns ``{"chapters": [...], "points": [[ts, chapter, path], ...]}`` with
@@ -171,6 +193,10 @@ def build_word_map(parser, epub_filename: str, map_points: List[Dict]) -> Dict:
     points: List[list] = []
     skipped = 0
     previous: Optional[Tuple[int, str]] = None
+    # Points in one text node share its chunk path, and finding that path walks
+    # the node's earlier siblings: per point, that is quadratic in a long file.
+    # Values are (chunk_path, chunk_offset, text when it has non-BMP characters).
+    node_bases: Dict[Tuple[int, int], Optional[Tuple[str, int, Optional[str]]]] = {}
 
     ordered = sorted(map_points, key=lambda p: float(p.get("ts", 0.0)))
     for point in ordered:
@@ -186,11 +212,20 @@ def build_word_map(parser, epub_filename: str, map_points: List[Dict]) -> Dict:
         if node_index >= len(index.nodes):
             skipped += 1
             continue
-        path = text_node_cfi_path(index.nodes[node_index], node_offset)
-        if path is None:
+        spine_index = index.item.spine_index
+        key = (spine_index, node_index)
+        if key not in node_bases:
+            text = str(index.nodes[node_index])
+            base = _text_chunk_base(index.nodes[node_index])
+            astral = text if _utf16_len(text) != len(text) else None
+            node_bases[key] = (base[0], base[1], astral) if base else None
+        base = node_bases[key]
+        if base is None:
             skipped += 1
             continue
-        spine_index = index.item.spine_index
+        chunk_path, chunk_offset, astral = base
+        units = _utf16_len(astral[:node_offset]) if astral else node_offset
+        path = f"{chunk_path}:{chunk_offset + units}"
         if spine_index not in chapter_number:
             chapter_number[spine_index] = len(chapters)
             chapters.append({
@@ -211,7 +246,13 @@ def build_word_map(parser, epub_filename: str, map_points: List[Dict]) -> Dict:
 class WordMapService:
     """Builds and caches device word maps, one per book and map version."""
 
-    def __init__(self, database_service, alignment_service, ebook_parser, cache_size: int = 4):
+    def __init__(
+        self,
+        database_service: "DatabaseService",
+        alignment_service: "AlignmentService",
+        ebook_parser: "EbookParser",
+        cache_size: int = 4,
+    ) -> None:
         self.database_service = database_service
         self.alignment_service = alignment_service
         self.ebook_parser = ebook_parser
@@ -219,22 +260,7 @@ class WordMapService:
         self._cache_size = cache_size
         self._lock = threading.Lock()
 
-    def _alignment_row(self, abs_id: str) -> Optional[Dict]:
-        with self.database_service.get_session() as session:
-            row = session.query(
-                BookAlignment.last_updated,
-                BookAlignment.align_method,
-                BookAlignment.quality_score,
-            ).filter(BookAlignment.abs_id == abs_id).first()
-            if row is None:
-                return None
-            return {
-                "last_updated": row.last_updated,
-                "align_method": row.align_method,
-                "quality_score": row.quality_score,
-            }
-
-    def status(self, book) -> Dict:
+    def status(self, book: "Book") -> Dict:
         """Where matching stands for ``book`` when no map is stored yet."""
         job = self.database_service.get_latest_job(book.abs_id)
         result = {"status": "not_ready", "book_status": getattr(book, "status", None)}
@@ -246,9 +272,11 @@ class WordMapService:
                 result["last_error"] = job.last_error
         return result
 
-    def get_word_map(self, book, epub_filename: Optional[str]) -> Tuple[int, Dict]:
+    def get_word_map(self, book: "Book", epub_filename: Optional[str]) -> Tuple[int, Dict]:
         """Return ``(http_status, body)`` for a device's word-map request."""
-        row = self._alignment_row(book.abs_id)
+        if getattr(book, "sync_mode", None) == "ebook_only":
+            return 409, {"status": "no_audio", "error": "This book has no audiobook in BookBridge"}
+        row = self.database_service.get_alignment_meta(book.abs_id)
         if row is None:
             return 202, self.status(book)
         if not epub_filename:
@@ -263,15 +291,20 @@ class WordMapService:
                 return 200, cached
 
             map_points = self.alignment_service._get_alignment(book.abs_id) or []
+            unsupported = {"status": "unsupported", "error": "This book's text could not be mapped to its EPUB"}
             try:
                 exported = build_word_map(self.ebook_parser, epub_filename, map_points)
-            except ValueError as e:
-                # build_dom_anchor_map refuses to guess when its replay of the text
-                # extraction disagrees with the stored text; neither should we.
-                logger.warning("Word map export failed for '%s': %s", book.abs_id, e)
-                return 409, {"status": "unsupported", "error": "This book's text could not be mapped to its EPUB"}
+                book_path = self.ebook_parser.resolve_book_path(epub_filename)
+            except (ValueError, OSError) as e:
+                # The EPUB is missing, or build_dom_anchor_map refused to guess
+                # because its replay of the text extraction disagreed.
+                logger.warning("Word map export failed for '%s': %s", book.abs_id, e, exc_info=True)
+                return 409, unsupported
+            if not exported["points"]:
+                # extract_text_and_map answers an unreadable EPUB with empty text.
+                logger.warning("Word map export placed no words for '%s'", book.abs_id)
+                return 409, unsupported
 
-            book_path = self.ebook_parser.resolve_book_path(epub_filename)
             # A Grimmory-audio book often has no duration on record (0 or None).
             # The last matched word is then the best lower bound available.
             duration = getattr(book, "audio_duration", None) or getattr(book, "duration", None)

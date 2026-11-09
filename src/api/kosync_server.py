@@ -22,6 +22,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 from flask import Blueprint, jsonify, request, send_file, g
+from flask.typing import ResponseReturnValue
 
 from src.api.booklore_client import BookloreClient
 from src.api.hardcover_client import HardcoverClient
@@ -2533,39 +2534,40 @@ def _device_claimed_book(abs_id):
     return book
 
 
-def _word_map_epub_filename(book):
-    """The EPUB whose text the book's alignment map was built against."""
-    chooser = getattr(_manager, "_get_alignment_epub_filename", None) if _manager else None
-    if chooser is not None:
-        try:
-            chosen = chooser(book)
-            if chosen:
-                return chosen
-        except Exception as e:
-            logger.debug(f"Alignment EPUB choice failed for '{book.abs_id}': {e}")
-    return getattr(book, "ebook_filename", None)
-
-
 @kosync_sync_bp.route('/device-sync/books/lookup', methods=['GET'])
 @kosync_sync_bp.route('/koreader/device-sync/books/lookup', methods=['GET'])
 @kosync_auth_required
-def device_sync_book_lookup():
-    """Find the user's BookBridge books for a Grimmory book id.
+def device_sync_book_lookup() -> ResponseReturnValue:
+    """Find the user's BookBridge books for a Grimmory or BookOrbit book id.
 
-    A reader app knows Grimmory's ids, not BookBridge's ``abs_id``. The id can be
-    the ebook's or the audiobook's; a Grimmory entry holding both files matches
-    on either side.
+    A reader app knows its library's ids, not BookBridge's ``abs_id``. Pass
+    ``source`` (``grimmory`` or ``bookorbit``) and ``id``; ``grimmory_id=<id>``
+    is kept as shorthand. The id can be the ebook's or the audiobook's, so an
+    entry holding both files matches on either side.
     """
-    grimmory_id = (request.args.get('grimmory_id') or '').strip()
-    if not grimmory_id:
-        return jsonify({"error": "grimmory_id is required"}), 400
+    source = (request.args.get('source') or '').strip().lower()
+    source_id = (request.args.get('id') or '').strip()
+    if not source and request.args.get('grimmory_id'):
+        source, source_id = 'grimmory', request.args['grimmory_id'].strip()
+    if not source_id or not (is_grimmory_source(source) or source == 'bookorbit'):
+        return jsonify({"error": "source (grimmory or bookorbit) and id are required"}), 400
     if _database_service is None:
         return jsonify({"error": "Database unavailable"}), 503
 
-    candidates = [
-        _database_service.get_book_by_ebook_source("BookLore", grimmory_id),
-        _database_service.get_book_by_audio_source("BookLore", grimmory_id),
-    ]
+    db = _database_service
+    user_id = getattr(g, "kosync_user_id", None)
+    if source == 'bookorbit':
+        # BookOrbit ids are per user: confirm each candidate resolves to this id for them.
+        candidates = [
+            book for book in db.find_books_by_bookorbit_id(user_id, source_id)
+            if source_id in (db.resolve_bookorbit_ebook_id(user_id, book),
+                             db.resolve_bookorbit_audio_id(user_id, book))
+        ]
+    else:
+        candidates = [
+            db.get_book_by_ebook_source("BookLore", source_id),
+            db.get_book_by_audio_source("BookLore", source_id),
+        ]
     books, seen = [], set()
     for book in candidates:
         if book is None or book.abs_id in seen:
@@ -2582,6 +2584,8 @@ def device_sync_book_lookup():
             "status": getattr(book, "status", None),
             "ebook_grimmory_id": getattr(book, "ebook_source_id", None) if is_grimmory_source(getattr(book, "ebook_source", None)) else None,
             "audio_grimmory_id": getattr(book, "audio_source_id", None) if getattr(book, "audio_source", None) == "BookLore" else None,
+            "ebook_bookorbit_id": db.resolve_bookorbit_ebook_id(user_id, book),
+            "audio_bookorbit_id": db.resolve_bookorbit_audio_id(user_id, book),
             "has_word_map": has_map,
         })
     return jsonify({"books": books})
@@ -2590,7 +2594,7 @@ def device_sync_book_lookup():
 @kosync_sync_bp.route('/device-sync/books/<path:abs_id>/word-map', methods=['GET'])
 @kosync_sync_bp.route('/koreader/device-sync/books/<path:abs_id>/word-map', methods=['GET'])
 @kosync_auth_required
-def device_sync_word_map(abs_id):
+def device_sync_word_map(abs_id: str) -> ResponseReturnValue:
     """Audio timestamps paired with in-text EPUB CFIs, for read-along and handoff.
 
     200 with the map once matching is done; 202 with progress while it isn't;
@@ -2605,26 +2609,22 @@ def device_sync_word_map(abs_id):
     if service is None:
         return jsonify({"error": "Word map service unavailable"}), 503
 
-    status, body = service.get_word_map(book, _word_map_epub_filename(book))
+    # The EPUB whose text the alignment map was built against, when that is certain.
+    epub = (_manager and _manager._get_alignment_epub_filename(book)) or getattr(book, "ebook_filename", None)
+    status, body = service.get_word_map(book, epub)
     if status != 200:
         return jsonify(body), status
 
     from src.services.word_map_service import word_map_etag
-    etag = word_map_etag(body)
-    if request.if_none_match and etag in request.if_none_match:
-        response = jsonify({})
-        response.status_code = 304
-        response.set_etag(etag)
-        return response
     response = jsonify(body)
-    response.set_etag(etag)
-    return response
+    response.set_etag(word_map_etag(body))
+    return response.make_conditional(request)
 
 
 @kosync_sync_bp.route('/device-sync/books/<path:abs_id>/sync-now', methods=['POST'])
 @kosync_sync_bp.route('/koreader/device-sync/books/<path:abs_id>/sync-now', methods=['POST'])
 @kosync_auth_required
-def device_sync_now(abs_id):
+def device_sync_now(abs_id: str) -> ResponseReturnValue:
     """Sync one book for the device's user now, instead of at the next poll.
 
     For an app that just saved a position to one service (closing the ebook, say)

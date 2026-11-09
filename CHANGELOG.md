@@ -8,6 +8,14 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Device API for reader apps** (#579). An app that pairs an ebook with its audiobook can now
+  find a book by its Grimmory or BookOrbit id, download a word map (when each matched word is
+  spoken, and exactly where that word sits in the EPUB) to highlight words as the narrator
+  reads them or switch between listening and reading at the same word, and ask BookBridge to
+  sync one book right away. Apps sign in with the reader's KOSync username and password and
+  only see that reader's matched books. See **Device API** in the docs. Contributed by
+  [@adam-fox](https://github.com/adam-fox) in #579.
+
 - **EPUB/audio transcription pre-flight measurements** (#528). Before a full Whisper fallback,
   BookBridge counts the EPUB's words and divides by the audiobook's catalog duration, and
   **Processing** (Classic and New) shows the result below the job. Once five of your books

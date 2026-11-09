@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from bs4 import BeautifulSoup
 from lxml import etree
@@ -71,7 +71,10 @@ def _xhtml(body: str) -> bytes:
 
 
 def _resolve_with_lxml(xhtml: bytes, path: str) -> str:
-    """Follow an in-document CFI path the way a browser DOM would; return the text from there."""
+    """Follow an in-document CFI path the way a browser DOM would; return the text from there.
+
+    Like a DOM offset, the character offset counts UTF-16 units.
+    """
     steps_part, offset = path.rsplit(":", 1)
     steps = [int(s) for s in steps_part.strip("/").split("/")]
     node = etree.fromstring(xhtml)
@@ -82,7 +85,7 @@ def _resolve_with_lxml(xhtml: bytes, path: str) -> str:
     assert text_step % 2 == 1, path
     children = list(node)
     chunk = node.text if text_step == 1 else children[(text_step - 1) // 2 - 1].tail
-    return (chunk or "")[int(offset):]
+    return (chunk or "").encode("utf-16-le")[2 * int(offset):].decode("utf-16-le")
 
 
 def _word_points(text: str, start_ts: float = 0.0) -> List[dict]:
@@ -121,10 +124,12 @@ def test_every_exported_point_lands_on_its_word():
         parser = _parser(tmp)
         chapters = {
             "ch1": _xhtml(
-                "<h1>One</h1>\n<p>It was a <em>bright</em> cold day in April,</p>\n"
+                "<h1>One</h1>\n<p>It was a <em>bright</em> cold 🌞 day in April,</p>\n"
                 "<p>and the clocks were <b>striking</b> thirteen.</p>"
             ),
-            "ch2": _xhtml("<div><p>Winston Smith, his chin nuzzled into his breast.</p></div>"),
+            # The emoji is two UTF-16 units, so every later offset in its text chunk
+            # is one more than its Python string index.
+            "ch2": _xhtml("<div><p>Winston Smith, 📖 his chin nuzzled into his breast.</p></div>"),
         }
         epub_path = tmp / "books" / "book.epub"
         _write_epub(epub_path, chapters)
@@ -171,8 +176,7 @@ def test_service_reports_progress_before_a_map_exists_and_caches_after():
     book = SimpleNamespace(abs_id="abs-1", status="forging", audio_duration=120.0)
 
     db = MagicMock()
-    session = db.get_session.return_value.__enter__.return_value
-    session.query.return_value.filter.return_value.first.return_value = None
+    db.get_alignment_meta.return_value = None
     db.get_latest_job.return_value = SimpleNamespace(progress=0.42, stage="aligning", last_error=None)
     service = WordMapService(db, MagicMock(), MagicMock())
 
@@ -187,9 +191,7 @@ def test_service_reports_progress_before_a_map_exists_and_caches_after():
         _write_epub(epub_path, {"ch1": _xhtml("<p>alpha beta</p>")})
         alignment = MagicMock()
         alignment._get_alignment.return_value = [{"char": 0, "ts": 0.0}, {"char": 6, "ts": 0.5}]
-        session.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
-            last_updated=None, align_method="lexical", quality_score=0.9,
-        )
+        db.get_alignment_meta.return_value = {"last_updated": None, "align_method": "lexical", "quality_score": 0.9}
         service = WordMapService(db, alignment, parser)
 
         status, body = service.get_word_map(book, str(epub_path))
@@ -209,3 +211,73 @@ def test_service_reports_progress_before_a_map_exists_and_caches_after():
         status, body = service.get_word_map(unknown, str(epub_path))
         assert status == 200
         assert body["duration"] == 0.5
+
+
+def test_offsets_count_utf16_units_like_a_browser():
+    soup = BeautifulSoup("<html><body><p>a😀 b <!-- c --> two</p></body></html>", "html.parser")
+    first, two = [s for s in soup.find_all(string=True) if s.parent.name == "p" and "c" != s.strip()][:2]
+    # "a😀 " is 3 characters in Python but 4 UTF-16 units, so "b" sits at 4.
+    assert text_node_cfi_path(first, 3) == "/2/2/1:4"
+    # "two" follows "a😀 b " (6 units) in the same chunk, plus its own leading space.
+    assert text_node_cfi_path(two, 1) == "/2/2/1:7"
+
+
+def test_each_text_node_path_is_computed_once():
+    import src.services.word_map_service as word_map_service
+
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str)
+        parser = _parser(tmp)
+        epub_path = tmp / "books" / "book.epub"
+        _write_epub(epub_path, {"ch1": _xhtml("<p>one two three four</p><p>five six seven</p>")})
+        text, _ = parser.extract_text_and_map(str(epub_path))
+        points = _word_points(text)
+
+        with patch.object(word_map_service, "_text_chunk_base", wraps=word_map_service._text_chunk_base) as base:
+            exported = build_word_map(parser, str(epub_path), points)
+
+        assert len(exported["points"]) == 7
+        assert base.call_count == 2  # one per paragraph's text node, not one per word
+
+
+def _ready_service(parser, alignment_points):
+    db = MagicMock()
+    db.get_alignment_meta.return_value = {"last_updated": None, "align_method": "ctc", "quality_score": 1.0}
+    alignment = MagicMock()
+    alignment._get_alignment.return_value = alignment_points
+    return WordMapService(db, alignment, parser), db
+
+
+def test_a_missing_epub_answers_409_instead_of_raising():
+    with tempfile.TemporaryDirectory() as tmp_str:
+        service, _db = _ready_service(_parser(Path(tmp_str)), [{"char": 0, "ts": 0.0}])
+
+        status, body = service.get_word_map(SimpleNamespace(abs_id="abs-gone", status="active"), "gone.epub")
+
+        assert status == 409
+        assert body["status"] == "unsupported"
+
+
+def test_an_unreadable_epub_is_not_served_as_an_empty_ready_map():
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str)
+        parser = _parser(tmp)
+        epub_path = tmp / "books" / "broken.epub"
+        epub_path.write_bytes(b"not a zip file")
+        service, _db = _ready_service(parser, [{"char": 0, "ts": 0.0}])
+
+        status, body = service.get_word_map(SimpleNamespace(abs_id="abs-broken", status="active"), str(epub_path))
+
+        assert status == 409
+        assert body["status"] == "unsupported"
+
+
+def test_an_ebook_only_book_answers_no_audio_instead_of_not_ready():
+    service, db = _ready_service(MagicMock(), [])
+    db.get_alignment_meta.return_value = None
+    book = SimpleNamespace(abs_id="abs-ebook", status="active", sync_mode="ebook_only")
+
+    status, body = service.get_word_map(book, "book.epub")
+
+    assert status == 409
+    assert body["status"] == "no_audio"

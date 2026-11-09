@@ -940,6 +940,29 @@ class DatabaseService:
                 return None
             return row[0] or ""
 
+    def get_alignment_meta(self, abs_id: str) -> Optional[dict]:
+        """``last_updated``, ``align_method`` and ``quality_score`` of a book's
+        stored alignment map, or None if it has no map. Never loads the map blob."""
+        if not abs_id:
+            return None
+        with self.get_session() as session:
+            row = (
+                session.query(
+                    BookAlignment.last_updated,
+                    BookAlignment.align_method,
+                    BookAlignment.quality_score,
+                )
+                .filter(BookAlignment.abs_id == abs_id)
+                .first()
+            )
+            if row is None:
+                return None
+            return {
+                "last_updated": row.last_updated,
+                "align_method": row.align_method,
+                "quality_score": row.quality_score,
+            }
+
     def get_aligned_book_ids(self) -> set[str]:
         """Every book with a stored alignment map: ``has_alignment`` for all books in one query."""
         with self.get_session() as session:
@@ -2530,6 +2553,37 @@ class DatabaseService:
             if val:
                 return str(val)
         return None
+
+    def find_books_by_bookorbit_id(self, user_id: Optional[int], bookorbit_id: str) -> List[Book]:
+        """Books whose BookOrbit ebook or audio id may be ``bookorbit_id``.
+
+        Candidates only: the user's own links plus the legacy shared columns.
+        Callers confirm each with ``resolve_bookorbit_ebook_id`` /
+        ``resolve_bookorbit_audio_id``, which decide which of the two applies.
+        """
+        bookorbit_id = str(bookorbit_id or "").strip()
+        if not bookorbit_id:
+            return []
+        from sqlalchemy import select
+        linked = select(UserBookOrbitLink.abs_id).where(
+            UserBookOrbitLink.user_id == user_id,
+            (UserBookOrbitLink.ebook_id == bookorbit_id) | (UserBookOrbitLink.audio_id == bookorbit_id),
+        )
+        with self.get_session() as session:
+            books = session.query(Book).filter(
+                Book.abs_id.in_(linked)
+                | ((Book.ebook_source == "BookOrbit") & (Book.ebook_source_id == bookorbit_id))
+                | (
+                    (Book.audio_source == "BookOrbit")
+                    & (
+                        (Book.audio_provider_book_id == bookorbit_id)
+                        | (Book.audio_source_id == bookorbit_id)
+                    )
+                )
+            ).all()
+            for book in books:
+                session.expunge(book)
+            return books
 
     def get_book_user_ids(self, abs_id: str) -> List[int]:
         """All user ids that have claimed this book."""

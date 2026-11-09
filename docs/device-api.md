@@ -9,10 +9,11 @@ Every route is available with and without the `/koreader` prefix.
 ## Find a book
 
 ```
-GET /device-sync/books/lookup?grimmory_id=110
+GET /device-sync/books/lookup?source=grimmory&id=110
+GET /device-sync/books/lookup?source=bookorbit&id=42
 ```
 
-Apps usually know Grimmory's ids, not BookBridge's. Pass the id of either the ebook or the audiobook; a Grimmory entry that holds both files matches on either.
+Apps usually know their library's ids, not BookBridge's. Pass `source` (`grimmory` or `bookorbit`) and the id of either the ebook or the audiobook; an entry that holds both files matches on either. `?grimmory_id=110` is short for `?source=grimmory&id=110`. BookOrbit ids are looked up among the reader's own BookOrbit matches, since each reader can link a book to their own BookOrbit entries.
 
 ```json
 {
@@ -24,6 +25,8 @@ Apps usually know Grimmory's ids, not BookBridge's. Pass the id of either the eb
       "status": "active",
       "ebook_grimmory_id": "110",
       "audio_grimmory_id": "111",
+      "ebook_bookorbit_id": null,
+      "audio_bookorbit_id": null,
       "has_word_map": true
     }
   ]
@@ -40,7 +43,7 @@ GET /device-sync/books/<abs_id>/word-map
 | --- | --- |
 | `200` | The map, below. Carries an `ETag`; send it back as `If-None-Match` to get `304` when nothing changed. |
 | `202` | Matching hasn't finished. The body has `status: "not_ready"`, the book's `book_status`, and, when a job exists, its `progress` (0–1), `stage` and `last_error`. |
-| `409` | The book has no ebook in BookBridge (`no_ebook`), or its text couldn't be placed in the EPUB (`unsupported`). |
+| `409` | The book has no ebook in BookBridge (`no_ebook`), it's an ebook-only book with no audiobook (`no_audio`), or its EPUB is missing, unreadable or its text couldn't be placed in it (`unsupported`). |
 
 ```json
 {
@@ -63,9 +66,9 @@ GET /device-sync/books/<abs_id>/word-map
 }
 ```
 
-Each point is `[seconds, chapter, path]`: a moment in the audiobook, an index into `chapters`, and the in-document part of an EPUB CFI. The full CFI is `epubcfi(/6/<spine_step>!<path>)`, which for the first point above is `epubcfi(/6/8!/4/2/14/1:212)`. Unlike the positions BookBridge writes to Grimmory, which point at the start of a paragraph, these point at the word itself.
+Each point is `[seconds, chapter, path]`: a moment in the audiobook, an index into `chapters`, and the in-document part of an EPUB CFI. The full CFI is `epubcfi(/6/<spine_step>!<path>)`, which for the first point above is `epubcfi(/6/8!/4/2/14/1:212)`. Unlike the positions BookBridge writes to Grimmory, which point at the start of a paragraph, these point at the word itself. The character offset after `:` counts UTF-16 units, the same as a browser's DOM offsets, so it works directly in foliate-js, epub.js or Readium.
 
-Points are in audio order, one per matched word. Between two points, the narrator is between those two words. `skipped` counts map points that had no place in the XHTML, such as a gap after a chapter's last word.
+Points are in audio order, one per matched word. Seconds count from the start of the whole audiobook: an app that plays a multi-file audiobook (BookOrbit reports its position within the current track) adds the lengths of the earlier tracks. Between two points, the narrator is between those two words. `skipped` counts map points that had no place in the XHTML, such as a gap after a chapter's last word.
 
 The CFIs are for the EPUB named in `epub`. If the app has a different copy of the book (compare `sha256` with the file it downloaded), the positions may not line up and the app should fall back to chapter-level positions.
 

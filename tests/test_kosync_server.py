@@ -1847,11 +1847,15 @@ class TestKosyncEndpoints(unittest.TestCase):
             etag = first.headers.get("ETag")
             again = self.client.get('/koreader/device-sync/books/abs-map/word-map',
                                     headers={**self.auth_headers, 'If-None-Match': etag})
+            # A proxy may hand the validator back weakened; If-None-Match compares weakly.
+            weak = self.client.get('/koreader/device-sync/books/abs-map/word-map',
+                                   headers={**self.auth_headers, 'If-None-Match': f'W/{etag}'})
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(first.get_json()["status"], "ready")
         self.assertTrue(etag)
         self.assertEqual(again.status_code, 304)
+        self.assertEqual(weak.status_code, 304)
         book_arg, epub_arg = service.get_word_map.call_args[0]
         self.assertEqual(book_arg.abs_id, "abs-map")
         self.assertEqual(epub_arg, "m.epub")
@@ -1923,15 +1927,45 @@ class TestKosyncEndpoints(unittest.TestCase):
                                    headers=self.auth_headers)
         by_audio = self.client.get('/koreader/device-sync/books/lookup?grimmory_id=111',
                                    headers=self.auth_headers)
+        by_source = self.client.get('/koreader/device-sync/books/lookup?source=grimmory&id=110',
+                                    headers=self.auth_headers)
         missing = self.client.get('/koreader/device-sync/books/lookup', headers=self.auth_headers)
 
         self.assertEqual(by_ebook.status_code, 200)
         self.assertEqual([b["abs_id"] for b in by_ebook.get_json()["books"]], ["abs-pair"])
         self.assertEqual([b["abs_id"] for b in by_audio.get_json()["books"]], ["abs-pair"])
+        self.assertEqual([b["abs_id"] for b in by_source.get_json()["books"]], ["abs-pair"])
         found = by_ebook.get_json()["books"][0]
         self.assertEqual(found["ebook_grimmory_id"], "110")
         self.assertEqual(found["audio_grimmory_id"], "111")
         self.assertEqual(missing.status_code, 400)
+
+    def test_device_book_lookup_finds_bookorbit_books_by_the_readers_own_ids(self):
+        from src import web_server
+        svc = web_server.database_service
+        me = svc._default_user_id()
+        self._save_claimed_book("abs-orbit", title="Orbit", ebook_filename="o.epub")
+        svc.set_user_bookorbit_link(me, "abs-orbit", ebook_id="wm-501", audio_id="wm-502")
+        self._save_claimed_book("abs-orbit-legacy", ebook_filename="l.epub",
+                                ebook_source="BookOrbit", ebook_source_id="wm-601")
+        other = svc.create_user(f"orbit_lookup_other_{time.time_ns()}", "pw", role="user")
+        svc.save_book(Book(abs_id="abs-orbit-theirs", abs_title="Theirs", ebook_filename="t.epub",
+                           status="active", user_id=other.id))
+        svc.set_user_bookorbit_link(other.id, "abs-orbit-theirs", ebook_id="wm-777")
+
+        def lookup(query):
+            response = self.client.get(f'/koreader/device-sync/books/lookup?{query}', headers=self.auth_headers)
+            return response.status_code, [b["abs_id"] for b in (response.get_json() or {}).get("books", [])]
+
+        by_ebook = self.client.get('/koreader/device-sync/books/lookup?source=bookorbit&id=wm-501',
+                                   headers=self.auth_headers).get_json()["books"]
+        self.assertEqual([b["abs_id"] for b in by_ebook], ["abs-orbit"])
+        self.assertEqual(by_ebook[0]["ebook_bookorbit_id"], "wm-501")
+        self.assertEqual(by_ebook[0]["audio_bookorbit_id"], "wm-502")
+        self.assertEqual(lookup("source=bookorbit&id=wm-502"), (200, ["abs-orbit"]))
+        self.assertEqual(lookup("source=bookorbit&id=wm-601"), (200, ["abs-orbit-legacy"]))
+        self.assertEqual(lookup("source=bookorbit&id=wm-777"), (200, []))
+        self.assertEqual(lookup("source=kavita&id=1")[0], 400)
 
     def _clear_koreader_stats_tables(self):
         from src import web_server
