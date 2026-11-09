@@ -1827,6 +1827,112 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         service.resolve_download.assert_not_called()
 
+    def _save_claimed_book(self, abs_id, **fields):
+        from src import web_server
+        svc = web_server.database_service
+        svc.save_book(Book(abs_id=abs_id, abs_title=fields.pop("title", abs_id), status="active",
+                           user_id=svc._default_user_id(), **fields))
+
+    def test_device_word_map_serves_the_map_with_an_etag(self):
+        from src.api import kosync_server
+        self._save_claimed_book("abs-map", ebook_filename="m.epub")
+        body = {"abs_id": "abs-map", "status": "ready", "map_version": "v1",
+                "epub": {"sha256": "abc"}, "chapters": [], "points": []}
+        service = MagicMock()
+        service.get_word_map.return_value = (200, body)
+
+        with patch.object(kosync_server, '_get_word_map_service', return_value=service), \
+                patch.object(kosync_server, '_manager', None):
+            first = self.client.get('/koreader/device-sync/books/abs-map/word-map', headers=self.auth_headers)
+            etag = first.headers.get("ETag")
+            again = self.client.get('/koreader/device-sync/books/abs-map/word-map',
+                                    headers={**self.auth_headers, 'If-None-Match': etag})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.get_json()["status"], "ready")
+        self.assertTrue(etag)
+        self.assertEqual(again.status_code, 304)
+        book_arg, epub_arg = service.get_word_map.call_args[0]
+        self.assertEqual(book_arg.abs_id, "abs-map")
+        self.assertEqual(epub_arg, "m.epub")
+
+    def test_device_word_map_reports_matching_still_running(self):
+        from src.api import kosync_server
+        self._save_claimed_book("abs-pending", ebook_filename="p.epub")
+        service = MagicMock()
+        service.get_word_map.return_value = (202, {"status": "not_ready", "progress": 0.3})
+
+        with patch.object(kosync_server, '_get_word_map_service', return_value=service), \
+                patch.object(kosync_server, '_manager', None):
+            response = self.client.get('/koreader/device-sync/books/abs-pending/word-map',
+                                       headers=self.auth_headers)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json(), {"status": "not_ready", "progress": 0.3})
+
+    def test_device_word_map_and_sync_now_hide_another_users_book(self):
+        from src.api import kosync_server
+        from src import web_server
+        svc = web_server.database_service
+        other = svc.create_user(f"word_map_other_user_{time.time_ns()}", "pw", role="user")
+        svc.save_book(Book(abs_id="theirs-map", abs_title="Theirs", ebook_filename="t.epub",
+                           status="active", user_id=other.id))
+        service = MagicMock()
+        manager = MagicMock()
+
+        with patch.object(kosync_server, '_get_word_map_service', return_value=service), \
+                patch.object(kosync_server, '_manager', manager):
+            word_map = self.client.get('/koreader/device-sync/books/theirs-map/word-map',
+                                       headers=self.auth_headers)
+            sync_now = self.client.post('/koreader/device-sync/books/theirs-map/sync-now',
+                                        headers=self.auth_headers)
+
+        self.assertEqual(word_map.status_code, 404)
+        self.assertEqual(sync_now.status_code, 404)
+        service.get_word_map.assert_not_called()
+        manager.sync_cycle.assert_not_called()
+
+    def test_device_sync_now_syncs_the_book_for_the_device_user(self):
+        from src.api import kosync_server
+        from src import web_server
+        self._save_claimed_book("abs-now", ebook_filename="n.epub")
+        manager = MagicMock()
+        thread_cls = MagicMock()
+
+        with patch.object(kosync_server, '_manager', manager), \
+                patch.object(kosync_server.threading, 'Thread', thread_cls):
+            response = self.client.post('/koreader/device-sync/books/abs-now/sync-now',
+                                        headers=self.auth_headers)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json(), {"started": True, "abs_id": "abs-now"})
+        kwargs = thread_cls.call_args.kwargs
+        self.assertIs(kwargs["target"], manager.sync_cycle)
+        self.assertEqual(kwargs["kwargs"], {
+            "target_abs_id": "abs-now",
+            "user_id": web_server.database_service._default_user_id(),
+        })
+        thread_cls.return_value.start.assert_called_once()
+
+    def test_device_book_lookup_finds_a_grimmory_pair_by_either_id(self):
+        self._save_claimed_book("abs-pair", title="Technopoly", ebook_filename="t.epub",
+                                ebook_source="BookLore", ebook_source_id="110",
+                                audio_source="BookLore", audio_source_id="111")
+
+        by_ebook = self.client.get('/koreader/device-sync/books/lookup?grimmory_id=110',
+                                   headers=self.auth_headers)
+        by_audio = self.client.get('/koreader/device-sync/books/lookup?grimmory_id=111',
+                                   headers=self.auth_headers)
+        missing = self.client.get('/koreader/device-sync/books/lookup', headers=self.auth_headers)
+
+        self.assertEqual(by_ebook.status_code, 200)
+        self.assertEqual([b["abs_id"] for b in by_ebook.get_json()["books"]], ["abs-pair"])
+        self.assertEqual([b["abs_id"] for b in by_audio.get_json()["books"]], ["abs-pair"])
+        found = by_ebook.get_json()["books"][0]
+        self.assertEqual(found["ebook_grimmory_id"], "110")
+        self.assertEqual(found["audio_grimmory_id"], "111")
+        self.assertEqual(missing.status_code, 400)
+
     def _clear_koreader_stats_tables(self):
         from src import web_server
         from src.db.models import KOReaderBookStat, KOReaderPageStat
