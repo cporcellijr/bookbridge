@@ -202,3 +202,10 @@ def test_service_reports_progress_before_a_map_exists_and_caches_after():
         service.get_word_map(book, str(epub_path))
         assert alignment._get_alignment.call_count == 1  # second call served from cache
         assert word_map_etag(body) == word_map_etag(dict(body))
+
+        # Grimmory-audio books often have no duration on record: report the last
+        # matched word's time rather than 0.
+        unknown = SimpleNamespace(abs_id="abs-2", status="active", audio_duration=None, duration=0.0)
+        status, body = service.get_word_map(unknown, str(epub_path))
+        assert status == 200
+        assert body["duration"] == 0.5

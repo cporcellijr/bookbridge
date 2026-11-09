@@ -272,7 +272,12 @@ class WordMapService:
                 return 409, {"status": "unsupported", "error": "This book's text could not be mapped to its EPUB"}
 
             book_path = self.ebook_parser.resolve_book_path(epub_filename)
+            # A Grimmory-audio book often has no duration on record (0 or None).
+            # The last matched word is then the best lower bound available.
             duration = getattr(book, "audio_duration", None) or getattr(book, "duration", None)
+            if not duration and exported["points"]:
+                duration = exported["points"][-1][0]
+            duration = duration or None
             body = {
                 "format": WORD_MAP_FORMAT_VERSION,
                 "abs_id": book.abs_id,
