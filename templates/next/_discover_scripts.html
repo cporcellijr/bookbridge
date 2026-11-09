@@ -564,6 +564,7 @@
         if (matchReason === 'same_folder') addBadge('samefolder', {{ _('Same folder')|tojson }});
         if (matchReason === 'same_folder_ambiguous') addBadge('samefolder', {{ _('Same folder?')|tojson }});
         if (matchReason === 'same_series') addBadge('sameseries', {{ _('Same series')|tojson }}, {{ _('Same series and number as the audiobook')|tojson }});
+        if (ebookFilename.toLowerCase().endsWith('.readalong.epub')) addBadge('unknown', '🔊 ' + {{ _('Read-along')|tojson }}, {{ _('Generated read-along copy with embedded audio, not the standard EPUB')|tojson }});
 
         if (badges.childElementCount) card.appendChild(badges);
         card.appendChild(icon);
