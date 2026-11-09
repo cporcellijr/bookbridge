@@ -2494,6 +2494,159 @@ def koreader_device_sync_download(abs_id):
     return response
 
 
+# ---------------- Device word map and sync trigger ----------------
+#
+# For reader apps that pair an ebook with its audiobook (read-along, and jumping
+# from one to the other at the same word). Same per-user KOSync credentials and
+# the same claim rule as the download route above: a device sees only books its
+# user has matched, and a foreign book answers 404 like a missing one.
+
+_word_map_service = None
+_word_map_service_lock = threading.Lock()
+
+
+def _get_word_map_service():
+    global _word_map_service
+    if _container is None or _database_service is None:
+        return None
+    with _word_map_service_lock:
+        if _word_map_service is None:
+            from src.services.word_map_service import WordMapService
+            _word_map_service = WordMapService(
+                _database_service,
+                _container.alignment_service(),
+                _container.ebook_parser(),
+            )
+        return _word_map_service
+
+
+def _device_claimed_book(abs_id):
+    """The book when the authenticated device's user has claimed it, else None."""
+    if _database_service is None:
+        return None
+    book = _database_service.get_book(abs_id)
+    if book is None:
+        return None
+    user_id = getattr(g, "kosync_user_id", None)
+    if user_id is not None and user_id not in _database_service.get_book_user_ids(abs_id):
+        return None
+    return book
+
+
+def _word_map_epub_filename(book):
+    """The EPUB whose text the book's alignment map was built against."""
+    chooser = getattr(_manager, "_get_alignment_epub_filename", None) if _manager else None
+    if chooser is not None:
+        try:
+            chosen = chooser(book)
+            if chosen:
+                return chosen
+        except Exception as e:
+            logger.debug(f"Alignment EPUB choice failed for '{book.abs_id}': {e}")
+    return getattr(book, "ebook_filename", None)
+
+
+@kosync_sync_bp.route('/device-sync/books/lookup', methods=['GET'])
+@kosync_sync_bp.route('/koreader/device-sync/books/lookup', methods=['GET'])
+@kosync_auth_required
+def device_sync_book_lookup():
+    """Find the user's BookBridge books for a Grimmory book id.
+
+    A reader app knows Grimmory's ids, not BookBridge's ``abs_id``. The id can be
+    the ebook's or the audiobook's; a Grimmory entry holding both files matches
+    on either side.
+    """
+    grimmory_id = (request.args.get('grimmory_id') or '').strip()
+    if not grimmory_id:
+        return jsonify({"error": "grimmory_id is required"}), 400
+    if _database_service is None:
+        return jsonify({"error": "Database unavailable"}), 503
+
+    candidates = [
+        _database_service.get_book_by_ebook_source("BookLore", grimmory_id),
+        _database_service.get_book_by_audio_source("BookLore", grimmory_id),
+    ]
+    books, seen = [], set()
+    for book in candidates:
+        if book is None or book.abs_id in seen:
+            continue
+        seen.add(book.abs_id)
+        if _device_claimed_book(book.abs_id) is None:
+            continue
+        # The same test the sync engine uses before reading a stored map.
+        has_map = getattr(book, "transcript_file", None) == "DB_MANAGED"
+        books.append({
+            "abs_id": book.abs_id,
+            "title": getattr(book, "abs_title", None),
+            "sync_mode": getattr(book, "sync_mode", None),
+            "status": getattr(book, "status", None),
+            "ebook_grimmory_id": getattr(book, "ebook_source_id", None) if is_grimmory_source(getattr(book, "ebook_source", None)) else None,
+            "audio_grimmory_id": getattr(book, "audio_source_id", None) if getattr(book, "audio_source", None) == "BookLore" else None,
+            "has_word_map": has_map,
+        })
+    return jsonify({"books": books})
+
+
+@kosync_sync_bp.route('/device-sync/books/<path:abs_id>/word-map', methods=['GET'])
+@kosync_sync_bp.route('/koreader/device-sync/books/<path:abs_id>/word-map', methods=['GET'])
+@kosync_auth_required
+def device_sync_word_map(abs_id):
+    """Audio timestamps paired with in-text EPUB CFIs, for read-along and handoff.
+
+    200 with the map once matching is done; 202 with progress while it isn't;
+    409 when the book has no ebook or its text can't be placed in the EPUB.
+    The map is built on first request after each re-match and then cached, so
+    the first call for a long book can take several seconds.
+    """
+    book = _device_claimed_book(abs_id)
+    if book is None:
+        return jsonify({"error": "Book not available"}), 404
+    service = _get_word_map_service()
+    if service is None:
+        return jsonify({"error": "Word map service unavailable"}), 503
+
+    status, body = service.get_word_map(book, _word_map_epub_filename(book))
+    if status != 200:
+        return jsonify(body), status
+
+    from src.services.word_map_service import word_map_etag
+    etag = word_map_etag(body)
+    if request.if_none_match and etag in request.if_none_match:
+        response = jsonify({})
+        response.status_code = 304
+        response.set_etag(etag)
+        return response
+    response = jsonify(body)
+    response.set_etag(etag)
+    return response
+
+
+@kosync_sync_bp.route('/device-sync/books/<path:abs_id>/sync-now', methods=['POST'])
+@kosync_sync_bp.route('/koreader/device-sync/books/<path:abs_id>/sync-now', methods=['POST'])
+@kosync_auth_required
+def device_sync_now(abs_id):
+    """Sync one book for the device's user now, instead of at the next poll.
+
+    For an app that just saved a position to one service (closing the ebook, say)
+    and wants the other services caught up before the user switches to the
+    audiobook. Runs in the background; the response only says it started.
+    """
+    book = _device_claimed_book(abs_id)
+    if book is None:
+        return jsonify({"error": "Book not available"}), 404
+    if not _manager:
+        return jsonify({"error": "Sync engine unavailable"}), 503
+
+    user_id = getattr(g, "kosync_user_id", None)
+    if user_id is not None:
+        target, kwargs = _manager.sync_cycle, {'target_abs_id': abs_id, 'user_id': user_id}
+    else:
+        target, kwargs = _manager.run_sync_for_all_users, {'target_abs_id': abs_id}
+    logger.info(f"⚡ Device sync-now: syncing '{getattr(book, 'abs_title', abs_id)}'")
+    threading.Thread(target=target, kwargs=kwargs, daemon=True).start()
+    return jsonify({"started": True, "abs_id": abs_id}), 202
+
+
 @kosync_sync_bp.route('/device-sync/statistics', methods=['POST'])
 @kosync_sync_bp.route('/koreader/device-sync/statistics', methods=['POST'])
 @kosync_auth_required

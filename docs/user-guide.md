@@ -179,6 +179,7 @@ The bridge still runs a normal background sync every 5 minutes by default, but i
 
 1. **Audiobookshelf playback**: when playback changes in Audiobookshelf, the bridge can sync shortly after the activity settles.
 2. **KOReader push**: if you use KOSync, KOReader can send progress straight to the bridge.
+3. **Reader apps**: an app can ask the bridge to sync one book right away, for example when you close the ebook and are about to switch to the audiobook. See [Device API](device-api.md).
 
 ### Per-client polling
 
