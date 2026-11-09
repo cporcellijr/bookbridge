@@ -254,3 +254,15 @@ def test_the_suggestion_card_marks_a_series_match():
     assert "matchReason === 'same_series'" in template
     assert "'Same series'" in template
     assert ".source-badge.sameseries {" in template
+
+
+def test_the_ebook_card_marks_a_generated_readalong_copy():
+    from pathlib import Path
+
+    from src.services.readalong_delivery import _READALONG_SUFFIX
+
+    root = Path(__file__).resolve().parents[1] / "templates"
+    for page in ("suggestions.html", "next/_discover_scripts.html"):
+        template = (root / page).read_text(encoding="utf-8")
+        assert f"ebookFilename.toLowerCase().endsWith('{_READALONG_SUFFIX}')" in template, page
+        assert "_('Read-along')" in template, page

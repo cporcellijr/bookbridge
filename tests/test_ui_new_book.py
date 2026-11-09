@@ -134,6 +134,27 @@ class TestBookPage(unittest.TestCase):
         assert '>Link<' in unlinked and 'Not linked' in unlinked
         assert '>Change link<' in linked and 'https://www.goodreads.com/book/show/42' in linked
 
+    def test_hero_chips_link_to_the_audio_ebook_and_rating_sites(self):
+        from src import web_server
+        original = web_server._build_dashboard_mappings
+        links = {'audio_url': 'https://audio.example/item/book-1',
+                 'bookorbit_url': 'https://orbit.example/book/7',
+                 'storygraph_url': 'https://app.thestorygraph.com/books/sg-1',
+                 'goodreads_url': 'https://www.goodreads.com/book/show/42'}
+
+        def with_links(*args, **kwargs):
+            mappings, progress = original(*args, **kwargs)
+            mappings[0].update(links, storygraph_rating=3.89, goodreads_rating=3.91)
+            return mappings, progress
+
+        self._login('ui-reader')
+        with patch.object(web_server, '_build_dashboard_mappings', side_effect=with_links):
+            text = self.client.get('/book/book-1').get_data(as_text=True)
+        chips = text.split('class="book-chips"', 1)[1].split('</div>', 1)[0]
+        for url in links.values():
+            assert f'<a href="{url}" target="_blank" rel="noopener noreferrer">' in chips, url
+        assert chips.count('<a ') == 4  # status and CTC stay plain chips
+
     def test_no_integration_actions_when_apps_unconfigured(self):
         self._login('ui-reader')
         with patch('src.web_server._build_dashboard_integrations', return_value={}):
