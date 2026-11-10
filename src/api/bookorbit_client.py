@@ -421,6 +421,7 @@ class BookOrbitClient:
             size = 200
             max_pages = 2000  # safety against a bad/zero total
             total = None
+            partial = False
             while page < max_pages:
                 resp = self._make_request(
                     "POST", "/api/v1/books/query", {"pagination": {"page": page, "size": size}}
@@ -441,11 +442,14 @@ class BookOrbitClient:
                     or page_total < 0
                     or not isinstance(items, list)
                     or (page_total == 0 and items)
-                    or (total is not None and page_total != total)
                 ):
                     self._last_refresh_failed = True
                     logger.warning("BookOrbit: book listing returned inconsistent pagination metadata")
                     return False
+                if total is not None and page_total != total:
+                    logger.warning("BookOrbit: book listing returned inconsistent pagination metadata")
+                    partial = True
+                    break
                 total = page_total
                 for raw in items:
                     if not isinstance(raw, dict):
@@ -454,21 +458,29 @@ class BookOrbitClient:
                     if info:
                         new_cache[info["id"]] = info
                 if len(new_cache) > total:
-                    self._last_refresh_failed = True
                     logger.warning("BookOrbit: book listing contained more books than its reported total")
-                    return False
+                    partial = True
+                    break
                 page += 1
                 if len(new_cache) >= total:
                     break
                 if not items or len(items) < size:
                     if len(new_cache) < total:
-                        self._last_refresh_failed = True
                         logger.warning("BookOrbit: book listing ended before all %d books were loaded", total)
-                        return False
+                        partial = True
                     break
             else:
-                self._last_refresh_failed = True
                 logger.warning("BookOrbit: book listing reached page cap (%d) before completion", max_pages)
+                partial = True
+
+            if partial:
+                # Keep the last complete snapshot; a cold cache takes the partial listing so sync
+                # lookups work, and the catalog stays incomplete until a full listing succeeds.
+                self._last_refresh_failed = True
+                if not self._book_cache:
+                    with self._cache_lock:
+                        self._book_cache = new_cache
+                        self._llm_match_cache = {}
                 return False
 
             with self._cache_lock:
