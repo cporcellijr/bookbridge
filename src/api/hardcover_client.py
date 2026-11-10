@@ -14,7 +14,7 @@ Key features:
 import os
 import logging
 import time
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 from datetime import date
 
 import requests
@@ -284,8 +284,8 @@ class HardcoverClient:
             self.user_id = me.get("id")
         return self.user_id
 
-    def get_user_book(self, book_id):
-        """Fetch the user's specific entry (UserBook) for a generic book_id."""
+    def get_user_book(self, book_id: Any) -> Optional[Dict]:
+        """Fetch the user's UserBook for a book_id: {} when confirmed absent, None when the lookup failed."""
         # Avoid querying when book_id is missing.
         if not book_id:
             return None
@@ -310,8 +310,7 @@ class HardcoverClient:
 
             if response and "user_books" in response:
                 books = response["user_books"]
-                if books:
-                    return books[0]
+                return books[0] if books else {}
 
         except Exception as e:
             logger.error(f"❌ Error fetching user book: {e}", exc_info=True)

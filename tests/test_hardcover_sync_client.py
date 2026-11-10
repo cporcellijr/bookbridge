@@ -270,9 +270,9 @@ class TestHardcoverSyncClient(unittest.TestCase):
         ))
 
     def test_update_progress_recreates_missing_user_book(self):
-        """A missing UserBook is re-created as Want to Read and progress continues."""
+        """A confirmed-empty UserBook lookup is re-created as Want to Read and progress continues."""
         self._save_matched_details()
-        self.mock_hardcover_client.get_user_book.return_value = None
+        self.mock_hardcover_client.get_user_book.return_value = {}
         self.mock_hardcover_client.update_status.return_value = {
             'id': 'ub', 'status_id': 1, 'user_book_reads': [],
         }
@@ -283,6 +283,18 @@ class TestHardcoverSyncClient(unittest.TestCase):
         self.mock_hardcover_client.update_status.assert_any_call('427554', 1, '999')
         self.assertTrue(result.success)
         self.assertEqual(self.mock_hardcover_client.update_progress.call_args[0][0], 'ub')
+
+    def test_update_progress_failed_user_book_lookup_writes_no_status(self):
+        """A failed lookup (query error, 429, no user id) must not re-add the book as Want to Read."""
+        self._save_matched_details()
+        self.mock_hardcover_client.get_user_book.return_value = None
+
+        result = self.hardcover_sync_client.update_progress(
+            self.test_book, UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5)))
+
+        self.assertFalse(result.success)
+        self.mock_hardcover_client.update_status.assert_not_called()
+        self.mock_hardcover_client.update_progress.assert_not_called()
 
     def test_update_progress_missing_user_book_warns_once_then_debug(self):
         """When the UserBook cannot be re-created the warning is not repeated at WARNING."""
