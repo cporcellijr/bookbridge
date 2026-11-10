@@ -2,6 +2,7 @@
 from html import unescape
 from unittest.mock import patch
 from flask.signals import template_rendered
+import re
 import unittest
 import tests.test_ui_new_foundation as foundation
 from src.db.models import Book, State
@@ -77,7 +78,11 @@ class TestBookPage(unittest.TestCase):
                            '/static/js/storyteller-modal.js']:
                 assert action in text
             assert ('Technical details' in text) == technical
-            # Nothing in the book window hides behind a disclosure except Remove's confirmation.
+            # Delete Mapping is the last Tools button, behind a confirm; no separate Remove section.
+            tools = re.search(r'<div class="book-tools">(.*?)</div>', text, re.S).group(1)
+            assert re.search(r'<form class="book-delete" method="POST" target="_top" action="/delete/book-1"><button type="submit" onclick=\'return confirm\("Delete this mapping\?"\)\'>Delete Mapping</button></form>\s*$', tools)
+            assert 'book-remove' not in text and '<summary>Remove</summary>' not in text
+            # Nothing in the book window hides behind a disclosure.
             assert 'class="reset-menu"' not in text and 'Show technical details' not in text
             self.client.get('/logout')
 
