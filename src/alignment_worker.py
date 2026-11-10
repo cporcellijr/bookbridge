@@ -404,10 +404,9 @@ class AlignmentWorker:
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    )
+    # The app's own console/file logging (configured when the module is imported);
+    # a basicConfig here as well would print every line twice.
+    import src.utils.logging_utils  # noqa: F401
     main_url = os.environ.get("WORKER_MAIN_URL", "").strip()
     token = os.environ.get("WORKER_TOKEN", "")
     if not main_url or not token:
