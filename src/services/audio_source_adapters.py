@@ -211,6 +211,7 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
             else self.abs_client.search_audiobooks(query, library_id=library_scope)
         )
         results: list[AudioResult] = []
+        self.catalog_incomplete = False
         for item in pool:
             item_id = str(item.get("id") or "")
             if not item_id:
@@ -219,7 +220,10 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
             metadata = media.get("metadata", {}) or {}
             title = self._get_title(item)
             if title == "Unknown" and self.catalog_items is not None:
-                raise ValueError(f"ABS catalog item '{item_id}' has no title")
+                # Catalog mode makes no per-item detail lookups: skip it and report the catalog incomplete.
+                logger.info("ABS catalog item '%s' has no title; skipped and catalog marked incomplete", item_id)
+                self.catalog_incomplete = True
+                continue
             if (self.catalog_items is not None or not query_mode) and not self._matches_query(item, query):
                 continue
             if title == "Unknown":

@@ -2245,6 +2245,7 @@ class TestKosyncEndpoints(unittest.TestCase):
         from src.api import kosync_server
         from src import web_server
         self._save_claimed_book("abs-now", ebook_filename="n.epub")
+        self.addCleanup(kosync_server._device_sync_now_inflight.clear)
         manager = MagicMock()
         thread_cls = MagicMock()
 
@@ -2255,13 +2256,27 @@ class TestKosyncEndpoints(unittest.TestCase):
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.get_json(), {"started": True, "abs_id": "abs-now"})
-        kwargs = thread_cls.call_args.kwargs
-        self.assertIs(kwargs["target"], manager.sync_cycle)
-        self.assertEqual(kwargs["kwargs"], {
-            "target_abs_id": "abs-now",
-            "user_id": web_server.database_service._default_user_id(),
-        })
+        user_id = web_server.database_service._default_user_id()
+        thread_kwargs = thread_cls.call_args.kwargs
+        self.assertIs(thread_kwargs["target"], kosync_server._run_device_sync_now)
+        key, target, kwargs = thread_kwargs["args"]
+        self.assertIs(target, manager.sync_cycle)
+        self.assertEqual(kwargs, {"target_abs_id": "abs-now", "user_id": user_id})
         thread_cls.return_value.start.assert_called_once()
+
+        # Pre-release review #7: repeats while that sync runs start no thread and queue one follow-up.
+        thread_cls.reset_mock()
+        with patch.object(kosync_server, '_manager', manager),                 patch.object(kosync_server.threading, 'Thread', thread_cls):
+            for _ in range(3):
+                repeat = self.client.post('/koreader/device-sync/books/abs-now/sync-now',
+                                          headers=self.auth_headers)
+                self.assertEqual(repeat.status_code, 202)
+        thread_cls.assert_not_called()
+        manager._queue_pending_sync.assert_called_with("abs-now", user_id=user_id)
+
+        kosync_server._run_device_sync_now(key, target, kwargs)
+        manager.sync_cycle.assert_called_once_with(target_abs_id="abs-now", user_id=user_id)
+        self.assertNotIn(key, kosync_server._device_sync_now_inflight)
 
     def test_device_book_lookup_finds_a_grimmory_pair_by_either_id(self):
         self._save_claimed_book("abs-pair", title="Technopoly", ebook_filename="t.epub",

@@ -292,3 +292,40 @@ def test_grimmory_malformed_or_partial_page_preserves_catalog(grimmory, payload)
     assert grimmory._refresh_book_cache(refresh_stale_details=False) is False
     assert not grimmory.catalog_complete
     assert set(grimmory._book_id_cache) == {"saved"}
+
+
+def test_grimmory_partial_listing_on_cold_cache_fills_sync_lookups(grimmory):
+    """Pre-release review #3: with no prior snapshot (fresh start), a listing whose distinct ids
+    fall short of totalElements still fills the cache that filename lookups use, while
+    Discover keeps seeing an incomplete catalog."""
+    grimmory.is_configured = lambda: True
+    grimmory._fetch_scan_page = lambda *_args: _Response({
+        "content": [{"id": "gr-1", "fileName": "book.epub", "title": "Book"}],
+        "page": {"totalElements": 2, "totalPages": 1, "number": 0},
+    })
+    grimmory._get_fresh_token = lambda: "token"
+    grimmory._fetch_book_detail = lambda book_id, token: {
+        "id": book_id,
+        "primaryFile": {"id": 7, "fileName": "book.epub", "bookType": "EPUB"},
+        "metadata": {"title": "Book"},
+    }
+
+    assert grimmory._refresh_book_cache(refresh_stale_details=False) is False
+
+    assert grimmory.find_book_by_filename("book.epub", allow_refresh=False)["id"] == "gr-1"
+    assert not grimmory.catalog_complete
+
+
+def test_bookorbit_partial_listing_on_cold_cache_fills_sync_lookups(bookorbit):
+    """Pre-release review #3: same as Grimmory — a short listing on an empty cache is kept
+    for sync lookups but the catalog stays incomplete for Discover."""
+    bookorbit.is_configured = lambda: True
+    bookorbit._make_request = lambda *args, **kwargs: _Response({
+        "items": [{"id": "partial", "title": "Partial", "files": []}],
+        "total": 2,
+    })
+
+    assert bookorbit._refresh_book_cache() is False
+
+    assert set(bookorbit._book_cache) == {"partial"}
+    assert not bookorbit.catalog_complete

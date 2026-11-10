@@ -1073,7 +1073,9 @@ class BookloreClient:
                     break
                 page += 1
 
-            if scan_capped or (expected_total is not None and len(seen_raw_ids) != expected_total):
+            partial = scan_capped or (expected_total is not None and len(seen_raw_ids) != expected_total)
+            if partial and self._has_cached_books():
+                # Keep the last complete snapshot; a cold cache takes the partial listing below.
                 self._last_refresh_failed = True
                 return False
 
@@ -1081,6 +1083,9 @@ class BookloreClient:
             self._prune_stale_cache_entries(live_ids)
 
             if not all_books_list:
+                if partial:
+                    self._last_refresh_failed = True
+                    return False
                 logger.debug("Grimmory: No books found in library")
                 self._cache_timestamp = time.time()
                 self._save_cache()  # No-op now
@@ -1254,6 +1259,10 @@ class BookloreClient:
                     "Grimmory: Skipping stale details refresh for quick search-triggered cache validation"
                 )
 
+            if partial:
+                # Sync lookups use what was listed; the catalog stays incomplete and is rescanned after the cooldown.
+                self._last_refresh_failed = True
+                return False
             self._cache_timestamp = time.time()
             self._last_refresh_failed = False
             return True

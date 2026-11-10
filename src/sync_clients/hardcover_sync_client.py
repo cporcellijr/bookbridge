@@ -558,7 +558,7 @@ class HardcoverSyncClient(SyncClient):
         # Get user book from Hardcover
         ub = self.hardcover_client.get_user_book(hardcover_details.hardcover_book_id)
         no_ub_key = f"hardcover_no_user_book:{hardcover_details.hardcover_book_id}"
-        if not ub:
+        if ub == {}:
             created = self.hardcover_client.update_status(
                 hardcover_details.hardcover_book_id, 1, hardcover_details.hardcover_edition_id,
             )

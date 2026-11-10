@@ -259,6 +259,8 @@ class WordMapService:
         self._cache: "OrderedDict[tuple, Dict]" = OrderedDict()
         self._cache_size = cache_size
         self._lock = threading.Lock()
+        # One build at a time per key; different books build concurrently.
+        self._build_locks: Dict[tuple, threading.Lock] = {}
 
     def status(self, book: "Book") -> Dict:
         """Where matching stands for ``book`` when no map is stored yet."""
@@ -289,46 +291,63 @@ class WordMapService:
             if cached is not None:
                 self._cache.move_to_end(key)
                 return 200, cached
+            build_lock = self._build_locks.setdefault(key, threading.Lock())
+        try:
+            with build_lock:
+                with self._lock:
+                    cached = self._cache.get(key)
+                if cached is not None:
+                    return 200, cached
+                status, body = self._build(book, epub_filename, row, map_version)
+                if status == 200:
+                    with self._lock:
+                        self._cache[key] = body
+                        while len(self._cache) > self._cache_size:
+                            self._cache.popitem(last=False)
+                return status, body
+        finally:
+            with self._lock:
+                if self._build_locks.get(key) is build_lock:
+                    del self._build_locks[key]
 
-            map_points = self.alignment_service._get_alignment(book.abs_id) or []
-            unsupported = {"status": "unsupported", "error": "This book's text could not be mapped to its EPUB"}
-            try:
-                exported = build_word_map(self.ebook_parser, epub_filename, map_points)
-                book_path = self.ebook_parser.resolve_book_path(epub_filename)
-            except (ValueError, OSError) as e:
-                # The EPUB is missing, or build_dom_anchor_map refused to guess
-                # because its replay of the text extraction disagreed.
-                logger.warning("Word map export failed for '%s': %s", book.abs_id, e, exc_info=True)
-                return 409, unsupported
-            if not exported["points"]:
-                # extract_text_and_map answers an unreadable EPUB with empty text.
-                logger.warning("Word map export placed no words for '%s'", book.abs_id)
-                return 409, unsupported
+    def _build(self, book: "Book", epub_filename: str, row: Dict, map_version: Optional[str]) -> Tuple[int, Dict]:
+        """Build one word-map response body; slow (EPUB parse, DOM walk, SHA-256)."""
+        map_points = self.alignment_service._get_alignment(book.abs_id) or []
+        unsupported = {"status": "unsupported", "error": "This book's text could not be mapped to its EPUB"}
+        try:
+            exported = build_word_map(self.ebook_parser, epub_filename, map_points)
+            book_path = self.ebook_parser.resolve_book_path(epub_filename)
+        except (ValueError, OSError) as e:
+            # The EPUB is missing, or build_dom_anchor_map refused to guess
+            # because its replay of the text extraction disagreed.
+            logger.warning("Word map export failed for '%s': %s", book.abs_id, e, exc_info=True)
+            return 409, unsupported
+        if not exported["points"]:
+            # extract_text_and_map answers an unreadable EPUB with empty text.
+            logger.warning("Word map export placed no words for '%s'", book.abs_id)
+            return 409, unsupported
 
-            # A Grimmory-audio book often has no duration on record (0 or None).
-            # The last matched word is then the best lower bound available.
-            duration = getattr(book, "audio_duration", None) or getattr(book, "duration", None)
-            if not duration and exported["points"]:
-                duration = exported["points"][-1][0]
-            duration = duration or None
-            body = {
-                "format": WORD_MAP_FORMAT_VERSION,
-                "abs_id": book.abs_id,
-                "status": "ready",
-                "map_version": map_version,
-                "align_method": row["align_method"],
-                "quality_score": row["quality_score"],
-                "duration": duration,
-                "epub": {
-                    "filename": Path(str(epub_filename)).name,
-                    "sha256": _file_sha256(Path(book_path)) if book_path else None,
-                },
-                **exported,
-            }
-            self._cache[key] = body
-            while len(self._cache) > self._cache_size:
-                self._cache.popitem(last=False)
-            return 200, body
+        # A Grimmory-audio book often has no duration on record (0 or None).
+        # The last matched word is then the best lower bound available.
+        duration = getattr(book, "audio_duration", None) or getattr(book, "duration", None)
+        if not duration and exported["points"]:
+            duration = exported["points"][-1][0]
+        duration = duration or None
+        body = {
+            "format": WORD_MAP_FORMAT_VERSION,
+            "abs_id": book.abs_id,
+            "status": "ready",
+            "map_version": map_version,
+            "align_method": row["align_method"],
+            "quality_score": row["quality_score"],
+            "duration": duration,
+            "epub": {
+                "filename": Path(str(epub_filename)).name,
+                "sha256": _file_sha256(Path(book_path)) if book_path else None,
+            },
+            **exported,
+        }
+        return 200, body
 
 
 def word_map_etag(body: Dict) -> str:

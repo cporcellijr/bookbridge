@@ -110,6 +110,8 @@ _BOOKLORE_SHELF_FILTER_TTL_SECONDS = 120
 # KoSync PUT debounce state
 _kosync_debounce: dict = {}  # {(abs_id, user_id): {'last_event': float, 'title': str, 'synced': bool, 'user_id', 'abs_id'}}
 _kosync_debounce_lock = threading.Lock()
+_device_sync_now_inflight: set = set()  # {(abs_id, user_id)} with a sync-now thread running
+_device_sync_now_lock = threading.Lock()
 _debounce_thread_started = False
 _kosync_open_sessions: dict = {}  # {session_key: session_dict}
 _kosync_open_sessions_lock = threading.Lock()
@@ -125,6 +127,8 @@ _kosync_recent_external_puts_lock = threading.Lock()
 _discovery_anchor_cache = LRUCache(capacity=1024)
 # (document hash, abs_id) pairs whose CWA identity was already checked (#582).
 _cwa_identity_checked = LRUCache(capacity=1024)
+# A negative CWA identity check is retried after this long (CWA may checksum the file later).
+_CWA_IDENTITY_RECHECK_SECONDS = 3600
 _discovery_anchor_cache_lock = threading.Lock()
 _KOREADER_STATS_MAX_BOOKS = 1000
 _KOREADER_STATS_MAX_PAGE_STATS = 10000
@@ -2657,9 +2661,27 @@ def device_sync_now(abs_id: str) -> ResponseReturnValue:
         target, kwargs = _manager.sync_cycle, {'target_abs_id': abs_id, 'user_id': user_id}
     else:
         target, kwargs = _manager.run_sync_for_all_users, {'target_abs_id': abs_id}
+    key = (abs_id, user_id)
+    with _device_sync_now_lock:
+        already_running = key in _device_sync_now_inflight
+        _device_sync_now_inflight.add(key)
+    if already_running:
+        # One thread per book and reader; a repeat while it runs becomes one queued follow-up.
+        _manager._queue_pending_sync(abs_id, user_id=user_id)
+        logger.info(f"⚡ Device sync-now: '{getattr(book, 'abs_title', abs_id)}' already syncing, queued a follow-up")
+        return jsonify({"started": True, "abs_id": abs_id}), 202
     logger.info(f"⚡ Device sync-now: syncing '{getattr(book, 'abs_title', abs_id)}'")
-    threading.Thread(target=target, kwargs=kwargs, daemon=True).start()
+    threading.Thread(target=_run_device_sync_now, args=(key, target, kwargs), daemon=True).start()
     return jsonify({"started": True, "abs_id": abs_id}), 202
+
+
+def _run_device_sync_now(key: tuple, target, kwargs: dict) -> None:
+    """Run one device sync-now and free its in-flight slot."""
+    try:
+        target(**kwargs)
+    finally:
+        with _device_sync_now_lock:
+            _device_sync_now_inflight.discard(key)
 
 
 @kosync_sync_bp.route('/device-sync/statistics', methods=['POST'])
@@ -3934,14 +3956,16 @@ def _adopt_cwa_identity(doc_id: str, book) -> None:
         return
     from src.services.cwa_checksum_resolver import find_calibre_book_id, find_calibre_epub_path
 
+    # Runs on every KoSync PUT: query metadata.db and walk the library once per hash and book.
+    key = (doc_id, book.abs_id)
+    checked_at = _cwa_identity_checked.get(key)
+    if checked_at is not None and time.monotonic() - checked_at < _CWA_IDENTITY_RECHECK_SECONDS:
+        return
+    _cwa_identity_checked.put(key, time.monotonic())
     try:
         calibre_book_id = find_calibre_book_id(doc_id)
         if not calibre_book_id or _database_service.get_book_by_ebook_source("CWA", calibre_book_id):
             return
-        # The file comparison can walk the library; do it once per hash and book.
-        if _cwa_identity_checked.get((doc_id, book.abs_id)):
-            return
-        _cwa_identity_checked.put((doc_id, book.abs_id), True)
         library_epub = find_calibre_epub_path(calibre_book_id)
         if library_epub is None:
             return

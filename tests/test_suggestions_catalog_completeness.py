@@ -206,11 +206,12 @@ def test_abs_adapter_uses_preloaded_catalog_without_including_ebook_only_items()
     client.search_audiobooks.assert_not_called()
     client.get_item_details.assert_not_called()
 
+    # Pre-release review #6: one untitled item used to raise and discard the whole ABS pool.
     incomplete = {"id": "missing-title", "libraryId": "lib", "media": {"duration": 30}}
     with patch.object(ABSAudioSourceAdapter, "_parse_library_scope", return_value=None):
-        adapter = ABSAudioSourceAdapter(client, catalog_items=[incomplete])
-        with pytest.raises(ValueError, match="has no title"):
-            adapter.search("")
+        adapter = ABSAudioSourceAdapter(client, catalog_items=[incomplete, audio])
+        assert [item.source_id for item in adapter.search("")] == ["audio"]
+        assert adapter.catalog_incomplete is True
     client.get_item_details.assert_not_called()
 
 
@@ -299,3 +300,23 @@ def test_kavita_normalisation_preserves_path_and_zero_series_position():
     book = client._normalise_book(_series(), _chapter())
     assert book["filePath"] == "/library/Series/Volume Zero.epub"
     assert book["seriesIndex"] == 0
+
+
+def test_discover_keeps_titled_abs_items_and_reports_incomplete_when_one_is_untitled(tmp_path):
+    """Pre-release review #6: Discover records ABS as incomplete instead of losing every ABS pair."""
+    from types import SimpleNamespace
+    from src import web_server
+
+    clients = SimpleNamespace(abs_client=_abs_client(), booklore_client=None, bookorbit_client=None)
+    audio = {"id": "audio", "libraryId": "lib", "media": {"duration": 30, "metadata": {"title": "Audio book"}}}
+    untitled = {"id": "missing-title", "libraryId": "lib", "media": {"duration": 30}}
+    states = {}
+    with (
+        patch.object(web_server, "_scan_user_clients", return_value=clients),
+        patch.object(web_server, "container", MagicMock(**{"data_dir.return_value": tmp_path})),
+        patch.object(ABSAudioSourceAdapter, "_parse_library_scope", return_value=None),
+    ):
+        results = web_server.get_searchable_audiobooks("", source_states=states, abs_catalog=[untitled, audio])
+
+    assert [item.source_id for item in results] == ["audio"]
+    assert states["ABS"]["roles"]["audio"]["complete"] is False
