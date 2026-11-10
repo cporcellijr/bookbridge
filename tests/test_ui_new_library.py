@@ -210,6 +210,16 @@ class TestNewLibrary(unittest.TestCase):
         self.assertNotIn("last-app", text)
         self.assertNotIn("Last: ", card)
 
+    def test_touch_input_shows_the_format_strip_and_a_tapped_icon_its_tip(self):
+        # iPadOS matches (hover: hover), so the hover-only strip stayed invisible and a tap opened the book.
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        hover_block = re.search(r"@media \(hover: hover\) \{(.*?)\n\}", css, re.S).group(1)
+        self.assertIn('html[data-input="touch"] .format-strip', hover_block)
+        self.assertIn(".format-slot.tip-open .format-tip", css)
+        script = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
+        self.assertIn("event.pointerType === 'mouse' ? 'mouse' : 'touch'", script)
+        self.assertIn("slot.classList.toggle('tip-open')", script)
+
     def test_cover_shows_progress_badge_and_line_only_for_a_position_above_zero(self):
         from src import web_server
         original = web_server._build_dashboard_mappings

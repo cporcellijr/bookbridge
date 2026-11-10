@@ -334,11 +334,11 @@ summary::-webkit-details-marker { display: none; }
 .format-slot.is-oos { color: #FF9466; background: radial-gradient(circle at 82% 18%, #FF9466 0 3px, transparent 3.5px); box-shadow: inset 0 0 0 1px rgba(255,148,102,.55); }
 /* Anchored to the strip (slots stay unpositioned) so it never clips at the card edge. */
 .format-tip { position: absolute; bottom: calc(100% + 8px); left: 50%; width: max-content; max-width: 170px; padding: 6px 9px; border: 1px solid #333A4A; border-radius: 7px; background: #0F1218; color: #EDE9E2; font: 500 11.5px/1.35 var(--font-ui); text-align: center; opacity: 0; pointer-events: none; transform: translateX(-50%); transition: opacity .15s; }
-.format-slot:hover .format-tip { opacity: 1; }
-/* Hover-only where a pointer can hover; touch screens keep the strip visible. */
+.format-slot:hover .format-tip, .format-slot.tip-open .format-tip { opacity: 1; }
+/* Hover-only where a pointer can hover; touch screens keep the strip visible. iPadOS claims hover, so touch input is tagged by script. */
 @media (hover: hover) {
   .format-strip { opacity: 0; transition: opacity .18s ease; }
-  .library-book-card:hover .format-strip, .library-book-card:focus-within .format-strip { opacity: 1; }
+  .library-book-card:hover .format-strip, .library-book-card:focus-within .format-strip, html[data-input="touch"] .format-strip { opacity: 1; }
 }
 .progress-bar-fill { display: block; height: 100%; background: var(--ribbon); }
 .out-of-sync-line, .state-label { display: inline-block; margin: 3px 0 0; color: var(--warn); font-size: 11px; }
