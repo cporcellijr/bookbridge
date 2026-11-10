@@ -19,4 +19,8 @@
   <symbol id="maintenance" viewBox="0 0 24 24"><path d="M14.5 5.5a5 5 0 0 0-6.4 6.4L3 17a2.1 2.1 0 0 0 3 3l5.1-5.1a5 5 0 0 0 6.4-6.4L14 12l-3-3z"/></symbol>
   <symbol id="external" viewBox="0 0 24 24"><path d="M14 4h6v6m0-6-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
   <symbol id="sidebar" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></symbol>
+  <symbol id="format-ebook" viewBox="0 0 24 24"><path d="M3 5.5c2.8-1 5.9-.9 9 1v13c-3.1-1.9-6.2-2-9-1z"/><path d="M21 5.5c-2.8-1-5.9-.9-9 1v13c3.1-1.9 6.2-2 9-1z"/></symbol>
+  <symbol id="format-audio" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6.5" rx="1.5"/><rect x="17" y="14" width="4" height="6.5" rx="1.5"/></symbol>
+  <symbol id="format-readalong" viewBox="0 0 24 24"><path d="M4.5 13.5a7.5 7.5 0 0 1 15 0" stroke-width="2"/><g fill="currentColor" stroke="none"><rect x="2.5" y="12.5" width="3.6" height="6.5" rx="1.8"/><rect x="17.9" y="12.5" width="3.6" height="6.5" rx="1.8"/><path d="M12 11.6c-1.4-.9-3.1-1.2-4.7-1v7.6c1.6-.2 3.3.1 4.7 1z"/><path d="M12 11.6c1.4-.9 3.1-1.2 4.7-1v7.6c-1.6-.2-3.3.1-4.7 1z"/></g></symbol>
+  <symbol id="format-koreader" viewBox="0 0 24 24"><rect x="5" y="2.5" width="14" height="19" rx="2.5"/><path d="M8.5 7h7M8.5 10.5h7M8.5 14h4.5M11 18.5h2"/></symbol>
 </svg>

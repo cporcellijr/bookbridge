@@ -319,7 +319,21 @@ summary::-webkit-details-marker { display: none; }
 .book-copy h3 small { display: block; color: var(--text-2); font-size: .8em; }
 .progress-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .progress-percent { font: 12px var(--font-mono); }
-.last-app { overflow: hidden; color: var(--text-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+/* Format strip on the cover: fixed colours, since it always sits on cover art. */
+.format-strip { position: absolute; z-index: 1; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-evenly; padding: 5px 4px; background: rgba(11,13,18,.68); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); box-shadow: inset 0 1px 0 rgba(255,255,255,.09); }
+.format-slot { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 99px; color: rgba(237,233,226,.92); }
+.format-slot .icon { width: 14px; height: 14px; stroke-width: 1.8; }
+.format-slot.is-faint { color: rgba(237,233,226,.26); }
+.format-slot.is-last { color: #FFD27A; background-color: rgba(242,181,68,.24); box-shadow: 0 0 0 1px rgba(242,181,68,.6), 0 0 14px 3px rgba(242,181,68,.5); }
+.format-slot.is-oos { color: #FF9466; background: radial-gradient(circle at 82% 18%, #FF9466 0 3px, transparent 3.5px); box-shadow: inset 0 0 0 1px rgba(255,148,102,.55); }
+/* Anchored to the strip (slots stay unpositioned) so it never clips at the card edge. */
+.format-tip { position: absolute; bottom: calc(100% + 8px); left: 50%; width: max-content; max-width: 170px; padding: 6px 9px; border: 1px solid #333A4A; border-radius: 7px; background: #0F1218; color: #EDE9E2; font: 500 11.5px/1.35 var(--font-ui); text-align: center; opacity: 0; pointer-events: none; transform: translateX(-50%); transition: opacity .15s; }
+.format-slot:hover .format-tip { opacity: 1; }
+/* Hover-only where a pointer can hover; touch screens keep the strip visible. */
+@media (hover: hover) {
+  .format-strip { opacity: 0; transition: opacity .18s ease; }
+  .library-book-card:hover .format-strip, .library-book-card:focus-within .format-strip { opacity: 1; }
+}
 .progress-track { height: 4px; margin: 7px 0; overflow: hidden; border-radius: 4px; background: var(--line-2); }
 .progress-bar-fill { display: block; height: 100%; background: var(--ribbon); }
 .out-of-sync-line, .state-label { display: inline-block; margin: 3px 0 0; color: var(--warn); font-size: 11px; }
@@ -341,6 +355,10 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
 .library-page[data-view="list"] .book-copy h3 { min-height: 0; }
 .library-page[data-view="list"] .book-select-hit { left: auto; right: 0; }
 .library-page[data-view="list"] .book-copy { padding-right: 42px; }
+.library-page[data-view="list"] .format-strip { left: auto; right: 3px; bottom: auto; top: 50%; flex-direction: column; gap: 2px; padding: 2px; border-radius: 99px; box-shadow: 0 4px 14px rgba(0,0,0,.35); transform: translateY(-50%); }
+.library-page[data-view="list"] .format-slot { width: 20px; height: 20px; }
+.library-page[data-view="list"] .format-slot .icon { width: 12px; height: 12px; }
+.library-page[data-view="list"] .format-tip { display: none; }
 .series-group { overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
 .series-header { width: 100%; min-height: 108px; display: flex; align-items: center; gap: 18px; padding: 18px; border: 0; background: var(--surface-2); color: inherit; text-align: left; cursor: pointer; }
 .series-stack { width: 66px; height: 78px; position: relative; flex: none; }

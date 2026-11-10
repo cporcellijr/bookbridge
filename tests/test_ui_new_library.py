@@ -194,6 +194,25 @@ class TestNewLibrary(unittest.TestCase):
         finally:
             template_rendered.disconnect(capture, self.app)
 
+    def test_cover_carries_the_format_strip_in_place_of_the_last_app_line(self):
+        self.service.record_reading_session(
+            abs_id="library-finished", session_type='AUDIOBOOK', start_time=1793800100.0, end_time=1793800200.0,
+            duration_seconds=100, start_progress=0.9, end_progress=1.0, leader_client='ABS', user_id=self.reader.id,
+        )
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        text = self.client.get("/").get_data(as_text=True)
+
+        card = re.search(r'<article[^>]*data-abs-id="library-finished"[^>]*>.*?</article>', text, re.S).group()
+        strip = re.search(r'<span class="format-strip">.*?</a>', card, re.S).group()
+        self.assertEqual(re.findall(r'data-slot="(\w+)"', strip), ["ebook", "audio", "readalong", "koreader"])
+        self.assertRegex(strip, r'class="format-slot is-last" data-slot="audio"')
+        self.assertRegex(strip, r'class="format-slot is-faint" data-slot="koreader"')
+        self.assertIn("Audiobook · Audiobookshelf 100%", strip)
+        self.assertIn("KOReader · not linked", strip)
+        self.assertNotIn("last-app", text)
+        self.assertNotIn("Last: ", card)
+
     def test_ratings_show_both_sources_and_sort_on_their_average_like_classic(self):
         from src import web_server
         original = web_server._build_dashboard_mappings

@@ -919,6 +919,7 @@
                                 card.querySelectorAll('.progress-percent, .progress-track, .spine-progress').forEach(node => { node.hidden = false; });
                             }
                             if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = book.last_sync_unix;
+                            if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, book.last_sync);
                             });
                         });
                     })
@@ -961,6 +962,18 @@
 
 
     /* P3 additions: views, format chips, selection and sequential existing-endpoint actions. */
+            // Move the glow to the slot that led the last sync and refresh its tooltip time.
+            function updateFormatStrip(card, lastSlot, lastSyncText) {
+                const strip = card.querySelector('.format-strip');
+                if (!strip) return;
+                strip.querySelectorAll('.format-slot').forEach(slot => {
+                    const isLast = slot.dataset.slot === lastSlot && !slot.classList.contains('is-faint');
+                    slot.classList.toggle('is-last', isLast);
+                    const when = slot.querySelector('.format-tip-when');
+                    if (when) when.textContent = isLast && lastSyncText ? ' · ' + bbFormat({{ _('synced {when}')|tojson }}, { when: lastSyncText }) : '';
+                });
+            }
+
     // One search box: wide screens move the Library filter into the top bar; phones keep it in the toolbar.
     (function () {
         const slot = document.querySelector('[data-library-search-slot]');

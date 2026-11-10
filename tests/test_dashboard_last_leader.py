@@ -125,5 +125,55 @@ class TestDashboardLeaderServiceNormalization(unittest.TestCase):
             self.assertIsNone(normalize(value), f"{value!r} should not resolve to a dot")
 
 
+
+class TestFormatStrip(unittest.TestCase):
+    """The library card's format strip: which slot each leader lights, and the slots' states."""
+
+    def test_leaders_map_to_format_slots(self):
+        from src.web_server import _format_strip_slot
+
+        cases = {
+            'ABS': 'audio', 'BookOrbitAudio': 'audio', 'BookLoreAudio': 'audio',
+            'ABSEbook': 'ebook', 'BookOrbit': 'ebook', 'CWA': 'ebook', 'Kavita': 'ebook', 'BookFusion': 'ebook',
+            'KoSync:kindle': 'koreader', 'BridgeSync_Plugin': 'koreader', 'Storyteller': 'readalong',
+            'Hardcover': None, 'StoryGraph': None, None: None, '': None,
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(_format_strip_slot(raw), expected)
+
+    def test_slots_show_links_the_last_leader_and_the_disagreeing_position(self):
+        from src.web_server import _build_format_strip
+
+        slots = {slot['key']: slot for slot in _build_format_strip({
+            'states': {
+                'bookorbit': {'percentage': 48.0, 'last_updated': 2},
+                'bookorbitaudio': {'percentage': 48.0},
+                'kosync': {'percentage': 61.0},
+            },
+            'ebook_source': 'BookOrbit', 'audio_source': 'BookOrbit', 'sync_mode': 'audiobook',
+            'last_leader': 'BookOrbit', 'is_out_of_sync': True, 'unified_progress': 61.0,
+        })}
+
+        self.assertEqual(list(slots), ['ebook', 'audio', 'readalong', 'koreader'])
+        self.assertEqual((slots['ebook']['service'], slots['ebook']['pct'], slots['ebook']['last']), ('BookOrbit', 48.0, True))
+        self.assertEqual((slots['audio']['linked'], slots['audio']['last']), (True, False))
+        self.assertFalse(slots['readalong']['linked'])
+        self.assertTrue(slots['koreader']['oos'])
+        self.assertEqual([key for key, slot in slots.items() if slot['oos']], ['koreader'])
+
+    def test_generated_readalong_lights_its_slot_and_ebook_only_has_no_audio(self):
+        from src.web_server import _build_format_strip
+
+        slots = {slot['key']: slot for slot in _build_format_strip({
+            'states': {}, 'sync_mode': 'ebook_only', 'ebook_source': 'CWA', 'readalong_ready': True,
+        })}
+
+        self.assertEqual((slots['ebook']['linked'], slots['ebook']['service']), (True, 'Calibre-Web'))
+        self.assertFalse(slots['audio']['linked'])
+        self.assertEqual((slots['readalong']['linked'], slots['readalong']['service']), (True, None))
+        self.assertFalse(any(slot['last'] or slot['oos'] for slot in slots.values()))
+
+
 if __name__ == '__main__':
     unittest.main()

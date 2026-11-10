@@ -6785,6 +6785,88 @@ def _dashboard_leader_service(leader_client: str | None) -> str | None:
     return None
 
 
+_FORMAT_STRIP_EBOOK_CLIENTS = ("bookorbit", "booklore", "kavita", "cwa", "bookfusion", "absebook")
+_FORMAT_STRIP_SERVICE_NAMES = {
+    "abs": "Audiobookshelf", "absebook": "Audiobookshelf", "bookorbit": "BookOrbit",
+    "bookorbitaudio": "BookOrbit", "booklore": "Grimmory", "bookloreaudio": "Grimmory",
+    "kavita": "Kavita", "cwa": "Calibre-Web", "bookfusion": "BookFusion",
+    "storyteller": "Storyteller", "kosync": "KOReader",
+    "BookOrbit": "BookOrbit", "BookLore": "Grimmory", "Booklore": "Grimmory", "Kavita": "Kavita", "CWA": "Calibre-Web",
+    "ABS": "Audiobookshelf", "BookFusion": "BookFusion",
+}
+
+
+def _format_strip_slot(leader_client: str | None) -> str | None:
+    """Map a raw ReadingSession.leader_client to its library-card format slot.
+
+    Unlike ``_dashboard_leader_service`` this keeps ABS ebook apart from ABS
+    audio, because the two light different slots. Trackers return None."""
+    if not leader_client:
+        return None
+    key = str(leader_client).strip().lower()
+    if key.startswith("kosync") or key == "bridgesync_plugin":
+        return "koreader"
+    if key in ("abs", "bookorbitaudio", "bookloreaudio"):
+        return "audio"
+    if key in _FORMAT_STRIP_EBOOK_CLIENTS:
+        return "ebook"
+    if key == "storyteller":
+        return "readalong"
+    return None
+
+
+def _build_format_strip(mapping: dict) -> list[dict]:
+    """The library card's four format slots: ebook, audio, read-along, KOReader.
+
+    Each slot says whether the book is linked there, the service and position
+    standing for it, whether it led the last sync, and whether it is the
+    position that disagrees on an out-of-sync book."""
+    states = mapping.get("states") or {}
+    ebook_states = [(c, states[c]) for c in _FORMAT_STRIP_EBOOK_CLIENTS if c in states]
+    ebook_client, ebook_state = max(
+        ebook_states, key=lambda item: item[1].get("last_updated") or 0, default=(None, None)
+    )
+    ebook_service = _FORMAT_STRIP_SERVICE_NAMES.get(ebook_client or mapping.get("ebook_source") or "")
+    if not ebook_service and mapping.get("booklore_id"):
+        ebook_service = "Grimmory"
+    if not ebook_service and mapping.get("bookfusion_linked"):
+        ebook_service = "BookFusion"
+    audio_client = {"BookOrbit": "bookorbitaudio", "BookLore": "bookloreaudio"}.get(mapping.get("audio_source"), "abs")
+    storyteller_linked = bool(
+        mapping.get("storyteller_uuid") or mapping.get("storyteller_legacy_link") or "storyteller" in states
+    )
+    rows = [
+        ("ebook", bool(ebook_client or ebook_service), ebook_service, ebook_state),
+        ("audio", mapping.get("sync_mode") != "ebook_only", _FORMAT_STRIP_SERVICE_NAMES.get(audio_client), states.get(audio_client)),
+        # service None = BookBridge's own generated read-along EPUB.
+        ("readalong", storyteller_linked or bool(mapping.get("readalong_ready")),
+         "Storyteller" if storyteller_linked else None, states.get("storyteller")),
+        ("koreader", "kosync" in states, "KOReader", states.get("kosync")),
+    ]
+    last_slot = _format_strip_slot(mapping.get("last_leader"))
+    slots = [
+        {
+            "key": key,
+            "linked": linked,
+            "service": service,
+            "pct": state.get("percentage") if linked and state else None,
+            "last": linked and key == last_slot,
+            "oos": False,
+        }
+        for key, linked, service, state in rows
+    ]
+    if mapping.get("is_out_of_sync"):
+        # shortcut: compares raw percentages, so an audio slot (time axis) can be
+        # picked on books with long front/back matter; use the text-axis values
+        # from _compute_dashboard_sync_warning_pct if that shows up in practice.
+        leader = next((s for s in slots if s["last"] and s["pct"]), None)
+        reference = leader["pct"] if leader else mapping.get("unified_progress") or 0
+        others = [s for s in slots if s["pct"] and s is not leader]
+        if others:
+            max(others, key=lambda s: abs(s["pct"] - reference))["oos"] = True
+    return slots
+
+
 def _browser_cover_url(
     raw_cover_url: str | None,
     audio_source: str | None = None,
@@ -7309,6 +7391,7 @@ def _build_dashboard_mappings(
         )
         mapping["ctc_aligned"] = book.abs_id in ctc_aligned_book_ids
         mapping["readalong_ready"] = book.abs_id in readalong_ready_book_ids
+        mapping["format_strip"] = _build_format_strip(mapping)
 
         # Read-along generation eligibility (Phase 6a). Cheap, locally-computable
         # conditions only -- whether BookOrbit can actually resolve the audio
@@ -14271,7 +14354,7 @@ def api_status():
     return jsonify({"mappings": mappings})
 
 
-def _build_dashboard_progress_rows(books, all_states):
+def _build_dashboard_progress_rows(books, all_states, reading_stats_by_book=None):
     """The per-book fields the dashboard's periodic refresh actually redraws.
 
     Derived from Book/State rows and scalar alignment status: no display-metadata
@@ -14309,6 +14392,7 @@ def _build_dashboard_progress_rows(books, all_states):
             "unified_progress": min(max_progress, 100.0),
             "last_sync": _format_dashboard_last_sync(latest_update_time),
             "last_sync_unix": latest_update_time,
+            "last_slot": _format_strip_slot(((reading_stats_by_book or {}).get(abs_id) or {}).get("last_leader")),
             "states": states,
         })
 
@@ -14328,8 +14412,9 @@ def api_status_progress():
     books = database_service.get_all_books(user_id=user_id)
     all_states = database_service.get_all_states(user_id=user_id)
     books = _dashboard_visible_books_for_user(books, user)
+    reading_stats = database_service.get_all_reading_stats(user_id=user_id)
 
-    return jsonify({"mappings": _build_dashboard_progress_rows(books, all_states)})
+    return jsonify({"mappings": _build_dashboard_progress_rows(books, all_states, reading_stats)})
 
 
 def logs_view():

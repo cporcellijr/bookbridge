@@ -317,6 +317,19 @@ class TestCompactRefreshEndpoint(unittest.TestCase):
 
         self.assertEqual([row["abs_id"] for row in rows], ["abs-1"])
 
+    def test_reports_the_format_slot_that_led_the_last_sync(self):
+        self._seed()
+        self.svc.record_reading_session(
+            abs_id="abs-1", session_type='EPUB', start_time=1751399900.0, end_time=1751400000.0,
+            duration_seconds=100, start_progress=0.4, end_progress=0.42,
+            leader_client='KoSync:kindle', user_id=self.user.id,
+        )
+        self._login()
+
+        row = self.client.get('/api/status/progress').get_json()["mappings"][0]
+
+        self.assertEqual(row["last_slot"], "koreader")
+
 
 if __name__ == "__main__":
     unittest.main()
