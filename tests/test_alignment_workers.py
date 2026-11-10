@@ -709,3 +709,17 @@ def test_the_lease_migration_matches_the_model(db):
         assert mig_cols[column] == built[column]
         assert mig_cols[column][1] is True
     assert "ix_jobs_lease_id" in {ix["name"] for ix in migrated.get_indexes("jobs")}
+
+
+def test_a_worker_marks_itself_alive_for_the_healthcheck(tmp_path, monkeypatch):
+    """A worker serves no HTTP port; the image's healthcheck reads this file's age."""
+    from src import alignment_worker
+
+    alive = tmp_path / "alive"
+    monkeypatch.setattr(alignment_worker, "ALIVE_FILE", alive)
+    beat = alignment_worker.Heartbeat(client=None, lease_id="x", lease_seconds=600,
+                                      progress=lambda: 0.0, on_lost=lambda: None)
+    beat.start()
+    beat.stop()
+    beat.join(timeout=5)
+    assert alive.is_file()

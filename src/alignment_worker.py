@@ -46,6 +46,16 @@ import requests
 logger = logging.getLogger("bookbridge.alignment_worker")
 
 _CHUNK = 1024 * 1024
+# Touched while the worker loop and heartbeats run; the image's healthcheck reads its
+# age in worker mode (a worker serves no HTTP port to probe).
+ALIVE_FILE = Path("/tmp/bookbridge-worker.alive")
+
+
+def _mark_alive() -> None:
+    try:
+        ALIVE_FILE.touch()
+    except OSError as e:
+        logger.warning("⚠️ Could not update %s for the healthcheck: %s", ALIVE_FILE, e)
 
 
 class LeaseLost(Exception):
@@ -156,7 +166,9 @@ class Heartbeat(threading.Thread):
 
     def run(self) -> None:
         interval = max(5.0, self.lease_seconds / 3)
+        _mark_alive()
         while not self._halt.wait(interval):
+            _mark_alive()
             try:
                 self.client.heartbeat(self.lease_id, self.progress(), self.lease_seconds)
             except LeaseLost:
@@ -228,6 +240,7 @@ class AlignmentWorker:
         backoff = self.poll_seconds
         logger.info("🛠️ Alignment worker '%s' polling %s", self.name, self.client.base)
         while True:
+            _mark_alive()
             try:
                 claimed = self.client.claim(self.name, self.lease_seconds)
                 backoff = self.poll_seconds
