@@ -348,6 +348,11 @@
             function updateReadalongStatus(card, ready) {
                 const badge = card && card.querySelector('.readalong-badge');
                 if (badge) badge.hidden = !ready;
+                const menu = card?.querySelector('.reset-menu > button')?._menu || card;
+                // Skip a button mid-action (⏳): its own handler settles it when the request ends.
+                menu?.querySelectorAll('.readalong-generate-btn, .readalong-remove-btn').forEach(b => {
+                    if (!b.textContent.startsWith('⏳')) b.disabled = b.classList.contains('readalong-generate-btn') ? ready : !ready;
+                });
             }
 
             function _setReadalongBadge(absId, ready) {
@@ -422,7 +427,7 @@
                         } else {
                             btn.innerHTML = originalText;
                         }
-                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 5000);
+                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = data.state === 'done'; }, 5000);
                     }).catch(error => {
                         console.debug('Read-along status check failed', error);
                         setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 8000);
@@ -466,13 +471,14 @@
                     .then(data => {
                         if (data.success && data.removed) {
                             btn.innerHTML = '✅ ' + {{ _('Removed')|tojson }};
-                            _setReadalongBadge(absId, false);
                         } else if (data.success) {
                             btn.innerHTML = 'ℹ️ ' + {{ _('Nothing to remove')|tojson }};
                         } else {
                             btn.textContent = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                         }
-                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 3000);
+                        // success means nothing is left to remove, whether or not this call deleted it
+                        if (data.success) _setReadalongBadge(absId, false);
+                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = !!data.success; }, 3000);
                     }).catch(error => {
                         console.error('Read-along removal error:', error);
                         btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};
