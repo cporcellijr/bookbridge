@@ -162,7 +162,7 @@
 }
 .view .book-detail .book-section > a { display: inline-flex; align-items: center; min-height: 44px; }
 .view .book-detail summary { display: flex; align-items: center; min-height: 44px; }
-.view .book-detail .book-remove button { min-height: 44px; }
+.view .book-detail .book-delete button { min-height: 44px; }
 .book-drawer > .drawer-close { min-width: 44px; }
 #diagnostics-optin-modal .hc-modal-close { min-width: 44px; min-height: 44px; }
 #diagnostics-optin-modal details summary { min-height: 44px; display: flex; align-items: center; }
@@ -209,7 +209,7 @@
 }
 
 :root[data-theme="light"] .view .account-wrap a[style] { color: var(--info) !important; }
-:root[data-theme="light"] .view .book-detail .book-remove button { color: var(--bad) !important; }
+:root[data-theme="light"] .view .book-detail .book-delete button { color: var(--bad) !important; }
 :root[data-theme="light"] .view .admin-users-wrap .badge.admin { color: var(--info); background: var(--info-bg); }
 :root[data-theme="light"] .view .logs-wrap .log-level.DEBUG { color: var(--text-2); background: var(--surface-2); }
 :root[data-theme="light"] .view .logs-wrap .log-level.INFO { color: var(--info); background: var(--info-bg); }

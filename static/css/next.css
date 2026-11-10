@@ -202,7 +202,8 @@ summary::-webkit-details-marker { display: none; }
 .book-current-chapter .chapter-position { color: var(--text-2); font-size: .88rem; margin-top: 4px; }
 .book-current-chapter .chapter-time { color: var(--text-2); font-family: var(--font-mono); font-size: .88rem; margin-top: 2px; }
 .book-thread { display: flex; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; font-size: .8rem; }
-.book-remove button { color: #e66e70; }
+.book-delete { display: contents; }
+.book-delete button { color: #e66e70; }
 .book-detail dd { margin-left: 0; font-family: 'IBM Plex Mono', monospace; }
 .book-drawer { width: 100%; min-height: 100vh; }
 .drawer-close { position: sticky; top: 0; float: right; z-index: 2; }
