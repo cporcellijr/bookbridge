@@ -3932,7 +3932,7 @@ def get_searchable_audiobooks(search_term, source_states=None, abs_catalog=None,
         per_adapter_counts[source_name] = len(provider_results) if provider_results else 0
         if discovery:
             if source_name == "ABS":
-                complete = abs_catalog is not None
+                complete = abs_catalog is not None and not getattr(adapter, "catalog_incomplete", False)
             elif source_name == "BookLore":
                 complete = bool(getattr(clients.booklore_client, "catalog_complete", False))
             else:
