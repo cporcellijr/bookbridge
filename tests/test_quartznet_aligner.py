@@ -618,6 +618,13 @@ def test_align_threads_overrides_detection_and_the_default_cap(tmp_path, monkeyp
     assert qn.align_threads(root) == (14, "ALIGN_THREADS")
 
 
+@pytest.mark.parametrize("content", ["garbage\n", "", "400000 nope\n"])
+def test_a_malformed_cgroup_file_is_treated_as_no_quota(tmp_path, monkeypatch, no_align_threads, content):
+    _affinity(monkeypatch, 6)
+    root = _cgroup_v2(tmp_path / "cg", content)
+    assert qn.align_threads(root) == (6, "CPU affinity")
+
+
 @pytest.mark.parametrize("value", ["0", "-2", "four", "1.5"])
 def test_an_invalid_align_threads_is_an_error_not_a_silent_default(monkeypatch, value):
     monkeypatch.setenv("ALIGN_THREADS", value)
@@ -641,4 +648,5 @@ def test_load_applies_and_logs_the_chosen_thread_count(data_dir, monkeypatch, ca
     with patch.object(ort, "InferenceSession", side_effect=fake_session):
         QuartzNetAligner()._load()
     assert seen["threads"] == 3
-    assert "3 threads from ALIGN_THREADS" in caplog.text
+    assert "⚙️ CTC: loading QuartzNet15x5 (onnxruntime, CPU) from " in caplog.text
+    assert "(3 threads from ALIGN_THREADS)" in caplog.text

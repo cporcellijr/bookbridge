@@ -79,14 +79,18 @@ def _cgroup_cpu_quota(root: Path = _CGROUP_ROOT) -> Optional[int]:
             return None
         return max(1, math.ceil(int(quota) / int(period)))
 
-    v2 = root / "cpu.max"
-    if v2.is_file():
-        quota, period = v2.read_text().split()[:2]
-        return ratio(quota, period)
-    for v1 in (root / "cpu", root / "cpu,cpuacct"):
-        quota_file, period_file = v1 / "cpu.cfs_quota_us", v1 / "cpu.cfs_period_us"
-        if quota_file.is_file() and period_file.is_file():
-            return ratio(quota_file.read_text().strip(), period_file.read_text().strip())
+    # An unreadable or malformed cgroup file means "no quota known", never a failed model load.
+    try:
+        v2 = root / "cpu.max"
+        if v2.is_file():
+            quota, period = v2.read_text().split()[:2]
+            return ratio(quota, period)
+        for v1 in (root / "cpu", root / "cpu,cpuacct"):
+            quota_file, period_file = v1 / "cpu.cfs_quota_us", v1 / "cpu.cfs_period_us"
+            if quota_file.is_file() and period_file.is_file():
+                return ratio(quota_file.read_text().strip(), period_file.read_text().strip())
+    except (OSError, ValueError):
+        logger.warning("⚠️ CTC: could not read the cgroup CPU quota under %s", root, exc_info=True)
     return None
 
 
@@ -269,8 +273,8 @@ class QuartzNetAligner(ForcedAligner):
         options = ort.SessionOptions()
         threads, source = align_threads()
         options.intra_op_num_threads = threads
-        logger.info("⚙️ CTC: loading QuartzNet15x5 (onnxruntime, CPU, %d threads from %s) from %s",
-                    threads, source, path)
+        logger.info("⚙️ CTC: loading QuartzNet15x5 (onnxruntime, CPU) from %s (%d threads from %s)",
+                    path, threads, source)
         self._session = ort.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
         self._model = self._session
         self._device = "cpu"
