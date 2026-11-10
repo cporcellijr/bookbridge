@@ -281,3 +281,45 @@ def test_an_ebook_only_book_answers_no_audio_instead_of_not_ready():
 
     assert status == 409
     assert body["status"] == "no_audio"
+
+
+def test_a_slow_build_for_one_book_does_not_block_another_book():
+    """Pre-release review #5: builds ran under one service-wide lock, serializing every reader."""
+    import threading
+    from unittest.mock import patch
+
+    from src.services import word_map_service
+
+    release_a = threading.Event()
+    a_started = threading.Event()
+
+    def fake_build(parser, epub_filename, map_points):
+        if epub_filename == "a.epub":
+            a_started.set()
+            assert release_a.wait(10)
+        return {"chapters": [], "points": [[0.0, 0, "/6/2!/4/2/1:0"]], "skipped": 0}
+
+    db = MagicMock()
+    db.get_alignment_meta.return_value = {"last_updated": None, "align_method": "ctc", "quality_score": 1.0}
+    parser = MagicMock()
+    parser.resolve_book_path.return_value = None
+    service = WordMapService(db, MagicMock(), parser)
+    book_a = SimpleNamespace(abs_id="abs-a", status="active", duration=10.0)
+    book_b = SimpleNamespace(abs_id="abs-b", status="active", duration=10.0)
+    results = {}
+    with patch.object(word_map_service, "build_word_map", side_effect=fake_build):
+        slow = threading.Thread(target=lambda: results.setdefault("a", service.get_word_map(book_a, "a.epub")))
+        slow.start()
+        try:
+            assert a_started.wait(5)
+            fast = threading.Thread(target=lambda: results.setdefault("b", service.get_word_map(book_b, "b.epub")))
+            fast.start()
+            fast.join(2)
+            b_done = not fast.is_alive()
+        finally:
+            release_a.set()
+            slow.join(10)
+            fast.join(10)
+    assert b_done, "book B's word map waited for book A's build"
+    assert results["a"][0] == 200 and results["b"][0] == 200
+    assert service._build_locks == {}
