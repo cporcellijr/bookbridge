@@ -285,19 +285,35 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   '    ',
   'const card = document.querySelector(`.book-card[data-abs-id="${book.abs_id}"]`);\n'
   'if (!card) return;\n'),
+ # Cover badge/check/line: whole number, shown only when a state is above 0%.
+ ("// Clear progress leaves 0% reset snapshots, so only a state above 0 counts as a position.\n"
+  "const hasPosition = Object.values(book.states || {}).some(s => s.percentage > 0);\n"
+  "const finished = hasPosition && book.unified_progress >= 100;\n"
+  "const progressPercent = card.querySelector('.progress-percent');\n"
+  "if (progressPercent) {\n"
+  "progressPercent.textContent = `${Math.floor(book.unified_progress)}%`;\n"
+  "progressPercent.hidden = !hasPosition || finished;\n"
+  "}\n"
+  "const progressDone = card.querySelector('.progress-done');\n"
+  "if (progressDone) progressDone.hidden = !finished;\n"
+  "const progressTrack = card.querySelector('.progress-track');\n"
+  "if (progressTrack) progressTrack.hidden = !hasPosition || finished;",
+  "// Update progress percentage text\n"
+  "const progressPercent = card.querySelector('.progress-percent');\n"
+  "if (progressPercent) {\n"
+  "progressPercent.textContent = `${book.unified_progress.toFixed(1)}%`;\n"
+  "}"),
  ('                            card.dataset.progress = book.unified_progress;\n'
   "                            card.querySelectorAll('[data-app-pct]').forEach(node => { const app = book.states && book.states[node.dataset.appPct]; if (app) node.textContent = app.percentage.toFixed(1) + '%'; });\n"
   "                            const spine = card.querySelector('.spine-progress');\n"
-  '                            if (spine) spine.textContent = book.unified_progress.toFixed(0) + '
-  "'%';\n"
-  '                            if (book.states && Object.keys(book.states).length) {\n'
-  "                                card.querySelectorAll('.progress-percent, .progress-track, "
-  ".spine-progress').forEach(node => { node.hidden = false; });\n"
+  '                            if (spine) {\n'
+  "                                spine.textContent = book.unified_progress.toFixed(0) + '%';\n"
+  '                                spine.hidden = !hasPosition;\n'
   '                            }\n'
   '                            if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = '
   'book.last_sync_unix;\n'
   '                            if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, '
-  'book.last_sync);\n'
+  'book.last_slot_sync);\n'
   '                            });',
   ''))
 

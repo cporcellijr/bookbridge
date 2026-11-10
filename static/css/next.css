@@ -311,14 +311,19 @@ summary::-webkit-details-marker { display: none; }
 .library-page .cover-badge[title] { top: 8px; bottom: auto; }
 .ctc-badge { left: 8px; right: auto; bottom: 8px; }
 .book-copy { padding: 13px 14px 14px; }
-.book-author { color: var(--text-3); font-size: 12px; }
+.book-author { display: block; margin-top: 3px; color: var(--text-3); font-size: 12px; }
 .book-heading { margin: 4px 0 10px; }
 .book-ratings { display: block; margin-top: 3px; color: var(--text-3); font: 11px/1.4 var(--font-mono); }
 .library-page[data-view="spines"] .book-ratings { display: none; }
 .book-copy h3 { display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font: 500 16px/1.35 var(--font-book); }
 .book-copy h3 small { display: block; color: var(--text-2); font-size: .8em; }
-.progress-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.progress-percent { font: 12px var(--font-mono); }
+/* Progress badge and line on the cover: fixed colours, like the format strip. */
+.progress-percent, .progress-done { position: absolute; z-index: 1; top: 8px; right: 8px; border-radius: 99px; }
+.progress-percent { padding: 3px 7px; background: rgba(11,13,18,.72); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); box-shadow: inset 0 0 0 1px rgba(255,255,255,.10); color: #EDE9E2; font: 600 11px var(--font-mono); }
+.progress-done { width: 22px; height: 22px; display: grid; place-items: center; background: var(--ok); color: var(--bg); }
+.progress-done svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.progress-track { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.12); }
+.progress-track:not([hidden]) ~ .format-strip { bottom: 3px; }
 /* Format strip on the cover: fixed colours, since it always sits on cover art. */
 .format-strip { position: absolute; z-index: 1; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-evenly; padding: 5px 4px; background: rgba(11,13,18,.68); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); box-shadow: inset 0 1px 0 rgba(255,255,255,.09); }
 .format-slot { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 99px; color: rgba(237,233,226,.92); }
@@ -334,12 +339,11 @@ summary::-webkit-details-marker { display: none; }
   .format-strip { opacity: 0; transition: opacity .18s ease; }
   .library-book-card:hover .format-strip, .library-book-card:focus-within .format-strip { opacity: 1; }
 }
-.progress-track { height: 4px; margin: 7px 0; overflow: hidden; border-radius: 4px; background: var(--line-2); }
 .progress-bar-fill { display: block; height: 100%; background: var(--ribbon); }
 .out-of-sync-line, .state-label { display: inline-block; margin: 3px 0 0; color: var(--warn); font-size: 11px; }
 .state-label { padding: 2px 7px; border-radius: 99px; background: var(--warn-bg); }
 .spine-progress { display: none; }
-.library-page[data-view="spines"] .cover-wrap, .library-page[data-view="spines"] .book-author, .library-page[data-view="spines"] .progress-line, .library-page[data-view="spines"] .progress-track, .library-page[data-view="spines"] .out-of-sync-line, .library-page[data-view="spines"] .state-label { display: none; }
+.library-page[data-view="spines"] .cover-wrap, .library-page[data-view="spines"] .book-author,.library-page[data-view="spines"] .out-of-sync-line, .library-page[data-view="spines"] .state-label { display: none; }
 .library-page[data-view="spines"] .book-select { display: none; }
 body.series-grouping-off .series-group, body.series-grouping-off .book-card.flatten-duplicate { display: none !important; }
 .collapsible-book-grid { display: none; }

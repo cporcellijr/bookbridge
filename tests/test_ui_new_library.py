@@ -195,10 +195,7 @@ class TestNewLibrary(unittest.TestCase):
             template_rendered.disconnect(capture, self.app)
 
     def test_cover_carries_the_format_strip_in_place_of_the_last_app_line(self):
-        self.service.record_reading_session(
-            abs_id="library-finished", session_type='AUDIOBOOK', start_time=1793800100.0, end_time=1793800200.0,
-            duration_seconds=100, start_progress=0.9, end_progress=1.0, leader_client='ABS', user_id=self.reader.id,
-        )
+        self.service.record_sync_marker("library-finished", "ABS", 1793800200.0, user_id=self.reader.id)
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
         self._login("ui-reader")
         text = self.client.get("/").get_data(as_text=True)
@@ -212,6 +209,62 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn("KOReader · not linked", strip)
         self.assertNotIn("last-app", text)
         self.assertNotIn("Last: ", card)
+
+    def test_cover_shows_progress_badge_and_line_only_for_a_position_above_zero(self):
+        from src import web_server
+        original = web_server._build_dashboard_mappings
+        cases = {
+            "library-book": dict(states={"abs": {"percentage": 47.6}, "kosync": {"percentage": 0.0}}, unified_progress=47.6),
+            "cleared": dict(states={"abs": {"percentage": 0.0}, "kosync": {"percentage": 0}}, unified_progress=0.0),
+            "unstarted": dict(states={}, unified_progress=0.0),
+        }
+
+        def mappings(*args, **kwargs):
+            result, progress = original(*args, **kwargs)
+            base = next(m for m in result if m["abs_id"] == "library-book")
+            for abs_id in ("cleared", "unstarted"):
+                result.append({**base, "abs_id": abs_id, "display_title": abs_id})
+            for mapping in result:
+                mapping.update(cases.get(mapping["abs_id"], {}))
+            return result, progress
+
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        with patch.object(web_server, "_build_dashboard_mappings", side_effect=mappings):
+            text = self.client.get("/").get_data(as_text=True)
+        card = lambda abs_id: re.search(rf'<article[^>]*data-abs-id="{abs_id}"[^>]*>.*?</article>', text, re.S).group()
+        shown = lambda html: sorted(name for name, attrs in re.findall(r'class="(progress-percent|progress-done|progress-track|spine-progress)"([^>]*)>', html) if "hidden" not in attrs)
+
+        # Clear progress leaves 0% reset snapshots; neither that nor no state at all shows progress.
+        for abs_id in ("cleared", "unstarted"):
+            with self.subTest(abs_id=abs_id):
+                self.assertEqual(shown(card(abs_id)), [])
+
+        reading = card("library-book")
+        self.assertEqual(shown(reading), ["progress-percent", "progress-track", "spine-progress"])
+        self.assertIn('class="progress-percent" >47%</span>', reading)
+        self.assertIn('style="width:47.6%"', reading)
+        # Progress sits on the cover; under it come the title then the author.
+        self.assertRegex(reading, r'(?s)class="cover-wrap">.*class="progress-percent".*</div>\s*<div class="book-copy"><div class="book-heading"><h3>.*?</h3><span class="book-author">')
+        self.assertNotIn("progress-line", reading)
+
+        finished = card("library-finished")
+        self.assertEqual(shown(finished), ["progress-done", "spine-progress"])
+        self.assertIn('class="progress-done" role="img" aria-label="Finished"', finished)
+        self.assertNotIn('class="state-label"', finished)
+
+    def test_live_refresh_hides_the_cover_progress_again_at_zero(self):
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required to execute the library refresh")
+        result = subprocess.run(
+            [node, str(_ROOT / "tests/test_ui_new_library_refresh.js")],
+            capture_output=True, text=True, timeout=15, cwd=_ROOT,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_ratings_show_both_sources_and_sort_on_their_average_like_classic(self):
         from src import web_server
@@ -235,7 +288,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('data-rating="3.5"', both)
         self.assertIn("SG 4.0 · GR 3.0", both)
         # Ratings sit under the title; CTC and read-along badges live in the book drawer, not on the card.
-        self.assertRegex(both, r'class="book-heading"><h3>.*?</h3><span class="book-ratings"[^>]*>SG 4.0 · GR 3.0')
+        self.assertRegex(both, r'class="book-heading"><h3>.*?</h3><span class="book-author">[^<]*</span><span class="book-ratings"[^>]*>SG 4.0 · GR 3.0')
         self.assertNotIn("cover-badge", both)
         self.assertNotIn("ctc-alignment-badge", both)
         self.assertIn('data-rating="4.4"', gr_only)

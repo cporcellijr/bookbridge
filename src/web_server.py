@@ -6843,7 +6843,7 @@ def _build_format_strip(mapping: dict) -> list[dict]:
          "Storyteller" if storyteller_linked else None, states.get("storyteller")),
         ("koreader", "kosync" in states, "KOReader", states.get("kosync")),
     ]
-    last_slot = _format_strip_slot(mapping.get("last_leader"))
+    last_slot = _format_strip_slot(mapping.get("last_sync_leader"))
     slots = [
         {
             "key": key,
@@ -7371,6 +7371,7 @@ def _build_dashboard_mappings(
     ctc_aligned_book_ids = database_service.get_ctc_aligned_book_ids()
     readalong_alignment_book_ids = database_service.get_readalong_alignment_book_ids()
     readalong_ready_book_ids = database_service.get_readalong_ready_book_ids()
+    sync_markers = database_service.get_sync_markers()
     mappings = []
     total_duration = 0
     total_listened = 0
@@ -7391,6 +7392,8 @@ def _build_dashboard_mappings(
         )
         mapping["ctc_aligned"] = book.abs_id in ctc_aligned_book_ids
         mapping["readalong_ready"] = book.abs_id in readalong_ready_book_ids
+        mapping["last_sync_leader"], mapping["last_sync_leader_at"] = sync_markers.get(book.abs_id, (None, 0))
+        mapping["last_sync_leader_when"] = _format_dashboard_last_sync(mapping["last_sync_leader_at"])
         mapping["format_strip"] = _build_format_strip(mapping)
 
         # Read-along generation eligibility (Phase 6a). Cheap, locally-computable
@@ -14354,7 +14357,7 @@ def api_status():
     return jsonify({"mappings": mappings})
 
 
-def _build_dashboard_progress_rows(books, all_states, reading_stats_by_book=None):
+def _build_dashboard_progress_rows(books, all_states):
     """The per-book fields the dashboard's periodic refresh actually redraws.
 
     Derived from Book/State rows and scalar alignment status: no display-metadata
@@ -14364,6 +14367,7 @@ def _build_dashboard_progress_rows(books, all_states, reading_stats_by_book=None
     states_by_book = _group_dashboard_states_by_book(all_states)
     ctc_aligned_book_ids = database_service.get_ctc_aligned_book_ids()
     readalong_ready_book_ids = database_service.get_readalong_ready_book_ids()
+    sync_markers = database_service.get_sync_markers()
     rows = []
 
     for book in books or []:
@@ -14385,6 +14389,7 @@ def _build_dashboard_progress_rows(books, all_states, reading_stats_by_book=None
             if state.percentage is not None:
                 max_progress = max(max_progress, pct_val)
 
+        last_slot_client, last_slot_unix = sync_markers.get(abs_id, (None, 0))
         rows.append({
             "abs_id": abs_id,
             "ctc_aligned": abs_id in ctc_aligned_book_ids,
@@ -14392,7 +14397,9 @@ def _build_dashboard_progress_rows(books, all_states, reading_stats_by_book=None
             "unified_progress": min(max_progress, 100.0),
             "last_sync": _format_dashboard_last_sync(latest_update_time),
             "last_sync_unix": latest_update_time,
-            "last_slot": _format_strip_slot(((reading_stats_by_book or {}).get(abs_id) or {}).get("last_leader")),
+            "last_slot": _format_strip_slot(last_slot_client),
+            "last_slot_unix": last_slot_unix,
+            "last_slot_sync": _format_dashboard_last_sync(last_slot_unix),
             "states": states,
         })
 
@@ -14412,9 +14419,8 @@ def api_status_progress():
     books = database_service.get_all_books(user_id=user_id)
     all_states = database_service.get_all_states(user_id=user_id)
     books = _dashboard_visible_books_for_user(books, user)
-    reading_stats = database_service.get_all_reading_stats(user_id=user_id)
 
-    return jsonify({"mappings": _build_dashboard_progress_rows(books, all_states, reading_stats)})
+    return jsonify({"mappings": _build_dashboard_progress_rows(books, all_states)})
 
 
 def logs_view():

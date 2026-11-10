@@ -41,6 +41,7 @@ class MockContainer:
         self.mock_database_service.get_ctc_aligned_book_ids.return_value = set()
         self.mock_database_service.get_readalong_alignment_book_ids.return_value = set()
         self.mock_database_service.get_readalong_ready_book_ids.return_value = set()
+        self.mock_database_service.get_sync_markers.return_value = {}
         self.mock_ebook_parser = Mock()
         self.mock_sync_clients = Mock()
         self.mock_forge_service = Mock()
