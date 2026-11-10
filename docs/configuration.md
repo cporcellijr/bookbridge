@@ -189,6 +189,11 @@ How books move:
   off, read-along timings, segmented maps and the content-match check are sent with
   each book. The engine is the worker's own: `CTC_MODEL`, `CTC_DEVICE`, `ALIGN_THREADS`,
   and the Whisper or transcription provider settings in its environment.
+- **Models.** A worker downloads the QuartzNet model (77 MB) and, for books that fall
+  back to transcription, its `WHISPER_MODEL` (default `base`) into `/data/models` on
+  first use, so give it internet access or copy them into that volume beforehand (then
+  set `HF_HUB_OFFLINE=1`). A worker that cannot load a model fails that book, and it
+  is retried like any other failure.
 - **Local only.** Workers are offered books that need full alignment. Audio-only and
   ebook-only books, books aligned from Storyteller transcripts, and ebook input
   recovery stay on this instance.
