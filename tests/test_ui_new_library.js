@@ -65,6 +65,28 @@ const context = {
 };
 vm.runInNewContext(script, context);
 
+// Format strip: the glow follows the slot that led the last sync; faint slots never glow.
+function fakeSlot(key, faint) {
+  const classes = new Set(faint ? ['is-faint'] : []);
+  const when = { textContent: '' };
+  return {
+    dataset: { slot: key }, when,
+    classList: { contains: name => classes.has(name), toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)) },
+    has: name => classes.has(name),
+    querySelector: () => when,
+  };
+}
+const slots = [fakeSlot('ebook'), fakeSlot('audio'), fakeSlot('readalong', true), fakeSlot('koreader')];
+const stripCard = { querySelector: () => ({ querySelectorAll: () => slots }) };
+context.updateFormatStrip(stripCard, 'koreader', '2m ago');
+assert(slots[3].has('is-last'));
+assert.equal(slots[3].when.textContent, ' · synced 2m ago');
+assert(!slots[0].has('is-last') && slots[0].when.textContent === '');
+context.updateFormatStrip(stripCard, 'audio', '1m ago');
+assert(slots[1].has('is-last') && !slots[3].has('is-last') && slots[3].when.textContent === '', 'the glow moves to the new leader');
+context.updateFormatStrip(stripCard, 'readalong', 'now');
+assert(!slots[2].has('is-last'), 'a faint slot never glows');
+
 (async () => {
   await context.window.bulkSyncNow();
   assert.deepEqual(requests.map(request => request.url), ids.map(id => '/api/sync-now/' + id));
