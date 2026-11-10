@@ -277,7 +277,7 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   '                            if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = '
   'book.last_sync_unix;\n'
   '                            if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, '
-  'book.last_sync);\n'
+  'book.last_slot_sync);\n'
   '                            });',
   ''))
 

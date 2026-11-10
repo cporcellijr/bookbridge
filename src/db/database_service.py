@@ -50,6 +50,7 @@ from .models import (
     UserCredential,
     UserBook,
     TranscriptionPreflight,
+    BookSyncMarker,
     UserBookFusionLink,
     UserBookOrbitLink,
     Base,
@@ -1610,6 +1611,9 @@ class DatabaseService:
             session.query(TranscriptionPreflight).filter(
                 TranscriptionPreflight.abs_id == abs_id
             ).delete(synchronize_session=False)
+            session.query(BookSyncMarker).filter(
+                BookSyncMarker.abs_id == abs_id
+            ).delete(synchronize_session=False)
             
             book = session.query(Book).filter(Book.abs_id == abs_id).first()
             if book:
@@ -2729,6 +2733,24 @@ class DatabaseService:
             return count
 
     # Pre-transcription length advisory (never changes Job.last_error or status).
+    def record_sync_marker(self, abs_id: str, leader_client: str, synced_at: float, user_id: int = None) -> None:
+        """Record the leader of a sync that reached at least one follower."""
+        user_id = self._resolve_uid(user_id)
+        with self.get_session() as session:
+            row = session.get(BookSyncMarker, (user_id, abs_id))
+            if row is None:
+                row = BookSyncMarker(user_id=user_id, abs_id=abs_id)
+                session.add(row)
+            row.leader_client = leader_client
+            row.synced_at = synced_at
+
+    def get_sync_markers(self, user_id: int = None) -> dict[str, tuple[str, float]]:
+        """Return {abs_id: (leader_client, synced_at)} for one user's last syncs."""
+        user_id = self._resolve_uid(user_id)
+        with self.get_session() as session:
+            rows = session.query(BookSyncMarker).filter(BookSyncMarker.user_id == user_id).all()
+            return {row.abs_id: (row.leader_client, row.synced_at) for row in rows}
+
     def save_transcription_preflight(
         self, abs_id: str, user_id: int, identity: str,
         pairing_key: str, evidence: dict,

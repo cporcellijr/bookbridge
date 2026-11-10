@@ -6229,6 +6229,10 @@ class SyncManager:
                             "Reading session accumulation failed for '%s': %s", book.abs_id, exc, exc_info=True,
                         )
 
+                # The card glow names the leader only once a follower really took the position.
+                if any(self._sync_result_was_applied(result) for result in results.values()):
+                    self.database_service.record_sync_marker(book.abs_id, leader, current_time)
+
                 # Debugging crash: Flush logs to ensure we see this before any potential hard crash
                 for handler in logger.handlers:
                     handler.flush()

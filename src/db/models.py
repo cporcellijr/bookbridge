@@ -479,6 +479,19 @@ class TranscriptionPreflight(Base):
     updated_at = Column(Float, nullable=False)
 
 
+class BookSyncMarker(Base):
+    """Leader and time of the last sync that reached a follower, per user and book.
+
+    Reading sessions close late and record history, so the library card's glow
+    reads this instead."""
+    __tablename__ = "book_sync_markers"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    abs_id = Column(String(255), ForeignKey("books.abs_id", ondelete="CASCADE"), primary_key=True)
+    leader_client = Column(String(50), nullable=False)
+    synced_at = Column(Float, nullable=False)
+
+
 class PendingSuggestion(Base):
     """
     Model for progress-triggered ebook suggestions.

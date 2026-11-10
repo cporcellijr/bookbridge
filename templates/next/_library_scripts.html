@@ -919,7 +919,7 @@
                                 card.querySelectorAll('.progress-percent, .progress-track, .spine-progress').forEach(node => { node.hidden = false; });
                             }
                             if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = book.last_sync_unix;
-                            if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, book.last_sync);
+                            if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, book.last_slot_sync);
                             });
                         });
                     })

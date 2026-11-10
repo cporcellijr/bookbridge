@@ -195,10 +195,7 @@ class TestNewLibrary(unittest.TestCase):
             template_rendered.disconnect(capture, self.app)
 
     def test_cover_carries_the_format_strip_in_place_of_the_last_app_line(self):
-        self.service.record_reading_session(
-            abs_id="library-finished", session_type='AUDIOBOOK', start_time=1793800100.0, end_time=1793800200.0,
-            duration_seconds=100, start_progress=0.9, end_progress=1.0, leader_client='ABS', user_id=self.reader.id,
-        )
+        self.service.record_sync_marker("library-finished", "ABS", 1793800200.0, user_id=self.reader.id)
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
         self._login("ui-reader")
         text = self.client.get("/").get_data(as_text=True)

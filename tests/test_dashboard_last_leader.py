@@ -152,7 +152,7 @@ class TestFormatStrip(unittest.TestCase):
                 'kosync': {'percentage': 61.0},
             },
             'ebook_source': 'BookOrbit', 'audio_source': 'BookOrbit', 'sync_mode': 'audiobook',
-            'last_leader': 'BookOrbit', 'is_out_of_sync': True, 'unified_progress': 61.0,
+            'last_sync_leader': 'BookOrbit', 'is_out_of_sync': True, 'unified_progress': 61.0,
         })}
 
         self.assertEqual(list(slots), ['ebook', 'audio', 'readalong', 'koreader'])
