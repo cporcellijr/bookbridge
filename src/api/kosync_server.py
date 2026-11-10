@@ -110,6 +110,8 @@ _BOOKLORE_SHELF_FILTER_TTL_SECONDS = 120
 # KoSync PUT debounce state
 _kosync_debounce: dict = {}  # {(abs_id, user_id): {'last_event': float, 'title': str, 'synced': bool, 'user_id', 'abs_id'}}
 _kosync_debounce_lock = threading.Lock()
+_device_sync_now_inflight: set = set()  # {(abs_id, user_id)} with a sync-now thread running
+_device_sync_now_lock = threading.Lock()
 _debounce_thread_started = False
 _kosync_open_sessions: dict = {}  # {session_key: session_dict}
 _kosync_open_sessions_lock = threading.Lock()
@@ -2654,9 +2656,27 @@ def device_sync_now(abs_id: str) -> ResponseReturnValue:
         target, kwargs = _manager.sync_cycle, {'target_abs_id': abs_id, 'user_id': user_id}
     else:
         target, kwargs = _manager.run_sync_for_all_users, {'target_abs_id': abs_id}
+    key = (abs_id, user_id)
+    with _device_sync_now_lock:
+        already_running = key in _device_sync_now_inflight
+        _device_sync_now_inflight.add(key)
+    if already_running:
+        # One thread per book and reader; a repeat while it runs becomes one queued follow-up.
+        _manager._queue_pending_sync(abs_id, user_id=user_id)
+        logger.info(f"⚡ Device sync-now: '{getattr(book, 'abs_title', abs_id)}' already syncing, queued a follow-up")
+        return jsonify({"started": True, "abs_id": abs_id}), 202
     logger.info(f"⚡ Device sync-now: syncing '{getattr(book, 'abs_title', abs_id)}'")
-    threading.Thread(target=target, kwargs=kwargs, daemon=True).start()
+    threading.Thread(target=_run_device_sync_now, args=(key, target, kwargs), daemon=True).start()
     return jsonify({"started": True, "abs_id": abs_id}), 202
+
+
+def _run_device_sync_now(key: tuple, target, kwargs: dict) -> None:
+    """Run one device sync-now and free its in-flight slot."""
+    try:
+        target(**kwargs)
+    finally:
+        with _device_sync_now_lock:
+            _device_sync_now_inflight.discard(key)
 
 
 @kosync_sync_bp.route('/device-sync/statistics', methods=['POST'])
