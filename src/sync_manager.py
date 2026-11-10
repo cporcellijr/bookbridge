@@ -1863,6 +1863,17 @@ class SyncManager:
                          self.database_service.get_books_by_status('failed_retry_later')
             
             for book in candidates:
+                # A remote alignment worker's book was not interrupted by this
+                # restart. Its lease decides: heartbeats keep it, and an expired
+                # lease puts it back in the queue (check_pending_jobs).
+                if book.status == 'processing':
+                    worker = self.database_service.alignment_lease_owner(book.abs_id)
+                    if worker is not None:
+                        logger.info(
+                            "⏳ Leaving '%s' with alignment worker '%s'",
+                            sanitize_log_data(book.abs_title), sanitize_log_data(worker),
+                        )
+                        continue
                 # Check if alignment actually exists (job finished but status update failed)
                 original_status = book.status
                 has_alignment = self._promote_alignment_backed_book(book)
@@ -3239,14 +3250,18 @@ class SyncManager:
         Check for pending jobs and run them in a BACKGROUND thread
         so we don't block the sync cycle.
         """
+        max_retries = int(os.getenv("JOB_MAX_RETRIES", 5))
+        retry_delay_mins = int(os.getenv("JOB_RETRY_DELAY_MINS", 15))
+
+        # Remote alignment workers' expired leases go back to the queue every
+        # tick, even while the local thread is busy (no-op without workers).
+        self._expire_alignment_leases(max_retries)
+
         # 1. If a job is already running, let it finish.
         if self._job_thread and self._job_thread.is_alive():
             return
 
         self._recover_ebook_input_candidates()
-
-        max_retries = int(os.getenv("JOB_MAX_RETRIES", 5))
-        retry_delay_mins = int(os.getenv("JOB_RETRY_DELAY_MINS", 15))
 
         # Get books with pending status
         pending_books = self.database_service.get_pending_alignment_queue()
@@ -3301,8 +3316,9 @@ class SyncManager:
         target_book = None
         retry_job = None
         eligible_books = list(full_pipeline_books)
+        leave_to_workers = self._leave_to_workers_filter()
         for book in full_pipeline_books:
-            if not target_book:
+            if not target_book and not (leave_to_workers and leave_to_workers(book, None)):
                 target_book = book
 
         # Get books that failed but are eligible for retry. Only consulted when
@@ -3322,6 +3338,9 @@ class SyncManager:
 
                     # Skip if max retries exceeded
                     if retry_count >= max_retries:
+                        continue
+
+                    if leave_to_workers and leave_to_workers(book, job):
                         continue
 
                     # Check if enough time has passed since last attempt
@@ -3379,8 +3398,9 @@ class SyncManager:
 
         # Create or update job record
         prior_job = retry_job
+        candidate_job = None
         if not prior_job:
-            get_latest_job = getattr(self.database_service, "get_latest_job", None)
+            get_latest_job= getattr(self.database_service, "get_latest_job", None)
             if callable(get_latest_job):
                 try:
                     candidate_job = get_latest_job(
@@ -3401,6 +3421,10 @@ class SyncManager:
             prior_retry_count = 0
         elif prior_stage != "ebook_input_recovery":
             prior_stage = None
+        if not retry_job and getattr(candidate_job, "stage", None) == "lease_expired":
+            # A remote worker's lease expired on this book: that attempt counts,
+            # so a book that kills every worker it lands on still runs out of retries.
+            prior_retry_count = candidate_job.retry_count or 0
         job = Job(
             abs_id=target_book.abs_id,
             last_attempt=time.time(),
@@ -3434,6 +3458,35 @@ class SyncManager:
         except Exception:
             unregister_worker(target_book.abs_id, cancellation_token)
             raise
+
+    def _expire_alignment_leases(self, max_retries: int) -> None:
+        """Return books whose remote worker stopped heartbeating to the queue."""
+        expire = getattr(self.database_service, "expire_alignment_leases", None)
+        if not callable(expire):
+            return
+        try:
+            for abs_id, owner in expire(max_retries):
+                logger.warning(
+                    "⏱️ Alignment worker '%s' stopped reporting on '%s'; returned it to the queue",
+                    sanitize_log_data(owner), abs_id,
+                )
+        except Exception as e:
+            logger.error(f"❌ Could not expire alignment worker leases: {e}", exc_info=True)
+
+    def _leave_to_workers_filter(self):
+        """None, or ``(book, latest_job) -> bool``: books the local job leaves to
+        remote workers. Only with ALIGNMENT_LOCAL_WORKER=false and the worker API
+        enabled; the local job still takes the books workers are never given."""
+        from src.services import alignment_workers
+
+        if alignment_workers.local_worker_enabled():
+            return None
+
+        def leave(book, job):
+            if job is None:
+                job = self.database_service.get_latest_job(book.abs_id, kind=JOB_KIND_ALIGNMENT)
+            return alignment_workers.remote_eligible(book, job)
+        return leave
 
     def cancel_background_job(self, abs_id: str) -> bool:
         """Request cancellation only when this manager has an active worker."""
@@ -3802,9 +3855,13 @@ class SyncManager:
         library_service=None,
         client_bundle=None,
         cancellation_token: CancellationToken = None,
+        raise_failures: bool = False,
     ):
         """
         Threaded worker that handles transcription without blocking the main loop.
+
+        ``raise_failures`` re-raises a failure instead of recording it, for a
+        remote alignment worker, whose main instance records it.
         """
         claimant = ExitStack()
         claimant.enter_context(self._claimant_context(client_bundle, library_service))
@@ -4187,6 +4244,8 @@ class SyncManager:
             if is_cancelled(abs_id, cancellation_token) or self.database_service.get_book(abs_id) is None:
                 logger.info(f"🛑 Background work cancelled for {sanitize_log_data(abs_title)}: mapping deleted")
                 return
+            if raise_failures:
+                raise
             logger.error(f"❌ {sanitize_log_data(abs_title)}: {e}", exc_info=True)
             self._record_alignment_failure(book, e, client_bundle, cancellation_token)
 

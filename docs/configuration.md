@@ -122,6 +122,77 @@ books when Shared Library is enabled. Integration PATCH requests save all submit
 fields together; changing a Readest email or password discards its previous session
 so the next sync authenticates with the updated credentials.
 
+### Remote Alignment Workers (Optional)
+
+Aligning an audiobook to its ebook is CPU-heavy, and BookBridge aligns one book at a
+time. A NAS with a `cpus:` limit can take days over a large backlog while a desktop on
+the same network sits idle. A **worker** is the same image started in worker mode on
+another machine. It takes books from this instance's alignment queue, aligns them
+with its own CPUs, and sends each map back. This instance stores the map through the
+same regression check as a local alignment, so a worse map never replaces a better one.
+
+The worker gets only what alignment needs: the EPUB and audio files of the book it
+took, served by this instance. It never sees the database, reading positions,
+readers, or any stored credentials, and it starts no web server, KoSync server or sync.
+
+On the main instance, set `ALIGNMENT_WORKER_TOKEN` to a random string of at least 32
+characters. Like `ADMIN_API_TOKEN`, it is read from the environment only; unset (or
+shorter), the worker API does not exist. It is a separate token from the admin API's
+and opens nothing else.
+
+```yaml
+environment:
+  - ALIGNMENT_WORKER_TOKEN=a-long-random-string-only-your-workers-know
+  # - ALIGNMENT_LOCAL_WORKER=false   # optional: leave alignment to the workers
+```
+
+On the worker machine, run the same image with:
+
+```yaml
+services:
+  bookbridge-worker:
+    image: ghcr.io/cporcellijr/bookbridge:latest
+    restart: unless-stopped
+    environment:
+      - BOOKBRIDGE_MODE=worker
+      - WORKER_MAIN_URL=http://nas.lan:8080   # the dashboard port, not KOSYNC_PORT
+      - WORKER_TOKEN=a-long-random-string-only-your-workers-know
+      - WORKER_NAME=desktop                   # shown on the Job Queue page
+      # - ALIGN_THREADS=14                    # default: the CPUs the container may use, at most 8
+    volumes:
+      - ./worker-data:/data                   # model cache and scratch space
+```
+
+| Variable | Where | Default | Description |
+| --- | --- | --- | --- |
+| `ALIGNMENT_WORKER_TOKEN` | main | empty | Enables the worker API (`/api/v1/worker/*`, primary port only). At least 32 characters. |
+| `ALIGNMENT_LOCAL_WORKER` | main | `true` | `false` stops this instance aligning the books workers can take, so its CPU stays free. It still aligns the books workers are never given (below). Ignored while the worker API is disabled. |
+| `BOOKBRIDGE_MODE` | worker | empty | `worker` starts the worker instead of BookBridge. |
+| `WORKER_MAIN_URL` | worker | — | The main instance's dashboard URL. |
+| `WORKER_TOKEN` | worker | — | The main instance's `ALIGNMENT_WORKER_TOKEN`. |
+| `WORKER_NAME` | worker | hostname | Letters, digits, `.`, `_`, `-`. Shown as "Aligning on worker *name*". |
+| `WORKER_LEASE_SECONDS` | worker | `300` | How long the main instance waits for a silent worker (60–3600). The worker reports every third of it. |
+| `WORKER_POLL_SECONDS` | worker | `30` | How often an idle worker asks for a book. |
+
+How books move:
+
+- **One queue.** Workers and this instance take books in Job Queue order, so moving a
+  book up the queue applies to workers too. Two claimants never get the same book.
+- **Leases.** A worker that stops reporting (crashed, switched off) loses the book
+  after `WORKER_LEASE_SECONDS`. It goes back to its place in the queue, and that counts
+  as an attempt, so a book that keeps killing workers ends as failed after
+  `JOB_MAX_RETRIES` instead of cycling forever. Restarting this instance does not
+  interrupt a worker's book.
+- **Cancelling.** Deleting or re-matching a book while a worker has it tells the worker
+  to stop at its next report.
+- **Settings.** How a book is aligned follows this instance: forced alignment on or
+  off, read-along timings, segmented maps and the content-match check are sent with
+  each book. The engine is the worker's own: `CTC_MODEL`, `CTC_DEVICE`, `ALIGN_THREADS`,
+  and the Whisper or transcription provider settings in its environment.
+- **Local only.** Workers are offered books that need full alignment. Audio-only and
+  ebook-only books, books aligned from Storyteller transcripts, and ebook input
+  recovery stay on this instance.
+
 ### Integrations
 
 Every integration card has an **Enable** switch, and that switch is server-wide: a

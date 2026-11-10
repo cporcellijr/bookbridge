@@ -20,6 +20,12 @@ def _percent(value: object) -> float:
         return 0
 
 
+def _aligning_label(alignment) -> str:
+    """'Aligning', naming the remote worker when one holds the book's lease."""
+    owner = getattr(alignment, "lease_owner", None) if getattr(alignment, "lease_id", None) else None
+    return f"Aligning on worker {owner}" if isinstance(owner, str) and owner else "Aligning"
+
+
 def _entry(title: str, operation: str, status: str, *, detail: str = "",
            epub3: bool = False, percent: float | None = None,
            timestamp: float | None = None, order: int | None = None,
@@ -120,7 +126,8 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
                 detail=(f"#{position} of {len(alignment_queue)} waiting for alignment"
                         if position is not None else
                         {"pending": "Awaiting background processing",
-                         "processing": "Aligning", "forging": "Forging"}.get(status)),
+                         "processing": _aligning_label(alignment),
+                         "forging": "Forging"}.get(status)),
                 epub3=epub_intent, percent=alignment_pct,
                 timestamp=getattr(alignment, "last_attempt", None),
                 queue_key=abs_id if own_position is not None else None,
