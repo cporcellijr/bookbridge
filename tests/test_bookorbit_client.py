@@ -318,6 +318,7 @@ def test_update_audiobook_progress_uses_revisioned_playback_api(client):
 
 
 def test_update_ebook_progress_uses_primary_file(client):
+    client._reading_progress_api = False
     captured = {}
     with patch.object(client, '_make_request', side_effect=lambda m, e, p=None: captured.update(endpoint=e, payload=p) or _Resp(status_code=204)):
         ok = client.update_ebook_progress({"id": 3, "ebookFileId": 12, "title": "X"}, 0.5)
@@ -327,6 +328,7 @@ def test_update_ebook_progress_uses_primary_file(client):
 
 
 def test_update_ebook_progress_includes_koreader_progress_when_perfect_ko_xpath_present(client):
+    client._reading_progress_api = False
     captured = {}
     locator = LocatorResult(percentage=0.5, cfi="epubcfi(/6/4)", perfect_ko_xpath="/body/DocFragment[12]/body/p[7]/text().0")
     with patch.object(client, '_make_request', side_effect=lambda m, e, p=None: captured.update(endpoint=e, payload=p) or _Resp(status_code=204)):
@@ -338,6 +340,7 @@ def test_update_ebook_progress_includes_koreader_progress_when_perfect_ko_xpath_
 
 
 def test_update_ebook_progress_omits_koreader_progress_when_perfect_ko_xpath_none(client):
+    client._reading_progress_api = False
     captured = {}
     locator = LocatorResult(percentage=0.5, cfi="epubcfi(/6/4)", perfect_ko_xpath=None)
     with patch.object(client, '_make_request', side_effect=lambda m, e, p=None: captured.update(endpoint=e, payload=p) or _Resp(status_code=204)):
@@ -905,9 +908,10 @@ def test_update_ebook_progress_compare_and_set_superseded(client, caplog):
     assert "after this cycle read it at 2026-10-28T10:00:00.123Z" in caplog.text
 
 
-def test_update_ebook_progress_compare_and_set_404_falls_back_to_legacy(client):
+@pytest.mark.parametrize("edited_iso", ["2026-10-28T10:00:00.123Z", None])
+def test_update_ebook_progress_compare_and_set_404_falls_back_to_legacy(client, edited_iso):
     from src.utils.progress_metadata import parse_service_timestamp
-    edited_ts = parse_service_timestamp("2026-10-28T10:00:00.123Z")
+    edited_ts = parse_service_timestamp(edited_iso) if edited_iso else None
     calls = []
 
     def fake_request(method, endpoint, payload=None):
@@ -938,12 +942,39 @@ def test_update_ebook_progress_compare_and_set_404_falls_back_to_legacy(client):
     assert len(post_calls) == 1
 
 
-def test_update_ebook_progress_no_edited_at_uses_legacy(client):
+def test_update_ebook_progress_first_write_without_edited_at_uses_reading_progress_api(client):
+    """Live: an unstarted ebook (updatedAt: null) had no edited_at, so every write went
+    to the legacy POST, which BookOrbit 403s (APP_ATTEST_REQUIRED) — the book never
+    got a first position and so never got a timestamp."""
+    captured = []
+    locator = LocatorResult(percentage=0.0996, cfi="epubcfi(/6/8)", perfect_ko_xpath="/body/DocFragment[4]")
+
+    def fake_request(method, endpoint, payload=None):
+        captured.append((method, endpoint, payload))
+        if method == "POST":
+            return _Resp(status_code=403)
+        return _Resp({"results": [{"status": "saved"}]}, status_code=200)
+
+    with patch.object(client, '_resolve_primary_file_id', return_value=16735), \
+         patch.object(client, '_make_request', side_effect=fake_request):
+        ok = client.update_ebook_progress({"id": 6481, "title": "X"}, 0.0996, locator, edited_at=None)
+    assert ok is True
+    assert [(m, e) for m, e, _ in captured] == [("PUT", "/api/v1/reading-progress")]
+    write = captured[0][2]["writes"][0]
+    assert "editedAt" not in write
+    assert write["fileId"] == 16735
+    assert write["percentage"] == pytest.approx(9.96)
+    assert write["text"] == {"cfi": "epubcfi(/6/8)"}
+    assert write["koreader"] == "/body/DocFragment[4]"
+
+
+@pytest.mark.parametrize("status", [403, 500])
+def test_update_ebook_progress_reading_progress_failure_does_not_fall_back(client, caplog, status):
     captured = []
     with patch.object(client, '_resolve_primary_file_id', return_value=None), \
-         patch.object(client, '_make_request', side_effect=lambda m, e, p=None: captured.append((m, e, p)) or _Resp(status_code=204)):
+         patch.object(client, '_make_request', side_effect=lambda m, e, p=None: captured.append((m, e)) or _Resp(status_code=status)):
         ok = client.update_ebook_progress({"id": 3, "ebookFileId": 12, "title": "X"}, 0.5, None, edited_at=None)
-    assert ok is True
-    post_calls = [c for c in captured if c[0] == "POST"]
-    assert len(post_calls) == 1
-    assert post_calls[0][1] == "/api/v1/books/files/12/progress"
+    assert ok is False
+    assert captured == [("PUT", "/api/v1/reading-progress")]
+    assert f"BookOrbit ebook update failed: {status}" in caplog.text
+    assert client._reading_progress_api is None

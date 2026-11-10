@@ -51,6 +51,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **BookOrbit ebooks you have not opened yet receive their first synced position.** Current
+  BookOrbit servers reject the older progress route BookBridge used for a never-started ebook
+  ("BookOrbit ebook update failed: 403"), so the ebook stayed at 0% while the audiobook moved on.
+  BookBridge now sends that first position through BookOrbit's reading-progress API, the same
+  route it already used for books with saved progress. Older BookOrbit servers without that API
+  still use the older route.
 - **Hardcover progress syncs again for a matched book that is missing from your Hardcover
   library.** If the book never made it onto your Hardcover shelf, or was removed there, BookBridge
   skipped its progress on every sync ("get_user_book returned None"). It now adds the book back as

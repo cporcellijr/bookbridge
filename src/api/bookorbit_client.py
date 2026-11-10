@@ -1211,11 +1211,14 @@ class BookOrbitClient:
         `koreaderProgress`. BookOrbit relays this value to KOReader as the pull
         position; without it BookOrbit derives a chapter-root xpointer from the CFI.
 
+        Writes go through `PUT /api/v1/reading-progress` (BookOrbit 3.6+); the
+        legacy file-progress POST requires App Attest on current servers. Pre-3.6
+        servers 404 the route once and stay on the legacy POST.
+
         `edited_at` is BookOrbit's own `updatedAt` (epoch seconds) from this cycle's
-        read. With it, BookOrbit 3.6+ gets the write through
-        `PUT /api/v1/reading-progress` as a compare-and-set: a position saved in
-        BookOrbit after that read wins and the write is skipped (returns False).
-        Pre-3.6 servers 404 the route once and stay on the legacy POST.
+        read. With it the write is a compare-and-set: a position saved in BookOrbit
+        after that read wins and the write is skipped (returns False). Without it
+        (never-started book) the write is unconditional.
         """
         book_id = book_info.get("id")
         file_id = self._resolve_primary_file_id(book_id, "ebook")
@@ -1237,16 +1240,18 @@ class BookOrbitClient:
             logger.error("BookOrbit: cannot update ebook — no primary file id for book %s", book_id)
             return False
 
-        if edited_at is not None and self._reading_progress_api is not False:
-            # BookOrbit refuses the write when its stored ms is strictly newer, so
-            # its own ms must come back exactly: round, never truncate.
-            edited = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=round(edited_at * 1000))
-            iso_edited = edited.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        if self._reading_progress_api is not False:
             write = {
                 "fileId": int(file_id),
                 "percentage": round(percentage * 100.0, 4),
-                "editedAt": iso_edited,
             }
+            iso_edited = None
+            if edited_at is not None:
+                # BookOrbit refuses the write when its stored ms is strictly newer, so
+                # its own ms must come back exactly: round, never truncate.
+                edited = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=round(edited_at * 1000))
+                iso_edited = edited.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                write["editedAt"] = iso_edited
             if locator and locator.cfi:
                 write["text"] = {"cfi": locator.cfi}
             if locator and locator.perfect_ko_xpath:
