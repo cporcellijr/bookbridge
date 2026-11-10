@@ -5,7 +5,7 @@ import os
 import threading
 import time
 import traceback
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
@@ -3411,17 +3411,12 @@ class SyncManager:
         self.database_service.save_job(job)
 
         # 4. Launch the heavy work in a separate thread
-        client_bundle = self._client_bundle_for_book_claimant(target_book)
+        client_bundle, library_service = self._claimant_for_book(target_book)
         bundle_user_id = getattr(client_bundle, 'user_id', None) if client_bundle else None
         logger.info(
             "Background job claimant for '%s': user_id=%s",
             sanitize_log_data(target_book.abs_title),
             bundle_user_id,
-        )
-        library_service = (
-            getattr(client_bundle, "library_service", None)
-            if client_bundle is not None
-            else self.active_library_service
         )
         cancellation_token = register_worker(target_book.abs_id)
         self._job_thread = threading.Thread(
@@ -3547,12 +3542,7 @@ class SyncManager:
                     )
                 )
 
-                client_bundle = self._client_bundle_for_book_claimant(book)
-                library_service = (
-                    getattr(client_bundle, "library_service", None)
-                    if client_bundle is not None
-                    else self.active_library_service
-                )
+                client_bundle, library_service = self._claimant_for_book(book)
                 cancellation_token = register_worker(abs_id)
                 try:
                     self._run_background_job(
@@ -3566,6 +3556,239 @@ class SyncManager:
                     exc_info=True,
                 )
 
+    @staticmethod
+    @contextmanager
+    def _claimant_context(client_bundle=None, library_service=None):
+        """Run a book's background work as its claimant: their clients, user id,
+        credentials and library service, reset on exit (threads are reused)."""
+        bundle_token = library_token = user_token = creds_token = None
+        if client_bundle is not None:
+            bundle_token = _client_bundle_override.set(client_bundle)
+            bundle_user_id = getattr(client_bundle, "user_id", None)
+            if bundle_user_id is not None:
+                user_token = set_current_user_id(bundle_user_id)
+            bundle_credentials = getattr(client_bundle, "credentials", None)
+            if bundle_credentials is not None:
+                creds_token = set_current_user_credentials(bundle_credentials)
+        if library_service is not None:
+            library_token = _library_service_override.set(library_service)
+        try:
+            yield
+        finally:
+            if library_token is not None:
+                _library_service_override.reset(library_token)
+            if creds_token is not None:
+                reset_current_user_credentials(creds_token)
+            if user_token is not None:
+                reset_current_user_id(user_token)
+            if bundle_token is not None:
+                _client_bundle_override.reset(bundle_token)
+
+    def _claimant_for_book(self, book: Book):
+        """(client_bundle, library_service) a background job for this book runs as."""
+        client_bundle = self._client_bundle_for_book_claimant(book)
+        library_service = (
+            getattr(client_bundle, "library_service", None)
+            if client_bundle is not None
+            else self.active_library_service
+        )
+        return client_bundle, library_service
+
+    def _backfill_series_from_item(self, book: Book, item_details, persist_book) -> None:
+        """Fill a book's missing series from its ABS item (best effort)."""
+        if not item_details or getattr(book, "series_name", None):
+            return
+        try:
+            _sname, _sseq = _extract_series_from_abs_item(item_details)
+            if _sname:
+                book.series_name = _sname
+                book.series_sequence = _sseq
+                persist_book()
+                logger.debug(f"Backfilled series '{_sname}' for '{sanitize_log_data(book.abs_title or 'Unknown')}'")
+        except TranscriptionCancelled:
+            raise
+        except Exception as _se:
+            logger.debug(f"Could not backfill series metadata: {_se}")
+
+    def _resolve_alignment_epub(self, book: Book, item_details, library_service=None) -> Path | None:
+        """The ebook a book aligns against: the library's priority chain, then local files."""
+        epub_path = None
+        library_service = library_service or self.active_library_service
+        if library_service:
+            # Try Priority Chain (Explicit mapping -> ABS Direct -> Grimmory -> CWA
+            # -> ABS Search). Priority 0 needs no ABS item, so this runs even when
+            # the item lookup was skipped (ebook-only / non-ABS audio sources).
+            epub_path = library_service.acquire_ebook(item_details, book)
+
+        # Fallback to legacy logic (Local Filesystem / Cache / Grimmory Classic)
+        if not epub_path:
+            epub_path = self._get_local_epub(book.ebook_filename)
+
+        # LibraryService returns a string, so normalize epub_path to Path.
+        return Path(epub_path) if epub_path else None
+
+    def _lock_kosync_id(self, book: Book, epub_path: Path, persist_book) -> None:
+        """Eagerly calculate and lock the KoSync hash from the original file.
+
+        This ensures we match what the user has on their device (KoReader)
+        regardless of what Storyteller does later.
+        """
+        try:
+            if not book.kosync_doc_id:
+                logger.info(f"🔒 Locking KOSync ID from original EPUB: {epub_path.name}")
+                computed_hash = self.ebook_parser.get_kosync_id(epub_path)
+                if computed_hash:
+                    book.kosync_doc_id = computed_hash
+                    # Also ensure original filename is saved
+                    if not book.original_ebook_filename:
+                        book.original_ebook_filename = book.ebook_filename
+                    persist_book()
+                    logger.info(f"✅ Locked KOSync ID: {computed_hash}")
+        except TranscriptionCancelled:
+            raise
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to eager-lock KOSync ID: {e}", exc_info=True)
+
+    def _finish_alignment_success(self, book: Book, epub_path: Path | None,
+                                  transcript_source: str | None, persist_book) -> None:
+        """Persist a book whose map is stored: mark it active, reset its job, and
+        hand it to read-along generation. Shared by local and remote alignment."""
+        # Update book with transcript path (Now just a marker or None, as data is in book_alignments)
+        book.transcript_file = "DB_MANAGED"
+        if transcript_source:
+            book.transcript_source = transcript_source
+        # Save the filename so cache cleanup knows this file belongs to a book.
+        if epub_path:
+            new_filename = epub_path.name
+
+            # Check if this is a Storyteller artifact (Tri-Link)
+            if "storyteller_" in new_filename and book.ebook_filename and "storyteller_" not in book.ebook_filename:
+                # We are switching TO a Storyteller artifact from a standard EPUB.
+                # Save the OLD filename as the original if it's not already set.
+                if not book.original_ebook_filename:
+                    book.original_ebook_filename = book.ebook_filename
+                    logger.info(f"   ⚡ Preserving original filename: '{book.original_ebook_filename}'")
+
+            # A source-side rename changes remote metadata, not the local cache
+            # identity. Do not oscillate ebook_filename back to the original
+            # cache basename after reconciliation.
+            stable_local = local_ebook_filename(book)
+            mapped_remote_identity = bool(
+                getattr(book, "ebook_source", None)
+                and getattr(book, "ebook_source_id", None)
+                and stable_local
+                and new_filename == stable_local
+                and not is_storyteller_filename(new_filename)
+            )
+            if not mapped_remote_identity:
+                book.ebook_filename = new_filename
+
+        # Guard against a delete that landed after transcription finished but
+        # before we persist (e.g. via SMIL/Storyteller paths that don't hit the
+        # chunk-boundary cancel check). Re-inserting a just-deleted book would
+        # resurrect it as a ghost row, so bail out cleanly instead.
+        book.status = 'active'
+        persist_book()
+
+        # Update the alignment job record to reset retry count and mark 100%.
+        job = self.database_service.get_latest_job(book.abs_id, kind=JOB_KIND_ALIGNMENT)
+        if job:
+            job.retry_count = 0
+            job.last_error = None
+            job.progress = 1.0
+            self.database_service.save_job(job)
+
+        logger.info(f"✅ Completed: {sanitize_log_data(book.abs_title or 'Unknown')}")
+        self._dispatch_readalong_intent(book)
+
+    def _record_alignment_failure(self, book: Book, error: Exception, client_bundle=None,
+                                  cancellation_token=None) -> None:
+        """Record a failed alignment attempt: bump the job's retry count and mark the
+        book failed_retry_later, or failed_permanent for a refused pairing or input,
+        or once JOB_MAX_RETRIES is reached. Shared by local and remote alignment."""
+        abs_id = book.abs_id
+        abs_title = book.abs_title or 'Unknown'
+        max_retries = int(os.getenv("JOB_MAX_RETRIES", 5))
+        e = error
+
+        # --- Failure Update using database service ---
+        # Get the current alignment job to increment its retry count.
+        job = self.database_service.get_latest_job(abs_id, kind=JOB_KIND_ALIGNMENT)
+        current_retry_count = job.retry_count if job else 0
+        new_retry_count = current_retry_count + 1
+        recovery_mode = getattr(job, "stage", None) == "ebook_input_recovery"
+        if recovery_mode and not self._ebook_recovery_book_matches(
+            book, self.database_service.get_book(abs_id)
+        ):
+            logger.info(
+                "🛑 Skipping recovery failure save for %s: mapping identity changed",
+                abs_id,
+            )
+            return
+        recovery_manual = recovery_mode and (
+            isinstance(e, (ContentMatchRejected, EbookInputError))
+            or new_retry_count >= max_retries
+        )
+
+        # Update job record
+        updated_job = Job(
+            abs_id=abs_id,
+            last_attempt=time.time(),
+            retry_count=new_retry_count,
+            last_error=redact_url_secrets(str(e)),
+            progress=job.progress if job else 0.0,
+            stage=(
+                "ebook_input_recovery_manual" if recovery_manual
+                else "ebook_input_recovery" if recovery_mode
+                else getattr(job, "stage", None)
+            ),
+            recovery_identity=getattr(job, "recovery_identity", None) if recovery_mode else None,
+        )
+        self.database_service.save_job(updated_job)
+
+        # Update book status based on retry count
+        if isinstance(e, (ContentMatchRejected, EbookInputError)) or new_retry_count >= max_retries:
+            book.status = 'failed_permanent'
+            if isinstance(e, ContentMatchRejected):
+                logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Alignment refused; awaiting corrected pairing")
+            elif isinstance(e, EbookInputError):
+                logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Ebook input refused; awaiting corrected file")
+            else:
+                logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Max retries exceeded", exc_info=True)
+
+            # Keep the completed transcript so correcting the pairing does not repeat Whisper.
+            if self.data_dir and not recovery_mode:
+                audio_cache_root = Path(self.data_dir) / "audio_cache"
+                try:
+                    from src.utils.transcriber import AudioTranscriber
+                    try:
+                        known_ids = [b.abs_id for b in self.database_service.get_all_books()]
+                    except Exception:
+                        known_ids = None
+                    pruned = False
+                    for cache_name in owned_cache_names(abs_id, known_ids):
+                        if (audio_cache_root / cache_name).exists():
+                            pruned = AudioTranscriber._prune_audio_cache(
+                                audio_cache_root / cache_name, remove_directories=True,
+                                cache_root=audio_cache_root, own_token=cancellation_token) or pruned
+                    if pruned:
+                        logger.info(f"✅ Cleaned up audio cache for {sanitize_log_data(abs_title)}")
+                except Exception as cleanup_err:
+                    logger.warning(f"⚠️ Failed to clean audio cache: {cleanup_err}", exc_info=True)
+        else:
+            book.status = 'failed_retry_later'
+            # Log which claimant was used so cross-user identity mismatches
+            # are diagnosable (shared Book row, wrong claimant's credentials).
+            bundle_user = getattr(client_bundle, 'user_id', None) if client_bundle else None
+            logger.info(
+                "Background job %s marked failed_retry_later (claimant user_id=%s, "
+                "error=%s)",
+                abs_id, bundle_user, str(e)[:200],
+            )
+
+        if self.database_service.update_book_if_exists(book) is None:
+            logger.info(f"🛑 Skipping failure save for {sanitize_log_data(abs_title)}: mapping was deleted")
+
     def _run_background_job(
         self,
         book: Book,
@@ -3578,25 +3801,12 @@ class SyncManager:
         """
         Threaded worker that handles transcription without blocking the main loop.
         """
-        bundle_token = None
-        library_token = None
-        user_token = None
-        creds_token = None
-        if client_bundle is not None:
-            bundle_token = _client_bundle_override.set(client_bundle)
-            bundle_user_id = getattr(client_bundle, "user_id", None)
-            if bundle_user_id is not None:
-                user_token = set_current_user_id(bundle_user_id)
-            bundle_credentials = getattr(client_bundle, "credentials", None)
-            if bundle_credentials is not None:
-                creds_token = set_current_user_credentials(bundle_credentials)
-        if library_service is not None:
-            library_token = _library_service_override.set(library_service)
+        claimant = ExitStack()
+        claimant.enter_context(self._claimant_context(client_bundle, library_service))
 
         abs_id = book.abs_id
         abs_title = book.abs_title or 'Unknown'
         ebook_filename = book.ebook_filename
-        max_retries = int(os.getenv("JOB_MAX_RETRIES", 5))
         if cancellation_token is None:
             cancellation_token = register_worker(abs_id)
 
@@ -3688,35 +3898,9 @@ class SyncManager:
                     f"Ebook-only background prep: skipping ABS item lookup for '{sanitize_log_data(abs_title)}'"
                 )
             
-            if item_details and not getattr(book, "series_name", None):
-                try:
-                    _sname, _sseq = _extract_series_from_abs_item(item_details)
-                    if _sname:
-                        book.series_name = _sname
-                        book.series_sequence = _sseq
-                        persist_book()
-                        logger.debug(f"Backfilled series '{_sname}' for '{sanitize_log_data(abs_title)}'")
-                except TranscriptionCancelled:
-                    raise
-                except Exception as _se:
-                    logger.debug(f"Could not backfill series metadata: {_se}")
+            self._backfill_series_from_item(book, item_details, persist_book)
 
-            epub_path = None
-            library_service = library_service or self.active_library_service
-            if library_service:
-                # Try Priority Chain (Explicit mapping -> ABS Direct -> Grimmory -> CWA
-                # -> ABS Search). Priority 0 needs no ABS item, so this runs even when
-                # the item lookup was skipped (ebook-only / non-ABS audio sources).
-                epub_path = library_service.acquire_ebook(item_details, book)
-
-            # Fallback to legacy logic (Local Filesystem / Cache / Grimmory Classic)
-            if not epub_path:
-                epub_path = self._get_local_epub(ebook_filename)
-                
-            # LibraryService returns a string, so normalize epub_path to Path.
-            if epub_path:
-                epub_path = Path(epub_path)
-                
+            epub_path = self._resolve_alignment_epub(book, item_details, library_service)
             update_progress(1.0, 1) # Done with step 1
             if not epub_path:
                 raise FileNotFoundError(f"Could not locate or download: {ebook_filename}")
@@ -3729,28 +3913,7 @@ class SyncManager:
                 if not book_text.strip():
                     raise EbookInputError(f"Ebook input refused: {epub_path.name} has no readable EPUB text. Replace the file and retry.")
             
-            # acquire_ebook returns a string, so normalize epub_path to Path.
-            if epub_path:
-                epub_path = Path(epub_path)
-                
-                # Eagerly calculate and lock the KoSync hash from the original file.
-                # This ensures we match what the user has on their device (KoReader)
-                # regardless of what Storyteller does later.
-                try:
-                    if not book.kosync_doc_id:
-                        logger.info(f"🔒 Locking KOSync ID from original EPUB: {epub_path.name}")
-                        computed_hash = self.ebook_parser.get_kosync_id(epub_path)
-                        if computed_hash:
-                            book.kosync_doc_id = computed_hash
-                            # Also ensure original filename is saved
-                            if not book.original_ebook_filename:
-                                book.original_ebook_filename = book.ebook_filename
-                            persist_book()
-                            logger.info(f"✅ Locked KOSync ID: {computed_hash}")
-                except TranscriptionCancelled:
-                    raise
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to eager-lock KOSync ID: {e}", exc_info=True)
+            self._lock_kosync_id(book, epub_path, persist_book)
 
             if ebook_only_mode:
                 logger.info(
@@ -4008,54 +4171,7 @@ class SyncManager:
             )
 
             # --- Success Update using database service ---
-            # Update book with transcript path (Now just a marker or None, as data is in book_alignments)
-            book.transcript_file = "DB_MANAGED"
-            if transcript_source:
-                book.transcript_source = transcript_source
-            # Save the filename so cache cleanup knows this file belongs to a book.
-            if epub_path:
-                new_filename = epub_path.name
-                
-                # Check if this is a Storyteller artifact (Tri-Link)
-                if "storyteller_" in new_filename and book.ebook_filename and "storyteller_" not in book.ebook_filename:
-                    # We are switching TO a Storyteller artifact from a standard EPUB.
-                    # Save the OLD filename as the original if it's not already set.
-                    if not book.original_ebook_filename:
-                        book.original_ebook_filename = book.ebook_filename
-                        logger.info(f"   ⚡ Preserving original filename: '{book.original_ebook_filename}'")
-
-                # A source-side rename changes remote metadata, not the local cache
-                # identity. Do not oscillate ebook_filename back to the original
-                # cache basename after reconciliation.
-                stable_local = local_ebook_filename(book)
-                mapped_remote_identity = bool(
-                    getattr(book, "ebook_source", None)
-                    and getattr(book, "ebook_source_id", None)
-                    and stable_local
-                    and new_filename == stable_local
-                    and not is_storyteller_filename(new_filename)
-                )
-                if not mapped_remote_identity:
-                    book.ebook_filename = new_filename
-            
-            # Guard against a delete that landed after transcription finished but
-            # before we persist (e.g. via SMIL/Storyteller paths that don't hit the
-            # chunk-boundary cancel check). Re-inserting a just-deleted book would
-            # resurrect it as a ghost row, so bail out cleanly instead.
-            book.status = 'active'
-            persist_book()
-
-            # Update the alignment job record to reset retry count and mark 100%.
-            job = self.database_service.get_latest_job(abs_id, kind=JOB_KIND_ALIGNMENT)
-            if job:
-                job.retry_count = 0
-                job.last_error = None
-                job.progress = 1.0
-                self.database_service.save_job(job)
-
-
-            logger.info(f"✅ Completed: {sanitize_log_data(abs_title)}")
-            self._dispatch_readalong_intent(book)
+            self._finish_alignment_success(book, epub_path, transcript_source, persist_book)
 
         except TranscriptionCancelled:
             # Mapping deleted mid-transcription. The worker stopped cleanly; do not
@@ -4067,85 +4183,7 @@ class SyncManager:
                 logger.info(f"🛑 Background work cancelled for {sanitize_log_data(abs_title)}: mapping deleted")
                 return
             logger.error(f"❌ {sanitize_log_data(abs_title)}: {e}", exc_info=True)
-
-            # --- Failure Update using database service ---
-            # Get the current alignment job to increment its retry count.
-            job = self.database_service.get_latest_job(abs_id, kind=JOB_KIND_ALIGNMENT)
-            current_retry_count = job.retry_count if job else 0
-            new_retry_count = current_retry_count + 1
-            recovery_mode = getattr(job, "stage", None) == "ebook_input_recovery"
-            if recovery_mode and not self._ebook_recovery_book_matches(
-                book, self.database_service.get_book(abs_id)
-            ):
-                logger.info(
-                    "🛑 Skipping recovery failure save for %s: mapping identity changed",
-                    abs_id,
-                )
-                return
-            recovery_manual = recovery_mode and (
-                isinstance(e, (ContentMatchRejected, EbookInputError))
-                or new_retry_count >= max_retries
-            )
-
-            # Update job record
-            from src.db.models import Job
-            updated_job = Job(
-                abs_id=abs_id,
-                last_attempt=time.time(),
-                retry_count=new_retry_count,
-                last_error=redact_url_secrets(str(e)),
-                progress=job.progress if job else 0.0,
-                stage=(
-                    "ebook_input_recovery_manual" if recovery_manual
-                    else "ebook_input_recovery" if recovery_mode
-                    else getattr(job, "stage", None)
-                ),
-                recovery_identity=getattr(job, "recovery_identity", None) if recovery_mode else None,
-            )
-            self.database_service.save_job(updated_job)
-
-            # Update book status based on retry count
-            if isinstance(e, (ContentMatchRejected, EbookInputError)) or new_retry_count >= max_retries:
-                book.status = 'failed_permanent'
-                if isinstance(e, ContentMatchRejected):
-                    logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Alignment refused; awaiting corrected pairing")
-                elif isinstance(e, EbookInputError):
-                    logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Ebook input refused; awaiting corrected file")
-                else:
-                    logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Max retries exceeded", exc_info=True)
-                
-                # Keep the completed transcript so correcting the pairing does not repeat Whisper.
-                if self.data_dir and not recovery_mode:
-                    audio_cache_root = Path(self.data_dir) / "audio_cache"
-                    try:
-                        from src.utils.transcriber import AudioTranscriber
-                        try:
-                            known_ids = [b.abs_id for b in self.database_service.get_all_books()]
-                        except Exception:
-                            known_ids = None
-                        pruned = False
-                        for cache_name in owned_cache_names(abs_id, known_ids):
-                            if (audio_cache_root / cache_name).exists():
-                                pruned = AudioTranscriber._prune_audio_cache(
-                                    audio_cache_root / cache_name, remove_directories=True,
-                                    cache_root=audio_cache_root, own_token=cancellation_token) or pruned
-                        if pruned:
-                            logger.info(f"✅ Cleaned up audio cache for {sanitize_log_data(abs_title)}")
-                    except Exception as cleanup_err:
-                        logger.warning(f"⚠️ Failed to clean audio cache: {cleanup_err}", exc_info=True)
-            else:
-                book.status = 'failed_retry_later'
-                # Log which claimant was used so cross-user identity mismatches
-                # are diagnosable (shared Book row, wrong claimant's credentials).
-                bundle_user = getattr(client_bundle, 'user_id', None) if client_bundle else None
-                logger.info(
-                    "Background job %s marked failed_retry_later (claimant user_id=%s, "
-                    "error=%s)",
-                    abs_id, bundle_user, str(e)[:200],
-                )
-
-            if self.database_service.update_book_if_exists(book) is None:
-                logger.info(f"🛑 Skipping failure save for {sanitize_log_data(abs_title)}: mapping was deleted")
+            self._record_alignment_failure(book, e, client_bundle, cancellation_token)
 
         finally:
             if is_cancelled(abs_id, cancellation_token) and self.data_dir:
@@ -4165,14 +4203,7 @@ class SyncManager:
                 except Exception as cleanup_err:
                     logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {cleanup_err}", exc_info=True)
             unregister_worker(abs_id, cancellation_token)
-            if library_token is not None:
-                _library_service_override.reset(library_token)
-            if creds_token is not None:
-                reset_current_user_credentials(creds_token)
-            if user_token is not None:
-                reset_current_user_id(user_token)
-            if bundle_token is not None:
-                _client_bundle_override.reset(bundle_token)
+            claimant.close()
 
     def _has_significant_delta(self, client_name, config, book):
         """
