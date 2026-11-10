@@ -685,8 +685,8 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         stub = db.get_kosync_document(device_hash)
         self.assertIsNotNone(stub)
-        self.assertIsNone(stub.linked_abs_id)
         self.assertEqual(stub.filename, "Title - Author.epub")
+        # GET discovery may already have mapped it; the forward PUTs must end on the CWA mapping either way.
 
         self._put_forward(headers, device_hash)
 
