@@ -572,6 +572,292 @@ class TestKosyncEndpoints(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def _unadded_cwa_library(self, calibre_book_id, device_hash, book_dir="Author/Title (95)"):
+        """#582: a Calibre library holding the original EPUB and CWA's checksum for the
+        re-stamped OPDS copy, with no BookBridge Book for it. Returns (root, library, epub)."""
+        import sqlite3
+        import tempfile
+        root = tempfile.mkdtemp(prefix="cwa_unadded_")
+        self.addCleanup(shutil.rmtree, root, True)
+        library = os.path.join(root, "library")
+        os.makedirs(library)
+        epub = os.path.normpath(os.path.join(library, book_dir, "Title - Author.epub"))
+        os.makedirs(os.path.dirname(epub), exist_ok=True)
+        with open(epub, "wb") as f:
+            f.write(b"original library bytes, not the OPDS copy")
+        with sqlite3.connect(os.path.join(library, "metadata.db")) as conn:
+            conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, path TEXT)")
+            conn.execute("CREATE TABLE data (id INTEGER PRIMARY KEY, book INTEGER, format TEXT, name TEXT)")
+            conn.execute(
+                "CREATE TABLE book_format_checksums (id INTEGER PRIMARY KEY, book INTEGER, "
+                "format TEXT, checksum TEXT(32), version TEXT, created TIMESTAMP)"
+            )
+            conn.execute("INSERT INTO books VALUES (?, 'Title', ?)", (calibre_book_id, book_dir))
+            conn.execute("INSERT INTO data (book, format, name) VALUES (?, 'EPUB', 'Title - Author')",
+                         (calibre_book_id,))
+            conn.execute(
+                "INSERT INTO book_format_checksums (book, format, checksum, version, created) "
+                "VALUES (?, 'EPUB', ?, 'koreader', '2026-11-09T21:00:00')",
+                (calibre_book_id, device_hash),
+            )
+        return root, library, epub
+
+    def _discovery_env(self, books_root, library):
+        """Run discovery inline over a real EbookParser rooted at books_root."""
+        from src.api import kosync_server
+        from src.utils.ebook_utils import EbookParser
+        from dependency_injector import providers
+
+        parser = EbookParser(books_root, epub_cache_dir=os.path.join(books_root, "_cache"))
+        kosync_server._container.ebook_parser.override(providers.Object(parser))
+        self.addCleanup(kosync_server._container.ebook_parser.reset_override)
+        unconfigured = MagicMock()
+        unconfigured.is_configured.return_value = False
+
+        def run_now(callback):
+            callback()
+            return MagicMock()
+
+        patches = [
+            patch.dict(os.environ, {"CALIBRE_LIBRARY_PATH": library, "AUTO_CREATE_EBOOK_MAPPING": "true"}),
+            patch.object(kosync_server, "_ebook_dir", Path(books_root)),
+            patch.object(kosync_server, "_discovery_client", return_value=unconfigured),
+            patch.object(kosync_server, "_manager", None),
+            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return parser
+
+    def _put_forward(self, headers, doc_hash, first=0.10, second=0.20):
+        responses = []
+        for pct in (first, second):
+            responses.append(self.client.put("/syncs/progress", headers=headers, json={
+                "document": doc_hash, "progress": "/body/DocFragment[3]",
+                "percentage": pct, "device": "Kindle", "device_id": "KPW2",
+            }))
+        return responses
+
+    def test_put_maps_unadded_cwa_opds_download_via_checksum_history(self):
+        """#582: a CWA OPDS download of a book never added to BookBridge maps on the
+        reader's first forward sync, carrying CWA's Calibre id as the ebook source."""
+        from src import web_server
+        db = web_server.database_service
+        reader, headers = self._make_second_kosync_user("cwa582")
+        device_hash = "d5" * 16
+        root, library, epub = self._unadded_cwa_library(95, device_hash)
+        parser = self._discovery_env(root, library)
+        self.assertNotEqual(parser.get_kosync_id(Path(epub)), device_hash)
+
+        with self.assertLogs("src.api.kosync_server", level="INFO") as captured:
+            self._put_forward(headers, device_hash)
+
+        book = db.get_book("ebook-" + device_hash[:16])
+        self.assertIsNotNone(book)
+        self.assertEqual((book.ebook_source, book.ebook_source_id), ("CWA", "95"))
+        self.assertEqual(book.ebook_filename, "Title - Author.epub")
+        self.assertEqual(book.kosync_doc_id, device_hash)
+        self.assertEqual(db.get_kosync_document(device_hash).linked_abs_id, book.abs_id)
+        self.assertTrue(db.is_user_linked(reader.id, book.abs_id))
+        messages = [r.getMessage() for r in captured.records]
+        self.assertIn(
+            f"🔍 KOSync: {device_hash} is Calibre book 95 in CWA checksum history, "
+            "but no BookBridge mapping uses it yet",
+            messages,
+        )
+        self.assertIn(
+            "📚 Matched EPUB via CWA checksum history: Title - Author.epub (Calibre book 95)", messages,
+        )
+        # The next unknown copy of the same Calibre book resolves to this mapping.
+        self.assertEqual(db.get_book_by_ebook_source("CWA", "95").abs_id, book.abs_id)
+
+    def test_get_stub_then_put_maps_unadded_cwa_download(self):
+        """#582: a GET first leaves an unlinked stub; the reader's forward PUTs still map it."""
+        from src import web_server
+        db = web_server.database_service
+        reader, headers = self._make_second_kosync_user("cwa582get")
+        device_hash = "d6" * 16
+        root, library, _epub = self._unadded_cwa_library(95, device_hash)
+        self._discovery_env(root, library)
+
+        response = self.client.get("/syncs/progress/" + device_hash, headers=headers)
+        self.assertEqual(response.status_code, 404)
+        stub = db.get_kosync_document(device_hash)
+        self.assertIsNotNone(stub)
+        self.assertIsNone(stub.linked_abs_id)
+        self.assertEqual(stub.filename, "Title - Author.epub")
+
+        self._put_forward(headers, device_hash)
+
+        book = db.get_book("ebook-" + device_hash[:16])
+        self.assertIsNotNone(book)
+        self.assertEqual((book.ebook_source, book.ebook_source_id), ("CWA", "95"))
+        self.assertEqual(db.get_kosync_document(device_hash).linked_abs_id, book.abs_id)
+        self.assertTrue(db.is_user_linked(reader.id, book.abs_id))
+
+    def test_unadded_cwa_download_with_missing_library_file_creates_nothing(self):
+        from src import web_server
+        db = web_server.database_service
+        _reader, headers = self._make_second_kosync_user("cwa582miss")
+        device_hash = "d7" * 16
+        root, library, epub = self._unadded_cwa_library(95, device_hash)
+        os.remove(epub)
+        self._discovery_env(root, library)
+
+        self._put_forward(headers, device_hash)
+
+        self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
+        self.assertIsNone(db.get_kosync_document(device_hash).linked_abs_id)
+
+    def test_unadded_cwa_download_refuses_epub_path_outside_library(self):
+        """A metadata.db path escaping the library is refused even when the file exists."""
+        from src import web_server
+        db = web_server.database_service
+        _reader, headers = self._make_second_kosync_user("cwa582esc")
+        device_hash = "d8" * 16
+        root, library, epub = self._unadded_cwa_library(95, device_hash, book_dir="../outside")
+        self.assertTrue(os.path.isfile(epub))
+        self._discovery_env(root, library)
+
+        from src.services import cwa_checksum_resolver
+        with patch.object(cwa_checksum_resolver.logger, "warning") as warned:
+            self._put_forward(headers, device_hash)
+
+        self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
+        self.assertIsNone(db.get_kosync_document(device_hash).linked_abs_id)
+        self.assertIn("outside the Calibre library", warned.call_args[0][0])
+
+    def test_unadded_cwa_download_without_checksum_row_creates_nothing(self):
+        from src import web_server
+        db = web_server.database_service
+        _reader, headers = self._make_second_kosync_user("cwa582none")
+        root, library, _epub = self._unadded_cwa_library(95, "d9" * 16)
+        self._discovery_env(root, library)
+        device_hash = "da" * 16
+
+        self._put_forward(headers, device_hash)
+
+        self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
+        self.assertIsNone(db.get_kosync_document(device_hash).linked_abs_id)
+
+    def test_discovery_reuses_existing_cwa_mapping_instead_of_duplicating(self):
+        """A reader without membership in an existing CWA mapping claims it through
+        discovery; the library EPUB's different filename must not create a second Book."""
+        from src.api import kosync_server
+        from src import web_server
+        db = web_server.database_service
+        reader, _headers = self._make_second_kosync_user("cwa582dup")
+        device_hash = "db" * 16
+        self._save_cwa_book("abs-cwa-existing", 95, "dc" * 16, 0.30)
+        root, library, _epub = self._unadded_cwa_library(95, device_hash)
+        self._discovery_env(root, library)
+
+        kosync_server._run_put_auto_discovery_inner(device_hash, reader.id)
+
+        self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
+        self.assertEqual(db.get_kosync_document(device_hash).linked_abs_id, "abs-cwa-existing")
+        self.assertTrue(db.is_user_linked(reader.id, "abs-cwa-existing"))
+
+    def test_unadded_cwa_download_is_not_linked_to_a_same_named_other_book(self):
+        """#582 review: another library file with the same name must not stand in for
+        the Calibre EPUB, or the reader's progress lands on that other book."""
+        from src import web_server
+        db = web_server.database_service
+        reader, headers = self._make_second_kosync_user("cwa582shadow")
+        device_hash = "dd" * 16
+        root, library, epub = self._unadded_cwa_library(95, device_hash)
+        shadow = os.path.join(root, "Title - Author.epub")
+        with open(shadow, "wb") as f:
+            f.write(b"a different book that happens to share the file name")
+        db.save_book(Book(
+            abs_id="abs-shadow", abs_title="Other Book", ebook_filename="Title - Author.epub",
+            kosync_doc_id="de" * 16, status="active", sync_mode="ebook_only",
+        ))
+        parser = self._discovery_env(root, library)
+        self.assertEqual(Path(parser.resolve_book_path("Title - Author.epub")).resolve(), Path(shadow).resolve())
+
+        self._put_forward(headers, device_hash)
+
+        book = db.get_book("ebook-" + device_hash[:16])
+        self.assertIsNotNone(book)
+        self.assertEqual(book.ebook_filename, "library/Author/Title (95)/Title - Author.epub")
+        self.assertEqual(Path(parser.resolve_book_path(book.ebook_filename)).resolve(), Path(epub).resolve())
+        self.assertEqual((book.ebook_source, book.ebook_source_id), ("CWA", "95"))
+        self.assertEqual(db.get_kosync_document(device_hash).linked_abs_id, book.abs_id)
+        self.assertFalse(db.is_user_linked(reader.id, "abs-shadow"))
+        self.assertIsNone(db.get_book("abs-shadow").ebook_source)
+
+    def test_accepted_suggestion_for_unadded_cwa_download_keeps_cwa_identity(self):
+        """#582 review: a suggested match is accepted from the local EPUB (no source);
+        the reader's next sync links the device copy and restores the CWA identity."""
+        from src.api import kosync_server
+        from src.sync_clients.cwa_sync_client import CWASyncClient
+        from src import web_server
+        db = web_server.database_service
+        reader, headers = self._make_second_kosync_user("cwa582sugg")
+        device_hash = "df" * 16
+        root, library, epub = self._unadded_cwa_library(95, device_hash)
+        parser = self._discovery_env(root, library)
+        candidate = {"abs_id": "abs-audio-95", "title": "Title", "author": "Author",
+                     "duration": 3600, "title_sim": 0.9, "progress_pct": 0}
+        with (
+            patch.dict(os.environ, {"KOSYNC_AUTO_MAP_ON_AGREEMENT": "false"}),
+            patch.object(kosync_server, "_autodiscovery_audiobook_candidates", return_value=[candidate]),
+        ):
+            self._put_forward(headers, device_hash)
+
+        self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
+        suggestion = next(s for s in db.get_all_pending_suggestions(user_id=reader.id)
+                          if s.source_id == device_hash)
+        ebook_match = next(m for m in suggestion.matches if m.get("source") == "ebook")
+        self.assertEqual(ebook_match["filename"], "Title - Author.epub")
+
+        # What the match routes store for a local EPUB pick: the file, no ebook source.
+        db.save_book(Book(
+            abs_id="abs-audio-95", abs_title="Title", ebook_filename=ebook_match["filename"],
+            kosync_doc_id=parser.get_kosync_id(Path(epub)), status="active", sync_mode="audiobook",
+        ))
+        db.link_user_book(reader.id, "abs-audio-95")
+
+        # The reader keeps reading: a fresh forward anchor runs discovery again. The
+        # placeholder EPUB has no readable author, so keep the filename-variant index
+        # (and its author re-reads, which reset forward anchors) out of this test.
+        with patch.object(kosync_server, "_resolve_book_by_filename_variants", return_value=None):
+            self._put_forward(headers, device_hash, 0.30, 0.40)
+
+        accepted = db.get_book("abs-audio-95")
+        self.assertEqual(db.get_kosync_document(device_hash).linked_abs_id, "abs-audio-95")
+        self.assertEqual((accepted.ebook_source, accepted.ebook_source_id), ("CWA", "95"))
+        cwa_client = CWASyncClient(MagicMock(), MagicMock(), MagicMock())
+        self.assertTrue(cwa_client.supports_book(accepted))
+        self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
+
+    def test_unadded_cwa_download_maps_when_library_is_mounted_twice(self):
+        """#582 live setup: CALIBRE_LIBRARY_PATH and EXTRA_EBOOK_DIRS are two mounts of
+        one folder, so the Calibre path and the scanned path differ for the same file."""
+        from src import web_server
+        db = web_server.database_service
+        reader, headers = self._make_second_kosync_user("cwa582mount")
+        device_hash = "e1" * 16
+        root, library, epub = self._unadded_cwa_library(95, device_hash)
+        mount = os.path.join(root, "second_mount")
+        mounted_epub = os.path.join(mount, "Author", "Title (95)", "Title - Author.epub")
+        os.makedirs(os.path.dirname(mounted_epub))
+        try:
+            os.link(epub, mounted_epub)  # one file, two paths: what a second bind mount looks like
+        except OSError as e:
+            self.skipTest(f"hard links unavailable: {e}")
+        self._discovery_env(mount, library)
+
+        self._put_forward(headers, device_hash)
+
+        book = db.get_book("ebook-" + device_hash[:16])
+        self.assertIsNotNone(book)
+        self.assertEqual(book.ebook_filename, "Title - Author.epub")
+        self.assertEqual((book.ebook_source, book.ebook_source_id), ("CWA", "95"))
+        self.assertTrue(db.is_user_linked(reader.id, book.abs_id))
+
     def test_get_progress_returns_404_for_missing(self):
         """Test that GET returns 404 (not 502) for missing document."""
         response = self.client.get(

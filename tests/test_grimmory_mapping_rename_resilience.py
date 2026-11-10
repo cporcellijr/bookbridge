@@ -501,7 +501,7 @@ def test_kosync_auto_map_keeps_grimmory_id_for_all_source_spellings(monkeypatch,
     monkeypatch.setattr(
         kosync_server,
         "_resolve_library_ebook_source",
-        lambda _filename: (source, "4"),
+        lambda _filename, _doc_hash=None: (source, "4"),
     )
 
     result = kosync_server._auto_map_ebook_to_audiobook(

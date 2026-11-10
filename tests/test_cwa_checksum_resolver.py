@@ -93,3 +93,44 @@ def test_opens_metadata_db_read_only(tmp_path, monkeypatch):
 
     assert db_path.read_bytes() == before
     assert not (tmp_path / "metadata.db-wal").exists()
+
+
+def make_library_epub(library_dir, book_id=95, book_path="Author/Title (95)", name="Title - Author", with_file=True):
+    """Add Calibre's books.path + data.name rows (#582); optionally create the EPUB."""
+    db_path = make_metadata_db(library_dir, [])
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE books ADD COLUMN path TEXT")
+        conn.execute("CREATE TABLE data (id INTEGER PRIMARY KEY, book INTEGER, format TEXT, name TEXT)")
+        conn.execute("INSERT INTO books (id, title, path) VALUES (?, 'Title', ?)", (book_id, book_path))
+        conn.execute("INSERT INTO data (book, format, name) VALUES (?, 'EPUB', ?)", (book_id, name))
+    epub = library_dir / book_path / f"{name}.epub"
+    if with_file:
+        epub.parent.mkdir(parents=True, exist_ok=True)
+        epub.write_bytes(b"epub")
+    return db_path, epub
+
+
+def test_epub_path_for_a_calibre_book(tmp_path, monkeypatch):
+    db_path, epub = make_library_epub(tmp_path)
+    monkeypatch.setenv("CALIBRE_LIBRARY_PATH", str(db_path))
+
+    assert cwa_checksum_resolver.find_calibre_epub_path("95") == epub.resolve()
+    assert not (tmp_path / "metadata.db-wal").exists()
+
+
+def test_epub_path_none_without_epub_format_or_file(tmp_path, monkeypatch):
+    make_library_epub(tmp_path, with_file=False)
+    monkeypatch.setenv("CALIBRE_LIBRARY_PATH", str(tmp_path))
+
+    assert cwa_checksum_resolver.find_calibre_epub_path("95") is None
+    assert cwa_checksum_resolver.find_calibre_epub_path("96") is None
+
+
+def test_epub_path_refuses_escape_from_library(tmp_path, monkeypatch):
+    library = tmp_path / "library"
+    library.mkdir()
+    _db, epub = make_library_epub(library, book_path="../outside")
+    assert epub.is_file()
+    monkeypatch.setenv("CALIBRE_LIBRARY_PATH", str(library))
+
+    assert cwa_checksum_resolver.find_calibre_epub_path("95") is None
