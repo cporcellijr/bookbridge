@@ -125,6 +125,8 @@ _kosync_recent_external_puts_lock = threading.Lock()
 _discovery_anchor_cache = LRUCache(capacity=1024)
 # (document hash, abs_id) pairs whose CWA identity was already checked (#582).
 _cwa_identity_checked = LRUCache(capacity=1024)
+# A negative CWA identity check is retried after this long (CWA may checksum the file later).
+_CWA_IDENTITY_RECHECK_SECONDS = 3600
 _discovery_anchor_cache_lock = threading.Lock()
 _KOREADER_STATS_MAX_BOOKS = 1000
 _KOREADER_STATS_MAX_PAGE_STATS = 10000
@@ -3899,14 +3901,16 @@ def _adopt_cwa_identity(doc_id: str, book) -> None:
         return
     from src.services.cwa_checksum_resolver import find_calibre_book_id, find_calibre_epub_path
 
+    # Runs on every KoSync PUT: query metadata.db and walk the library once per hash and book.
+    key = (doc_id, book.abs_id)
+    checked_at = _cwa_identity_checked.get(key)
+    if checked_at is not None and time.monotonic() - checked_at < _CWA_IDENTITY_RECHECK_SECONDS:
+        return
+    _cwa_identity_checked.put(key, time.monotonic())
     try:
         calibre_book_id = find_calibre_book_id(doc_id)
         if not calibre_book_id or _database_service.get_book_by_ebook_source("CWA", calibre_book_id):
             return
-        # The file comparison can walk the library; do it once per hash and book.
-        if _cwa_identity_checked.get((doc_id, book.abs_id)):
-            return
-        _cwa_identity_checked.put((doc_id, book.abs_id), True)
         library_epub = find_calibre_epub_path(calibre_book_id)
         if library_epub is None:
             return
