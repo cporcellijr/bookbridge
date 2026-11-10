@@ -51,6 +51,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Hardcover progress syncs again for a matched book that is missing from your Hardcover
+  library.** If the book never made it onto your Hardcover shelf, or was removed there, BookBridge
+  skipped its progress on every sync ("get_user_book returned None"). It now adds the book back as
+  Want to Read and syncs the progress.
+- **Ebook details are read from EPUBs whose navigation page has no table of contents.** Such books
+  failed with "Could not read EPUB metadata ... list index out of range", so Hardcover and
+  StoryGraph matching got no title or ISBN for them. They now read normally.
 - **Read-along EPUBs now build for books saved with Windows line endings.** About one EPUB in ten
   stores its text with Windows (CRLF) line endings, and BookBridge refused to build a read-along
   edition for every one of them ("could not map original XHTML for spine item"). They now build
