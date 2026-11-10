@@ -874,11 +874,18 @@
                                 updateCtcAlignmentStatus(card, book.ctc_aligned === true);
                                 updateReadalongStatus(card, book.readalong_ready === true);
 
-                            // Update progress percentage text
+                            // Clear progress leaves 0% reset snapshots, so only a state above 0 counts as a position.
+                            const hasPosition = Object.values(book.states || {}).some(s => s.percentage > 0);
+                            const finished = hasPosition && book.unified_progress >= 100;
                             const progressPercent = card.querySelector('.progress-percent');
                             if (progressPercent) {
-                                progressPercent.textContent = `${book.unified_progress.toFixed(1)}%`;
+                                progressPercent.textContent = `${Math.floor(book.unified_progress)}%`;
+                                progressPercent.hidden = !hasPosition || finished;
                             }
+                            const progressDone = card.querySelector('.progress-done');
+                            if (progressDone) progressDone.hidden = !finished;
+                            const progressTrack = card.querySelector('.progress-track');
+                            if (progressTrack) progressTrack.hidden = !hasPosition || finished;
 
                             // Update progress bar
                             const barFill = card.querySelector('.progress-bar-fill');
@@ -914,9 +921,9 @@
                             card.dataset.progress = book.unified_progress;
                             card.querySelectorAll('[data-app-pct]').forEach(node => { const app = book.states && book.states[node.dataset.appPct]; if (app) node.textContent = app.percentage.toFixed(1) + '%'; });
                             const spine = card.querySelector('.spine-progress');
-                            if (spine) spine.textContent = book.unified_progress.toFixed(0) + '%';
-                            if (book.states && Object.keys(book.states).length) {
-                                card.querySelectorAll('.progress-percent, .progress-track, .spine-progress').forEach(node => { node.hidden = false; });
+                            if (spine) {
+                                spine.textContent = book.unified_progress.toFixed(0) + '%';
+                                spine.hidden = !hasPosition;
                             }
                             if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = book.last_sync_unix;
                             if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, book.last_slot_sync);
