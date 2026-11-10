@@ -53,6 +53,15 @@ class _FakeDatabaseService:
     def get_book(self, abs_id):
         return self.books_by_id.get(abs_id)
 
+    def claim_alignment_book(self, abs_id, expected_status):
+        for book in self.get_books_by_status(expected_status):
+            if book.abs_id == abs_id:
+                book.status = "processing"
+                book.alignment_queue_position = None
+                self.save_book(book)
+                return True
+        return False
+
     def save_book(self, book):
         self.saved_books.append(book)
 
