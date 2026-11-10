@@ -285,6 +285,10 @@ class TestKosyncEndpoints(unittest.TestCase):
                                web_server.database_service)
         patcher.start()
         self.addCleanup(patcher.stop)
+        from src.utils.ebook_utils import LRUCache
+        patcher = patch.object(kosync_server, '_cwa_identity_checked', LRUCache(capacity=1024))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         # Mocked endpoint tests must not consume or refresh a real manifest cache.
         for name in ('_start_manifest_prebuilder', '_load_persisted_manifest'):
             patcher = patch.object(kosync_server, name, return_value=None)
@@ -857,6 +861,61 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertEqual(book.ebook_filename, "Title - Author.epub")
         self.assertEqual((book.ebook_source, book.ebook_source_id), ("CWA", "95"))
         self.assertTrue(db.is_user_linked(reader.id, book.abs_id))
+
+    def test_match_route_acceptance_of_unadded_cwa_download_gets_cwa_identity(self):
+        """#582 review: POST /match links the device hash itself (by the stub's filename),
+        skipping discovery; the reader's next PUT must still give the book CWA's id."""
+        from src.api import kosync_server
+        from src.sync_clients.cwa_sync_client import CWASyncClient
+        from src import web_server
+        db = web_server.database_service
+        admin = next(u for u in db.list_users() if u.is_admin)
+        device_hash = "e2" * 16
+        root, library, epub = self._unadded_cwa_library(95, device_hash)
+        parser = self._discovery_env(root, library)
+        candidate = {"abs_id": "abs-audio-e2", "title": "Title", "author": "Author",
+                     "duration": 3600, "title_sim": 0.9, "progress_pct": 0}
+        with (
+            patch.dict(os.environ, {"KOSYNC_AUTO_MAP_ON_AGREEMENT": "false"}),
+            patch.object(kosync_server, "_autodiscovery_audiobook_candidates", return_value=[candidate]),
+        ):
+            self.client.get("/syncs/progress/" + device_hash, headers=self.auth_headers)
+            self._put_forward(self.auth_headers, device_hash)
+        self.assertEqual(db.get_kosync_document(device_hash).filename, "Title - Author.epub")
+        self.assertIsNone(db.get_kosync_document(device_hash).linked_abs_id)
+
+        clients = MagicMock()
+        clients.storyteller_client.is_configured.return_value = False
+        clients.booklore_client.is_configured.return_value = False
+        clients.abs_client.get_item_details.return_value = {}
+        token = web_server.set_current_user_id(admin.id)
+        try:
+            with (
+                patch.dict(self.app.config, {"LOGIN_DISABLED": True}),
+                patch.object(web_server, "uc", return_value=clients),
+                patch.object(web_server, "get_audiobooks_conditionally",
+                             return_value=[{"id": "abs-audio-e2", "media": {"metadata": {"title": "Title"}}}]),
+                patch.object(web_server, "manager", MagicMock(**{"get_abs_title.return_value": "Title"})),
+                patch.object(web_server, "get_kosync_id_for_ebook", return_value=parser.get_kosync_id(Path(epub))),
+            ):
+                accepted = self.client.post("/match", data={
+                    "audiobook_id": "abs-audio-e2", "ebook_filename": "Title - Author.epub",
+                })
+        finally:
+            web_server.reset_current_user_id(token)
+        self.assertEqual(accepted.status_code, 302, accepted.get_data(as_text=True)[:300])
+        self.assertEqual(db.get_kosync_document(device_hash).linked_abs_id, "abs-audio-e2")
+        self.assertIsNone(db.get_book("abs-audio-e2").ebook_source)
+
+        self.client.put("/syncs/progress", headers=self.auth_headers, json={
+            "document": device_hash, "progress": "/body/DocFragment[5]",
+            "percentage": 0.30, "device": "Kindle", "device_id": "KPW2",
+        })
+
+        book = db.get_book("abs-audio-e2")
+        self.assertEqual((book.ebook_source, book.ebook_source_id), ("CWA", "95"))
+        self.assertTrue(CWASyncClient(MagicMock(), MagicMock(), MagicMock()).supports_book(book))
+        self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
 
     def test_get_progress_returns_404_for_missing(self):
         """Test that GET returns 404 (not 502) for missing document."""

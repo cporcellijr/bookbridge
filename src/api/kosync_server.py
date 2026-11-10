@@ -123,6 +123,8 @@ _kosync_device_session_registry_lock = threading.Lock()
 _kosync_recent_external_puts: dict = {}
 _kosync_recent_external_puts_lock = threading.Lock()
 _discovery_anchor_cache = LRUCache(capacity=1024)
+# (document hash, abs_id) pairs whose CWA identity was already checked (#582).
+_cwa_identity_checked = LRUCache(capacity=1024)
 _discovery_anchor_cache_lock = threading.Lock()
 _KOREADER_STATS_MAX_BOOKS = 1000
 _KOREADER_STATS_MAX_PAGE_STATS = 10000
@@ -2309,6 +2311,8 @@ def kosync_put_progress():
     if linked_book and not is_internal:
         if not _kosync_user_may_access_book(linked_book):
             return _defer_kosync_book_access(doc_hash, linked_book, source="put", discover=may_match)
+        # A match route may have linked this hash itself, skipping _register_hash_for_book.
+        _adopt_cwa_identity(doc_hash, linked_book)
         _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
 
     # AUTO-DISCOVERY
@@ -3899,6 +3903,10 @@ def _adopt_cwa_identity(doc_id: str, book) -> None:
         calibre_book_id = find_calibre_book_id(doc_id)
         if not calibre_book_id or _database_service.get_book_by_ebook_source("CWA", calibre_book_id):
             return
+        # The file comparison can walk the library; do it once per hash and book.
+        if _cwa_identity_checked.get((doc_id, book.abs_id)):
+            return
+        _cwa_identity_checked.put((doc_id, book.abs_id), True)
         library_epub = find_calibre_epub_path(calibre_book_id)
         if library_epub is None:
             return
