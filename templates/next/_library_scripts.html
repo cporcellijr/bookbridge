@@ -1084,6 +1084,18 @@
             checkbox.dispatchEvent(new Event('change', {bubbles: true}));
         }
     }, true);
+    // iPadOS reports hover, so CSS can't spot touch: tag the input, and a tapped format icon shows its tip instead of opening the book.
+    document.addEventListener('pointerdown', event => {
+        document.documentElement.dataset.input = event.pointerType === 'mouse' ? 'mouse' : 'touch';
+    }, true);
+    document.addEventListener('click', event => {
+        const slot = event.target.closest?.('.format-slot');
+        document.querySelectorAll('.format-slot.tip-open').forEach(open => { if (open !== slot) open.classList.remove('tip-open'); });
+        if (!slot || librarySelectMode || document.documentElement.dataset.input !== 'touch') return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        slot.classList.toggle('tip-open');
+    }, true);
     document.addEventListener('change', event => {
         if (!event.target.matches('[data-select-book]')) return;
         document.querySelectorAll('[data-select-book]').forEach(input => {
