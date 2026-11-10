@@ -51,6 +51,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Forced alignment no longer over-subscribes a CPU-limited container** (#580). QuartzNet
+  used up to 8 threads based on the host's core count, so a container capped with `cpus: 4`
+  ran 8 threads on 4 CPUs' worth of time and was throttled. It now uses the CPUs the
+  container can actually use (still at most 8), and the model-load log line names the
+  count. The new `ALIGN_THREADS` environment variable overrides it, including above 8; a
+  change needs a restart. Contributed by [@eschatus](https://github.com/eschatus) in #580.
+
 - **BookOrbit ebooks you have not opened yet receive their first synced position.** Current
   BookOrbit servers reject the older progress route BookBridge used for a never-started ebook
   ("BookOrbit ebook update failed: 403"), so the ebook stayed at 0% while the audiobook moved on.
