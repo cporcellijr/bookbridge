@@ -51,6 +51,17 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **A book downloaded from CWA in KOReader now matches even if you never added it to
+  BookBridge** (#582). CWA's checksum history already recognised a fresh CWA download, but
+  only for books BookBridge had mapped, so a new book downloaded through KOReader's OPDS
+  catalog stayed unmatched until you added it by hand. Now the hash leads to the book's EPUB
+  in your Calibre library, and the usual auto-discovery runs on your first forward sync:
+  it links to an existing mapping of that book, auto-maps or suggests an audiobook, or
+  creates an ebook-only mapping with CWA as the ebook source. If you accept a suggested match
+  instead, the book gets CWA as its ebook source on your next sync. A different file with the
+  same name elsewhere in your library is never mistaken for the book. The Calibre library must
+  be set in `CALIBRE_LIBRARY_PATH` and sit under `BOOKS_DIR` or `EXTRA_EBOOK_DIRS`.
+
 - **Forced alignment no longer over-subscribes a CPU-limited container** (#580). QuartzNet
   used up to 8 threads based on the host's core count, so a container capped with `cpus: 4`
   ran 8 threads on 4 CPUs' worth of time and was throttled. It now uses the CPUs the

@@ -1814,11 +1814,12 @@ def _select_auto_map_candidate(ebook_meta, candidates):
     return best, "agreement"
 
 
-def _resolve_library_ebook_source(epub_filename):
+def _resolve_library_ebook_source(epub_filename, doc_hash: Optional[str] = None):
     """Resolve a filesystem EPUB to its library identity.
 
     The mapping must reference the library copy by source id so progress actually
     syncs to BookOrbit/Grimmory/Kavita rather than treating it as a bare local file.
+    With ``doc_hash``, CWA's checksum history is the last fallback (a CWA download).
     Returns (source, source_id) or (None, None).
     """
     try:
@@ -1845,6 +1846,11 @@ def _resolve_library_ebook_source(epub_filename):
                 return "Kavita", str(match["id"])
     except Exception as e:
         logger.debug(f"Auto-map: Kavita filename resolve failed: {e}")
+    if doc_hash:
+        from src.services.cwa_checksum_resolver import find_calibre_book_id
+        calibre_book_id = find_calibre_book_id(doc_hash)
+        if calibre_book_id:
+            return "CWA", calibre_book_id
     return None, None
 
 
@@ -1877,7 +1883,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason,
         logger.warning(f"Auto-map: book mapping service unavailable: {e}", exc_info=True)
         return None
 
-    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
+    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename, doc_hash_val)
     abs_ebook_item_id = _resolve_abs_ebook_item(epub_filename)
 
     saved = mapping_service.create_audio_mapping_from_match(
@@ -3703,6 +3709,12 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
                  except Exception:
                      pass
 
+        # CWA serves re-stamped copies whose hash no library file has; its checksum
+        # history names the Calibre book, so take that book's library EPUB.
+        matched = _find_epub_by_cwa_checksum(doc_hash)
+        if matched:
+            return matched
+
         # Check filesystem — BOOKS_DIR plus any EXTRA_EBOOK_DIRS libraries.
         for scan_dir in _ebook_search_dirs():
             matched = _scan_directory_for_hash(scan_dir, doc_hash)
@@ -3813,6 +3825,93 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
 
     logger.info("🔍 Auto-discovery finished. No match found")
     return None
+
+
+def _resolves_to_file(parser, name: str, path: Path) -> bool:
+    """True when the stored name ``name`` resolves to the same file as ``path``."""
+    try:
+        return os.path.samefile(parser.resolve_book_path(name), path)
+    except OSError:
+        return False
+
+
+def _exact_library_name(parser, path: Path, calibre_root: Optional[Path] = None) -> Optional[str]:
+    """A stored name that resolves to the very file ``path``, or None.
+
+    The bare filename when no other file shadows it, otherwise the path within a
+    library root, which ``resolve_book_path`` looks up at that exact location. The
+    Calibre library may be mounted again under a scanned folder, so its own relative
+    path is tried as well.
+    """
+    names = [path.name]
+    for root in [*parser.search_dirs(), *([calibre_root] if calibre_root else [])]:
+        try:
+            names.append(path.relative_to(Path(root).resolve()).as_posix())
+        except (OSError, ValueError):
+            continue
+    return next((name for name in names if _resolves_to_file(parser, name, path)), None)
+
+
+def _find_epub_by_cwa_checksum(doc_hash: str) -> Optional[str]:
+    """Library EPUB name of the Calibre book CWA served with this hash, or None."""
+    from src.services.cwa_checksum_resolver import (
+        calibre_library_root, find_calibre_book_id, find_calibre_epub_path,
+    )
+
+    try:
+        calibre_book_id = find_calibre_book_id(doc_hash)
+        if not calibre_book_id:
+            return None
+        path = find_calibre_epub_path(calibre_book_id)
+        if path is None:
+            return None
+        name = _exact_library_name(_container.ebook_parser(), path, calibre_library_root())
+    except Exception as e:
+        logger.warning(f"⚠️ KOSync: CWA checksum EPUB lookup failed for {doc_hash}: {e}", exc_info=True)
+        return None
+    if name is None:
+        logger.info(
+            f"🔍 KOSync: Calibre book {calibre_book_id} EPUB '{path.name}' is not under "
+            "BOOKS_DIR or EXTRA_EBOOK_DIRS — cannot use it"
+        )
+        return None
+    logger.info(f"📚 Matched EPUB via CWA checksum history: {name} (Calibre book {calibre_book_id})")
+    return name
+
+
+def _adopt_cwa_identity(doc_id: str, book) -> None:
+    """Give a book with no library identity the CWA id of the copy CWA served (#582).
+
+    Only when the book's own file is exactly that Calibre book's EPUB, so a mapping
+    made from the local file (an accepted suggestion) still syncs to CWA.
+    """
+    if getattr(book, "ebook_source", None):
+        return
+    filenames = {
+        name for name in (getattr(book, "original_ebook_filename", None), getattr(book, "ebook_filename", None))
+        if name
+    }
+    if not filenames:
+        return
+    from src.services.cwa_checksum_resolver import find_calibre_book_id, find_calibre_epub_path
+
+    try:
+        calibre_book_id = find_calibre_book_id(doc_id)
+        if not calibre_book_id or _database_service.get_book_by_ebook_source("CWA", calibre_book_id):
+            return
+        library_epub = find_calibre_epub_path(calibre_book_id)
+        if library_epub is None:
+            return
+        parser = _container.ebook_parser()
+        if not any(_resolves_to_file(parser, name, library_epub) for name in filenames):
+            return
+        if _database_service.update_book_fields(book.abs_id, ebook_source="CWA", ebook_source_id=calibre_book_id):
+            book.ebook_source, book.ebook_source_id = "CWA", calibre_book_id
+            logger.info(
+                f"🔗 KOSync: '{book.abs_title}' is Calibre book {calibre_book_id} — CWA set as its ebook source"
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ KOSync: CWA identity check failed for '{book.abs_id}': {e}", exc_info=True)
 
 
 # ---------------- GET Fallback Helpers ----------------
@@ -4175,6 +4274,11 @@ def _resolve_book_by_cwa_checksum(doc_id: str):
             f"🔗 KOSync: Resolved {doc_id} to '{book.abs_title}' via CWA checksum history "
             f"(Calibre book {calibre_book_id})"
         )
+    else:
+        logger.info(
+            f"🔍 KOSync: {doc_id} is Calibre book {calibre_book_id} in CWA checksum history, "
+            "but no BookBridge mapping uses it yet"
+        )
     return book
 
 
@@ -4441,10 +4545,12 @@ def _register_hash_for_book(doc_id: str, book, *, user_id=None, exact: bool = Fa
                 return
             _database_service.link_kosync_document(doc_id, book.abs_id)
             logger.info(f"🔗 KOSync: Linked existing document {doc_id} to '{book.abs_title}'")
+            _adopt_cwa_identity(doc_id, book)
     else:
         doc = KD(document_hash=doc_id, linked_abs_id=book.abs_id, user_id=user_id)
         _database_service.save_kosync_document(doc)
         logger.info(f"🔗 KOSync: Created and linked new document {doc_id} to '{book.abs_title}'")
+        _adopt_cwa_identity(doc_id, book)
 
 
 def _is_valid_hex_hash(value: str) -> bool:
@@ -4538,6 +4644,7 @@ def _run_get_auto_discovery(doc_id: str, user_id=None) -> None:
         # shared EPUB identifier (raw library file vs the re-stamped matched copy).
         book = (
             _database_service.get_book_by_ebook_filename(epub_filename)
+            or _resolve_book_by_cwa_checksum(doc_id)
             or _resolve_book_by_epub_identifier(epub_filename, doc_id=doc_id)
         )
         if book:
@@ -4562,6 +4669,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
         return
     existing_book = (
         _database_service.get_book_by_ebook_filename(epub_filename)
+        or _resolve_book_by_cwa_checksum(doc_hash_val)
         or _resolve_book_by_epub_identifier(epub_filename, doc_id=doc_hash_val)
     )
     if existing_book:
@@ -4603,7 +4711,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
             ), user_id=user_id)
         return
     book_id = f"ebook-{doc_hash_val[:16]}"
-    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
+    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename, doc_hash_val)
     abs_ebook_item_id = _resolve_abs_ebook_item(epub_filename)
     _database_service.save_book(Book(
         abs_id=book_id, abs_title=ebook_meta.get("title") or title, ebook_filename=epub_filename,
