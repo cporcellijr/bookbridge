@@ -47,6 +47,28 @@ COMIC_EBOOK_EXTENSIONS = frozenset({'.cbz'})
 LINKABLE_EBOOK_EXTENSIONS = frozenset({'.epub', *COMIC_EBOOK_EXTENSIONS})
 
 
+class _TolerantEpubReader(epub.EpubReader):
+    """EpubReader that survives EPUB3 nav documents lacking a toc nav."""
+
+    def _parse_nav(self, *args, **kwargs):
+        try:
+            return super()._parse_nav(*args, **kwargs)
+        except IndexError:
+            # nav doc without a toc/page-list nav; the TOC is not needed by our readers
+            return None
+
+
+def _read_epub(path: str) -> epub.EpubBook:
+    """``epub.read_epub``, retried with the tolerant reader on a nav doc without a toc nav."""
+    try:
+        return epub.read_epub(path)
+    except IndexError:
+        reader = _TolerantEpubReader(path, None)
+        book = reader.load()
+        reader.process()
+        return book
+
+
 def is_linkable_ebook_filename(name: str | None) -> bool:
     """True for filenames BookBridge can link (EPUB plus CBZ comics)."""
     return str(name or '').strip().lower().endswith(tuple(LINKABLE_EBOOK_EXTENSIONS))
@@ -327,7 +349,7 @@ class EbookParser:
             except FileNotFoundError:
                 return set()
         try:
-            book = epub.read_epub(str(path))
+            book = _read_epub(str(path))
         except Exception as e:
             logger.debug(f"Could not read identifiers for '{path}': {e}")
             return set()
@@ -443,7 +465,7 @@ class EbookParser:
         except FileNotFoundError:
             return result
         try:
-            book = epub.read_epub(str(path))
+            book = _read_epub(str(path))
         except Exception as e:
             logger.warning(f"⚠️ Could not read EPUB metadata for '{filename}': {e}", exc_info=True)
             return result
@@ -466,7 +488,7 @@ class EbookParser:
             with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
                 tmp.write(content)
                 tmp_path = tmp.name
-            book = epub.read_epub(tmp_path)
+            book = _read_epub(tmp_path)
         except Exception as e:
             logger.warning(f"⚠️ Could not read EPUB metadata from bytes for '{filename}': {e}", exc_info=True)
             return result
@@ -540,7 +562,7 @@ class EbookParser:
             filepath = Path(filepath)
             # 1. Try to get cover from metadata using ebooklib
             try:
-                book = epub.read_epub(str(filepath))
+                book = _read_epub(str(filepath))
                 # Check for cover item
                 cover_item = None
 
@@ -714,13 +736,13 @@ class EbookParser:
 
         try:
             try:
-                book = epub.read_epub(str_path)
+                book = _read_epub(str_path)
             except Exception as read_error:
                 repaired = self._sanitize_epub(str_path)
                 if not repaired:
                     raise
                 try:
-                    book = epub.read_epub(repaired)
+                    book = _read_epub(repaired)
                 finally:
                     try:
                         os.unlink(repaired)

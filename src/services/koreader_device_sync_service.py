@@ -249,16 +249,27 @@ class KOReaderDeviceSyncService:
         if not source_filename:
             return None
 
+        abs_id = str(getattr(book, "abs_id", "") or "").strip()
+
         source_path = self._resolve_source_path(
             book, source_filename, allow_revalidation=allow_revalidation
         )
         if not source_path or not source_path.exists():
-            logger.warning(
+            get_persistent_condition_logger().warn(
+                logger,
+                f"device_sync_missing_original:{abs_id}",
                 "KOReader device-sync could not resolve original ebook for '%s' (%s)",
                 sanitize_log_data(getattr(book, "abs_title", None) or getattr(book, "abs_id", None)),
                 sanitize_log_data(source_filename),
             )
             return None
+
+        get_persistent_condition_logger().resolve(
+            logger,
+            f"device_sync_missing_original:{abs_id}",
+            "KOReader device-sync: original ebook for '%s' is available again",
+            sanitize_log_data(getattr(book, "abs_title", None) or abs_id),
+        )
 
         content_hash = self._content_hash_for_path(source_path)
         if not content_hash:
@@ -270,7 +281,6 @@ class KOReaderDeviceSyncService:
 
         kosync_hash = self._kosync_hash_for(book, content_hash, device_filename)
         stored_hash = self._select_content_hash(book)
-        abs_id = str(getattr(book, "abs_id", "") or "").strip()
 
         linked = False
         # Verify the atomic adoption before serving a hash another book may have claimed.
