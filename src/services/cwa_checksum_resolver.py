@@ -61,7 +61,7 @@ def find_calibre_book_id(doc_hash: str) -> Optional[str]:
             _missing_table_logged = True
         return None
     except sqlite3.Error as e:
-        logger.warning(f"CWA checksum lookup failed: {e}")
+        logger.warning(f"CWA checksum lookup failed: {e}", exc_info=True)
         return None
 
     if not row or row[0] is None:
@@ -94,7 +94,7 @@ def find_calibre_epub_path(calibre_book_id: str) -> Optional[Path]:
     try:
         path.relative_to(root)
     except ValueError:
-        logger.warning(f"CWA checksum: refused EPUB path outside the Calibre library for book {calibre_book_id}")
+        logger.warning(f"CWA checksum: refused EPUB path outside the Calibre library for book {calibre_book_id}", exc_info=True)
         return None
     if not path.is_file():
         logger.info(f"CWA checksum: EPUB for Calibre book {calibre_book_id} is missing at {path}")

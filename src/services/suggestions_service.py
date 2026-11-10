@@ -1690,7 +1690,7 @@ class SuggestionsService:
             try:
                 audiobooks = self.get_audiobooks_conditionally()
             except Exception as e:
-                self.logger.warning(f"Shelf-watch scan failed to load audiobook candidate pool: {e}")
+                self.logger.warning(f"Shelf-watch scan failed to load audiobook candidate pool: {e}", exc_info=True)
                 return []
 
         raw_count = len(audiobooks) if audiobooks else 0

@@ -3901,7 +3901,7 @@ def get_searchable_audiobooks(search_term, source_states=None, abs_catalog=None,
             _record_suggestions_source_state(
                 source_states, "_client_registry", "audio", True, complete=False, error_type=type(e).__name__,
             )
-            logger.warning("Could not build user-scoped audio adapters (%s)", type(e).__name__)
+            logger.warning("Could not build user-scoped audio adapters (%s)", type(e).__name__, exc_info=True)
             return []
         if not _acting_user_may_use_global_config():
             logger.warning(
@@ -4290,7 +4290,7 @@ def get_searchable_ebooks(
                 source_states, "_client_registry", "ebook", True,
                 complete=False, error_type=type(exc).__name__,
             )
-            logger.warning("Could not load user-scoped ebook clients (%s)", type(exc).__name__)
+            logger.warning("Could not load user-scoped ebook clients (%s)", type(exc).__name__, exc_info=True)
             return results
         raise
 
@@ -4385,7 +4385,7 @@ def get_searchable_ebooks(
                     source_states, "Grimmory", "ebook", True,
                     complete=False, error_type=type(e).__name__,
                 )
-                logger.warning("⚠️ Grimmory scan failed (%s)", type(e).__name__)
+                logger.warning("⚠️ Grimmory scan failed (%s)", type(e).__name__, exc_info=True)
             else:
                 logger.warning(f"⚠️ Grimmory search failed: {e}", exc_info=True)
 
@@ -4465,7 +4465,7 @@ def get_searchable_ebooks(
                     source_states, "BookOrbit", "ebook", True,
                     complete=False, error_type=type(e).__name__,
                 )
-                logger.warning("⚠️ BookOrbit scan failed (%s)", type(e).__name__)
+                logger.warning("⚠️ BookOrbit scan failed (%s)", type(e).__name__, exc_info=True)
             else:
                 logger.warning(f"⚠️ BookOrbit search failed: {e}", exc_info=True)
 
@@ -4575,7 +4575,7 @@ def get_searchable_ebooks(
                     source_states, "Kavita", "ebook", True,
                     complete=False, error_type=type(e).__name__,
                 )
-                logger.warning("Kavita scan failed (%s)", type(e).__name__)
+                logger.warning("Kavita scan failed (%s)", type(e).__name__, exc_info=True)
             else:
                 logger.warning("Kavita search failed: %s", e, exc_info=True)
 
@@ -4616,7 +4616,7 @@ def get_searchable_ebooks(
                     source_states, "ABS", "ebook", True,
                     complete=False, error_type=type(e).__name__,
                 )
-                logger.warning("⚠️ ABS ebook search failed (%s)", type(e).__name__)
+                logger.warning("⚠️ ABS ebook search failed (%s)", type(e).__name__, exc_info=True)
             else:
                 logger.warning(f"⚠️ ABS ebook search failed: {e}", exc_info=True)
 
@@ -4669,7 +4669,7 @@ def get_searchable_ebooks(
                 source_states, "ABS", "ebook", True,
                 complete=False, error_type=type(e).__name__,
             )
-            logger.warning("⚠️ ABS catalog capture failed (%s)", type(e).__name__)
+            logger.warning("⚠️ ABS catalog capture failed (%s)", type(e).__name__, exc_info=True)
 
     # 3. CWA (Calibre-Web Automated)
     library_service = getattr(clients, "library_service", None)
@@ -4719,7 +4719,7 @@ def get_searchable_ebooks(
                     source_states, "CWA", "ebook", True,
                     complete=False, error_type=type(e).__name__,
                 )
-                logger.warning("⚠️ CWA search failed (%s)", type(e).__name__)
+                logger.warning("⚠️ CWA search failed (%s)", type(e).__name__, exc_info=True)
             else:
                 logger.warning(f"⚠️ CWA search failed: {e}", exc_info=True)
 
@@ -4780,7 +4780,7 @@ def get_searchable_ebooks(
                 source_states, "CWA", "ebook", True,
                 complete=False, error_type=type(e).__name__,
             )
-            logger.warning("⚠️ CWA catalog capture failed (%s)", type(e).__name__)
+            logger.warning("⚠️ CWA catalog capture failed (%s)", type(e).__name__, exc_info=True)
 
     # 4. Search filesystem (Local) - LOW PRIORITY
     if EBOOK_DIR.exists() and not skip_local:
@@ -4841,7 +4841,7 @@ def get_searchable_ebooks(
                     source_states, "Local File", "ebook", True,
                     complete=False, error_type=type(e).__name__,
                 )
-                logger.warning("⚠️ Filesystem scan failed (%s)", type(e).__name__)
+                logger.warning("⚠️ Filesystem scan failed (%s)", type(e).__name__, exc_info=True)
             else:
                 logger.warning(f"⚠️ Filesystem search failed: {e}", exc_info=True)
 
@@ -10118,7 +10118,7 @@ def scan_library_suggestions(
         )
         audio_candidates = []
         ebook_candidates = []
-        logger.warning("Suggestions catalog capture failed (%s)", type(exc).__name__)
+        logger.warning("Suggestions catalog capture failed (%s)", type(exc).__name__, exc_info=True)
 
     if not _suggestions_discovery_sources_complete(source_states):
         snapshot = dict(previous) if isinstance(previous, dict) else {}
@@ -11033,7 +11033,7 @@ def _save_persisted_suggestions_cache(payload, *, replace_ignored=False):
                     loaded = json.loads(cache_file.read_text(encoding='utf-8'))
                     current = loaded if isinstance(loaded, dict) else {}
                 except Exception as exc:
-                    logger.warning("Could not read existing suggestions cache before saving (%s)", type(exc).__name__)
+                    logger.warning("Could not read existing suggestions cache before saving (%s)", type(exc).__name__, exc_info=True)
 
             safe_payload = {
                 "scan_cache_by_abs": current.get("scan_cache_by_abs", {}) if isinstance(current.get("scan_cache_by_abs", {}), dict) else {},
