@@ -179,8 +179,9 @@ class TestP8Finish(unittest.TestCase):
                 self.assertIn(selector, day_rules)
         self.assertIn('#diagnostics-optin-modal .hc-modal-footer button:not(.hc-btn-cancel) { background: var(--ribbon)', css)
 
-    def test_docs_and_unreleased_entry_identify_beta_switch(self):
-        changelog = source("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("### Fixed", 1)[0]
+    def test_docs_and_release_entry_identify_beta_switch(self):
+        # The beta switch shipped in 7.13.0; the release moved its entries out of Unreleased.
+        changelog = source("CHANGELOG.md").split("## [7.13.0]", 1)[1].split("\n## [", 1)[0]
         self.assertIn("**The New interface (beta)", changelog)
         self.assertIn("New interface", changelog)
         self.assertIn("Classic | New", changelog)
