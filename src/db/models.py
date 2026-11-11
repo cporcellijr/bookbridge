@@ -530,6 +530,38 @@ class BookSyncMarker(Base):
     synced_at = Column(Float, nullable=False)
 
 
+class AcquisitionRequest(Base):
+    """A book a reader asked a service (BookOrbit) to fetch, with the book it was asked for."""
+    __tablename__ = 'acquisition_requests'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    last_checked_at = Column(DateTime, nullable=True)
+    service = Column(String(30), nullable=False)
+    media_kind = Column(String(20), nullable=False)
+    remote_kind = Column(String(20), nullable=True)
+    remote_id = Column(String(255), nullable=True)
+    title = Column(String(500), nullable=False)
+    authors = Column(String(500), nullable=True)
+    isbn13 = Column(String(20), nullable=True)
+    series_name = Column(String(500), nullable=True)
+    series_index = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False, default='waiting', server_default='waiting')
+    remote_status = Column(String(50), nullable=True)
+    status_detail = Column(Text, nullable=True)
+    partner_source = Column(String(50), nullable=True)
+    partner_source_id = Column(String(255), nullable=True)
+    partner_filename = Column(String(500), nullable=True)
+    group_key = Column(String(64), nullable=True)
+    arrived_source = Column(String(50), nullable=True)
+    arrived_source_id = Column(String(255), nullable=True)
+    arrived_filename = Column(String(500), nullable=True)
+    linked_abs_id = Column(String(255), nullable=True)
+    dismissed = Column(Boolean, nullable=False, default=False, server_default='0')
+
+
 class PendingSuggestion(Base):
     """
     Model for progress-triggered ebook suggestions.

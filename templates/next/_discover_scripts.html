@@ -1478,7 +1478,7 @@
             if (view.ebooks.length) rows.unshift(searchGhostRowHtml());
             const empty = view.audiobooks.length ? ''
                 : `<div class="empty"><p>${esc(view.ebooks.length ? T.noAudioFound : T.noResults)}</p></div>`;
-            list.innerHTML = (rows.length ? `<div class="flat-list" role="list">${rows.join('')}</div>` : '') + empty;
+            list.innerHTML = (rows.length ? `<div class="flat-list" role="list">${rows.join('')}</div>` : '') + empty + acqActionsHtml(view);
         }
         list.scrollTop = scrollPos.search || 0;
         scrollPos.search = 0;
@@ -1842,6 +1842,7 @@
     loadInitialState();
     renderTabCounts();
     setTab(activeTab);
+    initAcquisition();
 
     if (scanInProgress) {
         document.getElementById('scanOverlay').classList.add('show');

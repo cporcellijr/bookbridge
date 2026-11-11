@@ -2288,6 +2288,21 @@
                 </div>
             </div>
 
+            <!-- Getting missing books -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>{{ _('Getting books') }}</h3>
+                </div>
+                <div class="section-body">
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="acquisition_allow_readers"
+                            name="ACQUISITION_ALLOW_READERS" {% if get_bool('ACQUISITION_ALLOW_READERS') %}checked{% endif %}>
+                        <label for="acquisition_allow_readers">{{ _('Let readers get missing books') }}</label>
+                        <div class="help-text">{{ _('Readers can ask BookOrbit for the ebook or audiobook a search did not find, using their own BookOrbit login. Admins can always do this.') }}</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Shelfmark (Optional) -->
             <div class="settings-section">
                 {% set shelfmark_enabled = get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and

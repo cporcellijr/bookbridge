@@ -28,7 +28,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 from difflib import SequenceMatcher
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import requests
 
@@ -854,6 +854,90 @@ class BookOrbitClient:
             return []
         data = self._parse_json(resp)
         return data if isinstance(data, list) else []
+
+    # ------------------------------------------------------------------
+    # Book requests (ask BookOrbit to fetch a book it does not have)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _request_work_fields(title: str, authors=None, isbn13: Optional[str] = None,
+                             series_name: Optional[str] = None, series_index=None) -> dict:
+        """Work fields for a request body: the title plus whichever optional ones are present."""
+        body = {"title": title}
+        if authors:
+            body["authors"] = [authors] if isinstance(authors, str) else list(authors)
+        if isbn13:
+            body["isbn13"] = isbn13
+        if series_name:
+            body["seriesName"] = series_name
+        if series_index not in (None, ""):
+            body["seriesIndex"] = int(series_index)
+        return body
+
+    def _request_json(self, method: str, endpoint: str, body=None, ok=(200, 201)) -> Optional[object]:
+        """Call a book-requests route; the parsed JSON on success, None otherwise."""
+        resp = self._make_request(method, endpoint, body)
+        if resp is None or resp.status_code not in ok:
+            if resp is not None and resp.status_code == 403:
+                logger.debug("BookOrbit: %s %s refused (403): the account cannot request books", method, endpoint)
+            else:
+                logger.warning(
+                    "BookOrbit: %s %s failed: status=%s", method, endpoint,
+                    resp.status_code if resp is not None else "no response",
+                )
+            return None
+        data = self._parse_json(resp)
+        return data if data is not None else {}
+
+    def request_sources(self) -> Optional[object]:
+        """Whether BookOrbit can search for requests; None when refused (403) or unreachable."""
+        return self._request_json("GET", "/api/v1/book-requests/source-status", ok=(200,))
+
+    def check_request_availability(self, items: list[dict]) -> Optional[list]:
+        """Per item ``{ownedBookId, existingRequestId, ...}``, or None on failure."""
+        data = self._request_json("POST", "/api/v1/book-requests/availability", {"items": items}, ok=(200,))
+        if isinstance(data, dict):
+            data = data.get("items")
+        return data if isinstance(data, list) else None
+
+    def create_request(self, title: str, media_kind: str, authors=None, isbn13: Optional[str] = None,
+                       series_name: Optional[str] = None, series_index=None) -> Optional[dict]:
+        """File one request; ``{request, subscribed}`` or None on failure."""
+        body = self._request_work_fields(title, authors, isbn13, series_name, series_index)
+        body["mediaKind"] = media_kind
+        data = self._request_json("POST", "/api/v1/book-requests", body)
+        return data if isinstance(data, dict) else None
+
+    def create_request_pair(self, title: str, authors=None, isbn13: Optional[str] = None,
+                            series_name: Optional[str] = None, series_index=None) -> Optional[dict]:
+        """File the ebook and audiobook together; ``{ebook, audiobook}`` results or None."""
+        body = self._request_work_fields(title, authors, isbn13, series_name, series_index)
+        body["ebook"] = {}
+        body["audiobook"] = {}
+        data = self._request_json("POST", "/api/v1/book-requests/pairs", body)
+        return data if isinstance(data, dict) else None
+
+    def list_requests(self, status: Optional[str] = None, media_kind: Optional[str] = None,
+                      page: int = 1, limit: int = 50) -> Optional[dict]:
+        """The caller's requests as ``{items, total}``, or None on failure."""
+        params = {"page": page, "limit": min(limit, 100)}
+        if status:
+            params["status"] = status
+        if media_kind:
+            params["mediaKind"] = media_kind
+        data = self._request_json("GET", f"/api/v1/book-requests?{urlencode(params)}", ok=(200,))
+        return data if isinstance(data, dict) else None
+
+    def get_request(self, request_id) -> Optional[dict]:
+        """One request, or None when missing or unreachable."""
+        data = self._request_json("GET", f"/api/v1/book-requests/{request_id}", ok=(200,))
+        return data if isinstance(data, dict) else None
+
+    def cancel_request(self, request_id) -> bool:
+        """Cancel a request; True when BookOrbit accepted it."""
+        return self._request_json(
+            "POST", f"/api/v1/book-requests/{request_id}/cancel", ok=(200, 201, 204),
+        ) is not None
 
     def scan_library(self, library_id: Optional[int]) -> bool:
         """Trigger a BookOrbit library scan so newly-written files get indexed.
