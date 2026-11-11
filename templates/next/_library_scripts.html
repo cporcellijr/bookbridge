@@ -9,8 +9,8 @@
             }
         </script>
 <script>
-            function checkForgeStatus() {
-                fetch('/api/forge/active')
+            function checkForgeStatus(signal) {
+                return fetch('/api/forge/active', { signal })
                     .then(r => r.json())
                     .then(tasks => {
                         const banner = document.getElementById('forge-status-banner');
@@ -24,13 +24,21 @@
                         } else {
                             banner.style.display = 'none';
                         }
+                        return !!(tasks && tasks.length > 0);
                     })
                     .catch(e => console.debug("Forge status check failed", e));
             }
-            // Poll every 5s
-            setInterval(checkForgeStatus, 5000);
-            // Initial check
-            document.addEventListener('DOMContentLoaded', checkForgeStatus);
+            // 5s while a forge task is running or work was just started, 30s when idle
+            // (tasks started elsewhere show up within one slow tick or on tab focus).
+            window.bbForgePoll = bbPoller({ name: 'forge', fastMs: 5000, slowMs: 30000, run: checkForgeStatus });
+            ['syncNow', 'remapAlignment', 'generateReadalongEpub'].forEach(function (name) {
+                var original = window[name];
+                if (typeof original !== 'function') return;
+                window[name] = function () {
+                    window.bbForgePoll.kick();
+                    return original.apply(this, arguments);
+                };
+            });
         </script>
 <script>
                 // Make function globally available
@@ -911,22 +919,23 @@
 
             let refreshPaused = false;
 
-            function refreshDashboard() {
-                // A hidden tab redraws nothing, so skip the round trip entirely.
-                if (refreshPaused || document.hidden) {
-                    setTimeout(refreshDashboard, 30000);
-                    return;
-                }
+            function refreshDashboard(signal) {
+                if (refreshPaused) return;
 
                 // Compact position feed, not the full dashboard payload: this
                 // handler redraws progress, the synced line and CTC status.
-                fetch('/api/status/progress')
+                return fetch('/api/status/progress', { signal })
                     .then(r => r.json())
                     .then(data => {
                         if (!data || !data.mappings) return;
+                        const cardsById = new Map();
+                        document.querySelectorAll('.book-card').forEach(card => {
+                            const list = cardsById.get(card.dataset.absId);
+                            if (list) list.push(card); else cardsById.set(card.dataset.absId, [card]);
+                        });
                         data.mappings.forEach(book => {
-                            const cards = document.querySelectorAll(`.book-card[data-abs-id="${book.abs_id}"]`);
-                            if (!cards.length) return;
+                            const cards = cardsById.get(String(book.abs_id));
+                            if (!cards) return;
                             cards.forEach(card => {
                                 updateCtcAlignmentStatus(card, book.ctc_aligned === true);
                                 updateReadalongStatus(card, book.readalong_ready === true);
@@ -985,8 +994,7 @@
                             });
                         });
                     })
-                    .catch(() => { })
-                    .finally(() => setTimeout(refreshDashboard, 30000));
+                    .catch(() => { });
             }
 
             // Pause on modal open
@@ -1005,7 +1013,7 @@
                 refreshPaused = false;
             };
 
-            setTimeout(refreshDashboard, 30000);
+            bbPoller({ name: 'library-progress', fastMs: 30000, slowMs: 30000, immediate: false, run: refreshDashboard });
         </script>
 
 <script>
@@ -1230,6 +1238,7 @@
             count.textContent = bbFormat({{ _('{count} completed')|tojson }}, {count: ids.length});
         }
         if (failed.length) count.textContent = bbFormat({{ _('{success} completed; {failed} failed. Failed books remain selected.')|tojson }}, {success: ids.length - failed.length, failed: failed.length});
+        window.bbForgePoll?.kick();
         return {failed, total: ids.length};
     }
     window.bulkSyncNow = function () { return runSelectedBooks({{ _('Syncing')|tojson }}, async id => {

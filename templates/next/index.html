@@ -159,4 +159,4 @@
     <footer class="library-footer"><span>{{ _('Build %(version)s', version=app_version) }}</span>{% if update_available %}<a href="https://github.com/cporcellijr/bookbridge/releases/latest" target="_blank" rel="noopener noreferrer">{{ _('v%(version)s Available', version=latest_version) }}</a>{% endif %}</footer>
 </div>
 {% endblock %}
-{% block scripts %}{% include 'next/_book_scripts.html' %}{% include 'next/_library_scripts.html' %}<script src="/static/js/next/masonry.js" defer></script>{% endblock %}
+{% block scripts %}{% include 'next/_book_scripts.html' %}<script src="/static/js/next/poller.js"></script>{% include 'next/_library_scripts.html' %}<script src="/static/js/next/masonry.js" defer></script>{% endblock %}

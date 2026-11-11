@@ -88,7 +88,7 @@ class TestP8Finish(unittest.TestCase):
         self.assertIn("row-gap: 0", css)
         self.assertIn('src="/static/js/next/masonry.js"', library)
         self.assertIn('id="library-page" class="library-page" data-view="covers"', library)
-        self.assertIn("setTimeout(refreshDashboard, 30000)", source("templates/next/_library_scripts.html"))
+        self.assertIn("bbPoller({ name: 'library-progress', fastMs: 30000, slowMs: 30000, immediate: false, run: refreshDashboard })", source("templates/next/_library_scripts.html"))
         self.assertIn('<label class="book-select-hit">', library)
 
     def test_view_switch_only_binds_its_own_buttons_not_the_library_page(self):

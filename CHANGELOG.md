@@ -31,6 +31,10 @@ All notable changes to BookBridge will be documented in this file.
   The out-of-sync checks that made the first page load after a restart slow are now prepared in
   the background at startup, and a BookOrbit book list that is due a refresh no longer holds
   the page: the last list is shown and the refresh happens in the background.
+- **The New Library asks the server for status far less often.** An idle Library tab checks
+  for running jobs every 30 seconds instead of every 5, a tab in the background makes no
+  requests at all and catches up the moment you return to it, and starting a sync, re-map or
+  read-along build still shows progress right away.
 
 - **CTC alignment jobs now show progress throughout the model pass.** QuartzNet
   and MMS report the amount of audiobook audio processed, so the first CTC
