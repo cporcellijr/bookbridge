@@ -164,8 +164,9 @@ class TestPolicy(ClientCase):
 
 
 class TestReleases(ClientCase):
-    def search(self, response):
-        client = self.client({("POST", "/api/auth/login"): _login(), ("GET", "/api/releases"): response})
+    def search(self, response, sources=None):
+        client = self.client({("POST", "/api/auth/login"): _login(), ("GET", "/api/releases"): response,
+                              ("GET", "/api/release-sources"): sources or _response(200, [{"name": "src-a", "display_name": "Source A"}])})
         return client, client.find_releases("Example Book", "A. Writer", "audiobook")
 
     def test_release_list_is_normalized(self):
@@ -174,7 +175,8 @@ class TestReleases(ClientCase):
         self.assertEqual(len(releases), 1)
         self.assertEqual(
             {k: v for k, v in releases[0].items() if k != "key"},
-            {"title": "Example Book", "format": "epub", "size": "2 MB", "source": "Indexer A", "language": "en", "detail": "4 seeders", "author": "", "kind": ""})
+            {"title": "Example Book", "format": "epub", "size": "2 MB", "source": "Indexer A", "language": "en", "detail": "4 seeders", "author": "", "kind": "",
+             "group": "src-a", "group_label": "Source A", "peers": "", "flags": [], "formats_more": 0})
         self.assertEqual(client.release_for(releases[0]["key"]), _RELEASE)
         self.assertIsNone(client.release_for("unknown"))
         _, _, kwargs = self.server.paths("/api/releases")[0]
@@ -192,6 +194,17 @@ class TestReleases(ClientCase):
         self.assertEqual(one(extra={}, protocol=None, source="direct"), ("", "direct"))
         self.assertEqual(one(protocol="dcc")[1], "irc")
         self.assertEqual(one(protocol="soulseek")[1], "soulseek")
+
+    def test_group_peers_flags_and_extra_formats(self):
+        item = {**_RELEASE, "peers": "533 / 1", "extra": {"indexer_flags": ["VIP", "FreeLeech"], "formats": ["epub", "azw3"]}}
+        _, (releases, _) = self.search(_response(200, {"releases": [item]}))
+        self.assertEqual((releases[0]["peers"], releases[0]["flags"], releases[0]["formats_more"]), ("533 / 1", ["VIP", "FreeLeech"], 1))
+
+    def test_group_label_falls_back_to_a_tidy_code(self):
+        item = {**_RELEASE, "source": "direct_download"}
+        for sources in (_response(500, {}), _response(200, {"oops": 1})):
+            _, (releases, _) = self.search(_response(200, {"releases": [item]}), sources)
+            self.assertEqual((releases[0]["group"], releases[0]["group_label"]), ("direct_download", "Direct Download"))
 
     def test_policy_refusal_and_source_failure_have_codes(self):
         self.assertEqual(self.search(_response(403, {"error": "blocked"}))[1], (None, "policy_refused"))

@@ -245,6 +245,7 @@ class ShelfmarkClient:
         raw = [item for item in body.get("releases") or [] if isinstance(item, dict) and item.get("source_id")]
         now = time.time()
         self._releases = {k: v for k, v in self._releases.items() if now - v[0] < _RELEASE_TTL}
+        labels = self._source_labels()
         releases = []
         for item in raw:
             key = _digest(item.get("source"), item.get("source_id"))
@@ -253,7 +254,14 @@ class ShelfmarkClient:
             author = (item.get("extra") or {}).get("author") if isinstance(item.get("extra"), dict) else None
             if isinstance(author, list):
                 author = ", ".join(str(a) for a in author if a)
+            extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+            flags = [str(f) for f in extra.get("indexer_flags") or [] if f] if isinstance(extra.get("indexer_flags"), list) else []
+            formats = extra.get("formats")
+            group = str(item.get("source") or "")
             releases.append({
+                "group": group, "group_label": labels.get(group) or group.replace("_", " ").title(),
+                "peers": str(item.get("peers") or ""), "flags": flags,
+                "formats_more": len(formats) - 1 if isinstance(formats, list) and len(formats) > 1 else 0,
                 "key": key, "title": item.get("title") or "", "format": item.get("format") or "",
                 "size": item.get("size") or "", "source": item.get("indexer") or item.get("source") or "",
                 "language": item.get("language") or "",
@@ -261,6 +269,12 @@ class ShelfmarkClient:
                 "detail": f"{seeders} seeders" if isinstance(seeders, int) and seeders > 0 else "",
             })
         return releases, None
+
+    def _source_labels(self) -> dict:
+        """Shelfmark's display name per release-source code; empty when the server will not say."""
+        response, _ = self._call("GET", "/api/release-sources")
+        body = self._json(response) if response is not None and response.status_code == 200 else None
+        return {s["name"]: s["display_name"] for s in body if isinstance(s, dict) and s.get("name") and s.get("display_name")} if isinstance(body, list) else {}
 
     def release_for(self, key: str) -> Optional[dict]:
         """The raw release behind a key from the latest searches, or None once it has expired."""

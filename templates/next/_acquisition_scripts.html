@@ -30,6 +30,7 @@
             irc: {{ _('IRC')|tojson }}, soulseek: {{ _('Soulseek')|tojson }},
         },
         by: {{ _('by {author}')|tojson }},
+        get: {{ _('Get')|tojson }},
         requestedShelfmark: {{ _('Requested from Shelfmark.')|tojson }},
     };
     const ACQ_STATUS = {
@@ -193,19 +194,54 @@
         }
     }
 
-    // Service-neutral list of things to pick from: releases is [{key, title, format, size, source, language, detail, author, kind}].
-    function renderReleaseList(releases, onPick) {
+    // Service-neutral list of things to pick from:
+    // releases is [{key, title, format, size, source, language, detail, author, kind, group, group_label, peers, flags, formats_more}].
+    // Releases that carry a group get one tab per group, in order of first appearance; without groups it is one plain list.
+    function renderReleaseList(releases, onPick, activeGroup) {
         const list = $('acqReleases');
-        list.innerHTML = releases.map((release) => {
+        const tabs = $('acqReleaseTabs');
+        const groups = [];
+        releases.forEach((release) => { if (release.group && !groups.some((g) => g.code === release.group)) groups.push({ code: release.group, label: release.group_label || release.group, count: 0 }); });
+        releases.forEach((release) => { const g = groups.find((x) => x.code === release.group); if (g) g.count += 1; });
+        const current = groups.some((g) => g.code === activeGroup) ? activeGroup : (groups[0] && groups[0].code);
+        tabs.innerHTML = groups.length > 1 ? groups.map((g) => `<button type="button" class="tab${g.code === current ? ' active' : ''}" role="tab" aria-selected="${g.code === current}" tabindex="${g.code === current ? 0 : -1}" data-group="${esc(g.code)}">${esc(g.label)} <span class="tab-count">${g.count}</span></button>`).join('') : '';
+        tabs.hidden = groups.length < 2;
+        tabs.onclick = (event) => {
+            const tab = event.target.closest('[data-group]');
+            if (tab) renderReleaseList(releases, onPick, tab.dataset.group);
+        };
+        tabs.onkeydown = (event) => {
+            const index = groups.findIndex((g) => g.code === current);
+            const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+            const next = step ? groups[(index + step + groups.length) % groups.length] : (event.key === 'Home' ? groups[0] : (event.key === 'End' ? groups[groups.length - 1] : null));
+            if (!next) return;
+            event.preventDefault();
+            renderReleaseList(releases, onPick, next.code);
+            tabs.querySelector('[aria-selected="true"]').focus();
+        };
+        const shown = groups.length > 1 ? releases.filter((release) => release.group === current) : releases;
+        list.innerHTML = shown.map((release) => {
             const kind = ACQ.kinds[release.kind] || '';
-            const source = release.source && release.source !== kind ? release.source : '';
-            return `<button type="button" class="acq-release" role="listitem" data-key="${esc(release.key)}">
-            <span class="acq-release-title">${esc(release.title)}</span>
-            ${release.author ? `<span class="acq-release-title acq-note">${esc(bbFormat(ACQ.by, { author: release.author }))}</span>` : ''}
-            ${kind ? `<span class="source-badge manual">${esc(kind)}</span>` : ''}
-            <span class="source-badge reason">${esc(release.format)}</span>
-            ${[release.size, source, release.language, release.detail].filter(Boolean).map((part) => `<span class="acq-note">${esc(part)}</span>`).join('')}
-        </button>`;
+            const groupLabel = (groups.find((g) => g.code === release.group) || {}).label;
+            const indexer = release.source && release.source !== groupLabel && release.source !== kind ? release.source : '';
+            const peers = release.peers || release.detail;
+            const flags = (release.flags || []).map((flag) => `<span class="source-badge manual">${esc(flag)}</span>`).join('');
+            const more = release.formats_more ? ` +${Number(release.formats_more)}` : '';
+            return `<div class="acq-release" role="listitem" data-key="${esc(release.key)}">
+            <span class="acq-release-main">
+                <span class="acq-release-title">${esc(release.title)}</span>
+                ${release.author ? `<span class="acq-note">${esc(bbFormat(ACQ.by, { author: release.author }))}</span>` : ''}
+            </span>
+            <span class="acq-release-meta">
+                ${indexer ? `<span class="acq-note">${esc(indexer)}</span>` : ''}
+                ${peers ? `<span class="acq-note">${esc(peers)}</span>` : ''}
+                ${flags}
+                ${release.language ? `<span class="source-badge reason">${esc(release.language.toUpperCase())}</span>` : ''}
+                ${release.format ? `<span class="source-badge reason">${esc(release.format + more)}</span>` : ''}
+                ${release.size ? `<span class="acq-note">${esc(release.size)}</span>` : ''}
+            </span>
+            <button type="button" class="btn btn-small btn-primary" data-key="${esc(release.key)}">${esc(ACQ.get)}</button>
+        </div>`;
         }).join('');
         list.onclick = (event) => {
             const row = event.target.closest('[data-key]');
@@ -219,6 +255,8 @@
         acqAbort = null;
         $('acqReleases').hidden = true;
         $('acqReleases').innerHTML = '';
+        $('acqReleaseTabs').hidden = true;
+        $('acqReleaseTabs').innerHTML = '';
     }
 
     function acqSelection() {
