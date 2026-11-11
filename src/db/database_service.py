@@ -3001,7 +3001,8 @@ class DatabaseService:
             session.expunge(job)
             return job
 
-    def update_latest_job(self, abs_id: str, kind: Optional[str] = None, **kwargs) -> Optional[Job]:
+    def update_latest_job(self, abs_id: str, kind: Optional[str] = None, *,
+                          expected_job_id: Optional[int] = None, **kwargs) -> Optional[Job]:
         """Update the latest job for a book.
 
         `kind` filters which job counts as "latest" the same way
@@ -3009,13 +3010,16 @@ class DatabaseService:
         via `kwargs`. Omitted, the newest row regardless of kind is updated
         (historical behavior); passed, only the newest row of that kind is
         considered, and no update happens if none exists.
+
+        If `expected_job_id` is supplied, do not update a replacement job
+        created after the caller's worker started.
         """
         with self.get_session() as session:
             query = session.query(Job).filter(Job.abs_id == abs_id)
             if kind is not None:
                 query = query.filter(Job.kind == kind)
             job = query.order_by(Job.last_attempt.desc()).first()
-            if not job:
+            if not job or (expected_job_id is not None and job.id != expected_job_id):
                 return None
             job_id = job.id
             for key, value in kwargs.items():
