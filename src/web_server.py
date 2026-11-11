@@ -80,6 +80,7 @@ from src.db.models import State, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.services.audio_source_adapters import AudioResult, ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.current_audio_chapter import resolve_current_chapter
+from src.services.cover_thumbnail_service import cover_thumbnail_cache
 from src.utils.storyteller_transcript import StorytellerTranscript
 from src.services.readalong_delivery import (
     deliver_readalong_epub,
@@ -13275,6 +13276,40 @@ def serve_cover(filename):
 
     return "Cover not found", 404
 
+def serve_thumbnail_cover(filename: str):
+    """Serve a verified thumbnail, or the original while a worker prepares it."""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+\.jpg", filename):
+        abort(404)
+    original_response = serve_cover(filename)
+    if not isinstance(original_response, Response):
+        return original_response
+
+    source = COVERS_DIR / filename
+    target = COVERS_DIR / "thumbs" / filename
+    if cover_thumbnail_cache.is_current(source, target):
+        original_response.close()
+        response = send_from_directory(
+            target.parent, filename, max_age=_COVER_BROWSER_MAX_AGE_SECONDS
+        )
+        response.headers['Cache-Control'] = (
+            f'private, max-age={_COVER_BROWSER_MAX_AGE_SECONDS}'
+        )
+        return response
+
+    if source.is_file():
+        if cover_thumbnail_cache.failed_recently(source, target):
+            original_response.close()
+            return Response(status=503, headers={'Cache-Control': 'private, no-store'})
+        cover_thumbnail_cache.enqueue(source, target)
+        original_response.close()
+        # A cold thumbnail must not transfer the original multi-megapixel cover.
+        # The New Library checks readiness with HEAD before assigning image.src.
+        return Response(status=202, headers={
+            'Cache-Control': 'private, no-store', 'Retry-After': '1',
+        })
+    return original_response
+
+
 def api_storyteller_search():
     query = request.args.get('q', '')
     if not query:
@@ -16730,6 +16765,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/me/books', 'api_me_books', api_me_books, methods=['GET'])
     app.add_url_rule('/update-hash/<abs_id>', 'update_hash', update_hash, methods=['POST'])
     app.add_url_rule('/covers/<path:filename>', 'serve_cover', serve_cover)
+    app.add_url_rule('/covers/thumb/<path:filename>', 'serve_thumbnail_cover', serve_thumbnail_cover)
     app.add_url_rule('/api/health', 'api_health', api_health)
     app.add_url_rule('/api/restart', 'api_restart', api_restart, methods=['POST'])
     app.add_url_rule('/api/status', 'api_status', api_status)
