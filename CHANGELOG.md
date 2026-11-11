@@ -8,6 +8,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **CTC alignment jobs now show progress throughout the model pass.** QuartzNet
+  and MMS report the amount of audiobook audio processed, so the first CTC
+  attempt advances the Job Queue from 10% to 90% and the post-transcript CTC
+  upgrade advances it from 91% to 95%. Cancelled workers no longer send progress,
+  and updates are tied to the original job rather than a newer job for the same
+  book. Contributed by [@hnrydvd](https://github.com/hnrydvd) in #587.
+
 - **BookOrbit can connect with an API key instead of a password.** BookOrbit 3.8 added
   API keys; paste one into your BookOrbit account settings in BookBridge and it is used in
   place of the username and password, with no login or token refresh. This makes BookOrbit

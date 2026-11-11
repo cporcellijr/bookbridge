@@ -3596,6 +3596,10 @@ class SyncManager:
                 """
                 if check_active:
                     ensure_active()
+                elif is_cancelled(abs_id, cancellation_token):
+                    # Called inside the CTC aligner: do not raise cancellation
+                    # into its fallback handler, but never write stale progress.
+                    return
                 global_pct = 0.0
                 if phase == 1:
                     global_pct = 0.0 + (local_pct * 0.1)
@@ -3604,8 +3608,15 @@ class SyncManager:
                 elif phase == 3:
                     global_pct = 0.9 + (local_pct * 0.1)
 
-                # Save to DB every time for now (or throttle if too frequent).
-                self.database_service.update_latest_job(abs_id, kind=JOB_KIND_ALIGNMENT, progress=global_pct)
+                # Bind progress to this worker's job generation, never to a
+                # replacement created for the same book while CTC is running.
+                options = {"progress": global_pct}
+                job_id = getattr(current_alignment_job, "id", None)
+                if isinstance(job_id, int):
+                    options["expected_job_id"] = job_id
+                self.database_service.update_latest_job(
+                    abs_id, kind=JOB_KIND_ALIGNMENT, **options
+                )
 
             current_alignment_job = self.database_service.get_latest_job(
                 abs_id, kind=JOB_KIND_ALIGNMENT

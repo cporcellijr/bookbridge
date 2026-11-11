@@ -8,7 +8,7 @@ import pytest
 from src.db.models import Book
 from src.services.audio_source_adapters import ABSAudioSourceAdapter
 from src.sync_manager import SyncManager
-from src.utils.transcription_cancel import register_worker
+from src.utils.transcription_cancel import register_worker, request_cancel
 from src.utils.transcriber import TranscriptionCancelled
 from src.utils.transcriber import AudioTranscriber
 from src.services.alignment_service import AlignmentService
@@ -696,6 +696,40 @@ def test_ctc_progress_never_raises_a_cancellation_inside_the_aligner(tmp_path, m
 
     assert reports == ["returned"]
     db.update_book_if_exists.assert_not_called()   # the job still stopped before saving
+
+
+def test_cancelled_ctc_worker_does_not_write_progress_from_inside_aligner(tmp_path, monkeypatch):
+    """Cancellation inside CTC cannot raise, but must not update any job."""
+    abs_id = "ctc-progress-cancelled"
+    calls_after_cancel = []
+
+    def forced(*_args, **kwargs):
+        kwargs["progress_callback"](0.25)
+        assert db.update_latest_job.call_args.kwargs["expected_job_id"] == 93
+        request_cancel(abs_id)
+        before = db.update_latest_job.call_count
+        kwargs["progress_callback"](0.5)
+        calls_after_cancel.append(db.update_latest_job.call_count - before)
+        return True
+
+    monkeypatch.setenv("CTC_ENABLED", "true")
+    manager, db, _abs, _transcriber, alignment_service = _build_manager(tmp_path)
+    db.get_latest_job.return_value.id = 93
+    alignment_service.align_forced_and_store.side_effect = forced
+    audio = tmp_path / "a.m4b"
+    audio.write_bytes(b"audio")
+    adapter = MagicMock()
+    adapter.get_audio_files.return_value = [{"local_path": str(audio)}]
+    adapter.get_chapters.return_value = [{"start": 0.0, "end": 12.0}]
+    manager.audio_source_adapters = {"BookOrbit": adapter}
+    book = Book(
+        abs_id=abs_id, abs_title="Cancelled CTC", ebook_filename="book.epub",
+        kosync_doc_id="h", status="pending", duration=12.0,
+        audio_source="BookOrbit", audio_source_id="5961", sync_mode="audiobook",
+    )
+    manager._run_background_job(book)
+    assert calls_after_cancel == [0]
+    db.update_book_if_exists.assert_not_called()
 
 
 def test_try_ctc_alignment_passes_a_progress_callback_through(tmp_path):
