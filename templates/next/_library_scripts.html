@@ -921,10 +921,7 @@
                             card.dataset.progress = book.unified_progress;
                             card.querySelectorAll('[data-app-pct]').forEach(node => { const app = book.states && book.states[node.dataset.appPct]; if (app) node.textContent = app.percentage.toFixed(1) + '%'; });
                             const spine = card.querySelector('.spine-progress');
-                            if (spine) {
-                                spine.textContent = book.unified_progress.toFixed(0) + '%';
-                                spine.hidden = !hasPosition;
-                            }
+                            if (spine) spine.hidden = !finished;
                             card.toggleAttribute('data-reading', hasPosition && !finished);
                             if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = book.last_sync_unix;
                             if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, book.last_slot_sync);
@@ -1037,31 +1034,38 @@
         const ink = 0.299 * main[0] + 0.587 * main[1] + 0.114 * main[2] > 150 ? '#1c1a17' : '#f3eee4';
         return [hex(main), hex(mean(ranked[1] || ranked[0])), ink];
     }
-    function paintSpines() {
+    /* Colour each card from its cover. `eager` (Spines) forces hidden lazy covers to load; Covers samples them as they arrive. */
+    function paintSpines(eager) {
         document.querySelectorAll('.library-book-card:not([data-spine-painted])').forEach(card => {
-            card.dataset.spinePainted = '';
             const img = card.querySelector('.cover-image');
-            if (!img) return;
+            if (!img) { card.dataset.spinePainted = ''; return; }
             const key = 'bb-spine2:' + card.dataset.absId;
             const apply = colours => ['--spine', '--spine-band', '--spine-ink'].forEach((name, i) => card.style.setProperty(name, colours[i]));
-            try { const cached = localStorage.getItem(key); if (cached) return apply(cached.split(',')); } catch (e) { console.debug('LocalStorage error:', e); }
+            try {
+                const cached = localStorage.getItem(key);
+                if (cached) { card.dataset.spinePainted = ''; return apply(cached.split(',')); }
+            } catch (e) { console.debug('LocalStorage error:', e); }
             const sample = () => {
+                card.dataset.spinePainted = '';
                 const colours = img.naturalWidth ? spineColours(img) : null;
                 if (!colours) return;
                 apply(colours);
                 try { localStorage.setItem(key, colours.join(',')); } catch (e) { console.debug('LocalStorage error:', e); }
             };
             if (img.complete && img.naturalWidth) return sample();
-            // A hidden lazy image never loads, and a failed /covers request swaps to the fallback src, so wait for the load that sticks.
-            img.addEventListener('load', sample, { once: true });
-            img.loading = 'eager';
+            // A failed /covers request swaps to the fallback src, so wait for the load that sticks; listen once per card.
+            if (!('spineWaiting' in card.dataset)) {
+                card.dataset.spineWaiting = '';
+                img.addEventListener('load', sample, { once: true });
+            }
+            if (eager) img.loading = 'eager';
         });
     }
     document.querySelectorAll('.view-switch [data-view]').forEach(button => button.addEventListener('click', () => {
         const view = button.dataset.view;
         libraryPage.dataset.view = view;
         if (view === 'spines') setBookSelectMode(false);
-        if (view === 'spines') paintSpines();
+        if (view === 'spines') paintSpines(true);
         if (selectModeButton) selectModeButton.hidden = view === 'spines';
         applySeriesGrouping(view === 'covers' && seriesGroupingToggle.checked);
         seriesGroupingToggle.disabled = view !== 'covers';
@@ -1072,6 +1076,7 @@
         const savedView = localStorage.getItem('abs_kosync_view');
         if (savedView && document.querySelector('.view-switch [data-view="' + savedView + '"]')) document.querySelector('.view-switch [data-view="' + savedView + '"]').click();
     } catch (e) { console.debug('LocalStorage error:', e); }
+    paintSpines(false);
     document.querySelectorAll('[data-format]').forEach(chip => {
         const active = chip.dataset.format === filterSelect.value;
         chip.classList.toggle('is-active', active);

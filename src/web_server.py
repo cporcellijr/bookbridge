@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 import zipfile
+import zlib
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -7136,6 +7137,8 @@ def _build_dashboard_mapping(
         "sync_mode": getattr(book, "sync_mode", "audiobook"),
         "unified_progress": 0,
         "duration": book.duration or 0,
+        # A Spines-view height that stays with the book under any filter or sort (crc32: stable across processes).
+        "spine_h": (196, 204, 214, 224)[zlib.crc32(book.abs_id.encode("utf-8")) % 4],
         "storyteller_uuid": book.storyteller_uuid,
         "added_at_unix": (claim_times_by_book or {}).get(book.abs_id, 0.0),
         "states": {},

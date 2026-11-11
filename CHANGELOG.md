@@ -11,7 +11,11 @@ All notable changes to BookBridge will be documented in this file.
 - **Spines in the New Library now look like your books.** Each spine carries the edge of its
   cover's art behind the title (or the cover's main colour when it has none), and its thickness follows the
   book's length (StoryGraph or Hardcover page count, or the audiobook's duration). Books you're
-  partway through stand face-out on the shelf, showing their cover and progress.
+  partway through stand face-out on the shelf, showing their cover and progress. A finished book gets a gold
+  tick at the foot of its spine, and hovering a spine shows its full title.
+- **Library covers fill their empty space with the book's own colour.** The last-synced and out-of-sync
+  app icons stay visible on a cover without hovering, and each book's rating shows as one star figure beside
+  the author (hover it for the StoryGraph and Goodreads figures).
 
 ## [7.13.0] - 2026-11-10
 

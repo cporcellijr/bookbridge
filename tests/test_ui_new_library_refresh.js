@@ -1,4 +1,4 @@
-// Live Library refresh: cover badge, finished check, line and spine follow the above-0% rule.
+// Live Library refresh: cover badge, finished check and line follow the above-0% rule; the spine tick shows only once finished.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -37,7 +37,7 @@ const visible = card => Object.keys(card.nodes).filter(sel => sel !== '.progress
 (async () => {
   const card = makeCard();
   await refresh(card, { unified_progress: 47.6, states: { abs: { percentage: 47.6 }, kosync: { percentage: 0 } } });
-  assert.deepEqual(visible(card), ['.progress-percent', '.progress-track', '.spine-progress']);
+  assert.deepEqual(visible(card), ['.progress-percent', '.progress-track']);
   assert.equal(card.nodes['.progress-percent'].textContent, '47%');
   assert.equal(card.nodes['.progress-bar-fill'].style.width, '47.6%');
   assert.equal(card.dataset.progress, 47.6);
@@ -46,10 +46,14 @@ const visible = card => Object.keys(card.nodes).filter(sel => sel !== '.progress
 
   await refresh(card, { unified_progress: 100, states: { abs: { percentage: 100 } } });
   assert.deepEqual(visible(card), ['.progress-done', '.spine-progress']);
+  // The spine's foot keeps its tick markup; the refresh never writes a number over it.
+  assert.equal(card.nodes['.spine-progress'].textContent, '');
   assert.ok(!card.attrs.has('data-reading'));
 
   // Clear progress leaves 0% reset snapshots: the refresh hides everything again.
   await refresh(card, { unified_progress: 47.6, states: { abs: { percentage: 47.6 } } });
+  // A finished book that is reopened loses its tick without a reload.
+  assert.ok(card.nodes['.spine-progress'].hidden);
   await refresh(card, { unified_progress: 0, states: { abs: { percentage: 0 }, kosync: { percentage: 0 } } });
   assert.deepEqual(visible(card), []);
   assert.ok(!card.attrs.has('data-reading'));
