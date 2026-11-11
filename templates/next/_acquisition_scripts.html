@@ -224,7 +224,8 @@
         list.innerHTML = shown.map((release) => {
             const kind = ACQ.kinds[release.kind] || '';
             const groupLabel = (groups.find((g) => g.code === release.group) || {}).label;
-            const indexer = release.source && release.source !== groupLabel && release.source !== kind ? release.source : '';
+            const indexer = release.source && release.source !== groupLabel && release.source !== release.group && release.source !== kind ? release.source : '';
+            const sourceName = groups.length === 1 ? groupLabel : '';
             const peers = release.peers || release.detail;
             const flags = (release.flags || []).map((flag) => `<span class="source-badge manual">${esc(flag)}</span>`).join('');
             const more = release.formats_more ? ` +${Number(release.formats_more)}` : '';
@@ -234,6 +235,7 @@
                 ${release.author ? `<span class="acq-note">${esc(bbFormat(ACQ.by, { author: release.author }))}</span>` : ''}
             </span>
             <span class="acq-release-meta">
+                ${sourceName ? `<span class="acq-note">${esc(sourceName)}</span>` : ''}
                 ${indexer ? `<span class="acq-note">${esc(indexer)}</span>` : ''}
                 ${peers ? `<span class="acq-note">${esc(peers)}</span>` : ''}
                 ${flags}
