@@ -174,13 +174,24 @@ class TestReleases(ClientCase):
         self.assertEqual(len(releases), 1)
         self.assertEqual(
             {k: v for k, v in releases[0].items() if k != "key"},
-            {"title": "Example Book", "format": "epub", "size": "2 MB", "source": "Indexer A", "language": "en", "detail": "4 seeders"})
+            {"title": "Example Book", "format": "epub", "size": "2 MB", "source": "Indexer A", "language": "en", "detail": "4 seeders", "author": "", "kind": ""})
         self.assertEqual(client.release_for(releases[0]["key"]), _RELEASE)
         self.assertIsNone(client.release_for("unknown"))
         _, _, kwargs = self.server.paths("/api/releases")[0]
         self.assertEqual(kwargs["timeout"], 120)
         self.assertEqual((kwargs["params"]["provider"], kwargs["params"]["content_type"], kwargs["params"]["title"]),
                          ("manual", "audiobook", "Example Book"))
+
+    def test_author_and_kind_are_derived(self):
+        def one(**fields):
+            _, (releases, _) = self.search(_response(200, {"releases": [{**_RELEASE, **fields}]}))
+            return releases[0]["author"], releases[0]["kind"]
+        self.assertEqual(one(extra={"author": "A. Writer"}, protocol="http"), ("A. Writer", "direct"))
+        self.assertEqual(one(extra={"author": ["A", "B"]}, protocol="torrent"), ("A, B", "torrent"))
+        self.assertEqual(one(extra=None, protocol="nzb"), ("", "usenet"))
+        self.assertEqual(one(extra={}, protocol=None, source="direct"), ("", "direct"))
+        self.assertEqual(one(protocol="dcc")[1], "irc")
+        self.assertEqual(one(protocol="soulseek")[1], "soulseek")
 
     def test_policy_refusal_and_source_failure_have_codes(self):
         self.assertEqual(self.search(_response(403, {"error": "blocked"}))[1], (None, "policy_refused"))

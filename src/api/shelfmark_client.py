@@ -44,6 +44,16 @@ def _fingerprint(user: str, password: str) -> str:
     return hashlib.sha256(f"{user}\0{password}".encode("utf-8")).hexdigest()
 
 
+_KIND_BY_PROTOCOL = {"http": "direct", "torrent": "torrent", "nzb": "usenet", "dcc": "irc", "soulseek": "soulseek"}
+
+
+def _release_kind(item: dict) -> str:
+    """Stable code for how a release is delivered; falls back to the source when the protocol is unset."""
+    if item.get("protocol"):
+        return _KIND_BY_PROTOCOL.get(item["protocol"], "")
+    return "direct" if item.get("source") == "direct" else ""
+
+
 def _digest(*parts: Any) -> str:
     """A short stable id for a set of values (release keys, manual-search book ids)."""
     return hashlib.sha1("|".join(str(part) for part in parts).encode("utf-8")).hexdigest()[:16]
@@ -240,10 +250,14 @@ class ShelfmarkClient:
             key = _digest(item.get("source"), item.get("source_id"))
             self._releases[key] = (now, item)
             seeders = item.get("seeders")
+            author = (item.get("extra") or {}).get("author") if isinstance(item.get("extra"), dict) else None
+            if isinstance(author, list):
+                author = ", ".join(str(a) for a in author if a)
             releases.append({
                 "key": key, "title": item.get("title") or "", "format": item.get("format") or "",
                 "size": item.get("size") or "", "source": item.get("indexer") or item.get("source") or "",
                 "language": item.get("language") or "",
+                "author": author or "", "kind": _release_kind(item),
                 "detail": f"{seeders} seeders" if isinstance(seeders, int) and seeders > 0 else "",
             })
         return releases, None
