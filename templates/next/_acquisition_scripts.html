@@ -25,6 +25,11 @@
         pickOne: {{ _('Choose one format to use Shelfmark.')|tojson }},
         notOffered: {{ _('Shelfmark does not offer this format to you.')|tojson }},
         downloadStarted: {{ _('Download started.')|tojson }},
+        kinds: {
+            direct: {{ _('Direct download')|tojson }}, torrent: {{ _('Torrent')|tojson }}, usenet: {{ _('Usenet')|tojson }},
+            irc: {{ _('IRC')|tojson }}, soulseek: {{ _('Soulseek')|tojson }},
+        },
+        by: {{ _('by {author}')|tojson }},
         requestedShelfmark: {{ _('Requested from Shelfmark.')|tojson }},
     };
     const ACQ_STATUS = {
@@ -188,14 +193,20 @@
         }
     }
 
-    // Service-neutral list of things to pick from: releases is [{key, title, format, size, source, language, detail}].
+    // Service-neutral list of things to pick from: releases is [{key, title, format, size, source, language, detail, author, kind}].
     function renderReleaseList(releases, onPick) {
         const list = $('acqReleases');
-        list.innerHTML = releases.map((release) => `<button type="button" class="acq-release" role="listitem" data-key="${esc(release.key)}">
+        list.innerHTML = releases.map((release) => {
+            const kind = ACQ.kinds[release.kind] || '';
+            const source = release.source && release.source !== kind ? release.source : '';
+            return `<button type="button" class="acq-release" role="listitem" data-key="${esc(release.key)}">
             <span class="acq-release-title">${esc(release.title)}</span>
+            ${release.author ? `<span class="acq-release-title acq-note">${esc(bbFormat(ACQ.by, { author: release.author }))}</span>` : ''}
+            ${kind ? `<span class="source-badge manual">${esc(kind)}</span>` : ''}
             <span class="source-badge reason">${esc(release.format)}</span>
-            ${[release.size, release.source, release.language, release.detail].filter(Boolean).map((part) => `<span class="acq-note">${esc(part)}</span>`).join('')}
-        </button>`).join('');
+            ${[release.size, source, release.language, release.detail].filter(Boolean).map((part) => `<span class="acq-note">${esc(part)}</span>`).join('')}
+        </button>`;
+        }).join('');
         list.onclick = (event) => {
             const row = event.target.closest('[data-key]');
             if (row) onPick(row.dataset.key);
