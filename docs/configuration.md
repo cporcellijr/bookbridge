@@ -358,6 +358,7 @@ BookOrbit is a supported ebook and audiobook source. You can use it for ebook sy
 | Server URL | `BOOKORBIT_SERVER` | empty | BookOrbit base URL. |
 | Username | `BOOKORBIT_USER` | empty | BookOrbit username. |
 | Password | `BOOKORBIT_PASSWORD` | empty | BookOrbit password. |
+| API Key | `BOOKORBIT_API_KEY` | empty | BookOrbit 3.8+ API key (per user). When set, BookBridge uses it instead of logging in, so it works with OIDC-only BookOrbit (`DISABLE_LOCAL_AUTH=true`). Create it in BookOrbit under Settings → API keys with **Write** access and the permissions Download, Upload, Delete books and Manage libraries. Keep the username filled in if you use highlight sync. |
 | Collection Name | `BOOKORBIT_SHELF_NAME` | `Kobo` | Collection that auto-matched books are moved to on success. |
 | Record Reading Sessions | `BOOKORBIT_READING_SESSIONS` | `true` | Sends reading or listening session updates back to BookOrbit. |
 | KOReader Sync Username | `BOOKORBIT_KOSYNC_USER` | empty | BookOrbit KOReader-sync username used for web-reader highlight relay. |
