@@ -28,7 +28,12 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from src.utils.forced_aligner import ForcedAligner, container_timeline_filter
+from src.utils.forced_aligner import (
+    AudioProgressCallback,
+    ForcedAligner,
+    container_timeline_filter,
+    report_audio_progress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -333,37 +338,53 @@ class QuartzNetAligner(ForcedAligner):
         if pending:
             yield np.frombuffer(bytes(pending), dtype="<f4")
 
-    def _stream_emissions(self, audio_paths) -> Tuple[Any, float]:
-        """``(emission [1, T, 29], seconds_per_frame)`` decoded window by window."""
+    def _stream_emissions(self, audio_paths,
+                          progress_callback: Optional[AudioProgressCallback] = None) -> Tuple[Any, float]:
+        """``(emission [1, T, 29], seconds_per_frame)`` decoded window by window.
+
+        ``progress_callback`` receives the seconds of audio covered after each
+        window. The stream's total length is unknown here, so the caller turns
+        seconds into a fraction.
+        """
         samples = 0
 
         def counted():
             nonlocal samples
             for window in self._pcm_windows(audio_paths):
+                # Reported when the next window is requested, i.e. after the model
+                # has run on the previous one.
+                report_audio_progress(progress_callback, samples / _SAMPLE_RATE)
                 samples += window.shape[0]
                 yield window
+            report_audio_progress(progress_callback, samples / _SAMPLE_RATE)
 
         emission = self._emissions_from_windows(counted())
         logger.info("⚙️ CTC: QuartzNet emissions for %.0fs audio (streamed, CPU)", samples / _SAMPLE_RATE)
         return emission, samples / emission.shape[1] / _SAMPLE_RATE
 
-    def emissions_for(self, audio_paths) -> Optional[Tuple[Any, float]]:
+    def emissions_for(self, audio_paths,
+                      progress_callback: Optional[AudioProgressCallback] = None) -> Optional[Tuple[Any, float]]:
         """Decode ``audio_paths`` and run the model once: ``(emission, seconds_per_frame)``."""
         if not self.is_available():
             return None
         try:
             self._load()
-            return self._stream_emissions(audio_paths)
+            return self._stream_emissions(audio_paths, progress_callback=progress_callback)
         except Exception as e:
             logger.error(f"❌ CTC emissions failed: {e}", exc_info=True)
             return None
 
     def _decode_and_emit(self, audio_paths, boundaries: Optional[List[Dict]],
-                         num_targets: int) -> Tuple[Optional[Any], float]:
-        return self._stream_emissions(audio_paths)
+                         num_targets: int,
+                         progress_callback: Optional[AudioProgressCallback] = None) -> Tuple[Optional[Any], float]:
+        return self._stream_emissions(audio_paths, progress_callback=progress_callback)
 
-    def _emissions(self, waveform):
-        """``[1, T, 29]`` log-probs for a ``[1, samples]`` 16 kHz waveform."""
+    def _emissions(self, waveform, progress_callback: Optional[AudioProgressCallback] = None):
+        """``[1, T, 29]`` log-probs for a ``[1, samples]`` 16 kHz waveform.
+
+        Only `ForcedAligner`'s in-memory path calls this; the streamed passes above
+        report progress, so ``progress_callback`` is accepted for parity and unused.
+        """
         samples = waveform[0]
         return self._emissions_from_windows(
             samples[start:start + _WINDOW_SAMPLES] for start in range(0, samples.shape[0], _WINDOW_SAMPLES)
