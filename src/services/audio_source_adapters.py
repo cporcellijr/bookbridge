@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import logging
 import math
 import os
+import re
+import stat
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +15,8 @@ from src.api.booklore_client import BookloreClient
 from src.services.audio_cache_ownership import cache_dir_name, remove_owned
 from src.api.bookorbit_client import BookOrbitClient
 from src.utils.config_loader import env_truthy
+from src.utils.cache_paths import safe_cache_path
+from src.utils.source_fingerprint import fingerprint
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.series_metadata import extract_series_from_abs_metadata, extract_series_from_library_detail
 
@@ -798,6 +802,13 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
         return [{"id": 0, "title": "Audiobook", "start": 0.0, "end": total_duration}]
 
 
+def _is_link_or_reparse_point(path: Path) -> bool:
+    """True for symlinks and Windows junctions/reparse points (attribute absent on POSIX)."""
+    if path.is_symlink():
+        return True
+    return bool(getattr(path.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
     source_name = "BookOrbit"
 
@@ -848,6 +859,51 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
     def get_cover_url(self, source_id: str) -> Optional[str]:
         return f"/api/bookorbit/audiobook-cover/{source_id}"
 
+    @staticmethod
+    def _verified_mounted_track(track: dict) -> Path | None:
+        """Resolve a provider-owned track on the approved mount, or fail closed.
+
+        An absolutePath is only a candidate: BookOrbit may run in a different
+        container namespace. Require matching provider identity, basename and
+        size, and reject traversal and symlinked components before reuse.
+        """
+        raw = track.get("absolute_path")
+        filename = track.get("filename")
+        if track.get("id") is None or not isinstance(raw, str) or not raw:
+            return None
+        if (not isinstance(filename, str) or not filename
+                or filename in (".", "..") or "/" in filename or "\\" in filename):
+            return None
+        try:
+            expected_size = int(track.get("size_bytes"))
+            if expected_size <= 0:
+                return None
+            root_text = os.environ.get("AUDIOBOOKS_DIR", "/audiobooks")
+            root_path = Path(root_text)
+            candidate = Path(raw)
+            if not root_path.is_absolute() or not candidate.is_absolute() or ".." in candidate.parts:
+                return None
+            root = root_path.resolve(strict=True)
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(root)  # disallow paths outside the approved mount
+            if candidate.name != filename or not resolved.is_file():
+                return None
+            # A symlink inside the mount can be retargeted after validation;
+            # fall back to the downloader rather than trusting it.
+            current = candidate
+            while current != root_path and current != current.parent:
+                if _is_link_or_reparse_point(current):
+                    return None
+                current = current.parent
+            if resolved.stat().st_size != expected_size:
+                return None
+            with resolved.open("rb") as handle:
+                if not handle.read(1):
+                    return None
+            return resolved
+        except (OSError, ValueError, RuntimeError, TypeError):
+            return None
+
     def get_audio_files(self, source_id: str, bridge_key: str | None = None) -> list[dict]:
         info = self.bookorbit_client.get_audiobook_info(source_id) or {}
         tracks = info.get("tracks") or []
@@ -862,17 +918,51 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
 
         # ':' in bridge keys ('bookorbit:42') is not a legal path char on Windows.
         cache_key = cache_dir_name(bridge_key or f"bookorbit-{source_id}")
-        source_cache_dir = self.data_dir / "audio_cache" / cache_key / "source_tracks"
-        source_cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_root = self.data_dir / "audio_cache"
+        # A bridge key comes from stored/external identifiers. Never let a
+        # malformed key or a symlinked cache directory redirect downloads
+        # (or failed-download cleanup) outside our generated-audio cache.
+        raw_parent = cache_root / cache_key
+        source_cache_dir = safe_cache_path(cache_root, cache_key)
+        if (source_cache_dir is None
+                or raw_parent.is_symlink()):
+            raise ValueError("Unsafe BookOrbit audio cache directory")
+        source_cache_dir = source_cache_dir / "source_tracks"
+        if source_cache_dir.is_symlink():
+            raise ValueError("Unsafe BookOrbit audio cache directory")
+        try:
+            source_cache_dir.resolve(strict=False).relative_to(
+                cache_root.resolve(strict=False))
+        except (OSError, ValueError) as exc:
+            raise ValueError("Unsafe BookOrbit audio cache directory") from exc
 
         files = []
         for idx, track in enumerate(tracks):
-            ext = (track.get("format") or "mp3").lower().lstrip(".")
+            ext = str(track.get("format") or "mp3").lower().lstrip(".")
+            if not re.fullmatch(r"[a-z0-9]{1,8}", ext):
+                ext = "mp3"
             local_path = source_cache_dir / f"track_{idx:03d}.{ext}"
             try:
                 expected_size = max(0, int(track.get("size_bytes") or 0))
             except (TypeError, ValueError):
                 expected_size = 0
+            mounted = self._verified_mounted_track(track)
+            mounted_print = None
+            if mounted is not None:
+                try:
+                    mounted_print = fingerprint(str(mounted))
+                except OSError:
+                    mounted = None
+            if mounted is not None:
+                duration = track.get("duration_seconds")
+                files.append({
+                    "local_path": str(mounted),
+                    "ext": ext,
+                    "track_index": idx,
+                    "duration_ms": int(float(duration) * 1000) if duration else None,
+                    "source_fingerprint": mounted_print,
+                })
+                continue
             cached_size = local_path.stat().st_size if local_path.exists() else 0
             if cached_size and expected_size and cached_size != expected_size:
                 logger.warning(
@@ -881,6 +971,7 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
                     source_id, track.get("id"), cached_size, expected_size,
                 )
             if not cached_size or (expected_size and cached_size != expected_size):
+                source_cache_dir.mkdir(parents=True, exist_ok=True)
                 ok = self.bookorbit_client.download_file_to_path(track.get("id"), local_path)
                 if not ok:
                     raise RuntimeError(

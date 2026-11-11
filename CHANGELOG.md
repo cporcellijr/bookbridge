@@ -17,6 +17,17 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **BookOrbit audiobook tracks can be processed directly from a verified shared mount.**
+  When BookOrbit supplies an absolute track path, matching filename, file ID
+  and file size, BookBridge validates containment under `AUDIOBOOKS_DIR` and
+  reuses the original read-only path in player order. Unsafe, missing or
+  unverified files use the existing download cache as before. No original
+  audiobook files are modified, and track order, indices and durations stay
+  unchanged for CTC/transcription. The fallback cache directory rejects
+  traversal and symlink escapes before any downloaded files are written.
+  If BookBridge notices an original changed or disappeared while a job was running, the job fails
+  and retries instead of saving timings built from the changed audio.
+
 - **CTC alignment jobs now show progress throughout the model pass.** QuartzNet
   and MMS report the amount of audiobook audio processed, so the first CTC
   attempt advances the Job Queue from 10% to 90% and the post-transcript CTC
