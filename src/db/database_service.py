@@ -2789,18 +2789,19 @@ class DatabaseService:
             return self._acquisition_dict(row) if row else None
 
     def get_refreshable_acquisition_requests(self, user_id: int, arrived_since) -> list[dict]:
-        """Return the user's BookOrbit requests still worth asking BookOrbit about.
+        """Return the user's BookOrbit and Shelfmark requests still worth checking.
 
         That is every open request, plus a request that arrived on or after
         ``arrived_since`` and still has to be paired (it has a partner or a
-        "Both" sibling but no mapping yet).
+        "Both" sibling but no mapping yet), or a Shelfmark download whose book
+        the library has not shown yet.
         """
         from sqlalchemy import and_, or_
 
         with self.get_session() as session:
             rows = session.query(AcquisitionRequest).filter(
                 AcquisitionRequest.user_id == user_id,
-                AcquisitionRequest.service == "BookOrbit",
+                AcquisitionRequest.service.in_(("BookOrbit", "Shelfmark")),
                 AcquisitionRequest.remote_id.isnot(None),
                 AcquisitionRequest.dismissed.is_(False),
                 or_(
@@ -2812,6 +2813,10 @@ class DatabaseService:
                         or_(
                             AcquisitionRequest.partner_source_id.isnot(None),
                             AcquisitionRequest.group_key.isnot(None),
+                            and_(
+                                AcquisitionRequest.service == "Shelfmark",
+                                AcquisitionRequest.arrived_source_id.is_(None),
+                            ),
                         ),
                     ),
                 ),

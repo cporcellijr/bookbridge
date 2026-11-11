@@ -64,6 +64,8 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "STORYGRAPH_SESSION_COOKIE", "STORYGRAPH_REMEMBER_USER_TOKEN", "STORYGRAPH_ENABLED",
     "GOODREADS_ENABLED", "GOODREADS_SESSION_COOKIE",
     "GOODREADS_COOKIE_REFRESH_URL", "GOODREADS_COOKIE_REFRESH_TOKEN", "GOODREADS_BROWSER_URL",
+    # Shelfmark (the server URL stays global; each reader signs in as themselves)
+    "SHELFMARK_USER", "SHELFMARK_PASSWORD",
 })
 
 
@@ -264,6 +266,10 @@ PER_USER_FIELD_GROUPS = [
         ("GOODREADS_COOKIE_REFRESH_URL", N_("Cookie refresher URL"), "text"),
         ("GOODREADS_COOKIE_REFRESH_TOKEN", N_("Cookie refresher token"), "secret"),
         ("GOODREADS_BROWSER_URL", N_("Signed-in Selenium URL (optional)"), "text"),
+    ]),
+    (N_("Shelfmark"), [
+        ("SHELFMARK_USER", N_("Username"), "text"),
+        ("SHELFMARK_PASSWORD", N_("Password"), "secret"),
     ]),
 ]
 

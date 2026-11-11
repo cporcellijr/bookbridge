@@ -38,6 +38,9 @@ class TestServiceTaxonomyParity(unittest.TestCase):
         # after KOReader / KoSync; it has no admin-side card.
         self.assertIn("KOReader Collections", labels)
         labels.remove("KOReader Collections")
+        # Shelfmark's server address lives in the admin Library card; the per-user
+        # card holds only each reader's own sign-in, so it comes last.
+        self.assertEqual(labels.pop(), "Shelfmark")
         # Reading preferences is the reader's own non-service card, pinned first.
         self.assertEqual(labels[0], "Reading preferences")
         self.assertEqual(labels[1:], CANONICAL_SERVICES)
@@ -51,7 +54,7 @@ class TestServiceTaxonomyParity(unittest.TestCase):
     def test_user_test_services_use_canonical_names(self):
         from src.web_server import _USER_TEST_SERVICES
 
-        self.assertEqual(list(_USER_TEST_SERVICES.keys()), CANONICAL_SERVICES)
+        self.assertEqual(list(_USER_TEST_SERVICES.keys()), CANONICAL_SERVICES + ["Shelfmark"])
 
     def test_integration_templates_gate_keys_use_canonical_names(self):
         for template_name in ('account_integrations.html', 'admin_user_integrations.html'):
