@@ -530,6 +530,38 @@ def escape_named_html_entities(content: bytes) -> bytes:
     return text.encode("utf-8")
 
 
+_BODY_START_RE = re.compile(rb"<body[\s>/]")
+# Markup whose bytes must pass through untouched: in CDATA, comments and PIs a
+# character reference is literal text (``&#13;`` would corrupt an SVG <style>).
+_MARKUP_RE = re.compile(
+    rb"<!\[CDATA\[.*?\]\]>|<!--.*?-->|<\?.*?\?>|<(?:[^>\"']|\"[^\"]*\"|'[^']*')*>", re.S
+)
+
+
+def _preserve_carriage_returns(content: bytes) -> bytes:
+    """Keep the body's carriage returns through the XML parse, as ``&#13;``.
+
+    XML end-of-line handling turns every CRLF into LF, but ebooklib's HTML-mode
+    reconstruction, whose text the sentence offsets are counted in, keeps the CR.
+    A CRLF source therefore never matched run for run, and every spine item was
+    refused (diagnostics finding 9177). A character reference survives the
+    parse. Only ordinary character data after ``<body`` is touched: one in the
+    prolog is not well-formed XML, and markup (see ``_MARKUP_RE``) is copied as is.
+    """
+    if b"\r" not in content:
+        return content
+    body = _BODY_START_RE.search(content)
+    if body is None:
+        return content
+    out, pos = [content[:body.start()]], body.start()
+    for markup in _MARKUP_RE.finditer(content, body.start()):
+        out.append(content[pos:markup.start()].replace(b"\r", b"&#13;"))
+        out.append(markup.group(0))
+        pos = markup.end()
+    out.append(content[pos:].replace(b"\r", b"&#13;"))
+    return b"".join(out)
+
+
 def parse_original_spine_xml(content: bytes) -> Optional[BeautifulSoup]:
     """Parse a spine item's ORIGINAL (un-reconstructed) archive bytes with a
     case- and attribute-preserving XML parser.
@@ -553,7 +585,7 @@ def parse_original_spine_xml(content: bytes) -> Optional[BeautifulSoup]:
     that may not correspond to this one.
     """
     try:
-        return BeautifulSoup(escape_named_html_entities(content), "lxml-xml")
+        return BeautifulSoup(escape_named_html_entities(_preserve_carriage_returns(content)), "lxml-xml")
     except Exception as e:
         logger.warning(
             "Could not parse original spine XML for read-along fidelity: %s",

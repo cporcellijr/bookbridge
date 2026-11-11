@@ -41,6 +41,7 @@ class MockContainer:
         self.mock_database_service.get_ctc_aligned_book_ids.return_value = set()
         self.mock_database_service.get_readalong_alignment_book_ids.return_value = set()
         self.mock_database_service.get_readalong_ready_book_ids.return_value = set()
+        self.mock_database_service.get_sync_markers.return_value = {}
         self.mock_ebook_parser = Mock()
         self.mock_sync_clients = Mock()
         self.mock_forge_service = Mock()
@@ -1554,8 +1555,8 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self._set_dashboard_integrations(storyteller=False)
 
         html = self._render_index_template_source()
-        self.assertIn("/add-book?search=Little+Eve&amp;review=bookorbit:5512", html)
-        self.assertIn('/add-book?search=Plain+Suggestion"', html)
+        self.assertIn("/suggestions?tab=search&amp;q=Little+Eve&amp;review=bookorbit:5512", html)
+        self.assertIn('/suggestions?tab=search&amp;q=Plain+Suggestion"', html)
 
     def test_index_endpoint_uses_cached_storygraph_and_goodreads_ratings(self):
         from src.db.models import Book, BookloreBook, StorygraphDetails
@@ -1853,49 +1854,50 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         # Exactly the two cards nested in the stack -- no flat copy beside their own group.
         self.assertEqual(finished_chunk.count('class="book-card'), 2)
 
-    def test_match_get_redirects_to_add_book_with_search(self):
+    def test_match_get_redirects_to_search_tab_with_query(self):
         response = self.client.get('/match?search=reader')
 
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(response.location.endswith('/add-book?search=reader'))
+        self.assertTrue(response.location.endswith('/suggestions?tab=search&q=reader'))
 
-    def test_kosync_document_review_lives_on_add_update_book(self):
+    def test_kosync_document_review_lives_on_the_search_tab(self):
         index_html = self._read_template_source('index.html')
-        add_book_html = self._read_template_source('add_book.html')
+        suggestions_html = self._read_template_source('suggestions.html')
+        reader_docs_html = self._read_template_source('_reader_documents.html')
 
-        # The Add/Update Book entry point lives in the shared nav chrome
+        # The Suggestions entry point lives in the shared nav chrome
         # (templates/_nav.html), so assert it on the rendered dashboard.
         rendered_index = self._render_index_template_source()
-        self.assertIn('/add-book', rendered_index)
+        self.assertIn('href="/suggestions"', rendered_index)
         self.assertNotIn('Reader Docs', index_html)
-        self.assertNotIn("{{ url_for('add_book') }}#kosync-documents", index_html)
-        self.assertIn('id="kosync-documents"', add_book_html)
-        self.assertIn('Reader Documents', add_book_html)
-        self.assertIn('/api/me/kosync-documents', add_book_html)
+        self.assertIn('{% include "_reader_documents.html" %}', suggestions_html)
+        self.assertIn('id="kosync-documents"', reader_docs_html)
+        self.assertIn('Reader Documents', reader_docs_html)
+        self.assertIn('/api/me/kosync-documents', reader_docs_html)
 
     def test_kosync_link_panel_suggests_filename_matches(self):
-        add_book_html = self._read_template_source('add_book.html')
+        reader_docs_html = self._read_template_source('_reader_documents.html')
 
-        self.assertIn('function kosyncMatchScore(', add_book_html)
-        self.assertIn('KOSYNC_LIKELY_MATCH_THRESHOLD', add_book_html)
-        self.assertIn('likely match', add_book_html)
-        self.assertIn("bbFormat({{ _('File: {filename}')|tojson }}, { filename: doc.filename })", add_book_html)
+        self.assertIn('function kosyncMatchScore(', reader_docs_html)
+        self.assertIn('KOSYNC_LIKELY_MATCH_THRESHOLD', reader_docs_html)
+        self.assertIn('likely match', reader_docs_html)
+        self.assertIn("bbFormat({{ _('File: {filename}')|tojson }}, { filename: doc.filename })", reader_docs_html)
 
-    def test_batch_match_post_falls_back_to_unified_add_book_view(self):
+    def test_batch_match_post_falls_back_to_the_suggestions_page(self):
         response = self.client.post('/batch-match')
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('<title>Add / Update Book · BookBridge</title>', html)
-        self.assertIn('action="/add-book"', html)
+        self.assertIn('<title>Discover · BookBridge</title>', html)
+        self.assertIn('id="searchTabForm"', html)
+        self.assertIn('action="/suggestions" id="addToQueueForm"', html)
         self.assertNotIn('action="/batch-match"', html)
+        self.assertNotIn('action="/add-book"', html)
         self.assertIn('id="kosync-documents"', html)
         self.assertIn('id="selectionFeedback"', html)
-        self.assertIn('data-working-label="Adding to queue..."', html)
-        self.assertIn('startBatchSubmitState(submitter)', html)
 
-    def test_add_book_multi_result_with_apostrophe_has_working_ebook_picker(self):
-        """Issue #339: multi-result cards must not interpolate titles into JS."""
+    def test_search_multi_result_with_apostrophe_has_working_ebook_picker(self):
+        """Issue #339: titles never reach JS through an interpolated onclick."""
         import src.web_server as ws
 
         ebooks = [
@@ -1921,22 +1923,17 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
                  '_promote_authoritative_ebook_matches',
                  side_effect=lambda _audio, candidates: candidates,
              ):
-            response = self.client.get('/add-book?search=reader')
+            response = self.client.get('/api/suggestions/search?q=reader')
 
-        html = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
-        self.assertIn('data-value="The Reader&#39;s Copy.epub"', html)
-        self.assertIn(
-            'data-display-name="The Reader&#39;s Copy - A. Author"', html
-        )
-        self.assertIn('onclick="selectEbookCard(this)"', html)
-        self.assertNotIn('onclick="selectEbookCard(this,', html)
-        self.assertIn("const filename = element.dataset.value || '';", html)
-        self.assertIn(
-            'const display_name = element.dataset.displayName || filename;', html
-        )
+        first = response.get_json()["ebooks"][0]
+        self.assertEqual(first["name"], "The Reader's Copy.epub")
+        self.assertEqual(first["display_name"], "The Reader's Copy - A. Author")
+        source = self._read_template_source('suggestions.html')
+        self.assertIn("card.onclick = () => selectEbookCard(card, ebookFilename, displayName", source)
+        self.assertNotIn('onclick="selectEbookCard(', source)
 
-    def test_add_book_search_finds_quoted_and_plain_greene_shorts_editions(self):
+    def test_search_finds_quoted_and_plain_greene_shorts_editions(self):
         """Both directions of the reported BookOrbit title mismatch reach the picker."""
         import src.web_server as ws
         from src.services.audio_source_adapters import AudioResult
@@ -1962,24 +1959,23 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
              patch.object(ws, "get_searchable_ebooks", side_effect=ebook_search):
             for title in (plain, quoted, 'The “Greene Shorts”Incest Collection'):
                 with self.subTest(title=title):
-                    response = self.client.get('/add-book', query_string={'search': title})
-                    html = response.get_data(as_text=True)
+                    response = self.client.get('/api/suggestions/search', query_string={'q': title})
                     self.assertEqual(response.status_code, 200)
-                    self.assertIn('data-audio-title="The Greene Shorts Incest Collection; Volume 1"', html)
-                    self.assertEqual(html.count('data-audio-title="The Greene Shorts Incest Collection; Volume 1"'), 1)
-                    self.assertIn('data-source-id="6138"', html)
+                    body = response.get_json()
+                    self.assertEqual([a["title"] for a in body["audiobooks"]], [plain])
+                    ebook_ids = [e["source_id"] for e in body["ebooks"]]
+                    self.assertIn("6138", ebook_ids)
                     if title != 'The “Greene Shorts”Incest Collection':
-                        self.assertNotIn('data-source-id="6139"', html)
+                        self.assertNotIn("6139", ebook_ids)
 
-    def test_add_book_cards_disambiguate_same_titled_series_books(self):
+    def test_search_results_disambiguate_same_titled_series_books(self):
         """Three same-titled 'Sorcerer' books rendered as indistinguishable cards.
 
         BookOrbit holds three books all titled exactly "Sorcerer" (subtitles
         "Book 1/2/3"), and ABS holds the matching audiobooks — one of which is
         also a bare "Sorcerer" whose only disambiguator is its subtitle. Both
-        picker columns must surface an edition label.
+        the ebook cards and the audiobook rows must surface an edition label.
         """
-        import re
         import src.web_server as ws
         from src.services.audio_source_adapters import AudioResult
 
@@ -2048,44 +2044,27 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
                  '_promote_authoritative_ebook_matches',
                  side_effect=lambda _audio, candidates: candidates,
              ):
-            response = self.client.get('/add-book?search=sorcerer')
+            response = self.client.get('/api/suggestions/search?q=sorcerer')
 
-        html = response.get_data(as_text=True)
-        squashed = " ".join(html.split())
         self.assertEqual(response.status_code, 200)
+        body = response.get_json()
 
-        # Ebook column: three distinct labels, not three bare "Sorcerer" cards.
-        for expected in (
-            "Sorcerer: Book 1 - Morgan Ashby",
-            "Sorcerer: Book 2 - Morgan Ashby",
-            "Sorcerer: Book 3 - Morgan Ashby",
-        ):
-            self.assertIn(f'data-display-name="{expected}"', html)
+        # Ebook cards: three distinct labels, not three bare "Sorcerer" cards.
+        self.assertEqual(
+            sorted(e["display_name"] for e in body["ebooks"]),
+            ["Sorcerer: Book 1 - Morgan Ashby", "Sorcerer: Book 2 - Morgan Ashby", "Sorcerer: Book 3 - Morgan Ashby"],
+        )
 
-        # Audiobook column: subtitle when present, series label otherwise.
-        self.assertIn('class="resource-subtitle"', squashed)
-        for label in ("Sorcerer, Book 1", "Sorcerer #2", "Sorcerer #3"):
-            self.assertIn(
-                f'<div class="resource-subtitle" title="{label}">{label}</div>',
-                squashed,
-            )
-
-        # The audiobook card (.book-card) has no padding of its own, unlike the
-        # centered-flex .resource-card the class was borrowed from, so the label
-        # needs its own inset to line up with the title above it.
-        self.assertIn('.book-card .resource-subtitle {', html)
-        self.assertIn('padding: 0 12px 12px;', html)
+        # Audiobook rows: subtitle when present, series label otherwise.
+        labels = [a["subtitle"] or a["series_label"] for a in body["audiobooks"]]
+        self.assertEqual(labels, ["Sorcerer, Book 1", "Sorcerer #2", "Sorcerer #3"])
+        self.assertIn("book.subtitle || book.series_label", self._read_template_source('suggestions.html'))
 
         # Display-only guarantee: the label never folds into the stored title.
-        self.assertIn('data-audio-title="Sorcerer"', html)
-        stored_titles = re.findall(r'data-audio-title="([^"]*)"', html)
-        self.assertEqual(
-            [t for t in stored_titles if t],
-            ["Sorcerer", "Sorcerer, Book Two", "Sorcerer: Book Three"],
-        )
+        stored_titles = [a["title"] for a in body["audiobooks"]]
+        self.assertEqual(stored_titles, ["Sorcerer", "Sorcerer, Book Two", "Sorcerer: Book Three"])
         for stored in stored_titles:
             self.assertNotIn("#", stored)
-            self.assertNotEqual(stored, "Sorcerer: Sorcerer, Book 1")
 
     def test_suggestions_template_has_submit_feedback_hooks(self):
         html = self._read_template_source('suggestions.html')
@@ -2101,11 +2080,11 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         panel = self._read_template_source('_match_queue_panel.html')
         self.assertIn('id="queueFeedback"', panel)
 
-    def test_forge_get_redirects_to_add_book(self):
+    def test_forge_get_redirects_to_search_tab(self):
         response = self.client.get('/forge')
 
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(response.location.endswith('/add-book'))
+        self.assertTrue(response.location.endswith('/suggestions?tab=search'))
 
     def test_clear_progress_endpoint_clean_di(self):
         """Test clear progress endpoint with clean dependency injection."""

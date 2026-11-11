@@ -263,6 +263,62 @@ class TestHardcoverSyncClient(unittest.TestCase):
         self.mock_booklore_client.get_book_shelf_mapping.assert_not_called()
         self.mock_hardcover_client.ensure_book_on_list.assert_not_called()
 
+    def _save_matched_details(self) -> None:
+        self.database_service.save_hardcover_details(HardcoverDetails(
+            abs_id='test-hardcover-book', hardcover_book_id='427554',
+            hardcover_edition_id='999', hardcover_pages=200, matched_by='pre-existing',
+        ))
+
+    def test_update_progress_recreates_missing_user_book(self):
+        """A confirmed-empty UserBook lookup is re-created as Want to Read and progress continues."""
+        self._save_matched_details()
+        self.mock_hardcover_client.get_user_book.return_value = {}
+        self.mock_hardcover_client.update_status.return_value = {
+            'id': 'ub', 'status_id': 1, 'user_book_reads': [],
+        }
+
+        result = self.hardcover_sync_client.update_progress(
+            self.test_book, UpdateProgressRequest(locator_result=LocatorResult(percentage=0.01)))
+
+        self.mock_hardcover_client.update_status.assert_any_call('427554', 1, '999')
+        self.assertTrue(result.success)
+        self.assertEqual(self.mock_hardcover_client.update_progress.call_args[0][0], 'ub')
+
+    def test_update_progress_failed_user_book_lookup_writes_no_status(self):
+        """A failed lookup (query error, 429, no user id) must not re-add the book as Want to Read."""
+        self._save_matched_details()
+        self.mock_hardcover_client.get_user_book.return_value = None
+
+        result = self.hardcover_sync_client.update_progress(
+            self.test_book, UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5)))
+
+        self.assertFalse(result.success)
+        self.mock_hardcover_client.update_status.assert_not_called()
+        self.mock_hardcover_client.update_progress.assert_not_called()
+
+    def test_update_progress_missing_user_book_warns_once_then_debug(self):
+        """When the UserBook cannot be re-created the warning is not repeated at WARNING."""
+        from src.utils.logging_utils import get_persistent_condition_logger
+        self._save_matched_details()
+        self.mock_hardcover_client.get_user_book.return_value = None
+        self.mock_hardcover_client.update_status.return_value = None
+        request = UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5))
+        get_persistent_condition_logger().reset()
+        try:
+            with self.assertLogs('src.sync_clients.hardcover_sync_client', level='DEBUG') as cm:
+                results = [self.hardcover_sync_client.update_progress(self.test_book, request)
+                           for _ in range(3)]
+        finally:
+            get_persistent_condition_logger().reset()
+
+        self.assertFalse(any(r.success for r in results))
+        hits = [r for r in cm.records if 'get_user_book returned None' in r.getMessage()]
+        self.assertEqual([r.levelname for r in hits], ['WARNING', 'DEBUG', 'DEBUG'])
+        self.assertEqual(
+            hits[0].getMessage(),
+            "⚠️ Hardcover: get_user_book returned None for book_id=427554 "
+            "('Test Hardcover Book') — skipping progress update")
+
     def test_update_progress_calls_hardcover_api(self):
         """A status promotion updates the new read returned by Hardcover."""
         # Pre-setup matched book to skip auto-matching

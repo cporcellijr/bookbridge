@@ -22,6 +22,7 @@ _ALLOW_GLOBAL_FALLBACK_KEY = "__allow_global_fallback__"
 # Keys stored per-user (credentials/accounts + per-service enable toggles).
 # Server URLs, library IDs, and engine/catalog settings stay global.
 PER_USER_CREDENTIAL_KEYS = frozenset({
+    "UI_MODE",
     # Audiobookshelf (server URL stays global; enable flag + API token + library
     # + collection are per-user). ABS_ENABLED is deliberately NOT in
     # ENGINE_MIRROR_KEYS: the primary admin switching their own ABS off must not

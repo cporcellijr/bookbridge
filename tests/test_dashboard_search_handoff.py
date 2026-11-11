@@ -104,11 +104,12 @@ class TestDashboardSearchHandoff(unittest.TestCase):
         html = self._dashboard_html()
         self.assertIn('class="search-handoff hidden"', html)
 
-    def test_dashboard_exposes_add_book_search_url(self):
-        """The JS builds its href from Add Book's real search URL."""
+    def test_dashboard_exposes_search_tab_url(self):
+        """The JS builds its href from the Suggestions Search tab's real URL."""
         self._login()
         html = self._dashboard_html()
-        self.assertIn("/add-book?search=", html)
+        self.assertIn("/suggestions?tab=search&q=", html)
+        self.assertNotIn("/add-book", html)
 
     # ---- Add Book queue badge -------------------------------------------
 

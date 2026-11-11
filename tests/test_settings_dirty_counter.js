@@ -22,11 +22,16 @@ for (const field of fields) {
 }
 const note = { style: {}, textContent: '' };
 const windowHandlers = {};
-const form = { addEventListener() {} };
+// The settings form plus the chrome's Classic/New switch form (a separate form that saves nothing).
+const makeForm = cls => ({ cls, handlers: {}, addEventListener(name, handler) { this.handlers[name] = handler; } });
+const settingsForm = makeForm('settings-form');
+const switchForm = makeForm('nav-interface-form');
 const context = vm.createContext({
     document: {
         getElementById: () => note,
-        querySelectorAll: selector => selector === 'form' ? [form] : fields,
+        querySelectorAll: selector => selector.startsWith('form')
+            ? [settingsForm, switchForm].filter(f => !selector.includes(':not(.' + f.cls + ')'))
+            : fields,
     },
     window: { addEventListener: (name, handler) => { windowHandlers[name] = handler; } },
 });
@@ -52,6 +57,10 @@ checkbox.checked = true;
 checkbox.handlers.change();
 assert.equal(note.textContent, '1 unsaved change');
 assert.ok(warning());
+// Submitting the interface switch must not clear the warning (P14 #2); a settings save does.
+if (switchForm.handlers.submit) switchForm.handlers.submit();
+assert.ok(warning());
+assert.ok(settingsForm.handlers.submit);
 text.value = 'ru';
 text.handlers.input();
 assert.equal(note.textContent, '2 unsaved changes');

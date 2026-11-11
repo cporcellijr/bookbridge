@@ -56,6 +56,7 @@ class ABSClient:
         self.session = requests.Session()
         self.timeout = 30
         self._item_ids_cache: Optional[tuple] = None  # (server+token key, expires_at, item ids)
+        self._library_catalog_cache: Optional[tuple] = None  # (server+token key, expires_at, raw items)
 
     def _cfg(self, key, default=None):
         return resolve_setting(self._creds, key, default)
@@ -956,6 +957,87 @@ class ABSClient:
             logger.error(f"❌ Error fetching all ABS progress: {e}", exc_info=True)
             return None
 
+    def _fetch_library_catalog(self) -> Optional[list[dict]]:
+        """Fetch all library items with their complete raw metadata."""
+        self._update_session_headers()
+        condition_key = f"abs-item-listing:{self.base_url}:{hash(self.token) & 0xffff}"
+        try:
+            response = self.session.get(f"{self.base_url}/api/libraries", timeout=self.timeout)
+            response.raise_for_status()
+            payload = response.json()
+            libraries = payload.get('libraries') if isinstance(payload, dict) else None
+            if not isinstance(libraries, list):
+                raise ValueError("libraries response is malformed")
+            items = []
+            for library in libraries:
+                if not isinstance(library, dict):
+                    raise ValueError("library row is malformed")
+                library_id = library.get('id')
+                if (
+                    isinstance(library_id, bool)
+                    or library_id is None
+                    or not str(library_id).strip()
+                ):
+                    raise ValueError("library row has no usable id")
+                response = self.session.get(
+                    f"{self.base_url}/api/libraries/{library_id}/items",
+                    params={"limit": 0, "minified": 1},
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise ValueError("library item response is malformed")
+                rows, total = data.get('results'), data.get('total')
+                if (
+                    not isinstance(rows, list)
+                    or isinstance(total, bool)
+                    or not isinstance(total, int)
+                    or total < 0
+                    or len(rows) != total
+                ):
+                    raise ValueError("library item count is malformed or incomplete")
+                for item in rows:
+                    if (
+                        not isinstance(item, dict)
+                        or isinstance(item.get("id"), bool)
+                        or item.get("id") is None
+                        or not str(item.get("id")).strip()
+                    ):
+                        raise ValueError("library item has no usable id")
+                    item.setdefault("libraryId", library_id)
+                items.extend(rows)
+        except Exception as exc:
+            get_persistent_condition_logger().warn(
+                logger, condition_key, "⚠️ ABS: Failed to list library items: %s", exc, exc_info=True
+            )
+            return None
+        get_persistent_condition_logger().resolve(logger, condition_key, "✅ ABS: Library item listing recovered")
+        return items
+
+    def get_library_catalog(
+        self, force_refresh: bool = False
+    ) -> Optional[list[dict]]:
+        """Return complete raw library items, or None if any listing is incomplete.
+
+        Results are cached per client and server+token for the same 30-minute
+        window as the id listing, preserving raw metadata and library provenance.
+        """
+        cache_key = (self.base_url, self.token)
+        cached = self._library_catalog_cache
+        if (
+            not force_refresh
+            and cached and cached[0] == cache_key and cached[1] > time.monotonic()
+        ):
+            return cached[2]
+        items = self._fetch_library_catalog()
+        if items is None:
+            return None
+        expires_at = time.monotonic() + _ABS_ITEM_LISTING_TTL_SECONDS
+        self._library_catalog_cache = (cache_key, expires_at, items)
+        self._item_ids_cache = (cache_key, expires_at, {item['id'] for item in items})
+        return items
+
     def get_all_item_ids(self) -> Optional[set[str]]:
         """Ids of every item in the user's libraries, or None when a listing failed.
 
@@ -966,31 +1048,13 @@ class ABSClient:
         cached = self._item_ids_cache
         if cached and cached[0] == cache_key and cached[1] > time.monotonic():
             return cached[2]
-        self._update_session_headers()
-        condition_key = f"abs-item-listing:{self.base_url}:{hash(self.token) & 0xffff}"
-        try:
-            r = self.session.get(f"{self.base_url}/api/libraries", timeout=self.timeout)
-            r.raise_for_status()
-            item_ids = set()
-            for lib in r.json()['libraries']:
-                # limit=0 returns all of the library's items
-                r_items = self.session.get(
-                    f"{self.base_url}/api/libraries/{lib['id']}/items",
-                    params={"limit": 0, "minified": 1},
-                    timeout=self.timeout,
-                )
-                r_items.raise_for_status()
-                data = r_items.json()
-                if len(data['results']) != data['total']:
-                    raise ValueError(f"listed {len(data['results'])} of {data['total']} items")
-                item_ids.update(item['id'] for item in data['results'])
-        except Exception as e:
-            get_persistent_condition_logger().warn(
-                logger, condition_key, "⚠️ ABS: Failed to list library items: %s", e, exc_info=True
-            )
+        items = self._fetch_library_catalog()
+        if items is None:
             return None
-        get_persistent_condition_logger().resolve(logger, condition_key, "✅ ABS: Library item listing recovered")
-        self._item_ids_cache = (cache_key, time.monotonic() + _ABS_ITEM_LISTING_TTL_SECONDS, item_ids)
+        item_ids = {item['id'] for item in items}
+        expires_at = time.monotonic() + _ABS_ITEM_LISTING_TTL_SECONDS
+        self._item_ids_cache = (cache_key, expires_at, item_ids)
+        self._library_catalog_cache = (cache_key, expires_at, items)
         return item_ids
 
     def get_in_progress(self, min_progress=0.01):
@@ -1119,19 +1183,22 @@ class ABSClient:
                 return False
 
             collections = r.json().get('collections', [])
-            target_collection = next((c for c in collections if c.get('name') == collection_name), None)
+            # An ABS collection belongs to one library and rejects books from any other,
+            # so a same-name collection in another library is never the target.
+            library_id = self._resolve_collection_library_id(item_id)
+            if not library_id:
+                logger.warning(
+                    "Failed to add item to ABS collection '%s': no library resolved for the item",
+                    collection_name
+                )
+                return False
+            target_collection = next(
+                (c for c in collections
+                 if c.get('name') == collection_name and c.get('libraryId') == library_id),
+                None,
+            )
 
             if not target_collection:
-                # The collection has to be created in the library that actually holds
-                # the item — ABS rejects books from any other one.
-                library_id = self._resolve_collection_library_id(item_id)
-                if not library_id:
-                    logger.warning(
-                        "Failed to add item to ABS collection '%s': no library resolved for the item",
-                        collection_name
-                    )
-                    return False
-
                 r_create = self.session.post(collections_url,
                                              json={"libraryId": library_id, "name": collection_name,
                                                    "books": [item_id]},
@@ -1163,6 +1230,8 @@ class ABSClient:
                 except Exception:
                     title = None
                 logger.info(f"🏷️ Added '{sanitize_log_data(title or str(item_id))}' to ABS Collection: {collection_name}")
+                return True
+            if r_add.status_code == 400 and (r_add.text or "").strip() == "Book already in collection":
                 return True
             logger.warning(
                 "Failed to add item to ABS collection '%s': add returned %s - %s",
@@ -1249,7 +1318,12 @@ class ABSClient:
                 return False
 
             collections = r.json().get('collections', [])
-            target_collection = next((c for c in collections if c.get('name') == collection_name), None)
+            named = [c for c in collections if c.get('name') == collection_name]
+            # Same-name collections can exist in several libraries; take the one holding the item.
+            target_collection = next(
+                (c for c in named if any(b.get('id') == item_id for b in c.get('books') or [])),
+                named[0] if named else None,
+            )
 
             if not target_collection:
                 # Only reached from delete/unlink cleanup, where a missing collection

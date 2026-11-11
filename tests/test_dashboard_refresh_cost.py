@@ -317,6 +317,43 @@ class TestCompactRefreshEndpoint(unittest.TestCase):
 
         self.assertEqual([row["abs_id"] for row in rows], ["abs-1"])
 
+    def _glow(self):
+        """(slot, unix, tooltip time) from the refresh feed, and (slot, tooltip time) from the New card."""
+        from lxml import html
+        row = self.client.get('/api/status/progress').get_json()["mappings"][0]
+        page = html.fromstring(self.client.get('/').get_data(as_text=True))
+        lit = page.xpath('//article[@data-abs-id="abs-1"]//span[contains(@class,"is-last")]')
+        card = (lit[0].get('data-slot'), lit[0].xpath('.//span[@class="format-tip-when"]')[0].text_content()) if lit else (None, '')
+        return (row.get("last_slot"), row.get("last_slot_unix"), row.get("last_slot_sync")), card
+
+    def test_glow_names_the_last_sync_leader_not_the_last_reading_session(self):
+        """Reported: an audio-led sync ("BookOrbitAudio leads at 13.6029%") updated the
+        ebook and KoSync, but the card kept glowing KOReader from the previous night's
+        completed BridgeSync_Plugin session while the audio session was still open."""
+        import time
+        now = time.time()
+        self._seed()
+        self.svc.set_user_credential(self.user.id, "UI_MODE", "new")
+        self.svc.record_reading_session(
+            abs_id="abs-1", session_type='EPUB', start_time=now - 60000, end_time=now - 57600,
+            duration_seconds=2400, start_progress=0.10, end_progress=0.13,
+            leader_client='BridgeSync_Plugin', user_id=self.user.id,
+        )
+        self.svc.extend_reading_session(
+            "abs-1", 'AUDIOBOOK', 'BookOrbitAudio', now=now - 7300, previous_at=None, position_delta=0.006,
+            start_progress=0.13, end_progress=0.136, gap_seconds=0, user_id=self.user.id,
+        )
+        self._login()
+
+        # Reading history is not a sync: no marker yet, so nothing glows.
+        self.assertEqual(self._glow(), ((None, 0, "Never"), (None, '')))
+
+        self.svc.record_sync_marker("abs-1", "BookOrbitAudio", now - 7200, user_id=self.user.id)
+        self.assertEqual(self._glow(), (("audio", now - 7200, "2h ago"), ("audio", " · synced 2h ago")))
+
+        self.svc.record_sync_marker("abs-1", "KoSync", now - 3600, user_id=self.user.id)
+        self.assertEqual(self._glow(), (("koreader", now - 3600, "1h ago"), ("koreader", " · synced 1h ago")))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -97,6 +97,7 @@ class TestSettingsComprehensive(unittest.TestCase):
             'BOOKORBIT_SHELF_WATCH_ENABLED',
             'BOOKORBIT_SHELF_WATCH_READALONG',
             'SUGGESTIONS_AUTO_MATCH_READALONG',
+            'SUGGESTIONS_EXCLUDE_LOCAL_FILES',
             'CALIBRE_USE_ABS_IDENTIFIER',
             'BOOKFUSION_POLL_WAIT_FOR_SETTLE',
         ]
@@ -219,6 +220,27 @@ class TestSettingsComprehensive(unittest.TestCase):
                 self.assertIn('id="suggestions_auto_match_readalong"', html)
                 checkbox = html.split('name="SUGGESTIONS_AUTO_MATCH_READALONG"', 1)[1].split('>', 1)[0]
                 self.assertIn('checked', checkbox)
+
+    @patch('src.web_server.restart_server')
+    def test_suggestions_exclude_local_checkbox_accepts_true_and_on(self, _mock_restart):
+        from src.utils.config_loader import ALL_SETTINGS, DEFAULT_CONFIG
+
+        key = 'SUGGESTIONS_EXCLUDE_LOCAL_FILES'
+        self.assertIn(key, ALL_SETTINGS)
+        self.assertEqual(DEFAULT_CONFIG[key], 'false')
+        for checked in ('true', 'on'):
+            with self.subTest(checked=checked):
+                response = self.client.post('/settings', data={'SYNC_PERIOD_MINS': '5', key: checked})
+                self.assertIn(response.status_code, (200, 302))
+                self.assertEqual(self.settings_store[key], 'true')
+                self.assertEqual(os.environ[key], 'true')
+                html = self._render_settings_template_source()
+                checkbox = html.split(f'name="{key}"', 1)[1].split('>', 1)[0]
+                self.assertIn('checked', checkbox)
+        response = self.client.post('/settings', data={'SYNC_PERIOD_MINS': '5'})
+        self.assertIn(response.status_code, (200, 302))
+        self.assertEqual(self.settings_store[key], 'false')
+        self.assertEqual(os.environ[key], 'false')
 
     @patch('src.web_server.restart_server')
     def test_text_fields_save(self, mock_restart):

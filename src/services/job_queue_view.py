@@ -25,7 +25,7 @@ def _entry(title: str, operation: str, status: str, *, detail: str = "",
            timestamp: float | None = None, order: int | None = None,
            queue_key: str | None = None, can_move_up: bool = False,
            can_move_down: bool = False, queue: str = 'staged',
-           alignment_rank: int | None = None) -> dict:
+           alignment_rank: int | None = None, book_id: str | None = None) -> dict:
     return {
         "title": str(title),
         "operation": operation,
@@ -38,6 +38,7 @@ def _entry(title: str, operation: str, status: str, *, detail: str = "",
         "queue_key": queue_key,
         "queue": queue,
         "alignment_rank": alignment_rank,
+        "book_id": book_id,
         "can_move_up": can_move_up,
         "can_move_down": can_move_down,
     }
@@ -47,7 +48,8 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
                          books: list, jobs: list, active_readalong_ids: set[str],
                          now: float | None = None,
                          alignment_queue: list | None = None,
-                         alignment_movable_ids: set[str] | None = None) -> dict[str, list[dict]]:
+                         alignment_movable_ids: set[str] | None = None,
+                         preflights: dict[str, dict] | None = None) -> dict[str, list[dict]]:
     """Combine visible work sources without pretending they share a scheduler.
 
     `batches` contains in-process handoffs only. A restart loses those entries,
@@ -124,14 +126,14 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
                 queue_key=abs_id if own_position is not None else None,
                 can_move_up=own_position is not None and own_position > 0,
                 can_move_down=own_position is not None and own_position < len(movable_order) - 1,
-                queue='alignment', alignment_rank=position,
+                queue='alignment', alignment_rank=position, book_id=abs_id,
             ))
         elif status in {"error", "failed_retry_later", "failed_permanent"}:
             recent.append(_entry(
                 title, "Forge / Alignment", "failed",
                 detail=(getattr(alignment, "last_error", None) or status),
                 epub3=epub_intent, percent=alignment_pct,
-                timestamp=getattr(alignment, "last_attempt", None),
+                timestamp=getattr(alignment, "last_attempt", None), book_id=abs_id,
             ))
         elif (alignment and (alignment.progress or 0) >= 1.0
               and (alignment.last_attempt or 0) >= now - 7 * 86400):
@@ -176,4 +178,9 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
         pending[index] = entry
 
     recent.sort(key=lambda row: row["timestamp"] or 0, reverse=True)
-    return {"pending": pending, "running": running, "recent": recent[:25]}
+    sections = {"pending": pending, "running": running, "recent": recent[:25]}
+    for entries in sections.values():
+        for entry in entries:
+            if entry.get("book_id") and (preflights or {}).get(entry["book_id"]):
+                entry["preflight"] = preflights[entry["book_id"]]
+    return sections

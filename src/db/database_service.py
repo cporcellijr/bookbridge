@@ -19,6 +19,9 @@ from typing import Callable, List, Optional, Tuple
 from contextlib import contextmanager
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.orm.exc import StaleDataError
+
 from .models import (
     DatabaseManager,
     Book,
@@ -46,6 +49,8 @@ from .models import (
     User,
     UserCredential,
     UserBook,
+    TranscriptionPreflight,
+    BookSyncMarker,
     UserBookFusionLink,
     UserBookOrbitLink,
     Base,
@@ -936,6 +941,29 @@ class DatabaseService:
                 return None
             return row[0] or ""
 
+    def get_alignment_meta(self, abs_id: str) -> Optional[dict]:
+        """``last_updated``, ``align_method`` and ``quality_score`` of a book's
+        stored alignment map, or None if it has no map. Never loads the map blob."""
+        if not abs_id:
+            return None
+        with self.get_session() as session:
+            row = (
+                session.query(
+                    BookAlignment.last_updated,
+                    BookAlignment.align_method,
+                    BookAlignment.quality_score,
+                )
+                .filter(BookAlignment.abs_id == abs_id)
+                .first()
+            )
+            if row is None:
+                return None
+            return {
+                "last_updated": row.last_updated,
+                "align_method": row.align_method,
+                "quality_score": row.quality_score,
+            }
+
     def get_aligned_book_ids(self) -> set[str]:
         """Every book with a stored alignment map: ``has_alignment`` for all books in one query."""
         with self.get_session() as session:
@@ -1268,13 +1296,15 @@ class DatabaseService:
         self._notify_catalog_change()
         return book
 
-    def save_book(self, book: Book) -> Book:
-        """Save or update a book model."""
+    def save_book(self, book: Book, create_only: bool = False) -> Optional[Book]:
+        """Save or update a book model; ``create_only`` returns None instead of touching an existing row."""
         from sqlalchemy.exc import IntegrityError
         from src.utils.config_loader import env_truthy
 
         with self.get_session() as session:
             existing = session.query(Book).filter(Book.abs_id == book.abs_id).first()
+            if existing is not None and create_only:
+                return None
 
             if existing is None:
                 # Keep the first creator, but claim the mapping for both requests
@@ -1288,6 +1318,8 @@ class DatabaseService:
                     session.rollback()
                     if "UNIQUE constraint failed: books.abs_id" not in str(exc.orig):
                         raise
+                    if create_only:
+                        return None
                     existing = session.query(Book).filter(Book.abs_id == book.abs_id).first()
                     if existing is None:
                         raise
@@ -1575,6 +1607,12 @@ class DatabaseService:
             ).delete(synchronize_session=False)
             session.query(ReadingSessionBuffer).filter(
                 ReadingSessionBuffer.abs_id == abs_id
+            ).delete(synchronize_session=False)
+            session.query(TranscriptionPreflight).filter(
+                TranscriptionPreflight.abs_id == abs_id
+            ).delete(synchronize_session=False)
+            session.query(BookSyncMarker).filter(
+                BookSyncMarker.abs_id == abs_id
             ).delete(synchronize_session=False)
             
             book = session.query(Book).filter(Book.abs_id == abs_id).first()
@@ -2152,6 +2190,11 @@ class DatabaseService:
             deleted = session.query(UserBook).filter(
                 UserBook.user_id == user_id, UserBook.abs_id == abs_id
             ).delete(synchronize_session=False)
+            if deleted:
+                session.query(TranscriptionPreflight).filter(
+                    TranscriptionPreflight.user_id == user_id,
+                    TranscriptionPreflight.abs_id == abs_id
+                ).delete(synchronize_session=False)
         if deleted:
             self._notify_catalog_change()
         return deleted
@@ -2515,6 +2558,37 @@ class DatabaseService:
                 return str(val)
         return None
 
+    def find_books_by_bookorbit_id(self, user_id: Optional[int], bookorbit_id: str) -> List[Book]:
+        """Books whose BookOrbit ebook or audio id may be ``bookorbit_id``.
+
+        Candidates only: the user's own links plus the legacy shared columns.
+        Callers confirm each with ``resolve_bookorbit_ebook_id`` /
+        ``resolve_bookorbit_audio_id``, which decide which of the two applies.
+        """
+        bookorbit_id = str(bookorbit_id or "").strip()
+        if not bookorbit_id:
+            return []
+        from sqlalchemy import select
+        linked = select(UserBookOrbitLink.abs_id).where(
+            UserBookOrbitLink.user_id == user_id,
+            (UserBookOrbitLink.ebook_id == bookorbit_id) | (UserBookOrbitLink.audio_id == bookorbit_id),
+        )
+        with self.get_session() as session:
+            books = session.query(Book).filter(
+                Book.abs_id.in_(linked)
+                | ((Book.ebook_source == "BookOrbit") & (Book.ebook_source_id == bookorbit_id))
+                | (
+                    (Book.audio_source == "BookOrbit")
+                    & (
+                        (Book.audio_provider_book_id == bookorbit_id)
+                        | (Book.audio_source_id == bookorbit_id)
+                    )
+                )
+            ).all()
+            for book in books:
+                session.expunge(book)
+            return books
+
     def get_book_user_ids(self, abs_id: str) -> List[int]:
         """All user ids that have claimed this book."""
         if not abs_id:
@@ -2658,6 +2732,111 @@ class DatabaseService:
             query.delete()
             return count
 
+    # Pre-transcription length advisory (never changes Job.last_error or status).
+    def record_sync_marker(self, abs_id: str, leader_client: str, synced_at: float, user_id: int = None) -> None:
+        """Record the leader of a sync that reached at least one follower."""
+        user_id = self._resolve_uid(user_id)
+        with self.get_session() as session:
+            row = session.get(BookSyncMarker, (user_id, abs_id))
+            if row is None:
+                row = BookSyncMarker(user_id=user_id, abs_id=abs_id)
+                session.add(row)
+            row.leader_client = leader_client
+            row.synced_at = synced_at
+
+    def get_sync_markers(self, user_id: int = None) -> dict[str, tuple[str, float]]:
+        """Return {abs_id: (leader_client, synced_at)} for one user's last syncs."""
+        user_id = self._resolve_uid(user_id)
+        with self.get_session() as session:
+            rows = session.query(BookSyncMarker).filter(BookSyncMarker.user_id == user_id).all()
+            return {row.abs_id: (row.leader_client, row.synced_at) for row in rows}
+
+    def save_transcription_preflight(
+        self, abs_id: str, user_id: int, identity: str,
+        pairing_key: str, evidence: dict,
+    ) -> bool:
+        """Upsert evidence for one claimed book, resetting ack if its pair changed."""
+        import json
+        with self.get_session() as session:
+            claimed = session.query(UserBook.id).filter(
+                UserBook.user_id == user_id, UserBook.abs_id == abs_id
+            ).first()
+            if not claimed:
+                return False
+            row = session.get(TranscriptionPreflight, (user_id, abs_id))
+            if row is None:
+                row = TranscriptionPreflight(user_id=user_id, abs_id=abs_id)
+                session.add(row)
+            if row.identity != identity:
+                row.acknowledged_at = None
+            row.identity = identity
+            row.pairing_key = pairing_key
+            row.evidence_json = json.dumps(evidence, allow_nan=False)
+            row.updated_at = time.time()
+            return True
+
+    def get_transcription_preflights(
+        self, user_id: int, abs_ids: list[str],
+    ) -> dict[str, dict]:
+        """Return only the user's claimed pairing evidence (no other reader's rows)."""
+        import json
+        if user_id is None or not abs_ids:
+            return {}
+        with self.get_session() as session:
+            rows = (
+                session.query(TranscriptionPreflight)
+                .join(UserBook, (UserBook.user_id == TranscriptionPreflight.user_id)
+                      & (UserBook.abs_id == TranscriptionPreflight.abs_id))
+                .filter(TranscriptionPreflight.user_id == user_id,
+                        TranscriptionPreflight.abs_id.in_(abs_ids))
+                .all()
+            )
+            return {
+                row.abs_id: {
+                    **json.loads(row.evidence_json),
+                    "identity": row.identity,
+                    "pairing_key": row.pairing_key,
+                    "acknowledged": row.acknowledged_at is not None,
+                }
+                for row in rows
+            }
+
+    def acknowledge_transcription_preflight(
+        self, user_id: int, abs_id: str, identity: str,
+    ) -> bool:
+        """Acknowledge only current evidence belonging to this user and pair."""
+        if user_id is None or not identity:
+            return False
+        with self.get_session() as session:
+            row = (
+                session.query(TranscriptionPreflight)
+                .join(UserBook, (UserBook.user_id == TranscriptionPreflight.user_id)
+                      & (UserBook.abs_id == TranscriptionPreflight.abs_id))
+                .filter(TranscriptionPreflight.user_id == user_id,
+                        TranscriptionPreflight.abs_id == abs_id,
+                        TranscriptionPreflight.identity == identity)
+                .first()
+            )
+            if row is None:
+                return False
+            from src.services.transcription_preflight import pair_key
+            book = session.get(Book, abs_id)
+            if book is None or row.pairing_key != pair_key(book):
+                return False
+            from sqlalchemy import update
+            stmt = (
+                update(TranscriptionPreflight)
+                .where(
+                    TranscriptionPreflight.user_id == user_id,
+                    TranscriptionPreflight.abs_id == abs_id,
+                    TranscriptionPreflight.identity == identity,
+                    TranscriptionPreflight.pairing_key == row.pairing_key,
+                )
+                .values(acknowledged_at=time.time())
+            )
+            result = session.execute(stmt)
+            return result.rowcount > 0
+
     # Job operations
     def get_latest_job(self, abs_id: str, kind: Optional[str] = None) -> Optional[Job]:
         """Get the latest job for a book.
@@ -2737,29 +2916,45 @@ class DatabaseService:
             if kind is not None:
                 query = query.filter(Job.kind == kind)
             job = query.order_by(Job.last_attempt.desc()).first()
-            if job:
-                for key, value in kwargs.items():
-                    if hasattr(job, key):
-                        setattr(job, key, value)
+            if not job:
+                return None
+            job_id = job.id
+            for key, value in kwargs.items():
+                if hasattr(job, key):
+                    setattr(job, key, value)
+            try:
                 session.flush()
                 session.refresh(job)
-                session.expunge(job)
-                return job
-            return None
+            except (StaleDataError, InvalidRequestError):
+                session.rollback()
+                exists = session.query(Job.id).filter(Job.id == job_id).first()
+                if exists:
+                    raise
+                return None
+            session.expunge(job)
+            return job
 
     def update_job_by_id(self, job_id: int, **kwargs) -> Optional[Job]:
         """Update exactly one job row by primary key."""
         with self.get_session() as session:
             job = session.query(Job).filter(Job.id == job_id).first()
-            if job:
-                for key, value in kwargs.items():
-                    if hasattr(job, key):
-                        setattr(job, key, value)
+            if not job:
+                return None
+            original_id = job.id
+            for key, value in kwargs.items():
+                if hasattr(job, key):
+                    setattr(job, key, value)
+            try:
                 session.flush()
                 session.refresh(job)
-                session.expunge(job)
-                return job
-            return None
+            except (StaleDataError, InvalidRequestError):
+                session.rollback()
+                exists = session.query(Job.id).filter(Job.id == original_id).first()
+                if exists:
+                    raise
+                return None
+            session.expunge(job)
+            return job
 
     def delete_jobs_for_book(self, abs_id: str, kind: Optional[str] = None) -> int:
         """Delete a book's jobs; all of them, or only those of ``kind``."""
@@ -3627,29 +3822,42 @@ class DatabaseService:
 
 
     # PendingSuggestion operations
-    def get_pending_suggestion(self, source_id: str) -> Optional[PendingSuggestion]:
-        """Get a pending suggestion by source ID (e.g. ABS ID). Only returns pending, not dismissed."""
+    def _suggestion_owner_clause(self, uid: Optional[int]):
+        """Owner filter for pending suggestions; NULL-owner rows belong to the default user."""
+        from sqlalchemy import or_
+        if uid is not None and uid == self._default_user_id():
+            return or_(PendingSuggestion.user_id == uid, PendingSuggestion.user_id.is_(None))
+        return PendingSuggestion.user_id == uid
+
+    def get_pending_suggestion(self, source_id: str, user_id: Optional[int] = None) -> Optional[PendingSuggestion]:
+        """Get a user's pending suggestion by source ID (e.g. ABS ID). Only returns pending, not dismissed."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             suggestion = session.query(PendingSuggestion).filter(
                 PendingSuggestion.source_id == source_id,
-                PendingSuggestion.status == 'pending'
+                PendingSuggestion.status == 'pending',
+                self._suggestion_owner_clause(uid),
             ).first()
             if suggestion:
                 session.expunge(suggestion)
             return suggestion
 
-    def suggestion_exists(self, source_id: str) -> bool:
-        """Check if any suggestion exists for source_id (pending or dismissed)."""
+    def suggestion_exists(self, source_id: str, user_id: Optional[int] = None) -> bool:
+        """Check if any suggestion exists for source_id and user (pending or dismissed)."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             return session.query(PendingSuggestion).filter(
-                PendingSuggestion.source_id == source_id
+                PendingSuggestion.source_id == source_id,
+                self._suggestion_owner_clause(uid),
             ).first() is not None
 
-    def save_pending_suggestion(self, suggestion: PendingSuggestion) -> PendingSuggestion:
-        """Save or update a pending suggestion."""
+    def save_pending_suggestion(self, suggestion: PendingSuggestion, user_id: Optional[int] = None) -> PendingSuggestion:
+        """Save or update a pending suggestion, upserting by (owner, source_id)."""
+        uid = self._resolve_uid(user_id if user_id is not None else suggestion.user_id)
         with self.get_session() as session:
             existing = session.query(PendingSuggestion).filter(
-                PendingSuggestion.source_id == suggestion.source_id
+                PendingSuggestion.source_id == suggestion.source_id,
+                self._suggestion_owner_clause(uid),
             ).first()
 
             if existing:
@@ -3657,11 +3865,14 @@ class DatabaseService:
                              'status', 'origin', 'origin_metadata_json']:
                     if hasattr(suggestion, attr):
                         setattr(existing, attr, getattr(suggestion, attr))
+                if existing.user_id is None:
+                    existing.user_id = uid
                 session.flush()
                 session.refresh(existing)
                 session.expunge(existing)
                 return existing
             else:
+                suggestion.user_id = uid
                 session.add(suggestion)
                 session.flush()
                 session.refresh(suggestion)
@@ -3678,29 +3889,36 @@ class DatabaseService:
                 KosyncDocument.document_hash == doc_hash
             ).count() > 0
 
-    def get_all_pending_suggestions(self) -> List[PendingSuggestion]:
-        """Get all pending suggestions."""
+    def get_all_pending_suggestions(self, user_id: Optional[int] = None,
+                                    all_users: bool = False) -> List[PendingSuggestion]:
+        """Get a user's pending suggestions (every user's when ``all_users``, e.g. cache cleanup)."""
+        uid = None if all_users else self._resolve_uid(user_id)
         with self.get_session() as session:
-            suggestions = session.query(PendingSuggestion).filter(
-                PendingSuggestion.status == 'pending'
-            ).order_by(PendingSuggestion.created_at.desc()).all()
+            query = session.query(PendingSuggestion).filter(PendingSuggestion.status == 'pending')
+            if not all_users:
+                query = query.filter(self._suggestion_owner_clause(uid))
+            suggestions = query.order_by(PendingSuggestion.created_at.desc()).all()
             for s in suggestions:
                 session.expunge(s)
             return suggestions
 
-    def get_ignored_suggestion_source_ids(self) -> List[str]:
-        """Get source IDs that should never be suggested again."""
+    def get_ignored_suggestion_source_ids(self, user_id: Optional[int] = None) -> List[str]:
+        """Get source IDs the user never wants suggested again."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             rows = session.query(PendingSuggestion.source_id).filter(
-                PendingSuggestion.status == 'ignored'
+                PendingSuggestion.status == 'ignored',
+                self._suggestion_owner_clause(uid),
             ).all()
             return [row[0] for row in rows if row and row[0]]
 
-    def dismiss_suggestion(self, source_id: str) -> bool:
-        """Mark a suggestion as dismissed."""
+    def dismiss_suggestion(self, source_id: str, user_id: Optional[int] = None) -> bool:
+        """Mark a user's suggestion as dismissed."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             suggestion = session.query(PendingSuggestion).filter(
-                PendingSuggestion.source_id == source_id
+                PendingSuggestion.source_id == source_id,
+                self._suggestion_owner_clause(uid),
             ).first()
             if suggestion:
                 suggestion.status = 'dismissed'
@@ -3708,11 +3926,13 @@ class DatabaseService:
                 return True
             return False
 
-    def ignore_suggestion(self, source_id: str) -> bool:
-        """Mark a suggestion as never ask."""
+    def ignore_suggestion(self, source_id: str, user_id: Optional[int] = None) -> bool:
+        """Mark a user's suggestion as never ask."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             suggestion = session.query(PendingSuggestion).filter(
-                PendingSuggestion.source_id == source_id
+                PendingSuggestion.source_id == source_id,
+                self._suggestion_owner_clause(uid),
             ).first()
             if suggestion:
                 suggestion.status = 'ignored'
@@ -3776,11 +3996,12 @@ class DatabaseService:
             ).delete(synchronize_session=False)
             return rows > 0
 
-    def clear_stale_suggestions(self) -> int:
+    def clear_stale_suggestions(self, user_id: Optional[int] = None) -> int:
         """
-        Delete suggestions that are not for active books in our bridge.
+        Delete a user's suggestions that are not for active books in our bridge.
         A suggestion is 'stale' if its source_id (ABS ID) is not in our books table.
         """
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             # Subquery to get all IDs in books table
             # We preserve ANY suggestion that corresponds to a book we tracking,
@@ -3795,6 +4016,7 @@ class DatabaseService:
             
             # Find all suggestions not in the books table
             stale_query = session.query(PendingSuggestion).filter(
+                self._suggestion_owner_clause(uid),
                 not_(PendingSuggestion.source_id.in_(
                     session.query(Book.abs_id)
                 ))

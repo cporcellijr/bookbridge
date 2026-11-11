@@ -12,6 +12,7 @@ import requests
 
 from src.services.aligned_shelf import defer_shelf_add
 from src.services.alignment_service import ingest_storyteller_transcripts
+from src.services.transcription_preflight import record_preflight
 from src.utils.cache_paths import safe_library_path
 from src.utils.file_transfers import copy_file_to_path, hardlink_file_to_path
 from src.utils.storyteller_transcript import StorytellerTranscript
@@ -1958,6 +1959,21 @@ class ForgeService:
                 if raw_transcript:
                     transcript_source = "smil"
                 if not raw_transcript:
+                    # A failed Storyteller/SMIL alternative may need Whisper.
+                    # Measure from existing text and catalog metadata first.
+                    try:
+                        preflight_book = self.database_service.get_book(abs_id)
+                        if preflight_book:
+                            advisory = record_preflight(
+                                self.database_service, preflight_book, book_text, item_details,
+                            )
+                            logger.info(
+                                "Auto-Forge pre-flight for '%s': %s EPUB tokens, %s tokens/audio-hour (%s)",
+                                abs_id, advisory["token_count"],
+                                advisory["epub_tokens_per_audio_hour"], advisory["assessment"],
+                            )
+                    except Exception:
+                        logger.warning("Auto-Forge pre-flight evidence could not be recorded", exc_info=True)
                     logger.info("Auto-Forge: SMIL unavailable/rejected. Falling back to Whisper transcription...")
                     whisper_audio = self._get_whisper_audio_inputs(temp_dir, abs_id, audio_source, audio_source_id)
                     if not whisper_audio:

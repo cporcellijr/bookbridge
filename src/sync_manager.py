@@ -72,6 +72,7 @@ from src.services.alignment_service import AlignmentService, ContentMatchRejecte
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.library_service import EbookInputError, LibraryService
 from src.services.map_quality import find_slips
+from src.services.transcription_preflight import record_preflight
 from src.services.readalong_delivery import is_generated_readalong_epub
 from src.services.migration_service import MigrationService
 from src.services.reading_session_aggregator import (
@@ -1897,7 +1898,7 @@ class SyncManager:
                     valid_filenames.add(book.ebook_filename)
             
             # From Pending Suggestions (covers auto-discovery matches)
-            suggestions = self.database_service.get_all_pending_suggestions()
+            suggestions = self.database_service.get_all_pending_suggestions(all_users=True)
             for suggestion in suggestions:
                 # matches property automatically parses the JSON
                 for match in suggestion.matches:
@@ -2722,7 +2723,7 @@ class SyncManager:
             with self._suggestion_lock:
                 if abs_id in self._suggestion_in_flight:
                     return
-                if self.database_service.suggestion_exists(abs_id):
+                if self.database_service.suggestion_exists(abs_id, user_id=user_id):
                     return
                 all_books = self.database_service.get_all_books()
                 if any(b.abs_id == abs_id for b in all_books):
@@ -2743,7 +2744,7 @@ class SyncManager:
                 logger.info(
                     f"ABS Socket.IO: Queuing suggestion discovery for unknown book '{abs_id[:12]}...'"
                 )
-                self._create_suggestion(abs_id, None)
+                self._create_suggestion(abs_id, None, user_id=user_id)
             finally:
                 with self._suggestion_lock:
                     self._suggestion_in_flight.discard(abs_id)
@@ -2762,12 +2763,13 @@ class SyncManager:
             return
 
         try:
+            owner_id = get_current_user_id()
             # optimization: get all mapped IDs to avoid suggesting existing books (even if inactive)
             all_books = self.database_service.get_all_books()
             mapped_ids = {b.abs_id for b in all_books}
 
             # Dismiss existing pending suggestions for books now >70% complete
-            existing_suggestions = self.database_service.get_all_pending_suggestions()
+            existing_suggestions = self.database_service.get_all_pending_suggestions(user_id=owner_id)
             for suggestion in existing_suggestions:
                 item_data = abs_progress_map.get(suggestion.source_id)
                 if not item_data:
@@ -2782,7 +2784,7 @@ class SyncManager:
                 pct = (current_time / duration) if duration > 0 else 0
                 if is_finished or pct > 0.70:
                     logger.info(f"🧹 Dismissing suggestion for '{suggestion.title}': progress {pct:.1%} (finished={is_finished})")
-                    self.database_service.dismiss_suggestion(suggestion.source_id)
+                    self.database_service.dismiss_suggestion(suggestion.source_id, user_id=owner_id)
 
             logger.debug(f"Checking for suggestions: {len(abs_progress_map)} books with progress, {len(mapped_ids)} already mapped")
 
@@ -2799,7 +2801,7 @@ class SyncManager:
                     pct = current_time / duration
                     if pct > 0.01:
                         # Check if a suggestion already exists (pending, dismissed, or ignored)
-                        if self.database_service.suggestion_exists(abs_id):
+                        if self.database_service.suggestion_exists(abs_id, user_id=owner_id):
                             logger.debug(f"Skipping {abs_id}: suggestion already exists/dismissed")
                             continue
 
@@ -2810,7 +2812,7 @@ class SyncManager:
                              continue
 
                         logger.debug(f"Creating suggestion for {abs_id} (progress: {pct:.1%})")
-                        self._create_suggestion(abs_id, item_data)
+                        self._create_suggestion(abs_id, item_data, user_id=owner_id)
                     else:
                         logger.debug(f"Skipping {abs_id}: progress {pct:.1%} below 1% threshold")
                 else:
@@ -2849,7 +2851,7 @@ class SyncManager:
             logger.debug(f"Suggestion for '{title}': dropped {len(matches) - len(kept)} hit(s) by another author or volume")
         return kept
 
-    def _create_suggestion(self, abs_id, progress_data):
+    def _create_suggestion(self, abs_id, progress_data, user_id=None):
         """Create a new suggestion for an unmapped book."""
         logger.info(f"🔍 Found potential new book for suggestion: '{abs_id}'")
         
@@ -3012,7 +3014,7 @@ class SyncManager:
                 cover_url=cover,
                 matches_json=json.dumps(matches)
             )
-            self.database_service.save_pending_suggestion(suggestion)
+            self.database_service.save_pending_suggestion(suggestion, user_id=user_id)
             match_count = len(matches)
             logger.info(f"✅ Created suggestion for '{title}' with {match_count} matches")
 
@@ -3830,6 +3832,19 @@ class SyncManager:
 
             # Step 3: Fallback to Whisper (Slow Path) - Only runs if SMIL failed
             if not direct_aligned and not raw_transcript:
+                # Read-only length evidence before acquiring audio for full Whisper.
+                # Uncalibrated measurements never reject a pairing or gate a worker.
+                try:
+                    advisory = record_preflight(
+                        self.database_service, book, book_text, item_details,
+                    )
+                    logger.info(
+                        "Transcription pre-flight for '%s': %s EPUB tokens, %s tokens/audio-hour (%s)",
+                        sanitize_log_data(abs_title), advisory["token_count"],
+                        advisory["epub_tokens_per_audio_hour"], advisory["assessment"],
+                    )
+                except Exception:
+                    logger.warning("Transcription pre-flight evidence could not be recorded", exc_info=True)
                 logger.info("🔄 SMIL extraction skipped/failed, falling back to Whisper transcription")
                 
                 if not audio_adapter:
@@ -6213,6 +6228,10 @@ class SyncManager:
                             logger, f"reading-session-ingest:{get_current_user_id()}:{book.abs_id}",
                             "Reading session accumulation failed for '%s': %s", book.abs_id, exc, exc_info=True,
                         )
+
+                # The card glow names the leader only once a follower really took the position.
+                if any(self._sync_result_was_applied(result) for result in results.values()):
+                    self.database_service.record_sync_marker(book.abs_id, leader, current_time)
 
                 # Debugging crash: Flush logs to ensure we see this before any potential hard crash
                 for handler in logger.handlers:

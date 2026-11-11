@@ -25,6 +25,7 @@ from src.utils.ebook_sources import (
 from src.sync_clients.sync_client_interface import LocatorResult
 from src.utils.fixed_page_progress import coerce_page, is_cbz_filename
 from src.utils.user_config import resolve_setting
+from src.utils.series_metadata import extract_series_from_library_detail
 
 logger = logging.getLogger(__name__)
 
@@ -475,6 +476,11 @@ class BookloreClient:
             logger.debug(f"Grimmory: Error fetching book {book_id}: {e}")
             return None
 
+    @property
+    def catalog_complete(self) -> bool:
+        """Whether a complete provider listing has been cached successfully."""
+        return self._cache_timestamp > 0 and not self._last_refresh_failed
+
     def _is_refresh_on_cooldown(self) -> bool:
         """Return True if last refresh failed and cooldown hasn't elapsed."""
         if not self._last_refresh_failed:
@@ -652,6 +658,7 @@ class BookloreClient:
     def _extract_book_summary_fields(self, book):
         metadata = book.get('metadata') or {}
         primary_file = book.get('primaryFile') or {}
+        series_name, series_index = extract_series_from_library_detail(book)
         title = (book.get('title') or metadata.get('title') or '').strip()
         subtitle = (metadata.get('subtitle') or book.get('subtitle') or '').strip()
         authors = self._format_authors(
@@ -667,6 +674,7 @@ class BookloreClient:
             or book.get('fileName')
             or ''
         )
+        file_path = primary_file.get('filePath') or book.get('filePath') or ''
         book_type = (
             primary_file.get('bookType')
             or book.get('bookType')
@@ -678,6 +686,14 @@ class BookloreClient:
             'authors': authors,
             'language': self._extract_language(book),
             'fileName': file_name,
+            'filePath': file_path,
+            'sourceFileId': (
+                primary_file.get('id')
+                if primary_file.get('id') is not None
+                else primary_file.get('bookFileId')
+            ),
+            'seriesName': series_name,
+            'seriesIndex': series_index,
             'bookType': book_type,
         }
 
@@ -777,10 +793,43 @@ class BookloreClient:
 
         with self._cache_lock:
             existing = self._book_id_cache.get(bid)
+            summary = self._extract_book_summary_fields(book)
+            metadata = dict((existing or {}).get('metadata') or {})
+            for key in (
+                'series', 'seriesName', 'series_name', 'seriesNumber', 'seriesIndex',
+                'seriesSequence', 'series_number', 'series_index',
+            ):
+                metadata.pop(key, None)
+            if summary['seriesName'] is not None:
+                metadata['seriesName'] = summary['seriesName']
+            if summary['seriesIndex'] is not None:
+                metadata['seriesNumber'] = summary['seriesIndex']
+
+            audio_shape = {
+                key: book[key] for key in
+                ("primaryFile", "alternativeFormats", "supplementaryFiles", "audiobookMetadata")
+                if key in book
+            }
             if existing and not existing.get('_needs_detail'):
+                existing.update({
+                    **audio_shape,
+                    'metadata': metadata,
+                    'seriesName': summary['seriesName'],
+                    'seriesIndex': summary['seriesIndex'],
+                })
+                old_filename = str(existing.get('fileName') or '').lower()
+                for key in ('title', 'subtitle', 'authors', 'language', 'fileName', 'filePath', 'bookType'):
+                    if summary.get(key):
+                        existing[key] = summary[key]
+                new_filename = str(existing.get('fileName') or '').lower()
+                if old_filename != new_filename and self._book_cache.get(old_filename) is existing:
+                    self._book_cache.pop(old_filename, None)
+                if new_filename:
+                    self._book_cache[new_filename] = existing
+                if summary['sourceFileId'] is not None:
+                    existing['sourceFileId'] = summary['sourceFileId']
                 return
 
-            summary = self._extract_book_summary_fields(book)
             lightweight_info = dict(existing or {})
             lightweight_info.update({
                 'id': bid,
@@ -789,10 +838,20 @@ class BookloreClient:
                 'authors': summary['authors'] or lightweight_info.get('authors') or '',
                 'language': summary['language'] or lightweight_info.get('language') or '',
                 'fileName': summary['fileName'] or lightweight_info.get('fileName'),
+                'filePath': summary['filePath'] or lightweight_info.get('filePath'),
+                'sourceFileId': (
+                    summary['sourceFileId']
+                    if summary['sourceFileId'] is not None
+                    else lightweight_info.get('sourceFileId')
+                ),
+                'metadata': metadata,
+                'seriesName': summary['seriesName'],
+                'seriesIndex': summary['seriesIndex'],
                 'bookType': summary['bookType'] or lightweight_info.get('bookType') or '',
                 'libraryId': book.get('libraryId'),
                 'libraryName': book.get('libraryName'),
                 '_needs_detail': True,
+                **audio_shape,
             })
             self._book_id_cache[bid] = lightweight_info
             if lightweight_info.get('fileName'):
@@ -880,6 +939,9 @@ class BookloreClient:
         try:
             all_books_list = []
             page = 0
+            scan_capped = False
+            seen_raw_ids = set()
+            expected_total = None
             batch_size = 200  # Reasonable chunk size
             use_server_side_filter = bool(self.target_library_id and self._server_side_filter_supported is not False)
             should_probe_server_side_filter = bool(self.target_library_id and self._server_side_filter_supported is None)
@@ -926,7 +988,24 @@ class BookloreClient:
                 elif isinstance(data, dict) and 'content' in data:
                     current_batch = data['content']
 
+                if not isinstance(data, (list, dict)) or (isinstance(data, dict) and 'content' not in data):
+                    self._last_refresh_failed = True
+                    return False
+                if not isinstance(current_batch, list) or any(
+                    not isinstance(row, dict) or isinstance(row.get('id'), bool)
+                    or row.get('id') is None for row in current_batch
+                ):
+                    self._last_refresh_failed = True
+                    return False
+                page_meta = data.get('page') or {} if isinstance(data, dict) else {}
+                total = page_meta.get('totalElements', data.get('totalElements')) if isinstance(data, dict) else None
+                if total is not None:
+                    if isinstance(total, bool) or not isinstance(total, int) or total < 0 or (expected_total is not None and total != expected_total):
+                        self._last_refresh_failed = True
+                        return False
+                    expected_total = total
                 raw_batch_size = len(current_batch)
+                seen_raw_ids.update(str(row['id']) for row in current_batch)
                 if should_probe_server_side_filter and page == 0 and not current_batch:
                     self._server_side_filter_supported = True
                     should_probe_server_side_filter = False
@@ -990,13 +1069,23 @@ class BookloreClient:
                         "Grimmory: scan reached page cap (%d); stopping pagination early",
                         SCAN_MAX_PAGES,
                     )
+                    scan_capped = True
                     break
                 page += 1
+
+            partial = scan_capped or (expected_total is not None and len(seen_raw_ids) != expected_total)
+            if partial and self._has_cached_books():
+                # Keep the last complete snapshot; a cold cache takes the partial listing below.
+                self._last_refresh_failed = True
+                return False
 
             live_ids = {b.get('id') for b in all_books_list if b.get('id') is not None}
             self._prune_stale_cache_entries(live_ids)
 
             if not all_books_list:
+                if partial:
+                    self._last_refresh_failed = True
+                    return False
                 logger.debug("Grimmory: No books found in library")
                 self._cache_timestamp = time.time()
                 self._save_cache()  # No-op now
@@ -1064,16 +1153,13 @@ class BookloreClient:
 
             id_snapshot = self._snapshot_book_id_items()
             existing_id_strings = {str(bid) for bid, _ in id_snapshot}
-            existing_lightweight_ids = {
-                str(bid) for bid, book_info in id_snapshot if book_info.get('_needs_detail')
-            }
             new_book_ids = [
                 b.get('id') for b in all_books_list
                 if b.get('id') is not None and str(b.get('id')) not in existing_id_strings
             ]
 
             for book in all_books_list:
-                if str(book.get('id')) in existing_lightweight_ids:
+                if str(book.get('id')) in existing_id_strings:
                     self._upsert_lightweight_entry(book)
 
             new_detail_fetch_count = 0
@@ -1173,6 +1259,10 @@ class BookloreClient:
                     "Grimmory: Skipping stale details refresh for quick search-triggered cache validation"
                 )
 
+            if partial:
+                # Sync lookups use what was listed; the catalog stays incomplete and is rescanned after the cooldown.
+                self._last_refresh_failed = True
+                return False
             self._cache_timestamp = time.time()
             self._last_refresh_failed = False
             return True
@@ -1198,6 +1288,7 @@ class BookloreClient:
         author_str = self._format_authors(metadata.get('authors') or [])
         subtitle = metadata.get('subtitle') or ''
         title = metadata.get('title') or detail.get('title') or filename
+        series_name, series_index = extract_series_from_library_detail(detail)
 
         stale_filenames = []
         book_info = {
@@ -1208,6 +1299,13 @@ class BookloreClient:
             'subtitle': subtitle,
             'authors': author_str,
             'language': self._extract_language(detail),
+            'seriesName': series_name,
+            'seriesIndex': series_index,
+            'sourceFileId': (
+                primary_file.get('id')
+                if primary_file.get('id') is not None
+                else primary_file.get('bookFileId')
+            ),
             'metadata': metadata,
             'bookType': book_type,
             'primaryFile': detail.get('primaryFile'),
@@ -1634,20 +1732,26 @@ class BookloreClient:
         logger.info(f"🧠 Grimmory LLM match: '{target_stem}' → '{cached_name}'")
         return book_info
 
-    def get_all_books(self):
-        """Get all books from cache, refreshing if necessary."""
-        # Use a reasonable cache time of 1 hour, similar to find_book_by_filename
-        if time.time() - self._cache_timestamp > 3600 and not self._is_refresh_on_cooldown():
+    def get_all_books(self, include_all_ids: bool = False, force_refresh: bool = False) -> list:
+        """Get cached books, optionally retaining duplicate filenames or refreshing first."""
+        if force_refresh:
             self._refresh_book_cache(refresh_stale_details=False)
-        if not self._has_cached_books() and not self._is_refresh_on_cooldown():
-            self._refresh_book_cache(refresh_stale_details=False)
+        else:
+            # Use a reasonable cache time of 1 hour, similar to find_book_by_filename
+            if time.time() - self._cache_timestamp > 3600 and not self._is_refresh_on_cooldown():
+                self._refresh_book_cache(refresh_stale_details=False)
+            if not self._has_cached_books() and not self._is_refresh_on_cooldown():
+                self._refresh_book_cache(refresh_stale_details=False)
 
         with self._cache_lock:
-            all_books = list(self._book_cache.values())
-            fully_cached_ids = {str(b.get('id')) for b in all_books if b.get('id') is not None}
-            for bid, book_info in self._book_id_cache.items():
-                if str(bid) not in fully_cached_ids and book_info.get('_needs_detail'):
-                    all_books.append(book_info)
+            if include_all_ids:
+                all_books = list(self._book_id_cache.values())
+            else:
+                all_books = list(self._book_cache.values())
+                fully_cached_ids = {str(b.get('id')) for b in all_books if b.get('id') is not None}
+                for bid, book_info in self._book_id_cache.items():
+                    if str(bid) not in fully_cached_ids and book_info.get('_needs_detail'):
+                        all_books.append(book_info)
         return self._dedupe_book_results(all_books)
 
     def search_audiobooks(self, search_term, include_info=True):

@@ -9,7 +9,7 @@ from src.db.models import Book, State, HardcoverDetails
 from src.services.llm_matching import craft_search_terms, judge_best_candidate, tracker_match_enabled
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
 from src.utils.ebook_utils import EbookParser, resolve_ebook_identifiers
-from src.utils.logging_utils import sanitize_log_data
+from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -557,12 +557,30 @@ class HardcoverSyncClient(SyncClient):
 
         # Get user book from Hardcover
         ub = self.hardcover_client.get_user_book(hardcover_details.hardcover_book_id)
+        no_ub_key = f"hardcover_no_user_book:{hardcover_details.hardcover_book_id}"
+        if ub == {}:
+            created = self.hardcover_client.update_status(
+                hardcover_details.hardcover_book_id, 1, hardcover_details.hardcover_edition_id,
+            )
+            if isinstance(created, dict) and created.get('id'):
+                ub = created
+                logger.info(
+                    f"📚 Hardcover: re-added '{sanitize_log_data(book.abs_title)}' to the Hardcover library "
+                    f"(no UserBook found)"
+                )
         if not ub:
-            logger.warning(
-                f"⚠️ Hardcover: get_user_book returned None for book_id={hardcover_details.hardcover_book_id} "
-                f"('{sanitize_log_data(book.abs_title)}') — skipping progress update"
+            get_persistent_condition_logger().warn(
+                logger,
+                no_ub_key,
+                "⚠️ Hardcover: get_user_book returned None for book_id=%s ('%s') — skipping progress update",
+                hardcover_details.hardcover_book_id,
+                sanitize_log_data(book.abs_title),
             )
             return SyncResult(None, False)
+        get_persistent_condition_logger().resolve(
+            logger, no_ub_key, "Hardcover: UserBook available again for book_id=%s",
+            hardcover_details.hardcover_book_id,
+        )
 
         if audio_seconds > 0:
             return self._update_audiobook_progress(book, hardcover_details, ub, percentage, audio_seconds)

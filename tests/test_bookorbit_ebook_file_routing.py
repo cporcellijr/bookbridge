@@ -67,7 +67,10 @@ def client():
         "BOOKORBIT_USER": "u",
         "BOOKORBIT_PASSWORD": "p",
     }):
-        yield BookOrbitClient()
+        c = BookOrbitClient()
+        # Pinned to the legacy file-progress route these tests assert (pre-3.6 servers).
+        c._reading_progress_api = False
+        yield c
 
 
 # ---- light cache entry: per-kind file ids ----
@@ -355,6 +358,7 @@ class TestPrimaryEbookSyncCycle(BaseSyncCycleTestCase):
 
         mocks = self.setup_common_mocks()
         client = BookOrbitClient()
+        client._reading_progress_api = False
         client.check_connection = Mock(return_value=True)
         detail = {"id": 443, "title": "Issue 443", "files": [
             {"id": 2, "format": "kepub", "role": "content"},

@@ -158,7 +158,7 @@ class TestSuggestionsFeature(unittest.TestCase):
         }
 
         created = []
-        manager._create_suggestion = lambda abs_id, item_data: created.append(abs_id)
+        manager._create_suggestion = lambda abs_id, item_data, **_kw: created.append(abs_id)
 
         # Must not raise.
         manager.check_for_suggestions(progress_map, [])
@@ -192,7 +192,7 @@ class TestSuggestionsFeature(unittest.TestCase):
 
         manager.check_for_suggestions(progress_map, [])
 
-        db.dismiss_suggestion.assert_called_once_with("finished-null")
+        db.dismiss_suggestion.assert_called_once_with("finished-null", user_id=None)
 
     def test_suggestions_cache_path_is_user_scoped(self):
         import src.web_server as web_server
@@ -225,7 +225,7 @@ class TestSuggestionsFeature(unittest.TestCase):
         original_run = web_server._run_suggestions_scan_job
         original_sync = web_server._BACKGROUND_TASKS_SYNCHRONOUS
 
-        def fake_run(_job_id, _cached, _no_match):
+        def fake_run(_job_id, _cached, _no_match, _full_refresh=False):
             captured['bundle'] = web_server.uc()
             captured['user_id'] = get_current_user_id()
             captured['credentials'] = dict(get_current_user_credentials() or {})

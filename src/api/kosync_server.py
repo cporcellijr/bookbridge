@@ -22,6 +22,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 from flask import Blueprint, jsonify, request, send_file, g
+from flask.typing import ResponseReturnValue
 
 from src.api.booklore_client import BookloreClient
 from src.api.hardcover_client import HardcoverClient
@@ -109,6 +110,8 @@ _BOOKLORE_SHELF_FILTER_TTL_SECONDS = 120
 # KoSync PUT debounce state
 _kosync_debounce: dict = {}  # {(abs_id, user_id): {'last_event': float, 'title': str, 'synced': bool, 'user_id', 'abs_id'}}
 _kosync_debounce_lock = threading.Lock()
+_device_sync_now_inflight: set = set()  # {(abs_id, user_id)} with a sync-now thread running
+_device_sync_now_lock = threading.Lock()
 _debounce_thread_started = False
 _kosync_open_sessions: dict = {}  # {session_key: session_dict}
 _kosync_open_sessions_lock = threading.Lock()
@@ -122,6 +125,10 @@ _kosync_device_session_registry_lock = threading.Lock()
 _kosync_recent_external_puts: dict = {}
 _kosync_recent_external_puts_lock = threading.Lock()
 _discovery_anchor_cache = LRUCache(capacity=1024)
+# (document hash, abs_id) pairs whose CWA identity was already checked (#582).
+_cwa_identity_checked = LRUCache(capacity=1024)
+# A negative CWA identity check is retried after this long (CWA may checksum the file later).
+_CWA_IDENTITY_RECHECK_SECONDS = 3600
 _discovery_anchor_cache_lock = threading.Lock()
 _KOREADER_STATS_MAX_BOOKS = 1000
 _KOREADER_STATS_MAX_PAGE_STATS = 10000
@@ -1813,11 +1820,12 @@ def _select_auto_map_candidate(ebook_meta, candidates):
     return best, "agreement"
 
 
-def _resolve_library_ebook_source(epub_filename):
+def _resolve_library_ebook_source(epub_filename, doc_hash: Optional[str] = None):
     """Resolve a filesystem EPUB to its library identity.
 
     The mapping must reference the library copy by source id so progress actually
     syncs to BookOrbit/Grimmory/Kavita rather than treating it as a bare local file.
+    With ``doc_hash``, CWA's checksum history is the last fallback (a CWA download).
     Returns (source, source_id) or (None, None).
     """
     try:
@@ -1844,6 +1852,11 @@ def _resolve_library_ebook_source(epub_filename):
                 return "Kavita", str(match["id"])
     except Exception as e:
         logger.debug(f"Auto-map: Kavita filename resolve failed: {e}")
+    if doc_hash:
+        from src.services.cwa_checksum_resolver import find_calibre_book_id
+        calibre_book_id = find_calibre_book_id(doc_hash)
+        if calibre_book_id:
+            return "CWA", calibre_book_id
     return None, None
 
 
@@ -1876,7 +1889,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason,
         logger.warning(f"Auto-map: book mapping service unavailable: {e}", exc_info=True)
         return None
 
-    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
+    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename, doc_hash_val)
     abs_ebook_item_id = _resolve_abs_ebook_item(epub_filename)
 
     saved = mapping_service.create_audio_mapping_from_match(
@@ -1901,7 +1914,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason,
     except Exception as e:
         logger.debug(f"Auto-map: link_kosync_document failed: {e}")
     try:
-        _database_service.dismiss_suggestion(doc_hash_val)
+        _database_service.dismiss_suggestion(doc_hash_val, user_id=user_id)
     except Exception:
         pass
 
@@ -2302,6 +2315,8 @@ def kosync_put_progress():
     if linked_book and not is_internal:
         if not _kosync_user_may_access_book(linked_book):
             return _defer_kosync_book_access(doc_hash, linked_book, source="put", discover=may_match)
+        # A match route may have linked this hash itself, skipping _register_hash_for_book.
+        _adopt_cwa_identity(doc_hash, linked_book)
         _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
 
     # AUTO-DISCOVERY
@@ -2492,6 +2507,176 @@ def koreader_device_sync_download(abs_id):
     # timeout and retried forever. BridgeSync never reads this header anyway -- it
     # takes the filename from the manifest.
     return response
+
+
+# ---------------- Device word map and sync trigger ----------------
+#
+# For reader apps that pair an ebook with its audiobook (read-along, and jumping
+# from one to the other at the same word). Same per-user KOSync credentials and
+# the same claim rule as the download route above: a device sees only books its
+# user has matched, and a foreign book answers 404 like a missing one.
+
+_word_map_service = None
+_word_map_service_lock = threading.Lock()
+
+
+def _get_word_map_service():
+    global _word_map_service
+    if _container is None or _database_service is None:
+        return None
+    with _word_map_service_lock:
+        if _word_map_service is None:
+            from src.services.word_map_service import WordMapService
+            _word_map_service = WordMapService(
+                _database_service,
+                _container.alignment_service(),
+                _container.ebook_parser(),
+            )
+        return _word_map_service
+
+
+def _device_claimed_book(abs_id):
+    """The book when the authenticated device's user has claimed it, else None."""
+    if _database_service is None:
+        return None
+    book = _database_service.get_book(abs_id)
+    if book is None:
+        return None
+    user_id = getattr(g, "kosync_user_id", None)
+    if user_id is not None and user_id not in _database_service.get_book_user_ids(abs_id):
+        return None
+    return book
+
+
+@kosync_sync_bp.route('/device-sync/books/lookup', methods=['GET'])
+@kosync_sync_bp.route('/koreader/device-sync/books/lookup', methods=['GET'])
+@kosync_auth_required
+def device_sync_book_lookup() -> ResponseReturnValue:
+    """Find the user's BookBridge books for a Grimmory or BookOrbit book id.
+
+    A reader app knows its library's ids, not BookBridge's ``abs_id``. Pass
+    ``source`` (``grimmory`` or ``bookorbit``) and ``id``; ``grimmory_id=<id>``
+    is kept as shorthand. The id can be the ebook's or the audiobook's, so an
+    entry holding both files matches on either side.
+    """
+    source = (request.args.get('source') or '').strip().lower()
+    source_id = (request.args.get('id') or '').strip()
+    if not source and request.args.get('grimmory_id'):
+        source, source_id = 'grimmory', request.args['grimmory_id'].strip()
+    if not source_id or not (is_grimmory_source(source) or source == 'bookorbit'):
+        return jsonify({"error": "source (grimmory or bookorbit) and id are required"}), 400
+    if _database_service is None:
+        return jsonify({"error": "Database unavailable"}), 503
+
+    db = _database_service
+    user_id = getattr(g, "kosync_user_id", None)
+    if source == 'bookorbit':
+        # BookOrbit ids are per user: confirm each candidate resolves to this id for them.
+        candidates = [
+            book for book in db.find_books_by_bookorbit_id(user_id, source_id)
+            if source_id in (db.resolve_bookorbit_ebook_id(user_id, book),
+                             db.resolve_bookorbit_audio_id(user_id, book))
+        ]
+    else:
+        candidates = [
+            db.get_book_by_ebook_source("BookLore", source_id),
+            db.get_book_by_audio_source("BookLore", source_id),
+        ]
+    books, seen = [], set()
+    for book in candidates:
+        if book is None or book.abs_id in seen:
+            continue
+        seen.add(book.abs_id)
+        if _device_claimed_book(book.abs_id) is None:
+            continue
+        # The same test the sync engine uses before reading a stored map.
+        has_map = getattr(book, "transcript_file", None) == "DB_MANAGED"
+        books.append({
+            "abs_id": book.abs_id,
+            "title": getattr(book, "abs_title", None),
+            "sync_mode": getattr(book, "sync_mode", None),
+            "status": getattr(book, "status", None),
+            "ebook_grimmory_id": getattr(book, "ebook_source_id", None) if is_grimmory_source(getattr(book, "ebook_source", None)) else None,
+            "audio_grimmory_id": getattr(book, "audio_source_id", None) if getattr(book, "audio_source", None) == "BookLore" else None,
+            "ebook_bookorbit_id": db.resolve_bookorbit_ebook_id(user_id, book),
+            "audio_bookorbit_id": db.resolve_bookorbit_audio_id(user_id, book),
+            "has_word_map": has_map,
+        })
+    return jsonify({"books": books})
+
+
+@kosync_sync_bp.route('/device-sync/books/<path:abs_id>/word-map', methods=['GET'])
+@kosync_sync_bp.route('/koreader/device-sync/books/<path:abs_id>/word-map', methods=['GET'])
+@kosync_auth_required
+def device_sync_word_map(abs_id: str) -> ResponseReturnValue:
+    """Audio timestamps paired with in-text EPUB CFIs, for read-along and handoff.
+
+    200 with the map once matching is done; 202 with progress while it isn't;
+    409 when the book has no ebook or its text can't be placed in the EPUB.
+    The map is built on first request after each re-match and then cached, so
+    the first call for a long book can take several seconds.
+    """
+    book = _device_claimed_book(abs_id)
+    if book is None:
+        return jsonify({"error": "Book not available"}), 404
+    service = _get_word_map_service()
+    if service is None:
+        return jsonify({"error": "Word map service unavailable"}), 503
+
+    # The EPUB whose text the alignment map was built against, when that is certain.
+    epub = (_manager and _manager._get_alignment_epub_filename(book)) or getattr(book, "ebook_filename", None)
+    status, body = service.get_word_map(book, epub)
+    if status != 200:
+        return jsonify(body), status
+
+    from src.services.word_map_service import word_map_etag
+    response = jsonify(body)
+    response.set_etag(word_map_etag(body))
+    return response.make_conditional(request)
+
+
+@kosync_sync_bp.route('/device-sync/books/<path:abs_id>/sync-now', methods=['POST'])
+@kosync_sync_bp.route('/koreader/device-sync/books/<path:abs_id>/sync-now', methods=['POST'])
+@kosync_auth_required
+def device_sync_now(abs_id: str) -> ResponseReturnValue:
+    """Sync one book for the device's user now, instead of at the next poll.
+
+    For an app that just saved a position to one service (closing the ebook, say)
+    and wants the other services caught up before the user switches to the
+    audiobook. Runs in the background; the response only says it started.
+    """
+    book = _device_claimed_book(abs_id)
+    if book is None:
+        return jsonify({"error": "Book not available"}), 404
+    if not _manager:
+        return jsonify({"error": "Sync engine unavailable"}), 503
+
+    user_id = getattr(g, "kosync_user_id", None)
+    if user_id is not None:
+        target, kwargs = _manager.sync_cycle, {'target_abs_id': abs_id, 'user_id': user_id}
+    else:
+        target, kwargs = _manager.run_sync_for_all_users, {'target_abs_id': abs_id}
+    key = (abs_id, user_id)
+    with _device_sync_now_lock:
+        already_running = key in _device_sync_now_inflight
+        _device_sync_now_inflight.add(key)
+    if already_running:
+        # One thread per book and reader; a repeat while it runs becomes one queued follow-up.
+        _manager._queue_pending_sync(abs_id, user_id=user_id)
+        logger.info(f"⚡ Device sync-now: '{getattr(book, 'abs_title', abs_id)}' already syncing, queued a follow-up")
+        return jsonify({"started": True, "abs_id": abs_id}), 202
+    logger.info(f"⚡ Device sync-now: syncing '{getattr(book, 'abs_title', abs_id)}'")
+    threading.Thread(target=_run_device_sync_now, args=(key, target, kwargs), daemon=True).start()
+    return jsonify({"started": True, "abs_id": abs_id}), 202
+
+
+def _run_device_sync_now(key: tuple, target, kwargs: dict) -> None:
+    """Run one device sync-now and free its in-flight slot."""
+    try:
+        target(**kwargs)
+    finally:
+        with _device_sync_now_lock:
+            _device_sync_now_inflight.discard(key)
 
 
 @kosync_sync_bp.route('/device-sync/statistics', methods=['POST'])
@@ -3550,6 +3735,12 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
                  except Exception:
                      pass
 
+        # CWA serves re-stamped copies whose hash no library file has; its checksum
+        # history names the Calibre book, so take that book's library EPUB.
+        matched = _find_epub_by_cwa_checksum(doc_hash)
+        if matched:
+            return matched
+
         # Check filesystem — BOOKS_DIR plus any EXTRA_EBOOK_DIRS libraries.
         for scan_dir in _ebook_search_dirs():
             matched = _scan_directory_for_hash(scan_dir, doc_hash)
@@ -3660,6 +3851,99 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
 
     logger.info("🔍 Auto-discovery finished. No match found")
     return None
+
+
+def _resolves_to_file(parser, name: str, path: Path) -> bool:
+    """True when the stored name ``name`` resolves to the same file as ``path``."""
+    try:
+        return os.path.samefile(parser.resolve_book_path(name), path)
+    except OSError:
+        return False
+
+
+def _exact_library_name(parser, path: Path, calibre_root: Optional[Path] = None) -> Optional[str]:
+    """A stored name that resolves to the very file ``path``, or None.
+
+    The bare filename when no other file shadows it, otherwise the path within a
+    library root, which ``resolve_book_path`` looks up at that exact location. The
+    Calibre library may be mounted again under a scanned folder, so its own relative
+    path is tried as well.
+    """
+    names = [path.name]
+    for root in [*parser.search_dirs(), *([calibre_root] if calibre_root else [])]:
+        try:
+            names.append(path.relative_to(Path(root).resolve()).as_posix())
+        except (OSError, ValueError):
+            continue
+    return next((name for name in names if _resolves_to_file(parser, name, path)), None)
+
+
+def _find_epub_by_cwa_checksum(doc_hash: str) -> Optional[str]:
+    """Library EPUB name of the Calibre book CWA served with this hash, or None."""
+    from src.services.cwa_checksum_resolver import (
+        calibre_library_root, find_calibre_book_id, find_calibre_epub_path,
+    )
+
+    try:
+        calibre_book_id = find_calibre_book_id(doc_hash)
+        if not calibre_book_id:
+            return None
+        path = find_calibre_epub_path(calibre_book_id)
+        if path is None:
+            return None
+        name = _exact_library_name(_container.ebook_parser(), path, calibre_library_root())
+    except Exception as e:
+        logger.warning(f"⚠️ KOSync: CWA checksum EPUB lookup failed for {doc_hash}: {e}", exc_info=True)
+        return None
+    if name is None:
+        logger.info(
+            f"🔍 KOSync: Calibre book {calibre_book_id} EPUB '{path.name}' is not under "
+            "BOOKS_DIR or EXTRA_EBOOK_DIRS — cannot use it"
+        )
+        return None
+    logger.info(f"📚 Matched EPUB via CWA checksum history: {name} (Calibre book {calibre_book_id})")
+    return name
+
+
+def _adopt_cwa_identity(doc_id: str, book) -> None:
+    """Give a book with no library identity the CWA id of the copy CWA served (#582).
+
+    Only when the book's own file is exactly that Calibre book's EPUB, so a mapping
+    made from the local file (an accepted suggestion) still syncs to CWA.
+    """
+    if getattr(book, "ebook_source", None):
+        return
+    filenames = {
+        name for name in (getattr(book, "original_ebook_filename", None), getattr(book, "ebook_filename", None))
+        if name
+    }
+    if not filenames:
+        return
+    from src.services.cwa_checksum_resolver import find_calibre_book_id, find_calibre_epub_path
+
+    # Runs on every KoSync PUT: query metadata.db and walk the library once per hash and book.
+    key = (doc_id, book.abs_id)
+    checked_at = _cwa_identity_checked.get(key)
+    if checked_at is not None and time.monotonic() - checked_at < _CWA_IDENTITY_RECHECK_SECONDS:
+        return
+    _cwa_identity_checked.put(key, time.monotonic())
+    try:
+        calibre_book_id = find_calibre_book_id(doc_id)
+        if not calibre_book_id or _database_service.get_book_by_ebook_source("CWA", calibre_book_id):
+            return
+        library_epub = find_calibre_epub_path(calibre_book_id)
+        if library_epub is None:
+            return
+        parser = _container.ebook_parser()
+        if not any(_resolves_to_file(parser, name, library_epub) for name in filenames):
+            return
+        if _database_service.update_book_fields(book.abs_id, ebook_source="CWA", ebook_source_id=calibre_book_id):
+            book.ebook_source, book.ebook_source_id = "CWA", calibre_book_id
+            logger.info(
+                f"🔗 KOSync: '{book.abs_title}' is Calibre book {calibre_book_id} — CWA set as its ebook source"
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ KOSync: CWA identity check failed for '{book.abs_id}': {e}", exc_info=True)
 
 
 # ---------------- GET Fallback Helpers ----------------
@@ -4022,6 +4306,11 @@ def _resolve_book_by_cwa_checksum(doc_id: str):
             f"🔗 KOSync: Resolved {doc_id} to '{book.abs_title}' via CWA checksum history "
             f"(Calibre book {calibre_book_id})"
         )
+    else:
+        logger.info(
+            f"🔍 KOSync: {doc_id} is Calibre book {calibre_book_id} in CWA checksum history, "
+            "but no BookBridge mapping uses it yet"
+        )
     return book
 
 
@@ -4288,10 +4577,12 @@ def _register_hash_for_book(doc_id: str, book, *, user_id=None, exact: bool = Fa
                 return
             _database_service.link_kosync_document(doc_id, book.abs_id)
             logger.info(f"🔗 KOSync: Linked existing document {doc_id} to '{book.abs_title}'")
+            _adopt_cwa_identity(doc_id, book)
     else:
         doc = KD(document_hash=doc_id, linked_abs_id=book.abs_id, user_id=user_id)
         _database_service.save_kosync_document(doc)
         logger.info(f"🔗 KOSync: Created and linked new document {doc_id} to '{book.abs_title}'")
+        _adopt_cwa_identity(doc_id, book)
 
 
 def _is_valid_hex_hash(value: str) -> bool:
@@ -4385,6 +4676,7 @@ def _run_get_auto_discovery(doc_id: str, user_id=None) -> None:
         # shared EPUB identifier (raw library file vs the re-stamped matched copy).
         book = (
             _database_service.get_book_by_ebook_filename(epub_filename)
+            or _resolve_book_by_cwa_checksum(doc_id)
             or _resolve_book_by_epub_identifier(epub_filename, doc_id=doc_id)
         )
         if book:
@@ -4409,13 +4701,14 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
         return
     existing_book = (
         _database_service.get_book_by_ebook_filename(epub_filename)
+        or _resolve_book_by_cwa_checksum(doc_hash_val)
         or _resolve_book_by_epub_identifier(epub_filename, doc_id=doc_hash_val)
     )
     if existing_book:
         _register_hash_for_book(doc_hash_val, existing_book, user_id=user_id)
         if user_id is not None:
             _database_service.link_user_book(user_id, existing_book.abs_id)
-        _database_service.dismiss_suggestion(doc_hash_val)
+        _database_service.dismiss_suggestion(doc_hash_val, user_id=user_id)
         return
 
     title = Path(epub_filename).stem
@@ -4439,7 +4732,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
         for c in candidates if (c.get("progress_pct") or 0) <= 75
     ]
     if matches:
-        if not _database_service.suggestion_exists(doc_hash_val):
+        if not _database_service.suggestion_exists(doc_hash_val, user_id=user_id):
             matches.append({"source": "ebook", "filename": epub_filename, "confidence": "high"})
             _database_service.save_pending_suggestion(PendingSuggestion(
                 source_id=doc_hash_val,
@@ -4447,10 +4740,10 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
                 author=ebook_meta.get("author"),
                 cover_url=f"/api/cover-proxy/{matches[0]['abs_id']}",
                 matches_json=json.dumps(matches),
-            ))
+            ), user_id=user_id)
         return
     book_id = f"ebook-{doc_hash_val[:16]}"
-    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
+    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename, doc_hash_val)
     abs_ebook_item_id = _resolve_abs_ebook_item(epub_filename)
     _database_service.save_book(Book(
         abs_id=book_id, abs_title=ebook_meta.get("title") or title, ebook_filename=epub_filename,
@@ -4459,7 +4752,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
         kosync_doc_id=doc_hash_val, status='active', sync_mode='ebook_only',
     ))
     _database_service.link_kosync_document(doc_hash_val, book_id)
-    _database_service.dismiss_suggestion(doc_hash_val)
+    _database_service.dismiss_suggestion(doc_hash_val, user_id=user_id)
     if user_id is not None:
         _database_service.link_user_book(user_id, book_id)
         if ebook_source == "BookOrbit":

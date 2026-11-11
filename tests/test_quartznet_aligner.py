@@ -141,6 +141,23 @@ def test_a_sliver_of_trailing_audio_is_not_run():
     assert len(aligner._session.signals) == 1
 
 
+@pytest.mark.parametrize("windows, reason", [
+    ([], "ffmpeg produced no audio samples"),
+    ([np.zeros(100, dtype=np.float32)], "audio too short to align (100 samples)"),
+])
+def test_an_empty_or_sliver_decode_names_the_cause(windows, reason, caplog):
+    """Diagnostics finding 9529: an empty decode logged
+    '❌ CTC emissions failed: need at least one array to concatenate'."""
+    aligner = _aligner_with_fake_session()
+    with patch.object(QuartzNetAligner, "_load"), \
+            patch.object(QuartzNetAligner, "_pcm_windows", return_value=iter(windows)), \
+            caplog.at_level("ERROR"):
+        assert aligner.emissions_for(["book.m4b"]) is None
+
+    assert f"❌ CTC emissions failed: {reason}" in caplog.text
+    assert "need at least one array" not in caplog.text
+
+
 def test_word_starts_apply_the_onset_offset_and_frame_offset():
     aligner = _aligner_with_fake_session()
     log_probs = np.full((1, 40, 29), -10.0, dtype=np.float32)
@@ -518,3 +535,118 @@ def test_align_runs_the_chunked_path_on_a_numpy_emission():
     by_char = {p["char"]: p["ts"] for p in result}
     for offset, frame in zip(offsets, starts):
         assert by_char[offset] == pytest.approx(max(0.0, frame * spf - 0.28), abs=1e-3), offset
+
+
+# --- Thread count: ALIGN_THREADS, else the effective (cgroup-aware) CPU count ---
+
+
+@pytest.fixture
+def no_align_threads(monkeypatch):
+    monkeypatch.delenv("ALIGN_THREADS", raising=False)
+
+
+def _cgroup_v2(root, content):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "cpu.max").write_text(content)
+    return root
+
+
+def _cgroup_v1(root, quota, period, controller="cpu"):
+    d = root / controller
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "cpu.cfs_quota_us").write_text(f"{quota}\n")
+    (d / "cpu.cfs_period_us").write_text(f"{period}\n")
+    return root
+
+
+def _affinity(monkeypatch, n):
+    monkeypatch.setattr(qn.os, "sched_getaffinity", lambda _pid: set(range(n)), raising=False)
+
+
+def test_a_docker_cpus_quota_caps_the_threads_below_the_host_core_count(tmp_path, monkeypatch, no_align_threads):
+    """cpus: 4 on a 16-core host: 4 threads, not min(8, 16)."""
+    _affinity(monkeypatch, 16)
+    root = _cgroup_v2(tmp_path / "cg", "400000 100000\n")
+    assert qn.align_threads(root) == (4, "cgroup CPU quota")
+
+
+def test_a_fractional_quota_rounds_up(tmp_path, monkeypatch, no_align_threads):
+    _affinity(monkeypatch, 16)
+    root = _cgroup_v2(tmp_path / "cg", "150000 100000\n")
+    assert qn.align_threads(root) == (2, "cgroup CPU quota")
+
+
+def test_an_unlimited_cgroup_v2_falls_back_to_affinity_capped_at_eight(tmp_path, monkeypatch, no_align_threads):
+    _affinity(monkeypatch, 16)
+    root = _cgroup_v2(tmp_path / "cg", "max 100000\n")
+    assert qn.align_threads(root) == (8, "CPU affinity")
+    _affinity(monkeypatch, 3)
+    assert qn.align_threads(root) == (3, "CPU affinity")
+
+
+@pytest.mark.parametrize("controller", ["cpu", "cpu,cpuacct"])
+def test_cgroup_v1_quota_and_period_are_read(tmp_path, monkeypatch, no_align_threads, controller):
+    _affinity(monkeypatch, 16)
+    root = _cgroup_v1(tmp_path / "cg", 300000, 100000, controller)
+    assert qn.align_threads(root) == (3, "cgroup CPU quota")
+
+
+def test_cgroup_v1_unlimited_quota_is_ignored(tmp_path, monkeypatch, no_align_threads):
+    _affinity(monkeypatch, 6)
+    root = _cgroup_v1(tmp_path / "cg", -1, 100000)
+    assert qn.align_threads(root) == (6, "CPU affinity")
+
+
+def test_a_quota_above_the_affinity_set_does_not_raise_the_count(tmp_path, monkeypatch, no_align_threads):
+    _affinity(monkeypatch, 2)
+    root = _cgroup_v2(tmp_path / "cg", "800000 100000\n")
+    assert qn.align_threads(root) == (2, "CPU affinity")
+
+
+def test_without_cgroup_or_affinity_os_cpu_count_is_the_last_resort(tmp_path, monkeypatch, no_align_threads):
+    monkeypatch.delattr(qn.os, "sched_getaffinity", raising=False)
+    monkeypatch.setattr(qn.os, "cpu_count", lambda: 4)
+    assert qn.align_threads(tmp_path / "missing") == (4, "os.cpu_count()")
+    monkeypatch.setattr(qn.os, "cpu_count", lambda: None)
+    assert qn.align_threads(tmp_path / "missing") == (1, "os.cpu_count()")
+
+
+def test_align_threads_overrides_detection_and_the_default_cap(tmp_path, monkeypatch):
+    _affinity(monkeypatch, 16)
+    root = _cgroup_v2(tmp_path / "cg", "400000 100000\n")
+    monkeypatch.setenv("ALIGN_THREADS", " 14 ")
+    assert qn.align_threads(root) == (14, "ALIGN_THREADS")
+
+
+@pytest.mark.parametrize("content", ["garbage\n", "", "400000 nope\n"])
+def test_a_malformed_cgroup_file_is_treated_as_no_quota(tmp_path, monkeypatch, no_align_threads, content):
+    _affinity(monkeypatch, 6)
+    root = _cgroup_v2(tmp_path / "cg", content)
+    assert qn.align_threads(root) == (6, "CPU affinity")
+
+
+@pytest.mark.parametrize("value", ["0", "-2", "four", "1.5"])
+def test_an_invalid_align_threads_is_an_error_not_a_silent_default(monkeypatch, value):
+    monkeypatch.setenv("ALIGN_THREADS", value)
+    with pytest.raises(ValueError, match="ALIGN_THREADS"):
+        qn.align_threads()
+
+
+def test_load_applies_and_logs_the_chosen_thread_count(data_dir, monkeypatch, caplog):
+    ort = pytest.importorskip("onnxruntime")
+    monkeypatch.setenv("ALIGN_THREADS", "3")
+    model = data_dir / "model.onnx"
+    model.write_bytes(b"onnx")
+    monkeypatch.setenv("CTC_QUARTZNET_MODEL_PATH", str(model))
+    seen = {}
+
+    def fake_session(path, options, providers):
+        seen["threads"] = options.intra_op_num_threads
+        return MagicMock()
+
+    caplog.set_level("INFO")
+    with patch.object(ort, "InferenceSession", side_effect=fake_session):
+        QuartzNetAligner()._load()
+    assert seen["threads"] == 3
+    assert "⚙️ CTC: loading QuartzNet15x5 (onnxruntime, CPU) from " in caplog.text
+    assert "(3 threads from ALIGN_THREADS)" in caplog.text

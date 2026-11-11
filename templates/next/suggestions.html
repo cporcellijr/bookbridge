@@ -1,0 +1,247 @@
+{% extends 'next/base.html' %}
+{% from "_i18n.html" import plural_forms %}
+{% set active_page = 'suggestions' %}
+{% set tabs_shown = available_tabs|default(['pairs', 'ebook_only', 'search']) %}
+{% block title %}{{ _('Discover') }} · BookBridge{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/next-discover.css">{% endblock %}
+{% block content %}
+
+<div class="suggestions-wrap discover-page">
+    {% set tabs_shown = available_tabs|default(['pairs', 'ebook_only', 'search']) %}
+    <div class="page-header">
+        {% if 'pairs' in tabs_shown %}
+        <h1 class="h1">{{ _('Discover') }}</h1>
+        <p class="subtitle">{{ _('Scan your library to find unmatched audiobook/ebook pairs') }}</p>
+        {% else %}
+        <h1 class="h1">{{ _('Discover') }}</h1>
+        <p class="subtitle">{{ _('Pick text by itself, or pair audio with text and choose how the list should be processed') }}</p>
+        {% endif %}
+    </div>
+
+    <p class="subtitle">
+        {{ _('If an audiobook needs Whisper transcription, its uncalibrated EPUB/audio measurements are shown on') }}
+        <a href="{{ url_for('job_queue_page') }}">{{ _('Processing') }}</a>.
+        {{ _('Review the edition before a long run; no unsupported mismatch threshold blocks unattended work.') }}
+    </p>
+
+    {% if discover_process_summary %}
+    <div class="discover-process-summary" role="status">
+        {{ _('Adding %(added)s to your Library and %(sent)s to Processing in the background', added=discover_process_summary.added, sent=discover_process_summary.sent) }}
+        <a href="{{ url_for('job_queue_page') }}">{{ _('View Processing') }}</a>
+    </div>
+    {% endif %}
+    <div class="tabs sugg-tabs" role="tablist" aria-label="{{ _('Discover') }}">
+        {% if 'pairs' in tabs_shown %}
+        <button type="button" class="tab" role="tab" id="tab-pairs" data-tab="pairs" aria-controls="suggestionsPanel" aria-selected="false" tabindex="-1">
+            {{ _('Pairs') }}
+            <span class="tab-sub">{{ _('Audiobook + Ebook') }}</span>
+            <span class="tab-count" id="tabCount-pairs">{% if tab_counts %}{{ tab_counts.pairs }}{% endif %}</span>
+        </button>
+        <button type="button" class="tab" role="tab" id="tab-ebook_only" data-tab="ebook_only" aria-controls="suggestionsPanel" aria-selected="false" tabindex="-1">
+            {{ _('Ebook Only') }}
+            <span class="tab-sub">{{ _('No audio match found') }}</span>
+            <span class="tab-count" id="tabCount-ebook_only">{% if tab_counts %}{{ tab_counts.ebook_only }}{% endif %}</span>
+        </button>
+        {% endif %}
+        <button type="button" class="tab" role="tab" id="tab-search" data-tab="search" aria-controls="suggestionsPanel" aria-selected="false" tabindex="-1">
+            {{ _('Search') }}
+            <span class="tab-sub">{{ _('Find any book') }}</span>
+        </button>
+    </div>
+
+    {% if 'pairs' in tabs_shown %}
+    <div class="toolbar" data-only-tab="pairs ebook_only">
+        <div class="toolbar-actions">
+            <form method="POST" action="/suggestions" id="scanForm">
+                <input type="hidden" name="action" value="scan">
+                <button type="submit" class="btn btn-primary" {% if scan_in_progress %}disabled{% endif %}>{{ _('Scan Library') }}</button>
+            </form>
+            <form method="POST" action="/suggestions" id="scanFullForm">
+                <input type="hidden" name="action" value="scan_full">
+                <button type="submit" class="btn btn-muted" {% if scan_in_progress %}disabled{% endif %}>{{ _('Full Refresh') }}</button>
+            </form>
+        </div>
+        <div class="scan-status" id="scanStatus" role="status"></div>
+    </div>
+    {% if scan_error %}
+    <div class="flash-error" data-only-tab="pairs ebook_only">{{ _('Last scan failed: %(error)s', error=scan_error) }}</div>
+    {% endif %}
+
+    <div class="filter-bar" id="filterBar" data-only-tab="pairs ebook_only">
+        <div class="filter-field grow">
+            <label class="sort-label" for="searchInput">{{ _('Search') }}</label>
+            <input type="search" id="searchInput" class="form-input" placeholder="{{ _('Title, author or series') }}" autocomplete="off">
+        </div>
+        <div class="filter-field">
+            <label class="sort-label" for="seriesFilter">{{ _('Series') }}</label>
+            <select id="seriesFilter" class="form-select"><option value="">{{ _('All series') }}</option></select>
+        </div>
+        <div class="filter-field">
+            <label class="sort-label" for="sourceFilter">{{ _('Source') }}</label>
+            <select id="sourceFilter" class="form-select"><option value="">{{ _('All sources') }}</option></select>
+        </div>
+        <div class="filter-field" data-only-tab="pairs">
+            <label class="sort-label" for="statusFilter">{{ _('Status') }}</label>
+            <select id="statusFilter" class="form-select">
+                <option value="all">{{ _('All pairs') }}</option>
+                <option value="eligible">{{ _('Exact, ready to add') }}</option>
+                <option value="manual_review">{{ _('Needs review') }}</option>
+                <option value="queued">{{ _('Queued') }}</option>
+            </select>
+        </div>
+        <div class="filter-field" data-only-tab="ebook_only">
+            <label class="sort-label" for="ignoredFilter">{{ _('Show') }}</label>
+            <select id="ignoredFilter" class="form-select">
+                <option value="exclude">{{ _('Active') }}</option>
+                <option value="only">{{ _('Ignored') }}</option>
+                <option value="include">{{ _('Active and ignored') }}</option>
+            </select>
+        </div>
+        <div class="filter-field">
+            <label class="sort-label" for="sortMode">{{ _('Sort') }}</label>
+            <select id="sortMode" class="form-select">
+                <option value="series">{{ _('Series') }}</option>
+                <option value="title">{{ _('Title') }}</option>
+                <option value="confidence" data-only-tab="pairs">{{ _('Best Match') }}</option>
+            </select>
+        </div>
+        <label class="series-grouping-label" for="groupToggle">
+            <input type="checkbox" id="groupToggle" checked> {{ _('Group by series') }}
+        </label>
+    </div>
+    {% endif %}
+
+    <form class="filter-bar" id="searchTabForm" role="search" data-only-tab="search">
+        <div class="filter-field grow">
+            <label class="sort-label" for="searchTabInput">{{ _('Search') }}</label>
+            <input type="search" id="searchTabInput" class="form-input" placeholder="{{ _('Search by title, author, or filename...') }}" autocomplete="off">
+        </div>
+        <button type="submit" class="btn btn-primary" id="searchTabBtn">{{ _('Search') }}</button>
+    </form>
+
+    <div class="layout" id="layout">
+        <div class="panel" id="suggestionsPanel" role="tabpanel">
+            <div class="panel-head">
+                <h3 id="panelTitle">{{ _('Audiobooks') }}</h3>
+                <div class="panel-head-meta">
+                    <span class="count" id="hiddenNotice" hidden></span>
+                    <span class="count" id="panelCount"></span>
+                </div>
+            </div>
+            <div class="bulk-actions" id="bulkActions" data-only-tab="pairs">
+                <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" title="{{ _('Queue every pair in this view whose best match is exact and needs no choice') }}" disabled>{{ _('Select all exact matches') }} (<span id="exactCount">0</span>)</button>
+                <button type="button" class="btn btn-small btn-muted" id="addSelectedBtn" disabled>{{ _('Add selected to queue') }} (<span id="selectedCount">0</span>)</button>
+                <button type="button" class="btn btn-small btn-muted" id="clearSelectionBtn" disabled>{{ _('Clear selection') }}</button>
+                <span class="selection-summary" id="selectionSummary"></span>
+                <div id="bulkFeedback" class="submit-feedback block" aria-live="polite"></div>
+            </div>
+            <div class="bulk-actions" data-only-tab="ebook_only" id="ebookBulkActions">
+                <button type="button" class="btn btn-small" id="ebookSelectAllBtn" disabled>{{ _('Select all') }}</button>
+                <button type="button" class="btn btn-small btn-success" id="ebookAddSelectedBtn" disabled>{{ _('Add selected to queue') }} (<span id="ebookSelectedCount">0</span>)</button>
+                <button type="button" class="btn btn-small" id="ebookClearSelectionBtn" disabled>{{ _('Clear selection') }}</button>
+            </div>
+            <div class="list-feedback" id="listFeedback" role="status" aria-live="polite"></div>
+            <div class="left-wrap">
+                <div class="scan-overlay {% if scan_in_progress %}show{% endif %}" id="scanOverlay">
+                    <div class="spinner"></div>
+                    <div class="scan-progress-wrap">
+                        <div class="scan-progress-bar" id="scanProgressBar"></div>
+                    </div>
+                    <p class="scan-progress-text" id="scanProgressText">{{ _('Scanning library... 0%%') }}</p>
+                </div>
+                <div class="results-list" id="resultsList" aria-busy="true">
+                    <div class="empty"><p>{{ _('Loading...') }}</p></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel queue-panel" id="queuePanel" aria-label="{{ _('Queue') }}">
+            <div class="panel-head">
+                <h3>{{ _('Queue') }}</h3>
+                <span class="count" id="queueCount">{{ ngettext('%(num)s item', '%(num)s items', queue|length) }}</span>
+            </div>
+
+            <div class="selection">
+                <h4>{{ _('Selected Book') }}</h4>
+                <p class="selection-placeholder" id="selectionPlaceholder">{{ _('Click a book to review it and add it to the queue.') }}</p>
+                <div class="selection-details hidden" id="selectionDetails">
+                    <div class="selected-book">
+                        <img id="selectedCover" src="" alt="{{ _('Selected') }}">
+                        <div>
+                            <div class="selected-title" id="selectedTitle"></div>
+                            <div class="selected-author" id="selectedAuthor"></div>
+                        </div>
+                    </div>
+                    <form method="POST" action="/suggestions" id="addToQueueForm">
+                        <input type="hidden" name="action" value="add_to_queue">
+                        <input type="hidden" name="audiobook_id" id="selected_audiobook_id">
+                        <input type="hidden" name="audio_source" id="selected_audio_source" value="">
+                        <input type="hidden" name="audio_source_id" id="selected_audio_source_id" value="">
+                        <input type="hidden" name="audio_title" id="selected_audio_title" value="">
+                        <input type="hidden" name="audio_author" id="selected_audio_author" value="">
+                        <input type="hidden" name="audio_cover_url" id="selected_audio_cover_url" value="">
+                        <input type="hidden" name="audio_duration" id="selected_audio_duration" value="">
+                        <input type="hidden" name="audio_provider_book_id" id="selected_audio_provider_book_id" value="">
+                        <input type="hidden" name="audio_provider_file_id" id="selected_audio_provider_file_id" value="">
+                        <input type="hidden" name="ebook_filename" id="selected_ebook_filename">
+                        <input type="hidden" name="ebook_display_name" id="selected_ebook_display_name" value="">
+                        <input type="hidden" name="ebook_source" id="selected_ebook_source" value="">
+                        <input type="hidden" name="ebook_source_id" id="selected_ebook_source_id" value="">
+                        <input type="hidden" name="ebook_source_path" id="selected_ebook_source_path" value="">
+                        <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
+                        <input type="hidden" name="audio_only" id="selected_audio_only" value="">
+                        {# Hidden, not removed: the picker scripts still read these ids. #}
+                        <div class="storyteller-pick"{% if not storyteller_enabled %} hidden{% endif %}>
+                            <label class="field-label" for="storytellerCardGrid">{{ _('Storyteller (Preferred)') }}</label>
+                            <p class="field-hint">{{ _('Optional. Choose this to create a tri-link.') }}</p>
+                            <div class="selection-grid-scroll">
+                                <div id="storytellerCardGrid" class="resource-grid"></div>
+                            </div>
+                            <p id="storytellerGridEmpty" class="ebook-grid-empty hidden"></p>
+                        </div>
+                        <label class="field-label" for="ebookCardGrid">{{ _('Ebook Match') }}</label>
+                        <div class="selection-grid-scroll">
+                            <div id="ebookCardGrid" class="ebook-grid"></div>
+                        </div>
+                        <p id="ebookGridEmpty" class="ebook-grid-empty hidden"></p>
+                        <button type="submit" class="btn btn-success w-100" id="addToQueueBtn" disabled>{{ _('Add to queue') }}</button>
+                    </form>
+                    <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
+                </div>
+            </div>
+
+            <div class="queue-list" id="queueList">
+                {% include "next/_match_queue_panel.html" %}
+            </div>
+        </div>
+    </div>
+
+    <div class="reader-docs-wrap" data-only-tab="search">
+        {% include "_reader_documents.html" %}
+    </div>
+</div>
+
+{% if storyteller_enabled %}
+<div class="modal-overlay" id="forgeStageModal" aria-hidden="true">
+    <div class="modal modal-card" role="dialog" aria-modal="true" aria-labelledby="forgeStageTitle">
+        <h3 id="forgeStageTitle">{{ _('Storyteller edition staging') }}</h3>
+        <p>{{ _('Choose what happens to the staged source files after Storyteller finishes processing.') }}</p>
+        <div class="modal-options">
+            <button type="button" class="modal-option" data-stage-mode="cleanup">
+                <strong>{{ _('Delete staged sources') }}</strong>
+                <span>{{ _('Default. Copy files into Storyteller, then remove the staged audio and EPUB after processing completes.') }}</span>
+            </button>
+            <button type="button" class="modal-option" data-stage-mode="hardlink">
+                <strong>{{ _('Keep staged files / hardlink local') }}</strong>
+                <span>{{ _('Use hardlinks for local files when possible and skip staged-source cleanup. Remote downloads still fall back to copied files.') }}</span>
+            </button>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" data-stage-mode="">{{ _('Cancel') }}</button>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}{% include 'next/_discover_scripts.html' %}{% endblock %}

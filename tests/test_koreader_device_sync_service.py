@@ -923,3 +923,22 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertIsNotNone(self.db.get_kosync_document("name-Book A.epub"))
         self.assertIsNotNone(self.db.get_kosync_document("name-Book B.epub"))
 
+    def test_missing_original_warns_once_then_repeats_at_debug(self):
+        from src.utils.logging_utils import get_persistent_condition_logger
+        get_persistent_condition_logger().reset()
+        try:
+            book = Book(abs_id="gone", abs_title="Gone Book", original_ebook_filename="gone.epub", status="active")
+            self.db.save_book(book)
+            with self.assertLogs('src.services.koreader_device_sync_service', level='DEBUG') as cm:
+                for _ in range(3):
+                    result = self.service._resolve_download_artifact(book)
+                    self.assertIsNone(result)
+            records = [r for r in cm.records if r.getMessage().startswith("KOReader device-sync could not resolve original ebook for 'Gone Book'")]
+            self.assertEqual([r.levelname for r in records], ['WARNING', 'DEBUG', 'DEBUG'])
+            self._write_book_file("gone.epub")
+            with self.assertLogs('src.services.koreader_device_sync_service', level='DEBUG') as cm2:
+                result = self.service._resolve_download_artifact(book)
+            info_records = [r for r in cm2.records if r.levelname == 'INFO' and "original ebook for 'Gone Book' is available again" in r.getMessage()]
+            self.assertEqual(len(info_records), 1)
+        finally:
+            get_persistent_condition_logger().reset()

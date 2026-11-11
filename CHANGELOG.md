@@ -4,6 +4,129 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Spines in the New Library now look like your books.** Each spine takes its colours from the
+  book's cover, with the title in light or dark ink to stay readable, and its thickness follows the
+  book's length (StoryGraph or Hardcover page count, or the audiobook's duration). Books you're
+  partway through stand face-out on the shelf, showing their cover and progress.
+
+## [7.13.0] - 2026-11-10
+
+### Added
+
+- **The New interface (beta) gives BookBridge a fresh look while keeping Classic available.** Switch
+  interfaces immediately: choose **New interface** beside the Classic account menu, or use
+  **Classic | New** above the user menu in New (also in the phone account menu). The page reopens in
+  your chosen interface without a Save step, and Classic stays the default. New has a redesigned
+  Library with Covers, Spines and List, Discover, a book drawer, search with Ctrl K (or ⌘K on Mac),
+  day and night themes, and phone navigation. A strip on each Library cover shows where the book is
+  linked (ebook, audiobook, read-along, KOReader) and lights the app that led its last sync; on a
+  touch screen it stays visible, and tapping an icon shows that app's position. Library cards show
+  your progress on the cover (a percentage badge and a thin line, or a check once finished), with the
+  author under the title; books you haven't started show none. The book window shows your current
+  audiobook chapter (#428) for Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter
+  information: its title, where it falls in the book (for example 18 of 32) and how far into it you are.
+
+- **Suggestions is now Discover, with three tabs: Pairs, Ebook Only and Search, open to every reader.**
+  Each reader sees only their own scans, suggestions, ignores and queue, and when several readers
+  scan, the scans run one at a time.
+  - **Pairs** keeps the audiobook/ebook matching, candidate review and Batch Match Queue.
+  - **Ebook Only** lists ebooks the last scan found no qualifying audiobook for, dated "as of" that
+    scan, with Find audiobook (opens Search with the ebook already chosen), Create ebook-only (or Add
+    to your library, when another reader already added the same ebook), Hide for now and a saved
+    Ignore you can undo.
+  - Both tabs group books by series (collapsed, numbered in series order, with an Other / No Series
+    group; switch to a flat list any time), and have search, series, source, status and sort filters
+    that each tab remembers separately. Ticking a series selects every exact match in it; review
+    matches are never selected that way. A scan that could not read every source says the results
+    may be incomplete instead of presenting them as final, and opening a tab never starts a scan.
+  - **Search replaces Add Book.** Search your libraries by title, author or file name, pick the
+    audiobook (or none, for an ebook by itself), then the ebook, a Storyteller title or Audio only,
+    and add it to the Batch Match Queue, which now also offers Create Storyteller Edition Only and a
+    read-along EPUB for BookOrbit audiobooks. Reader Documents moved there too, and old Add Book links
+    open it. The server's own ebook folder is listed for admins only.
+  - **Ignore local files in Suggestions** is a new admin setting, off by default. Enable it to leave
+    locally scanned files out of Pairs and Ebook Only on the next Scan Library while keeping ebooks
+    from your library services.
+
+- **Device API for reader apps** (#579). An app that pairs an ebook with its audiobook can now
+  find a book by its Grimmory or BookOrbit id, download a word map (when each matched word is
+  spoken, and exactly where that word sits in the EPUB) to highlight words as the narrator
+  reads them or switch between listening and reading at the same word, and ask BookBridge to
+  sync one book right away. Apps sign in with the reader's KOSync username and password and
+  only see that reader's matched books. See **Device API** in the docs. Contributed by
+  [@adam-fox](https://github.com/adam-fox) in #579.
+
+- **EPUB/audio transcription pre-flight measurements** (#528). Before a full Whisper fallback,
+  BookBridge counts the EPUB's words and divides by the audiobook's catalog duration, and
+  **Processing** (Classic and New) shows the result below the job. Once five of your books
+  have been measured and passed the content check, it also shows how the new book compares
+  with them, for example "2.01× your library median · your library: 7,000–8,000 across 5
+  books", so an omnibus paired with one narrated volume stands out before the long run ends.
+  It is a measurement, not a verdict: work never pauses, **Dismiss** only hides the advisory,
+  and the final content-match check still refuses real mismatches. Chapter comparison and audio
+  sampling are not included yet.
+
+### Changed
+
+- **Stats is now open to every reader** for their own reading and listening activity.
+
+### Fixed
+
+- **A book downloaded from CWA in KOReader now matches even if you never added it to
+  BookBridge** (#582). CWA's checksum history already recognised a fresh CWA download, but
+  only for books BookBridge had mapped, so a new book downloaded through KOReader's OPDS
+  catalog stayed unmatched until you added it by hand. Now the hash leads to the book's EPUB
+  in your Calibre library, and the usual auto-discovery runs on your first forward sync:
+  it links to an existing mapping of that book, auto-maps or suggests an audiobook, or
+  creates an ebook-only mapping with CWA as the ebook source. If you accept a suggested match
+  instead, the book gets CWA as its ebook source on your next sync. A different file with the
+  same name elsewhere in your library is never mistaken for the book. The Calibre library must
+  be set in `CALIBRE_LIBRARY_PATH` and sit under `BOOKS_DIR` or `EXTRA_EBOOK_DIRS`.
+- **Forced alignment no longer over-subscribes a CPU-limited container** (#580). QuartzNet
+  used up to 8 threads based on the host's core count, so a container capped with `cpus: 4`
+  ran 8 threads on 4 CPUs' worth of time and was throttled. It now uses the CPUs the
+  container can actually use (still at most 8), and the model-load log line names the
+  count. The new `ALIGN_THREADS` environment variable overrides it, including above 8; a
+  change needs a restart. Contributed by [@eschatus](https://github.com/eschatus) in #580.
+- **BookOrbit ebooks you have not opened yet receive their first synced position.** Current
+  BookOrbit servers reject the older progress route BookBridge used for a never-started ebook
+  ("BookOrbit ebook update failed: 403"), so the ebook stayed at 0% while the audiobook moved on.
+  BookBridge now sends that first position through BookOrbit's reading-progress API, the same
+  route it already used for books with saved progress. Older BookOrbit servers without that API
+  still use the older route.
+- **Hardcover progress syncs again for a matched book that is missing from your Hardcover
+  library.** If the book never made it onto your Hardcover shelf, or was removed there, BookBridge
+  skipped its progress on every sync ("get_user_book returned None"). When Hardcover confirms the
+  book isn't in your library, BookBridge now adds it back as Want to Read and syncs the progress;
+  a failed or rate-limited lookup changes nothing.
+- **Ebook details are read from EPUBs whose navigation page has no table of contents.** Such books
+  failed with "Could not read EPUB metadata ... list index out of range", so Hardcover and
+  StoryGraph matching got no title or ISBN for them. They now read normally.
+- **Read-along EPUBs now build for books saved with Windows line endings.** About one EPUB in ten
+  stores its text with Windows (CRLF) line endings, and BookBridge refused to build a read-along
+  edition for every one of them ("could not map original XHTML for spine item"). They now build
+  normally.
+- **Adding a book to an Audiobookshelf collection it is already in no longer reports a failure.**
+  Audiobookshelf answers a repeated add with "Book already in collection", and BookBridge now treats
+  that as done.
+- **Books land in the right Audiobookshelf collection when two libraries share a collection name.**
+  Adding a single book used the first collection with that name on the server, even one in another
+  library, so the add failed; removing a book could miss it the same way. Both now use the
+  collection in the book's own library.
+- **Diagnostics reports no longer include your ebook file names.** Stored ebook file names, and file
+  paths containing apostrophes, are now scrubbed from diagnostics, including tracebacks and recent
+  log lines.
+- **Removing a background job while it runs no longer brings it back.** A progress update for a job
+  that was just deleted is dropped instead of recreating it or updating a different job.
+- **One reader's automatic matching no longer changes another reader's book.** A shelf watch or a
+  KoSync device opening a new ebook could re-point an audiobook someone else had already matched, and
+  reset it for re-alignment. Now a different pairing is left alone, and the same pairing just adds the
+  book to the second reader's library.
+
 ## [7.12.0] - 2026-11-02
 
 ### Added

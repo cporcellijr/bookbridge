@@ -1,28 +1,30 @@
-"""PR #407 - provider badges on the Suggestions cards.
+"""PR #407 - provider badges on the Suggestions rows.
 
 The badges name the audiobook's provider so a user with the same title in ABS,
-Grimmory and BookOrbit can tell the candidate cards apart.
+Grimmory and BookOrbit can tell the candidate rows apart.
 
-Two defects in the original implementation are guarded here:
+Rows are rendered client-side from `GET /api/suggestions/discovery`; the page
+only ships the `AUDIO_BADGES` source -> (label, css class) constant, built by
+`web_server.suggestion_source_badge()`. Two defects are guarded here:
 
-1. The badge was `position: absolute; top: 10px; right: 10px`, which is exactly
-   where `.suggestion-card.is-queued::before` floats its "Queued" marker (both
-   top-right, card padding 10px). Queueing a suggestion painted the two labels
-   on top of each other - the same failure #381 fixed on the Add Book cards.
-   The badge is now an inline chip beside the language chip, so there is no
-   shared corner and no gutter arithmetic to keep in sync.
+1. The badge was `position: absolute; top: 10px; right: 10px`, colliding with
+   the "Queued" marker (the same failure #381 fixed on the Add Book cards). The
+   badge is now an inline chip inside `.row-title`, and the queued state is an
+   inline `source-badge queued` chip in `.row-evidence`; no row element is
+   absolutely positioned and `.row-main` reserves no gutter.
 
-2. The label was resolved in Jinja from `s.audio_source or 'ABS'`, which skips
-   the bridge-key prefix fallback the rest of the page uses. A suggestion
-   rehydrated from the persisted scan cache carries `bridge_key="booklore:..."`
-   with no `audio_source`, so it was badged "Audiobookshelf" - mislabelling
-   precisely the non-ABS books the feature exists to identify. Resolution now
-   lives in `web_server.suggestion_source_badge()`.
+2. The label was resolved from `s.audio_source or 'ABS'`, skipping the
+   bridge-key prefix fallback. A suggestion rehydrated from the persisted scan
+   cache carries `bridge_key="booklore:..."` with no `audio_source`, so it was
+   badged "Audiobookshelf". The projector now infers `audio_source` from the
+   prefix and the page maps it through `AUDIO_BADGES`.
 
 CSS cannot be executed here, so the layout guards are structural assertions on
-the real rule bodies. The label guards render the real template.
+the real rule bodies. The label guards hit the real API route and read the real
+template's `AUDIO_BADGES` constant.
 """
 
+import json
 import os
 import re
 import sys
@@ -92,15 +94,15 @@ class SuggestionProviderBadgeLayoutTests(unittest.TestCase):
             "an absolutely positioned badge collides with the 'Queued' float",
         )
 
-    def test_queued_marker_keeps_the_top_right_corner_to_itself(self):
-        body = _rule(".suggestion-card.is-queued::before")
-        self.assertIn("float: right", body)
+    def test_queued_marker_is_an_inline_chip_not_a_corner_float(self):
+        self.assertNotIn("is-queued::before", _source())
+        self.assertRegex(_source(), r"chips\.push\(`<span class=\"source-badge queued\">")
+        self.assertRegex(_source(), r"\.source-badge\.queued\s*\{")
 
-    def test_card_reserves_no_gutter_for_an_absolute_badge(self):
-        """The 108px gutter and the badge's max-width disagreed; an inline chip
-        needs neither, so both must be gone or they will drift apart again."""
-        self.assertNotRegex(_rule(".suggestion-main"), r"padding-right:")
-        self.assertNotRegex(_rule(".suggestion-card"), r"position:\s*relative")
+    def test_row_reserves_no_gutter_for_an_absolute_badge(self):
+        """An inline chip needs neither a gutter nor a positioned row."""
+        self.assertNotRegex(_rule(".row-main"), r"padding-right:")
+        self.assertNotRegex(_rule(".sugg-row"), r"position:\s*relative")
 
     def test_provider_chip_reuses_the_shared_badge_styling(self):
         for css_class in ("abs", "grimmory", "bookorbit", "unknown"):
@@ -152,6 +154,8 @@ class SuggestionProviderBadgeRenderTests(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _seed_cached_suggestion(self, key: str, entry: dict) -> None:
+        token = web_server.set_current_user_id(7)
+        self.addCleanup(web_server.reset_current_user_id, token)
         entry = {"abs_id": key, "bridge_key": key, **entry}
         web_server._save_persisted_suggestions_cache({
             "scan_cache_by_abs": {key: entry},
@@ -165,19 +169,29 @@ class SuggestionProviderBadgeRenderTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         return response.get_data(as_text=True)
 
+    def _only_entry(self) -> dict:
+        response = self.client.get("/api/suggestions/discovery?tab=pairs")
+        self.assertEqual(response.status_code, 200)
+        entries = response.get_json()["entries"]
+        self.assertEqual(len(entries), 1)
+        return entries[0]
+
+    def _audio_badges(self, html: str) -> dict:
+        match = re.search(r"const AUDIO_BADGES = (\{.*?\});", html)
+        self.assertIsNotNone(match, "no AUDIO_BADGES constant rendered")
+        return json.loads(match.group(1))
+
     def test_abs_suggestion_renders_the_audiobookshelf_chip(self):
         self._seed_cached_suggestion("ab-1", {
             "audio_source": "ABS",
             "audio_title": "An ABS Book",
         })
 
-        html = self._render()
+        entry = self._only_entry()
 
-        self.assertIn("An ABS Book", html)
-        self.assertIn(
-            '<span class="source-badge abs" title="Audiobook source">Audiobookshelf</span>',
-            html,
-        )
+        self.assertEqual(entry["title"], "An ABS Book")
+        self.assertEqual(entry["audio_source"], "ABS")
+        self.assertEqual(self._audio_badges(self._render())["ABS"], ["Audiobookshelf", "abs"])
 
     def test_cached_grimmory_suggestion_without_audio_source_is_not_badged_abs(self):
         """The reported defect: only the bridge key names the provider."""
@@ -185,26 +199,26 @@ class SuggestionProviderBadgeRenderTests(unittest.TestCase):
             "audio_title": "A Grimmory Book",
         })
 
-        html = self._render()
+        entry = self._only_entry()
 
-        self.assertIn("A Grimmory Book", html)
-        self.assertIn(
-            '<span class="source-badge grimmory" title="Audiobook source">Grimmory</span>',
-            html,
-        )
-        self.assertNotIn("Audiobookshelf", html)
+        self.assertEqual(entry["title"], "A Grimmory Book")
+        self.assertEqual(entry["audio_source"], "BookLore")
+        self.assertEqual(self._audio_badges(self._render())["BookLore"], ["Grimmory", "grimmory"])
 
     def test_badge_renders_inside_the_card_title_not_the_card_corner(self):
         self._seed_cached_suggestion("bookorbit:9", {"audio_title": "An Orbit Book"})
 
+        entry = self._only_entry()
         html = self._render()
 
+        self.assertEqual(entry["audio_source"], "BookOrbit")
+        self.assertEqual(self._audio_badges(html)["BookOrbit"], ["BookOrbit", "bookorbit"])
         self.assertNotIn("suggestion-provider-badge", html)
         title_block = re.search(
-            r'<div class="title">(?P<body>.*?)</div>', html, re.DOTALL
+            r'<div class="row-title">(?P<body>.*?)</div>', _source(), re.DOTALL
         )
-        self.assertIsNotNone(title_block, "no card title rendered")
-        self.assertIn("BookOrbit", title_block.group("body"))
+        self.assertIsNotNone(title_block, "no row title in the pair row template")
+        self.assertIn("source-badge ${esc(cls)}", title_block.group("body"))
 
 
 if __name__ == "__main__":

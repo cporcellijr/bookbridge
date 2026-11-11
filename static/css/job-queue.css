@@ -29,3 +29,9 @@
 .job-queue-move-actions button:disabled{opacity:.3;cursor:default}
 .job-queue-empty{padding:15px 20px 23px;color:var(--muted);margin:0}
 @media(max-width:680px){.job-queue-page{padding:18px 12px 45px}.job-queue-header h1{font-size:1.5rem}}
+/* Read-only pre-flight evidence, never styled as a failed job. */
+/* Advisory text must not change the job table's column widths. */
+.job-queue-preflight{display:flex;flex-wrap:wrap;gap:.35rem .75rem;margin-top:.5rem;padding:.6rem;border:1px solid var(--border);border-radius:.5rem;contain:inline-size;max-width:min(100%,calc(100vw - 5rem));overflow-wrap:anywhere;font-size:.85rem}
+.job-queue-preflight strong,.job-queue-preflight small{flex-basis:100%}
+.job-queue-preflight form{margin:0}
+.job-queue-preflight button{min-height:44px;cursor:pointer}

@@ -12,8 +12,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
+from sqlalchemy import event
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import InvalidRequestError, OperationalError
+from sqlalchemy.orm.exc import StaleDataError
+
 from src.db.database_service import DatabaseService
-from sqlalchemy.exc import OperationalError
 
 from src.db.models import Book, BookAlignment, Job, State, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
 from src.services.forge_service import ForgeService
@@ -487,6 +491,187 @@ class TestUpdateJobById(unittest.TestCase):
 
     def test_returns_none_for_an_unknown_job_id(self) -> None:
         self.assertIsNone(self.db.update_job_by_id(999999, progress=1.0))
+
+    def test_update_job_by_id_returns_none_when_row_deleted_before_flush_changed(self) -> None:
+        job = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=1000.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+        other = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=2000.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+
+        def delete_target(session, flush_context, instances):
+            with self.db.get_session() as s:
+                s.query(Job).filter(Job.id == job.id).delete(synchronize_session=False)
+
+        event.listen(Session, "before_flush", delete_target)
+        try:
+            result = self.db.update_job_by_id(job.id, progress=1.0)
+            self.assertIsNone(result)
+            # verify deletion actually happened
+            with self.db.get_session() as s:
+                self.assertIsNone(s.query(Job).filter(Job.id == job.id).first())
+            # other job untouched
+            with self.db.get_session() as s:
+                other_row = s.query(Job).filter(Job.id == other.id).first()
+                self.assertEqual(other_row.progress, 0.0)
+        finally:
+            event.remove(Session, "before_flush", delete_target)
+
+    def test_update_job_by_id_returns_none_when_row_deleted_before_flush_unchanged(self) -> None:
+        job = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=1000.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+
+        def delete_target(session, flush_context, instances):
+            with self.db.get_session() as s:
+                s.query(Job).filter(Job.id == job.id).delete(synchronize_session=False)
+
+        event.listen(Session, "before_flush", delete_target)
+        try:
+            result = self.db.update_job_by_id(job.id, progress=0.0)
+            self.assertIsNone(result)
+            with self.db.get_session() as s:
+                self.assertIsNone(s.query(Job).filter(Job.id == job.id).first())
+        finally:
+            event.remove(Session, "before_flush", delete_target)
+
+    def test_update_latest_job_returns_none_when_row_deleted_before_flush_changed(self) -> None:
+        older = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=500.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+        job = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=1000.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+        # retain a higher-id other-kind row to avoid SQLite id reuse
+        other_kind = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=2000.0, progress=0.0, kind=JOB_KIND_ALIGNMENT)
+        )
+        self.assertGreater(other_kind.id, job.id)
+
+        callback_fired = []
+        delete_counts = []
+        replacement_id = []
+
+        def delete_target(session, flush_context, instances):
+            # The inner insert must not trigger another deletion.
+            target = next((obj for obj in session.dirty if isinstance(obj, Job) and obj.id == job.id), None)
+            if target is None:
+                return
+            callback_fired.append(True)
+            with self.db.get_session() as s:
+                deleted = s.query(Job).filter(Job.id == job.id).delete(synchronize_session=False)
+                delete_counts.append(deleted)
+                # insert a newer replacement by the second session
+                new_job = Job(abs_id=self.abs_id, last_attempt=4000.0, progress=0.5, kind=JOB_KIND_READALONG)
+                s.add(new_job)
+                s.flush()
+                s.refresh(new_job)
+                replacement_id.append(new_job.id)
+
+        event.listen(Session, "before_flush", delete_target)
+        try:
+            result = self.db.update_latest_job(self.abs_id, kind=JOB_KIND_READALONG, progress=1.0)
+            self.assertIsNone(result)
+            self.assertEqual(len(callback_fired), 1)
+            self.assertEqual(delete_counts, [1])
+            with self.db.get_session() as s:
+                self.assertIsNone(s.query(Job).filter(Job.id == job.id).first())
+                # newer replacement stays untouched
+                self.assertEqual(len(replacement_id), 1)
+                new_row = s.query(Job).filter(Job.id == replacement_id[0]).first()
+                self.assertIsNotNone(new_row)
+                self.assertEqual(new_row.progress, 0.5)
+                # older read-along row untouched
+                older_row = s.query(Job).filter(Job.id == older.id).first()
+                self.assertIsNotNone(older_row)
+                self.assertEqual(older_row.progress, 0.0)
+                # other kind untouched
+                other_row = s.query(Job).filter(Job.id == other_kind.id).first()
+                self.assertIsNotNone(other_row)
+                self.assertEqual(other_row.progress, 0.0)
+        finally:
+            event.remove(Session, "before_flush", delete_target)
+
+    def test_update_latest_job_returns_none_when_row_deleted_before_flush_unchanged(self) -> None:
+        job = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=1000.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+
+        def delete_target(session, flush_context, instances):
+            with self.db.get_session() as s:
+                s.query(Job).filter(Job.id == job.id).delete(synchronize_session=False)
+
+        event.listen(Session, "before_flush", delete_target)
+        try:
+            result = self.db.update_latest_job(self.abs_id, kind=JOB_KIND_READALONG, progress=0.0)
+            self.assertIsNone(result)
+            with self.db.get_session() as s:
+                self.assertIsNone(s.query(Job).filter(Job.id == job.id).first())
+        finally:
+            event.remove(Session, "before_flush", delete_target)
+
+    def test_update_latest_job_does_not_fall_back_to_another_job_when_target_deleted(self) -> None:
+        older = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=1000.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+        newer = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=2000.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+
+        def delete_newer(session, flush_context, instances):
+            with self.db.get_session() as s:
+                s.query(Job).filter(Job.id == newer.id).delete(synchronize_session=False)
+
+        event.listen(Session, "before_flush", delete_newer)
+        try:
+            result = self.db.update_latest_job(self.abs_id, kind=JOB_KIND_READALONG, progress=1.0)
+            self.assertIsNone(result)
+            with self.db.get_session() as s:
+                older_row = s.query(Job).filter(Job.id == older.id).first()
+                self.assertEqual(older_row.progress, 0.0)
+        finally:
+            event.remove(Session, "before_flush", delete_newer)
+
+    def test_update_job_by_id_propagates_unrelated_before_flush_error(self) -> None:
+        job = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=1000.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+
+        for exc in (InvalidRequestError, StaleDataError):
+            with self.subTest(exc=exc):
+                def raise_error(session, flush_context, instances):
+                    raise exc("forced")
+                event.listen(Session, "before_flush", raise_error)
+                try:
+                    with self.assertRaises(exc):
+                        self.db.update_job_by_id(job.id, progress=1.0)
+                    with self.db.get_session() as s:
+                        row = s.query(Job).filter(Job.id == job.id).first()
+                        self.assertIsNotNone(row)
+                        self.assertEqual(row.progress, 0.0)
+                finally:
+                    event.remove(Session, "before_flush", raise_error)
+
+    def test_update_latest_job_propagates_unrelated_before_flush_error(self) -> None:
+        job = self.db.save_job(
+            Job(abs_id=self.abs_id, last_attempt=1000.0, progress=0.0, kind=JOB_KIND_READALONG)
+        )
+
+        for exc in (InvalidRequestError, StaleDataError):
+            with self.subTest(exc=exc):
+                def raise_error(session, flush_context, instances):
+                    raise exc("forced")
+                event.listen(Session, "before_flush", raise_error)
+                try:
+                    with self.assertRaises(exc):
+                        self.db.update_latest_job(self.abs_id, kind=JOB_KIND_READALONG, progress=1.0)
+                    with self.db.get_session() as s:
+                        row = s.query(Job).filter(Job.id == job.id).first()
+                        self.assertIsNotNone(row)
+                        self.assertEqual(row.progress, 0.0)
+                finally:
+                    event.remove(Session, "before_flush", raise_error)
 
 
 if __name__ == "__main__":

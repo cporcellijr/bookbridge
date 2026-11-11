@@ -378,6 +378,10 @@ class BookOrbitClient:
             "title": (book.get("title") or "").strip(),
             "authors": self._format_authors(book.get("authors")),
             "language": str(book.get("language") or "").strip(),
+            "seriesName": book.get("seriesName"),
+            "seriesIndex": book.get("seriesIndex"),
+            "seriesId": book.get("seriesId"),
+            "seriesMemberships": book.get("seriesMemberships"),
             "ebookFileId": (ebook_file or {}).get("id"),
             "ebookFormat": ((ebook_file or {}).get("format") or "").lower(),
             "audioFileId": (audio_file or {}).get("id"),
@@ -391,6 +395,11 @@ class BookOrbitClient:
     # ------------------------------------------------------------------
     # Book cache (paginated POST /books/query)
     # ------------------------------------------------------------------
+
+    @property
+    def catalog_complete(self) -> bool:
+        """Whether a complete provider listing has been cached successfully."""
+        return self._cache_timestamp > 0 and not self._last_refresh_failed
 
     def _is_refresh_on_cooldown(self) -> bool:
         return self._last_refresh_failed and (
@@ -411,7 +420,8 @@ class BookOrbitClient:
             # ignored and always returns page 0). offset = page*size.
             size = 200
             max_pages = 2000  # safety against a bad/zero total
-            total = 0
+            total = None
+            partial = False
             while page < max_pages:
                 resp = self._make_request(
                     "POST", "/api/v1/books/query", {"pagination": {"page": page, "size": size}}
@@ -424,17 +434,54 @@ class BookOrbitClient:
                 if not isinstance(data, dict):
                     self._last_refresh_failed = True
                     return False
+                page_total = data.get("total")
                 items = data.get("items") or []
+                if (
+                    isinstance(page_total, bool)
+                    or not isinstance(page_total, int)
+                    or page_total < 0
+                    or not isinstance(items, list)
+                    or (page_total == 0 and items)
+                ):
+                    self._last_refresh_failed = True
+                    logger.warning("BookOrbit: book listing returned inconsistent pagination metadata")
+                    return False
+                if total is not None and page_total != total:
+                    logger.warning("BookOrbit: book listing returned inconsistent pagination metadata")
+                    partial = True
+                    break
+                total = page_total
                 for raw in items:
                     if not isinstance(raw, dict):
                         continue
                     info = self._build_light_info(raw)
                     if info:
                         new_cache[info["id"]] = info
-                total = data.get("total") or 0
-                page += 1
-                if not items or len(new_cache) >= total:
+                if len(new_cache) > total:
+                    logger.warning("BookOrbit: book listing contained more books than its reported total")
+                    partial = True
                     break
+                page += 1
+                if len(new_cache) >= total:
+                    break
+                if not items or len(items) < size:
+                    if len(new_cache) < total:
+                        logger.warning("BookOrbit: book listing ended before all %d books were loaded", total)
+                        partial = True
+                    break
+            else:
+                logger.warning("BookOrbit: book listing reached page cap (%d) before completion", max_pages)
+                partial = True
+
+            if partial:
+                # Keep the last complete snapshot; a cold cache takes the partial listing so sync
+                # lookups work, and the catalog stays incomplete until a full listing succeeds.
+                self._last_refresh_failed = True
+                if not self._book_cache:
+                    with self._cache_lock:
+                        self._book_cache = new_cache
+                        self._llm_match_cache = {}
+                return False
 
             with self._cache_lock:
                 self._book_cache = new_cache
@@ -456,8 +503,11 @@ class BookOrbitClient:
         ):
             self._refresh_book_cache()
 
-    def get_all_books(self) -> list:
-        self._ensure_cache()
+    def get_all_books(self, force_refresh: bool = False) -> list:
+        if force_refresh:
+            self._refresh_book_cache()
+        else:
+            self._ensure_cache()
         with self._cache_lock:
             return list(self._book_cache.values())
 
@@ -570,6 +620,12 @@ class BookOrbitClient:
                 {"id": info.get("id"), "title": info.get("title") or "",
                  "authors": info.get("authors") or "",
                  "language": info.get("language") or "",
+                 "seriesName": info.get("seriesName"),
+                 "seriesIndex": info.get("seriesIndex"),
+                 "seriesId": info.get("seriesId"),
+                 "seriesMemberships": info.get("seriesMemberships"),
+                 "audioFileId": info.get("audioFileId"),
+                 "sourceFileId": info.get("audioFileId"),
                  "duration_seconds": None, "num_files": None}
                 for info in self.get_all_books()
                 if self._info_offers_kind(info, "audiobook")
@@ -625,6 +681,13 @@ class BookOrbitClient:
                 "title": info.get("title") or "",
                 "authors": info.get("authors") or "",
                 "language": info.get("language") or "",
+                "seriesName": info.get("seriesName"),
+                "seriesIndex": info.get("seriesIndex"),
+                "seriesId": info.get("seriesId"),
+                "seriesMemberships": info.get("seriesMemberships"),
+                "ebookFileId": info.get("ebookFileId"),
+                "ebookFormat": info.get("ebookFormat"),
+                "sourceFileId": info.get("ebookFileId"),
                 "fileName": None,
             })
         return out
@@ -633,19 +696,21 @@ class BookOrbitClient:
     # Book detail (resolves primary file id, filename, duration, chapters)
     # ------------------------------------------------------------------
 
-    def get_book_detail(self, book_id, force: bool = False) -> Optional[dict]:
+    def get_book_detail(self, book_id, force: bool = False, fresh_only: bool = False) -> Optional[dict]:
+        """Book detail, TTL-cached. ``fresh_only`` returns None instead of a cached copy when the fetch fails."""
         if book_id is None:
             return None
         with self._cache_lock:
             cached = self._detail_cache.get(book_id)
         if cached and not force and (time.time() - cached[0]) < _DETAIL_TTL:
             return cached[1]
+        fallback = None if fresh_only else (cached[1] if cached else None)
         resp = self._make_request("GET", f"/api/v1/books/{book_id}")
         if not resp or resp.status_code != 200:
-            return cached[1] if cached else None
+            return fallback
         detail = self._parse_json(resp)
         if not isinstance(detail, dict):
-            return cached[1] if cached else None
+            return fallback
         with self._cache_lock:
             self._detail_cache[book_id] = (time.time(), detail)
             # Opportunistically index filenames we now know about.
@@ -1158,11 +1223,14 @@ class BookOrbitClient:
         `koreaderProgress`. BookOrbit relays this value to KOReader as the pull
         position; without it BookOrbit derives a chapter-root xpointer from the CFI.
 
+        Writes go through `PUT /api/v1/reading-progress` (BookOrbit 3.6+); the
+        legacy file-progress POST requires App Attest on current servers. Pre-3.6
+        servers 404 the route once and stay on the legacy POST.
+
         `edited_at` is BookOrbit's own `updatedAt` (epoch seconds) from this cycle's
-        read. With it, BookOrbit 3.6+ gets the write through
-        `PUT /api/v1/reading-progress` as a compare-and-set: a position saved in
-        BookOrbit after that read wins and the write is skipped (returns False).
-        Pre-3.6 servers 404 the route once and stay on the legacy POST.
+        read. With it the write is a compare-and-set: a position saved in BookOrbit
+        after that read wins and the write is skipped (returns False). Without it
+        (never-started book) the write is unconditional.
         """
         book_id = book_info.get("id")
         file_id = self._resolve_primary_file_id(book_id, "ebook")
@@ -1184,16 +1252,18 @@ class BookOrbitClient:
             logger.error("BookOrbit: cannot update ebook — no primary file id for book %s", book_id)
             return False
 
-        if edited_at is not None and self._reading_progress_api is not False:
-            # BookOrbit refuses the write when its stored ms is strictly newer, so
-            # its own ms must come back exactly: round, never truncate.
-            edited = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=round(edited_at * 1000))
-            iso_edited = edited.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        if self._reading_progress_api is not False:
             write = {
                 "fileId": int(file_id),
                 "percentage": round(percentage * 100.0, 4),
-                "editedAt": iso_edited,
             }
+            iso_edited = None
+            if edited_at is not None:
+                # BookOrbit refuses the write when its stored ms is strictly newer, so
+                # its own ms must come back exactly: round, never truncate.
+                edited = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=round(edited_at * 1000))
+                iso_edited = edited.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                write["editedAt"] = iso_edited
             if locator and locator.cfi:
                 write["text"] = {"cfi": locator.cfi}
             if locator and locator.perfect_ko_xpath:
@@ -1412,6 +1482,14 @@ class BookOrbitClient:
         """Push track-local audiobook progress through the server's supported API."""
         if self._audiobook_api is None:
             self.get_audiobook_progress(book_id)
+        if self._audiobook_api is None:
+            # Unanswered probe: falling through to the pre-3.2 route asked for a file id
+            # the failed lookup could not supply, and blamed the book instead.
+            logger.error(
+                "BookOrbit audio: cannot update book %s — BookOrbit's audiobook progress API "
+                "did not answer", book_id,
+            )
+            return False
 
         if self._audiobook_api == "playback":
             info = self.get_audiobook_info(book_id) or {}

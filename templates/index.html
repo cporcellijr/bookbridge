@@ -413,11 +413,11 @@
                                 {% if mapping.ctc_aligned %}disabled title="{{ _('This book already has a CTC alignment map') }}"{% endif %}
                                 onclick='remapAlignment({{ mapping.abs_id|tojson }}, this)'>{% if mapping.ctc_aligned %}✓ {{ _('Already using CTC') }}{% else %}🎯 {{ _('Remap alignment') }}{% endif %}</button>
                             <button type="button" role="menuitem" class="reset-menu-item readalong-generate-btn"
-                                {% if not mapping.readalong_eligible %}title="{{ mapping.readalong_ineligible_reason }}"{% endif %}
+                                {% if mapping.readalong_ready %}disabled {% endif %}{% if not mapping.readalong_eligible %}title="{{ mapping.readalong_ineligible_reason }}"{% endif %}
                                 onclick='generateReadalongEpub({{ mapping.abs_id|tojson }}, this)'>📖 {{ _('Create read-along EPUB') }}</button>
                             {% if mapping.readalong_audio_ok %}
                             <button type="button" role="menuitem" class="reset-menu-item readalong-remove-btn"
-                                onclick='removeReadalongEpub({{ mapping.abs_id|tojson }}, this)'>🗑️ {{ _('Remove read-along EPUB') }}</button>
+                                {% if not mapping.readalong_ready %}disabled {% endif %}onclick='removeReadalongEpub({{ mapping.abs_id|tojson }}, this)'>🗑️ {{ _('Remove read-along EPUB') }}</button>
                             {% endif %}
                         </div>
                     </div>
@@ -707,7 +707,7 @@
         }
 
         /* Search hand-off: bridges the dashboard filter (books you already sync)
-           to Add Book's library search (books you don't). */
+           to the Suggestions Search tab (books you don't). */
         .search-handoff {
             display: flex;
             align-items: center;
@@ -2316,7 +2316,7 @@
         <div id="suggestions-section">
             <div class="suggestions-banner" id="suggestions-banner">
                 <div class="suggestions-title-group">
-                    <h2 class="suggestions-title">💡 {{ _('Pending Suggestions') }}</h2>
+                    <h2 class="suggestions-title">💡 {{ _('Matches to review') }}</h2>
                     <span class="count-badge">{{ suggestions|length }}</span>
                 </div>
                 <div class="banner-hint">
@@ -2344,7 +2344,7 @@
                                 </div>
 
                                 <div class="suggestion-actions" style="display: flex; gap: 8px;">
-                                    <a href="{{ url_for('add_book', search=suggestion.title, review=suggestion.source_id) if suggestion.origin in ('shelf_watch', 'reading_watch') else url_for('add_book', search=suggestion.title) }}"
+                                    <a href="{{ url_for('suggestions', tab='search', q=suggestion.title, review=suggestion.source_id) if suggestion.origin in ('shelf_watch', 'reading_watch') else url_for('suggestions', tab='search', q=suggestion.title) }}"
                                         class="btn btn-sm btn-primary"
                                         style="padding: 4px 10px; font-size: 0.8rem; text-decoration: none;">{{ _('Review') }}</a>
                                     <button onclick="dismissSuggestion(event, '{{ suggestion.source_id }}')"
@@ -2530,7 +2530,7 @@
 
         <div class="search-handoff hidden" id="search-handoff">
             <span class="search-handoff-msg" id="search-handoff-msg"></span>
-            <a class="btn btn-secondary" id="search-handoff-link" href="{{ url_for('add_book') }}"></a>
+            <a class="btn btn-secondary" id="search-handoff-link" href="{{ url_for('suggestions', tab='search') }}"></a>
         </div>
 
         {% if section_flags.has_in_progress %}
@@ -2601,7 +2601,7 @@
                     <div class="empty-state-icon">📚</div>
                     <h2>{{ _('No books syncing yet') }}</h2>
                     <p>{{ _('Start by adding your first audiobook mapping') }}</p>
-                    <a href="{{ url_for('add_book') }}" class="btn btn-primary">{{ _('Add Your First Book') }}</a>
+                    <a href="{{ url_for('suggestions', tab='search') }}" class="btn btn-primary">{{ _('Add Your First Book') }}</a>
                 </div>
                 {% endif %}
         </div>
@@ -2619,7 +2619,7 @@
             const searchHandoff = document.getElementById('search-handoff');
             const searchHandoffMsg = document.getElementById('search-handoff-msg');
             const searchHandoffLink = document.getElementById('search-handoff-link');
-            const addBookSearchUrl = '{{ url_for('add_book') }}?search=';
+            const addBookSearchUrl = '{{ url_for('suggestions', tab='search') }}&q=';
             const notStartedSection = document.getElementById('not-started-section');
             const notStartedHeader = document.getElementById('not-started-header');
             const notStartedGrid = document.getElementById('not-started-grid');
@@ -2744,7 +2744,7 @@
                 );
             }
 
-            // Offers a route into Add Book's library search for a title the dashboard
+            // Offers a route into the Search tab's library search for a title the dashboard
             // filter can't show, because it isn't synced yet.
             function updateSearchHandoff(rawQuery) {
                 if (!searchHandoff || !searchHandoffMsg || !searchHandoffLink) return;
@@ -3736,6 +3736,11 @@
             function updateReadalongStatus(card, ready) {
                 const badge = card && card.querySelector('.readalong-badge');
                 if (badge) badge.hidden = !ready;
+                const menu = card?.querySelector('.reset-menu > button')?._menu || card;
+                // Skip a button mid-action (⏳): its own handler settles it when the request ends.
+                menu?.querySelectorAll('.readalong-generate-btn, .readalong-remove-btn').forEach(b => {
+                    if (!b.textContent.startsWith('⏳')) b.disabled = b.classList.contains('readalong-generate-btn') ? ready : !ready;
+                });
             }
 
             function _setReadalongBadge(absId, ready) {
@@ -3832,7 +3837,7 @@
                         } else if (data.status === 'up_to_date') {
                             btn.innerHTML = 'ℹ️ ' + {{ _('Already optimal')|tojson }};
                         } else {
-                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
+                            btn.textContent = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                         }
                         setTimeout(() => {
                             if (btn.dataset.ctcAligned === 'true') return;
@@ -3858,7 +3863,7 @@
                             // alone can run several minutes with no other feedback.
                             const label = data.stage_label || {{ _('Generating')|tojson }};
                             const pct = (typeof data.percent === 'number') ? ' ' + data.percent + '%' : '';
-                            btn.innerHTML = '⏳ ' + label + '…' + pct;
+                            btn.textContent = '⏳ ' + label + '…' + pct;
                             setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
                             return;
                         }
@@ -3867,11 +3872,11 @@
                             _setReadalongBadge(absId, true);
                         } else if (data.state === 'failed') {
                             const stagePrefix = data.stage_label ? data.stage_label + ': ' : '';
-                            btn.innerHTML = '❌ ' + stagePrefix + (data.error || {{ _('Failed')|tojson }});
+                            btn.textContent = '❌ ' + stagePrefix + (data.error || {{ _('Failed')|tojson }});
                         } else {
                             btn.innerHTML = originalText;
                         }
-                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 5000);
+                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = data.state === 'done'; }, 5000);
                     }).catch(error => {
                         console.debug('Read-along status check failed', error);
                         setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 8000);
@@ -3891,7 +3896,7 @@
                             btn.innerHTML = '⏳ ' + {{ _('Generating… (this can take minutes)')|tojson }};
                             setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
                         } else {
-                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
+                            btn.textContent = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                             setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 4000);
                         }
                     }).catch(error => {
@@ -3915,13 +3920,14 @@
                     .then(data => {
                         if (data.success && data.removed) {
                             btn.innerHTML = '✅ ' + {{ _('Removed')|tojson }};
-                            _setReadalongBadge(absId, false);
                         } else if (data.success) {
                             btn.innerHTML = 'ℹ️ ' + {{ _('Nothing to remove')|tojson }};
                         } else {
-                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
+                            btn.textContent = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                         }
-                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 3000);
+                        // success means nothing is left to remove, whether or not this call deleted it
+                        if (data.success) _setReadalongBadge(absId, false);
+                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = !!data.success; }, 3000);
                     }).catch(error => {
                         console.error('Read-along removal error:', error);
                         btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};

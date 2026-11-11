@@ -1,0 +1,238 @@
+/* P8 finish: accessible cover layout and responsive, high-contrast UI in both themes. */
+.library-page[data-view="covers"] .book-grid.masonry {
+    grid-auto-rows: 4px;
+    row-gap: 0;
+    align-items: start;
+}
+.library-page:not([data-view="covers"]) .book-grid.masonry {
+    grid-auto-rows: auto;
+    row-gap: 14px;
+}
+.rail-app-links .app-link { min-height: 44px; min-width: 0; }
+.app-link { min-width: 0; }
+.app-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.app-link .icon { margin-left: auto; }
+.book-select-hit {
+    position: absolute; z-index: 3; left: 0; top: 0; width: 44px; height: 44px;
+    display: flex; justify-content: center; align-items: center; cursor: pointer;
+}
+.book-select-hit > .book-select {
+    position: static; width: 21px; height: 21px; margin: 0; cursor: pointer;
+}
+.library-page[data-view="spines"] .book-select-hit { display: none; }
+.library-page[data-view="list"] .book-select-hit { left: auto; right: 0; }
+
+/* The focus ring must survive Classic-derived pages' outline:none rules. */
+:is(a,button,input,select,textarea,summary,[role="button"],[tabindex]):focus-visible,
+.discover-page :is(.btn,.btn-link,.tab,.sugg-group-toggle):focus-visible {
+    outline: 3px solid var(--info) !important;
+    outline-offset: 2px !important;
+    box-shadow: 0 0 0 2px var(--bg) !important;
+}
+.book-select-hit:focus-within { outline: 3px solid var(--info); outline-offset: 0; border-radius: 8px; }
+#bb-search-input:focus-visible { outline-offset: -3px !important; }
+.view .settings-tab, .view .settings-main button, .view .integrations-wrap button,
+.view .account-wrap button, .view .admin-users-wrap button { min-height: 44px; }
+.library-page .format-chips .chip, .library-page .view-switch button,
+.library-page .selection-bar button, .library-page .section-collapse,
+.library-page .library-banner button { min-height: 44px; }
+.discover-page .tab, .discover-page .btn, .discover-page button,
+.discover-page .form-input, .discover-page .form-select { min-height: 44px; }
+.discover-page .queue-remove { min-width: 44px; min-height: 44px; border-radius: 9px; }
+.discover-page :is(.row-check,.group-check,.ebook-row-check) { width: 22px; height: 22px; }
+.bb-search-close { min-width: 44px; min-height: 44px; }
+.book-detail button, .book-detail .drawer-close { min-height: 44px; }
+.book-detail .drawer-close { display: inline-flex; align-items: center; }
+
+/* Retain the original badge words and semantic categories, but draw New chips. */
+.discover-page .source-badge {
+    display: inline-flex; align-items: center; min-height: 23px; padding: 3px 9px;
+    border: 1px solid var(--line-2); border-radius: 999px;
+    background: var(--surface-2); color: var(--text-2);
+    font: 600 11px/1.35 var(--font-ui);
+    letter-spacing: normal; text-transform: none; white-space: normal;
+}
+.discover-page .source-badge.manual { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+.discover-page .source-badge.exact, .discover-page .source-badge.queued,
+.discover-page .source-badge.linked { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+.discover-page .source-badge.samefolder, .discover-page .source-badge.sameseries,
+.discover-page .source-badge.reason { background: var(--info-bg); color: var(--info); border-color: var(--info); }
+.discover-page .source-badge.ignored { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+.discover-page .score { font-family: var(--font-ui); }
+
+/* Day mode: semantic colors and copied Classic dark-only text become readable. */
+:root[data-theme="light"] {
+    --text-3: #555E6E;
+    --ok: #116942;
+    --warn: #9F420F;
+    --bad: #B5263D;
+    --info: #214FA8;
+}
+:root[data-theme="light"] .library-page :is(.out-of-sync-line,.state-label) { color: var(--warn); }
+:root[data-theme="light"] .your-place,
+:root[data-theme="light"] .tabbar > a[aria-current="page"] { color: var(--ribbon-strong); }
+:root[data-theme="light"] .discover-page .source-badge:not(.manual):not(.exact):not(.queued):not(.linked):not(.samefolder):not(.sameseries):not(.reason):not(.ignored) {
+    background: var(--surface-2); color: var(--text-2); border-color: var(--line-2);
+}
+:root[data-theme="light"] .discover-page :is(.series-name.is-other,.series-meta-row,.series-chevron,.group-select,.row-seq,.series-grouping-label,.scan-progress-text) {
+    color: var(--text-2);
+}
+:root[data-theme="light"] .discover-page :is(.btn-link,.list-feedback,.queue-actions .btn:not(.btn-success):not(.btn-danger)) {
+    color: var(--info); background: var(--info-bg);
+}
+:root[data-theme="light"] .discover-page :is(.flash-error,.list-feedback.error) { color: var(--bad); }
+:root[data-theme="light"] .discover-page :is(.scan-status.warn,.scan-status.warn strong,.selection-summary .warn) { color: var(--warn); }
+:root[data-theme="light"] .discover-page .series-children { background: var(--surface-2); border-color: var(--line); }
+:root[data-theme="light"] .view .settings-section h4[style],
+:root[data-theme="light"] .view .settings-section :is(.toggle-label,.help-text) { color: var(--text) !important; }
+:root[data-theme="light"] .view .account-wrap :is(.url-row input,.btn-link,code) {
+    color: var(--info); background: var(--info-bg);
+}
+:root[data-theme="light"] .view .stats-wrap :is(.hero-chip,.status-pill),
+:root[data-theme="light"] .view .stats-wrap .hero-chip strong {
+    color: var(--text); background: var(--surface-2); border-color: var(--line-2);
+}
+:root[data-theme="light"] .view .stats-wrap :is(.stat-card-label,.dashboard-note,.panel-head span,.summary-card-sub,.recent-time,.heatmap-days,.heatmap-legend,.heatmap-month-track) { color: var(--text-2); }
+:root[data-theme="light"] .view .whats-new-notes code { color: var(--text); background: var(--surface-2); }
+:root[data-theme="light"] .view .logs-wrap :is(.control-label,.log-meta) { color: var(--text-2); }
+
+@media (max-width: 760px) {
+    .app-shell { padding-bottom: calc(82px + env(safe-area-inset-bottom)); }
+    .view { min-width: 0; padding: 14px 12px calc(110px + env(safe-area-inset-bottom)); }
+    .view > *, .view .library-page, .view .discover-page, .view .settings-layout,
+    .view .stats-wrap, .view .logs-wrap, .view .job-queue-page { min-width: 0; max-width: 100%; }
+    .topbar { min-width: 0; }
+    .mobile-brand { min-width: 0; }
+    .mobile-brand span { overflow: hidden; text-overflow: ellipsis; }
+    .library-toolbar { padding: 10px; }
+    .format-chips { max-width: 100%; }
+    .selection-bar { max-height: 50dvh; overflow-y: auto; bottom: calc(72px + env(safe-area-inset-bottom)); }
+    .library-page .book-copy { padding: 10px; }
+    .library-page .book-copy h3 {
+        display: block; max-height: none; overflow-wrap: break-word; word-break: normal;
+        -webkit-line-clamp: unset; -webkit-box-orient: initial;
+    }
+    .library-page[data-view="spines"] .book-copy h3 {
+        white-space: nowrap; text-overflow: ellipsis; overflow: hidden;
+    }
+    .library-page .series-preview { overflow-wrap: anywhere; }
+    .view .settings-tab { min-height: 44px; }
+    .view .submit-bar { bottom: calc(74px + env(safe-area-inset-bottom)); max-height: 42dvh; overflow-y: auto; }
+    .view .admin-users-wrap .row-actions { min-width: 0; }
+    .view .stats-wrap .recent-side { min-width: 0; flex-shrink: 1; }
+    .view .job-queue-table-scroll, .view .admin-users-wrap .table { width: 100%; max-width: 100%; overflow-x: auto; }
+    .view .logs-wrap .controls, .view .whats-new-notes { min-width: 0; }
+    .discover-page .row-actions .btn { min-height: 44px; }
+    .discover-page .resource-card, .discover-page .ebook-card { min-width: 0; }
+    /* Same width as the cover (next.css shrinks it to 90px only at 640px), so it never spills onto the title. */
+    .book-hero { grid-template-columns: minmax(0,150px) minmax(0,1fr); }
+    .book-detail { min-width: 0; }
+}
+@media (max-width: 640px) {
+    .book-hero { grid-template-columns: minmax(0,90px) minmax(0,1fr); }
+}
+@media (max-width: 410px) {
+    .topbar { gap: 6px; padding: 8px 9px; }
+    .mobile-brand { flex: 1 1 auto; }
+    .mobile-app-menu,.mobile-user-menu { flex: none; }
+    .tabbar > a { min-height: 56px; }
+    .library-page .book-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+    .library-page .series-group { min-width: 0; }
+    .library-page[data-view="covers"] .book-grid.masonry > .series-group { grid-column: 1 / -1; }
+    .library-page .series-header { min-width: 0; padding: 10px; gap: 8px; }
+    .library-page .series-info { min-width: 0; overflow-wrap: anywhere; }
+    .discover-page .filter-field { flex: 1 1 100%; }
+    .view .next-service-tiles { grid-template-columns: minmax(0,1fr); }
+    .view .settings-sidebar { gap: 4px; }
+    .view .settings-tab { flex: 1 1 45%; }
+}
+
+/* The touch hit area includes padding, not just the icon or label. */
+.skip-link { min-height: 44px; }
+.library-page .format-chips .chip, .library-page .view-switch button { min-width: 44px; }
+.library-page .hc-modal-close { min-width: 44px; min-height: 44px; }
+.library-page .hc-modal details summary { min-height: 44px; display: flex; align-items: center; }
+.view .integrations-wrap .test-btn, .view .admin-users-wrap .test-btn,
+.view .settings-section .btn, .view .submit-bar .btn { min-height: 44px; }
+.view :is(.account-wrap,.integrations-wrap,.admin-users-wrap) .nav a,
+.view :is(.account-wrap,.integrations-wrap,.admin-users-wrap) > .card > a,
+.view .account-wrap .btn-link, .view .whats-new-all-releases,
+.view .book-back, .book-drawer > .drawer-close {
+    display: inline-flex; align-items: center; min-height: 44px;
+}
+.view .book-detail .book-section > a { display: inline-flex; align-items: center; min-height: 44px; }
+.view .book-detail summary { display: flex; align-items: center; min-height: 44px; }
+.view .book-detail .book-delete button { min-height: 44px; }
+.book-drawer > .drawer-close { min-width: 44px; }
+#diagnostics-optin-modal .hc-modal-close { min-width: 44px; min-height: 44px; }
+#diagnostics-optin-modal details summary { min-height: 44px; display: flex; align-items: center; }
+.view .account-wrap p a[style], .view .whats-new-notes a,
+.view .settings-main :is(.help-text,.section-body,.settings-legend) a { padding-block: 13px; }
+.view .settings-main a:not(.btn):not(.settings-tab),
+.view .account-wrap p a[style] { display: inline-flex; align-items: center; min-height: 44px; vertical-align: middle; }
+.view .settings-main a:not(.btn):not(.settings-tab) { min-width: 44px; }
+@media (max-width: 760px) {
+    /* User management is a card layout on phones: no horizontal table scroller. */
+    .view .admin-users-wrap .table { display: block; overflow: visible; width: 100%; }
+    .view .admin-users-wrap .table tbody { display: grid; gap: 12px; }
+    .view .admin-users-wrap .table tr:first-child {
+        position: absolute; width: 1px; height: 1px; overflow: hidden;
+        white-space: nowrap; clip-path: inset(50%);
+    }
+    .view .admin-users-wrap .table tr:not(:first-child) {
+        display: grid; grid-template-columns: repeat(2,minmax(0,1fr));
+        gap: 5px; min-width: 0; padding: 10px;
+        border: 1px solid var(--line); background: var(--surface-2); border-radius: 12px;
+    }
+    .view .admin-users-wrap .table td {
+        display: flex; flex-direction: column; align-items: flex-start;
+        min-width: 0; overflow-wrap: anywhere; padding: 6px; border: 0;
+        white-space: normal;
+    }
+    .view .admin-users-wrap .table td::before {
+        content: attr(data-label); font-size: 11px; font-weight: 650;
+        text-transform: uppercase; color: var(--text-2);
+    }
+    .view .admin-users-wrap .table td:first-child,
+    .view .admin-users-wrap .table td.row-actions { grid-column: 1 / -1; }
+    .view .admin-users-wrap .table td.row-actions {
+        display: flex; flex-flow: row wrap; align-items: center; gap: 8px;
+    }
+    .view .admin-users-wrap .table td.row-actions::before { width: 100%; }
+    .view .admin-users-wrap .table td.row-actions form {
+        display: flex; flex: 1 1 auto; gap: 6px; align-items: center;
+        flex-wrap: wrap; margin: 0;
+    }
+    .view .admin-users-wrap .table td.row-actions button,
+    .view .admin-users-wrap .table td.row-actions a { min-height: 44px; }
+    .view .admin-users-wrap .table td.row-actions .reset-inline input { flex: 1 1 140px; min-width: 0; max-width: 100%; }
+}
+
+:root[data-theme="light"] .view .account-wrap a[style] { color: var(--info) !important; }
+:root[data-theme="light"] .view .book-detail .book-delete button { color: var(--bad) !important; }
+:root[data-theme="light"] .view .admin-users-wrap .badge.admin { color: var(--info); background: var(--info-bg); }
+:root[data-theme="light"] .view .logs-wrap .log-level.DEBUG { color: var(--text-2); background: var(--surface-2); }
+:root[data-theme="light"] .view .logs-wrap .log-level.INFO { color: var(--info); background: var(--info-bg); }
+:root[data-theme="light"] .view .logs-wrap .log-level.WARNING { color: var(--warn); background: var(--warn-bg); }
+:root[data-theme="light"] .view .logs-wrap .log-level.ERROR,
+:root[data-theme="light"] .view .logs-wrap .log-level.CRITICAL { color: var(--bad); background: var(--bad-bg); }
+
+/* Day mode: Classic-copied markup that hard-codes light-on-dark text (admin screens). */
+:root[data-theme="light"] :is([style*="color:rgba(255,255,255"],[style*="color: rgba(255,255,255"],[style*="color: rgba(255, 255, 255"]) { color: var(--text-2) !important; }
+:root[data-theme="light"] details.advanced-sub summary { color: var(--text-2); }
+:root[data-theme="light"] details.advanced-sub summary:hover { color: var(--text); }
+:root[data-theme="light"] .tracker-tag { color: var(--text-2); background: var(--surface-2); }
+:root[data-theme="light"] .logs-wrap .log-module { background: var(--surface-2); }
+:root[data-theme="light"] .u-badge.admin { color: var(--info); background: var(--info-bg); }
+:root[data-theme="light"] .u-badge.user { color: var(--text-2); background: var(--surface-2); }
+:root[data-theme="light"] .u-badge.on { color: var(--ok); background: var(--ok-bg); }
+:root[data-theme="light"] :is(.u-badge.off,.u-btn-danger) { color: var(--bad); background: var(--bad-bg); }
+:root[data-theme="light"] td[style="color:#888"] { color: var(--text-2) !important; }
+:root[data-theme="light"] .u-btn-sm { color: var(--text); background: var(--surface-2); border: 1px solid var(--line-2); }
+/* The Library page has no --gradient, so the opt-in's main button drew no background. */
+#diagnostics-optin-modal .hc-modal-footer button:not(.hc-btn-cancel) { background: var(--ribbon) !important; color: var(--ribbon-ink) !important; }
+:root[data-theme="light"] .discover-page .btn-dismiss { background: var(--surface-2); color: var(--text); border-color: var(--line-2); }
+:root[data-theme="light"] .discover-page .btn-reject { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+/* Night: Classic's small tag and INFO badge colors fall below 4.5:1 on New surfaces. */
+.view .tracker-tag { color: var(--text-2); }
+:root:not([data-theme="light"]) .view .logs-wrap .log-level.INFO { color: #4fd1e6; }

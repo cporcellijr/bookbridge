@@ -466,6 +466,32 @@ class Job(Base):
 
 
 
+class TranscriptionPreflight(Base):
+    """Read-only length evidence and optional acknowledgement per user and pair."""
+    __tablename__ = "transcription_preflights"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    abs_id = Column(String(255), ForeignKey("books.abs_id", ondelete="CASCADE"), primary_key=True)
+    pairing_key = Column(String(64), nullable=False)
+    identity = Column(String(64), nullable=False)
+    evidence_json = Column(Text, nullable=False)
+    acknowledged_at = Column(Float, nullable=True)
+    updated_at = Column(Float, nullable=False)
+
+
+class BookSyncMarker(Base):
+    """Leader and time of the last sync that reached a follower, per user and book.
+
+    Reading sessions close late and record history, so the library card's glow
+    reads this instead."""
+    __tablename__ = "book_sync_markers"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    abs_id = Column(String(255), ForeignKey("books.abs_id", ondelete="CASCADE"), primary_key=True)
+    leader_client = Column(String(50), nullable=False)
+    synced_at = Column(Float, nullable=False)
+
+
 class PendingSuggestion(Base):
     """
     Model for progress-triggered ebook suggestions.
@@ -483,10 +509,15 @@ class PendingSuggestion(Base):
     created_at = Column(DateTime, default=utcnow)
     origin = Column(String(50), nullable=True, index=True)
     origin_metadata_json = Column(Text, nullable=True)
+    user_id = Column(Integer, nullable=True)
+
+    __table_args__ = (Index('ix_pending_suggestions_user_source', 'user_id', 'source_id'),)
 
     def __init__(self, source_id: str, title: str, author: str = None,
                  cover_url: str = None, matches_json: str = "[]", status: str = 'pending',
-                 source: str = None, origin: str = None, origin_metadata_json: str = None):
+                 source: str = None, origin: str = None, origin_metadata_json: str = None,
+                 user_id: Optional[int] = None):
+        self.user_id = user_id
         self.source = source or 'abs'
         self.source_id = source_id
         self.title = title

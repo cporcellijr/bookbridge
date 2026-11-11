@@ -1,0 +1,154 @@
+/* P6: Settings and account pages in the New interface. Classic remains untouched. */
+.view:has(.settings-layout), .view:has(.account-wrap),
+.view:has(.integrations-wrap), .view:has(.admin-users-wrap) { max-width: none; }
+.view .container { max-width: 1540px; padding: 12px 0 140px; }
+.view .section-header-flat h2, .view .account-wrap h1,
+.view .integrations-wrap h1, .view .admin-users-wrap h1 {
+  color: var(--text) !important; background: none !important;
+  -webkit-text-fill-color: currentColor !important; font: 600 clamp(26px,3vw,36px)/1.2 var(--font-book);
+  letter-spacing: -.025em;
+}
+.view .settings-layout { gap: 20px; color: var(--text-2); align-items: flex-start; }
+.view .settings-main { flex: 1 1 auto; width: 100%; min-width: 0; }
+.settings-navigation .settings-tab { color: var(--text-2); min-height: 43px; font-family: var(--font-ui); }
+.settings-navigation .settings-tab:hover { background: var(--surface-2); color: var(--text); }
+.settings-navigation .settings-tab.active { background: var(--info-bg); box-shadow: inset 3px 0 0 var(--info); color: var(--text); }
+.settings-navigation .settings-tab .icon { width: 17px; height: 17px; }
+.settings-navigation .settings-search, .view .settings-section input:not([type="checkbox"]):not([type="radio"]),
+.view .settings-section select, .view .settings-section textarea,
+.view .settings-main input:not([type="checkbox"]):not([type="radio"]),
+.view .settings-main select, .view .settings-main textarea {
+  max-width: 100%; background: var(--bg-2); color: var(--text); border: 1px solid var(--line-2); border-radius: 8px;
+}
+.settings-navigation .settings-search { background: var(--bg-2); color: var(--text); }
+.view .settings-legend, .view .panel-intro, .view .help-text, .view .svc-desc, .view .settings-section small,
+.settings-navigation .changed-only { color: var(--text-2) !important; }
+.view .settings-section { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.view .section-header { background: var(--surface-2); border-color: var(--line); gap: 10px; flex-wrap: wrap; }
+.view .settings-section .section-header h3, .view .settings-section .checkbox-wrapper label,
+.view .settings-section label, .view .settings-section .toggle-label { color: var(--text) !important; }
+.view .settings-section .section-body { color: var(--text-2); }
+.view .settings-section .section-header .svc-title { min-width: 0; }
+.view .settings-section .section-header .header-tail { flex-wrap: wrap; justify-content: flex-end; }
+.view .settings-section .pill.off { color: var(--text-2); background: var(--surface-2); }
+.view .settings-section .pill.ok { color: var(--ok); background: var(--ok-bg); }
+.view .settings-section .svc-chip { background: var(--info-bg); color: var(--info); }
+.view .settings-section .btn, .view .settings-section button, .view .settings-main button {
+  font-family: var(--font-ui);
+}
+.view .settings-section a, .view .settings-main a { color: var(--info) !important; }
+.view .settings-section code, .view .account-wrap code { font-family: var(--font-mono); color: var(--text); }
+.view .settings-section :is(td,th) { color: var(--text-2); border-color: var(--line); }
+.view .settings-section :is(td,th) a { color: var(--info); }
+.view .settings-section details { border-color: var(--line); }
+.view .settings-section .restart-badge { color: var(--warn); border-color: var(--warn); }
+.view .settings-section .reader-badge { color: var(--info); border-color: var(--info); }
+.view .settings-legend .restart-badge { color: var(--warn); }
+.view .settings-section .reset-default { color: var(--info); }
+.view .settings-section .btn-primary, .view .submit-bar .btn-primary { background: var(--info-bg); color: var(--text); border-color: var(--info); }
+.view .settings-section .btn-primary:hover, .view .submit-bar .btn-primary:hover { background: var(--surface-2); }
+.view .submit-bar {
+  max-width: none; left: calc(var(--rail) + 30px); right: 24px; bottom: 18px;
+  padding: 12px 18px; background: var(--surface); border: 1px solid var(--line-2);
+  border-radius: 14px; color: var(--text); box-shadow: 0 16px 42px rgba(0,0,0,.25);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.view .save-effect, .view .dirty-note { color: var(--text-2); }
+.view .save-effect.warn { color: var(--warn); }
+/* P13: the only Settings menu lives in the rail, and moves to the page on phones. */
+.rail-settings { overflow: hidden; }
+.rail-settings .brand, .rail-settings .rail-foot { flex: none; }
+/* Short screens (landscape phones): the whole rail scrolls instead of squeezing the menu to a sliver. */
+@media (min-width: 761px) and (max-height: 600px) {
+  .rail-settings { overflow-y: auto; }
+  .rail-settings .settings-rail-nav, .rail-settings .settings-navigation, .rail-settings .settings-navigation .settings-menu { flex: none; min-height: auto; overflow: visible; }
+}
+.settings-rail-nav { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.settings-navigation { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; gap: 8px; }
+.settings-back { display: flex; flex: none; align-items: center; gap: 9px; min-height: 44px; padding: 8px 12px; border-radius: 9px; color: var(--text-2); font-weight: 600; }
+.settings-back:hover { background: var(--surface); color: var(--text); }
+.settings-back .icon { transform: rotate(180deg); width: 16px; height: 16px; }
+.settings-navigation .settings-search { flex: none; min-height: 44px; width: 100%; margin: 2px 0 0; padding: 9px 12px; background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); }
+.settings-navigation .changed-only { flex: none; display: flex; align-items: center; gap: 8px; min-height: 44px; margin: 0; font-size: 12px; color: var(--text-2) !important; }
+.settings-navigation .changed-only input { flex: none; width: 17px; height: 17px; accent-color: var(--info); }
+.settings-navigation .settings-menu { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; gap: 14px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 10px 0; border-top: 1px solid var(--line); }
+.settings-navigation .settings-nav-group { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-navigation .settings-nav-heading { margin: 0 12px 5px; font: 700 11px/1.5 var(--font-ui); text-transform: uppercase; letter-spacing: .09em; color: var(--text-3); }
+.settings-navigation .settings-tab { display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 44px; padding: 8px 10px; text-decoration: none; color: var(--text-2); font-family: var(--font-ui); }
+.settings-navigation .settings-tab:hover { background: var(--surface-2); color: var(--text); }
+.settings-navigation .settings-tab.active { background: var(--info-bg); box-shadow: inset 3px 0 0 var(--info); color: var(--text); }
+.settings-navigation .settings-tab .icon { width: 17px; height: 17px; }
+.settings-navigation .settings-tab-label { min-width: 0; }
+.settings-navigation .settings-service-tab { flex-direction: column; align-items: flex-start; gap: 3px; padding: 9px 12px; }
+.settings-navigation .settings-service-tab .settings-tab-label { color: var(--text); font-size: 13px; font-weight: 650; }
+.settings-navigation .next-connection-status { display: flex; align-items: center; gap: 7px; font: 500 12px/1.4 var(--font-ui); color: var(--text-2); }
+.settings-navigation .next-connection-status::before { content: ''; display: block; flex: 0 0 8px; height: 8px; border: 1px solid currentColor; border-radius: 50%; }
+.settings-navigation .next-connection-status[data-state="ok"] { color: var(--ok); }
+.settings-navigation .next-connection-status[data-state="off"] { color: var(--text-3); }
+.view .next-connection-test { min-height: 44px; padding: 8px 14px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.view .next-connection-test:hover { border-color: var(--info); }
+.view .next-connection-test:disabled { opacity: .6; cursor: wait; }
+.settings-menu-hint { flex: none; margin: 0; padding: 10px 8px 0; border-top: 1px solid var(--line); font: 11px/1.4 var(--font-ui); color: var(--text-3); }
+.settings-legends { display: grid; gap: 4px; margin: 0 0 20px; }
+.view .settings-legends .settings-legend { margin: 0; }
+/* Keep disabled services closed, but an enabled section no longer has a manual collapse affordance. */
+.view .settings-section[data-svc] > .section-header { cursor: default; }
+.view .next-logs-panel h3 { font: 600 25px var(--font-book); margin: 4px 0 14px; }
+.view .next-logs-panel iframe { display: block; width: 100%; min-height: 72vh; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+/* Account and per-reader integrations retain the complete Classic forms. */
+.view .account-wrap, .view .integrations-wrap, .view .admin-users-wrap { padding: 12px 0 60px; max-width: 1320px; margin: 0 auto; }
+.view .account-wrap .card { max-width: 740px; }
+.view .integrations-wrap .card { max-width: 820px; }
+.view .account-wrap .nav { max-width: 740px; }
+.view .integrations-wrap .nav { max-width: 820px; }
+.view .account-wrap .card, .view .integrations-wrap .card, .view .admin-users-wrap .card {
+  padding: 26px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 16px;
+}
+.view .integrations-wrap h1, .view .account-wrap h1, .view .admin-users-wrap h1 { font-size: 29px; }
+.view .account-wrap .card label, .view .integrations-wrap label, .view .admin-users-wrap label { color: var(--text-2); }
+.view .account-wrap :is(input,select), .view .integrations-wrap :is(input,select),
+.view .admin-users-wrap :is(input,select) {
+  max-width: 100%; color: var(--text); background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 8px; min-height: 40px; padding: 8px 12px;
+}
+.view .integrations-wrap .toggle-row input, .view .integrations-wrap input[type="checkbox"] { min-height: 0; width: 17px; height: 17px; padding: 0; }
+.view .account-wrap .sub, .view .account-wrap .help, .view .account-wrap .plugin-card p,
+.view .integrations-wrap .sub, .view .integrations-wrap .note, .view .integrations-wrap .inline-status,
+.view .admin-users-wrap p { color: var(--text-2); }
+.view :is(.account-wrap, .integrations-wrap, .admin-users-wrap) a { color: var(--info); }
+.view .integrations-wrap .group { border-color: var(--line); }
+.view .integrations-wrap .group h2 { color: var(--text); }
+.view .integrations-wrap .group-head { flex-wrap: wrap; }
+.view .integrations-wrap .test-btn { min-height: 34px; color: var(--text); background: var(--surface-2); }
+.view .integrations-wrap .status-pill.linked { color: var(--ok); }
+.view .integrations-wrap .status-pill.unlinked { color: var(--warn); }
+.view .admin-users-wrap .table { display: block; overflow-x: auto; width: 100%; }
+.view .admin-users-wrap .table th { white-space: nowrap; }
+.view .admin-users-wrap .table th, .view .admin-users-wrap .table td { padding: 10px 8px; color: var(--text); border-bottom: 1px solid var(--line); }
+.view .admin-users-wrap .create-grid > * { flex: 0 1 auto; }
+.view .admin-users-wrap .row-actions { min-width: 320px; }
+.view .admin-users-wrap .row-actions form { margin: 4px; }
+:root[data-theme="light"] .view .settings-section .section-header h3,
+:root[data-theme="light"] .view .settings-section label { color: var(--text) !important; }
+:root[data-theme="light"] .view .settings-section .svc-desc { color: var(--text-2) !important; }
+@media (max-width: 840px) {
+  .view .settings-layout { flex-direction: column; }
+  .view .settings-main { width: 100%; }
+  .view .settings-section .section-body { grid-template-columns: minmax(0, 1fr); }
+  .view .settings-section .full-width { grid-column: 1; }
+}
+@media (max-width: 760px) {
+  .view .settings-mobile-slot { width: 100%; }
+  .settings-mobile-slot .settings-navigation { padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  .settings-mobile-slot .settings-menu { flex: 0 1 auto; max-height: 280px; overflow-y: auto; }
+}
+@media (max-width: 600px) {
+  .view .container { padding: 0 0 150px; }
+  .view .settings-layout { gap: 14px; }
+  .view .settings-section .section-header { padding: 14px 12px; }
+  .view .settings-section .section-body { padding: 14px 12px; }
+  .view .settings-tab { width: 100%; min-height: 44px; font-size: 13px; padding: 9px 10px; }
+  .view .submit-bar { left: 10px; right: 10px; bottom: calc(74px + env(safe-area-inset-bottom)); padding: 9px; flex-wrap: wrap; }
+  .view .submit-bar .btn { flex: none; min-height: 44px; }
+  .view .settings-section .header-tail { width: 100%; }
+  .view .account-wrap .card, .view .integrations-wrap .card, .view .admin-users-wrap .card { padding: 16px; }
+}

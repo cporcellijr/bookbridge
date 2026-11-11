@@ -44,11 +44,13 @@ def _make_record(
 
 
 class _FakeBook:
-    """Just the title columns the known-title sweep reads from a Book row."""
+    """Book fields consumed by the known-value sweep."""
 
-    def __init__(self, abs_title=None, audio_title=None):
+    def __init__(self, abs_title=None, audio_title=None, ebook_filename=None, original_ebook_filename=None):
         self.abs_title = abs_title
         self.audio_title = audio_title
+        self.ebook_filename = ebook_filename
+        self.original_ebook_filename = original_ebook_filename
 
 
 class FakeDatabaseService:
@@ -1096,6 +1098,75 @@ class TestMaybeSendScrubsKnownTitles(unittest.TestCase):
         with self.handler._lock:
             remaining = len(self.handler._entries)
         self.assertEqual(remaining, 30 - sent)
+
+    @patch('src.services.diagnostics.requests.post')
+    def test_ebook_filenames_swept_across_message_context_template_traceback_and_recent_logs(self, mock_post: Mock) -> None:
+        """Scrub stored filenames across the complete sender path."""
+        catalog_title = "The Throne of Glass Novellas"
+        ebook_filename = "The Assassin's Blade_ The Throne of Glass Novellas - Example Author.epub"
+        original_filename = "The Butcher's Masquerade (2021).epub"
+        self.db.books = [
+            _FakeBook(abs_title=catalog_title, ebook_filename=ebook_filename,
+                      original_ebook_filename=original_filename),
+        ]
+
+        self.handler.emit(_make_record(
+            'src.sync_manager', logging.INFO,
+            f"KOReader device-sync could not resolve original ebook for '{catalog_title}' ({ebook_filename})",
+        ))
+
+        self.handler.emit(_make_record(
+            'src.sync_manager', logging.ERROR,
+            f'❌ {ebook_filename} and {original_filename}: not found',
+        ))
+
+        record = _make_record('src.sync_manager', logging.ERROR, 'alignment failed')
+        try:
+            raise RuntimeError(f'no audio for {ebook_filename}')
+        except RuntimeError:
+            record.exc_info = sys.exc_info()
+        self.handler.emit(record)
+
+        raw_path = "/books/John Scalzi/Old Man's War (2498)/Old Man's War - John Scalzi.epub"
+        self.handler.emit(_make_record(
+            'src.sync_manager', logging.WARNING,
+            f"Failed to open '{raw_path}' for reading",
+        ))
+
+        payload = self._post(mock_post, manual=True, user_message='private file leak test')
+
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn(ebook_filename, payload_json)
+        self.assertNotIn(original_filename, payload_json)
+        self.assertNotIn("The Assassin's Blade", payload_json)
+        self.assertNotIn("Scalzi", payload_json)
+        self.assertNotIn("Old Man's War", payload_json)
+
+        token_ebook = f"t:{_sha1_prefix(ebook_filename)}"
+        token_original = f"t:{_sha1_prefix(original_filename)}"
+
+        filename_warning = next(
+            w for w in payload['warnings']
+            if 'not found' in w['message'].lower()
+        )
+        self.assertIn(token_ebook, filename_warning['message'])
+        self.assertIn(token_original, filename_warning['message'])
+        self.assertEqual(filename_warning['template'], '❌ t:# and t:#: not found')
+        self.assertTrue(any(token_ebook in line for line in filename_warning['context']))
+        self.assertTrue(any(token_original in line for line in filename_warning['context']))
+
+        tb_warning = next(
+            w for w in payload['warnings']
+            if w.get('traceback') and 'alignment failed' in w['message']
+        )
+        self.assertIn(token_ebook, tb_warning['traceback'])
+        self.assertNotIn(ebook_filename, tb_warning['traceback'])
+
+        recent_logs = ' '.join(payload['recent_logs'])
+        self.assertIn(token_ebook, recent_logs)
+        self.assertIn(token_original, recent_logs)
+        self.assertNotIn(ebook_filename, recent_logs)
+        self.assertNotIn(original_filename, recent_logs)
 
 
 # ---------------------------------------------------------------------------

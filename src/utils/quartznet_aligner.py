@@ -60,6 +60,72 @@ _MODEL_URL = "https://gitlab.com/api/v4/projects/67994333/packages/ml_models/302
 _MODEL_BYTES = 76711679
 _MODEL_SHA256 = "3a4cf199c53475ae752694bb65989c05755bf6920d8ac8aaf51581a1021bdf2c"
 
+# Default ceiling for the ONNX intra-op thread pool when ALIGN_THREADS is unset.
+_DEFAULT_MAX_THREADS = 8
+_CGROUP_ROOT = Path("/sys/fs/cgroup")
+
+
+def _cgroup_cpu_quota(root: Path = _CGROUP_ROOT) -> Optional[int]:
+    """CPUs granted by the cgroup's CPU quota (docker ``cpus:``), rounded up.
+
+    Reads cgroup v2 ``cpu.max`` ("<quota> <period>" or "max <period>"), then
+    cgroup v1 ``cpu.cfs_quota_us`` / ``cpu.cfs_period_us``. ``None`` when there is
+    no quota (unlimited, or not running under a cgroup that exposes one).
+    """
+    import math
+
+    def ratio(quota: str, period: str) -> Optional[int]:
+        if quota == "max" or int(quota) <= 0 or int(period) <= 0:
+            return None
+        return max(1, math.ceil(int(quota) / int(period)))
+
+    # An unreadable or malformed cgroup file means "no quota known", never a failed model load.
+    try:
+        v2 = root / "cpu.max"
+        if v2.is_file():
+            quota, period = v2.read_text().split()[:2]
+            return ratio(quota, period)
+        for v1 in (root / "cpu", root / "cpu,cpuacct"):
+            quota_file, period_file = v1 / "cpu.cfs_quota_us", v1 / "cpu.cfs_period_us"
+            if quota_file.is_file() and period_file.is_file():
+                return ratio(quota_file.read_text().strip(), period_file.read_text().strip())
+    except (OSError, ValueError):
+        logger.warning("⚠️ CTC: could not read the cgroup CPU quota under %s", root, exc_info=True)
+    return None
+
+
+def effective_cpu_count(root: Path = _CGROUP_ROOT) -> Tuple[int, str]:
+    """CPUs this process can actually use, and where that number came from.
+
+    ``os.cpu_count()`` reports the host's cores, which over-subscribes a container
+    capped with ``cpus:``. The answer is the smaller of the cgroup quota and the
+    scheduler affinity set; ``os.cpu_count()`` is the last resort.
+    """
+    if hasattr(os, "sched_getaffinity"):
+        cpus, source = len(os.sched_getaffinity(0)), "CPU affinity"
+    else:
+        cpus, source = os.cpu_count() or 1, "os.cpu_count()"
+    quota = _cgroup_cpu_quota(root)
+    if quota is not None and quota < cpus:
+        cpus, source = quota, "cgroup CPU quota"
+    return max(1, cpus), source
+
+
+def align_threads(root: Path = _CGROUP_ROOT) -> Tuple[int, str]:
+    """ONNX intra-op threads for alignment: ``ALIGN_THREADS``, else the effective
+    CPU count capped at ``_DEFAULT_MAX_THREADS``. Returns (threads, source)."""
+    configured = os.environ.get("ALIGN_THREADS", "").strip()
+    if configured:
+        try:
+            threads = int(configured)
+        except ValueError:
+            threads = 0
+        if threads < 1:
+            raise ValueError(f"ALIGN_THREADS must be a positive integer, got {configured!r}")
+        return threads, "ALIGN_THREADS"
+    cpus, source = effective_cpu_count(root)
+    return min(_DEFAULT_MAX_THREADS, cpus), source
+
 
 def ctc_viterbi_first_frames(log_probs: Any, labels: Sequence[int], blank: int,
                              star: Optional[int] = None,
@@ -205,8 +271,10 @@ class QuartzNetAligner(ForcedAligner):
             )
             raise
         options = ort.SessionOptions()
-        options.intra_op_num_threads = max(1, min(8, os.cpu_count() or 1))
-        logger.info("⚙️ CTC: loading QuartzNet15x5 (onnxruntime, CPU) from %s", path)
+        threads, source = align_threads()
+        options.intra_op_num_threads = threads
+        logger.info("⚙️ CTC: loading QuartzNet15x5 (onnxruntime, CPU) from %s (%d threads from %s)",
+                    path, threads, source)
         self._session = ort.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
         self._model = self._session
         self._device = "cpu"
@@ -276,8 +344,6 @@ class QuartzNetAligner(ForcedAligner):
                 yield window
 
         emission = self._emissions_from_windows(counted())
-        if not samples:
-            raise ValueError("ffmpeg produced no audio samples")
         logger.info("⚙️ CTC: QuartzNet emissions for %.0fs audio (streamed, CPU)", samples / _SAMPLE_RATE)
         return emission, samples / emission.shape[1] / _SAMPLE_RATE
 
@@ -308,8 +374,10 @@ class QuartzNetAligner(ForcedAligner):
         import numpy as np
 
         parts = []
+        samples = 0
         for window in windows:
             window = np.asarray(window, dtype=np.float32)
+            samples += window.shape[0]
             if window.shape[0] <= _MIN_WINDOW_SAMPLES:
                 continue
             emphasised = np.empty_like(window)
@@ -322,6 +390,12 @@ class QuartzNetAligner(ForcedAligner):
             if window.shape[0] == _WINDOW_SAMPLES:
                 log_probs = log_probs[:_FRAMES_PER_WINDOW]
             parts.append(log_probs)
+        # Checked before concatenating: an empty decode otherwise fails as
+        # "need at least one array to concatenate", which names no cause.
+        if not parts:
+            if not samples:
+                raise ValueError("ffmpeg produced no audio samples")
+            raise ValueError(f"audio too short to align ({samples} samples)")
         return np.concatenate(parts)[None, :, :]
 
     def _alignment_backend(self) -> Tuple[Any, Any]:

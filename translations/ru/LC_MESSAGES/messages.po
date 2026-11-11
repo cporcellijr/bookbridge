@@ -1217,8 +1217,8 @@ msgstr "Начинаем связывание с BookFusion…"
 
 #: templates/admin_user_integrations.html:271
 #, python-brace-format
-msgid "Go to <a href=\"{url}\" target=\"_blank\" style=\"color:#aab4f5;\">{url}</a> and enter code <strong>{code}</strong> while signed in to this user's BookFusion account."
-msgstr "Перейдите на <a href=\"{url}\" target=\"_blank\" style=\"color:#aab4f5;\">{url}</a> и введите код <strong>{code}</strong>, войдя в аккаунт BookFusion этого пользователя."
+msgid "Go to <a href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#aab4f5;\">{url}</a> and enter code <strong>{code}</strong> while signed in to this user's BookFusion account."
+msgstr "Перейдите на <a href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#aab4f5;\">{url}</a> и введите код <strong>{code}</strong>, войдя в аккаунт BookFusion этого пользователя."
 
 #: templates/admin_user_integrations.html:290
 msgid "BookFusion linked to this user. Save or refresh to see the stored token."
@@ -1654,8 +1654,8 @@ msgstr[1] "Создаются {count} издания Storyteller..."
 msgstr[2] "Создаются {count} изданий Storyteller..."
 
 #: templates/index.html:2319
-msgid "Pending Suggestions"
-msgstr "Ожидающие предложения"
+msgid "Matches to review"
+msgstr "Совпадения для проверки"
 
 #: templates/index.html:2323
 msgid "Click to Review"
@@ -5660,8 +5660,8 @@ msgid "Failed to load book detail."
 msgstr "Не удалось загрузить сведения о книге."
 
 #: templates/suggestions.html:138
-msgid "Library Suggestions"
-msgstr "Предложения по библиотеке"
+msgid "Discover"
+msgstr "Обзор"
 
 #: templates/suggestions.html:139
 msgid "Scan your library to find unmatched audiobook/ebook pairs"
@@ -5746,8 +5746,8 @@ msgstr "Отклонить"
 
 #: templates/suggestions.html:242
 #, python-format
-msgid "No suggestions found above 60%% confidence."
-msgstr "Предложений с уверенностью выше 60%% не найдено."
+msgid "No pairs found above 60%% confidence."
+msgstr "Не найдено пар с уверенностью выше 60%%."
 
 #: templates/suggestions.html:242
 msgid "Run another scan after your library changes."
@@ -5766,12 +5766,12 @@ msgid "Batch Match Queue"
 msgstr "Очередь пакетного сопоставления"
 
 #: templates/suggestions.html:258
-msgid "Selected Suggestion"
-msgstr "Выбранное предложение"
+msgid "Selected Book"
+msgstr "Выбранная книга"
 
 #: templates/suggestions.html:259
-msgid "Click a suggestion to review and add to queue."
-msgstr "Нажмите на предложение, чтобы проверить его и добавить в очередь."
+msgid "Click a book to review it and add it to the queue."
+msgstr "Нажмите на книгу, чтобы проверить её и добавить в очередь."
 
 #: templates/suggestions.html:262
 msgid "Selected"
@@ -5786,8 +5786,8 @@ msgid "Ebook Match"
 msgstr "Электронная книга"
 
 #: templates/suggestions.html:295
-msgid "No ebook matches available for this suggestion. Storyteller-only queue is allowed."
-msgstr "Для этого предложения нет подходящих электронных книг. Можно поставить в очередь только с Storyteller."
+msgid "No ebook matches available for this audiobook. Storyteller-only queue is allowed."
+msgstr "Для этой аудиокниги нет подходящих электронных книг. Можно поставить в очередь только Storyteller."
 
 #: templates/suggestions.html:376
 #, python-brace-format, python-format
@@ -5845,8 +5845,8 @@ msgid "Same series"
 msgstr "Та же серия"
 
 #: templates/suggestions.html:820
-msgid "All current suggestions are hidden."
-msgstr "Все текущие предложения скрыты."
+msgid "Everything in this list is hidden for now."
+msgstr "Всё в этом списке пока скрыто."
 
 #: templates/suggestions.html:820
 msgid "Run Scan Library to refresh."
@@ -5933,3 +5933,420 @@ msgstr "Ручной выбор"
 #: templates/suggestions.html
 msgid "{count} skipped: choose the ebook on the card."
 msgstr "Пропущено: {count}. Выберите электронную книгу на карточке."
+
+#: templates/suggestions.html
+msgid "A newer scan finished. The list was refreshed; try again."
+msgstr "Завершилось более новое сканирование. Список обновлён, попробуйте ещё раз."
+
+#: templates/suggestions.html
+msgid "Active"
+msgstr "Активные"
+
+#: templates/suggestions.html
+msgid "Active and ignored"
+msgstr "Активные и игнорируемые"
+
+#: templates/suggestions.html
+msgid "Add all exact will queue this one"
+msgstr "«Добавить все точные» поставит эту книгу в очередь"
+
+#: templates/suggestions.html
+msgid "Add this ebook to BookBridge on its own, without an audiobook"
+msgstr "Добавить эту электронную книгу в BookBridge отдельно, без аудиокниги"
+
+#: templates/suggestions.html
+msgid "All series"
+msgstr "Все серии"
+
+#: templates/suggestions.html
+msgid "All sources"
+msgstr "Все источники"
+
+#: templates/suggestions.html
+msgid "All pairs"
+msgstr "Все пары"
+
+#: templates/suggestions.html
+msgid "Audiobook + Ebook"
+msgstr "Аудиокнига + электронная книга"
+
+#: templates/suggestions.html
+msgid "Best: {name}"
+msgstr "Лучшее совпадение: {name}"
+
+#: templates/suggestions.html
+msgid "Clear filters"
+msgstr "Сбросить фильтры"
+
+#: templates/suggestions.html
+msgid "Clear selection"
+msgstr "Снять выделение"
+
+#: templates/suggestions.html
+msgid "Could not load this list."
+msgstr "Не удалось загрузить этот список."
+
+#: templates/suggestions.html
+msgid "Could not save the change. Try again."
+msgstr "Не удалось сохранить изменение. Попробуйте ещё раз."
+
+#: templates/suggestions.html
+msgid "Create an ebook-only book for \"{title}\"? It syncs reading progress without an audiobook."
+msgstr "Создать книгу только с электронной версией для «{title}»? Прогресс чтения синхронизируется без аудиокниги."
+
+#: templates/suggestions.html
+msgid "Create ebook-only"
+msgstr "Создать только электронную"
+
+#: templates/suggestions.html
+msgid "Created an ebook-only book for \"{title}\"."
+msgstr "Создана книга только с электронной версией для «{title}»."
+
+#: templates/suggestions.html
+msgid "Ebook Only results appear after the next Scan Library."
+msgstr "Результаты вкладки «Только электронные» появятся после следующего сканирования библиотеки."
+
+#: templates/suggestions.html
+msgid "Ebooks"
+msgstr "Электронные книги"
+
+#: templates/suggestions.html
+msgid "Every ebook from the last scan has an audiobook match or is already in BookBridge."
+msgstr "У каждой электронной книги из последнего сканирования есть аудиокнига или она уже в BookBridge."
+
+#: templates/suggestions.html
+msgid "Exact"
+msgstr "Точное"
+
+#: templates/suggestions.html
+msgid "Exact, ready to add"
+msgstr "Точное совпадение, можно добавлять"
+
+#: templates/suggestions.html
+msgid "Find audiobook"
+msgstr "Найти аудиокнигу"
+
+#: templates/suggestions.html
+msgid "Group by series"
+msgstr "Группировать по сериям"
+
+#: templates/suggestions.html
+msgid "Hid \"{title}\" for this session."
+msgstr "«{title}» скрыта на время этого сеанса."
+
+#: templates/suggestions.html
+msgid "Hide for now"
+msgstr "Скрыть на время"
+
+#: templates/suggestions.html
+msgid "Hide it in this browser session only. Nothing is saved; it comes back in a new session."
+msgstr "Скрыть только в этом сеансе браузера. Ничего не сохраняется: в новом сеансе она вернётся."
+
+#: templates/suggestions.html
+msgid "Ignore"
+msgstr "Игнорировать"
+
+#: templates/suggestions.html
+msgid "Ignored"
+msgstr "Игнорируемые"
+
+#: templates/suggestions.html
+msgid "Ignored \"{title}\". It stays out of this list after new scans."
+msgstr "«{title}» в игнор-списке. После новых сканирований её здесь не будет."
+
+#: templates/suggestions.html
+msgid "Last scan: {date}"
+msgstr "Последнее сканирование: {date}"
+
+#: templates/suggestions.html
+msgid "List this ebook again after the next scan checks it."
+msgstr "Снова показывать эту электронную книгу после проверки при следующем сканировании."
+
+#: templates/suggestions.html
+msgid "Needs review"
+msgstr "Требует проверки"
+
+#: templates/suggestions.html
+msgid "No audio match found"
+msgstr "Аудиоверсия не найдена"
+
+#: templates/suggestions.html
+msgid "No audio match found as of {date}."
+msgstr "Аудиоверсия не найдена (по состоянию на {date})."
+
+#: templates/suggestions.html
+msgid "No ebook match"
+msgstr "Нет электронной книги"
+
+#: templates/suggestions.html
+msgid "No qualifying audiobook was found in the last scan. That does not mean none exists."
+msgstr "Подходящая аудиокнига в последнем сканировании не найдена. Это не значит, что её не существует."
+
+#: templates/suggestions.html
+msgid "No reliable results yet: the last scan could not read every source."
+msgstr "Надёжных результатов пока нет: последнее сканирование не смогло прочитать все источники."
+
+#: templates/suggestions.html
+msgid "No scan has finished yet."
+msgstr "Ни одно сканирование ещё не завершено."
+
+#: templates/suggestions.html
+msgid "Not fully read: {sources}"
+msgstr "Прочитано не полностью: {sources}"
+
+#: templates/suggestions.html
+msgid "Nothing matches these filters."
+msgstr "Нет совпадений с этими фильтрами."
+
+#: templates/suggestions.html
+msgid "Open Search with this ebook selected and look for its audiobook"
+msgstr "Открыть «Поиск» с этой электронной книгой и найти для неё аудиокнигу"
+
+#: templates/suggestions.html
+msgid "Added \"{title}\" to your library. It was already in BookBridge."
+msgstr "Книга «{title}» добавлена в вашу библиотеку. Она уже была в BookBridge."
+
+#: templates/suggestions.html
+msgid "Waiting for another library scan to finish..."
+msgstr "Ожидание завершения другого сканирования библиотеки..."
+
+#: templates/suggestions.html
+msgid "Find any book"
+msgstr "Найти любую книгу"
+
+#: templates/suggestions.html
+msgid "Search your library by title, author, or filename."
+msgstr "Ищите в библиотеке по названию, автору или имени файла."
+
+#: templates/suggestions.html
+msgid "No audiobooks found. You can still add an ebook by itself."
+msgstr "Аудиокниги не найдены. Электронную книгу можно добавить и без аудио."
+
+#: templates/suggestions.html
+msgid "Nothing found for this search."
+msgstr "По этому запросу ничего не найдено."
+
+#: templates/suggestions.html
+msgid "No audiobook (ebook only)"
+msgstr "Без аудиокниги (только электронная книга)"
+
+#: templates/suggestions.html
+msgid "Add an ebook by itself, without audio"
+msgstr "Добавить электронную книгу отдельно, без аудио"
+
+#: templates/suggestions.html
+msgid "Added to the queue."
+msgstr "Добавлено в очередь."
+
+#: templates/suggestions.html
+msgid "Your library services could not be reached. Check your integrations and try again."
+msgstr "Не удалось связаться с сервисами вашей библиотеки. Проверьте интеграции и повторите попытку."
+
+#: templates/suggestions.html
+msgid "The Ebook Only list changed since you opened it. Search for the book instead."
+msgstr "Список «Только электронные книги» изменился с момента открытия. Найдите книгу через поиск."
+
+#: templates/suggestions.html
+msgid "Open its ebook candidates in the review panel"
+msgstr "Открыть кандидатов в электронные книги на панели проверки"
+
+#: templates/suggestions.html
+msgid "Other / No Series"
+msgstr "Прочие / без серии"
+
+#: templates/suggestions.html
+msgid "Pairs"
+msgstr "Пары"
+
+#: templates/suggestions.html
+msgid "Queue every pair in this view whose best match is exact and needs no choice"
+msgstr "Поставить в очередь все пары в этом списке, лучшее совпадение которых точное и не требует выбора"
+
+#: templates/suggestions.html
+msgid "Restore"
+msgstr "Восстановить"
+
+#: templates/suggestions.html
+msgid "Restored \"{title}\". The next scan checks it again."
+msgstr "«{title}» восстановлена. Следующее сканирование проверит её снова."
+
+#: templates/suggestions.html
+msgid "Retry"
+msgstr "Повторить"
+
+#: templates/suggestions.html
+msgid "Select eligible"
+msgstr "Выбрать подходящие"
+
+#: templates/suggestions.html
+msgid "Select eligible books in {series}"
+msgstr "Выбрать подходящие книги в серии {series}"
+
+#: templates/suggestions.html
+msgid "Select {title}"
+msgstr "Выбрать «{title}»"
+
+#: templates/suggestions.html
+msgid "Selection cleared in {series}"
+msgstr "Выделение снято в серии {series}"
+
+#: templates/suggestions.html
+msgid "Show"
+msgstr "Показать"
+
+#: templates/suggestions.html
+msgid "Show hidden"
+msgstr "Показать скрытые"
+
+#: templates/suggestions.html
+msgid "Some selected pairs are not exact matches; check them in the queue before matching."
+msgstr "Некоторые выбранные пары не являются точными совпадениями; проверьте их в очереди перед сопоставлением."
+
+#: templates/suggestions.html
+msgid "Source"
+msgstr "Источник"
+
+#: templates/suggestions.html
+msgid "Stop listing this ebook. This is saved and survives new scans; restore it from Show: Ignored."
+msgstr "Больше не показывать эту электронную книгу. Это сохраняется и переживает новые сканирования; восстановить можно через «Показать: Игнорируемые»."
+
+#: templates/suggestions.html
+msgid "Stop listing this audiobook. This is saved and survives new scans."
+msgstr "Больше не показывать эту аудиокнигу. Это сохраняется и переживает новые сканирования."
+
+#: templates/suggestions.html
+msgid "The action failed ({code})."
+msgstr "Действие не выполнено ({code})."
+
+#: templates/suggestions.html
+#, python-format
+msgid "The best match is below 100%%"
+msgstr "Лучшее совпадение ниже 100%%"
+
+#: templates/suggestions.html
+msgid "The ebook file could not be read from its source."
+msgstr "Не удалось прочитать файл электронной книги из источника."
+
+#: templates/suggestions.html
+msgid "The latest scan ({date}) could not read every source, so these results may be incomplete."
+msgstr "Последнее сканирование ({date}) не смогло прочитать все источники, поэтому результаты могут быть неполными."
+
+#: templates/suggestions.html
+msgid "The latest scan could not read every source, so these results may be incomplete."
+msgstr "Последнее сканирование не смогло прочитать все источники, поэтому результаты могут быть неполными."
+
+#: templates/suggestions.html
+msgid "This ebook changed since the scan. The list was refreshed."
+msgstr "Эта электронная книга изменилась после сканирования. Список обновлён."
+
+#: templates/suggestions.html
+msgid "This ebook is already in BookBridge."
+msgstr "Эта электронная книга уже в BookBridge."
+
+#: templates/suggestions.html
+msgid "This ebook is ignored. The list was refreshed."
+msgstr "Эта электронная книга в игнор-списке. Список обновлён."
+
+#: templates/suggestions.html
+msgid "This ebook is no longer ignored. The list was refreshed."
+msgstr "Эта электронная книга больше не игнорируется. Список обновлён."
+
+#: templates/suggestions.html
+msgid "This source cannot create an ebook-only book."
+msgstr "Этот источник не может создать книгу только с электронной версией."
+
+#: templates/suggestions.html
+msgid "Title, author or series"
+msgstr "Название, автор или серия"
+
+#: templates/suggestions.html
+msgid "Two ebooks match equally: pick one in the review panel"
+msgstr "Две электронные книги подходят одинаково: выберите одну на панели проверки"
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s ebook"
+msgid_plural "%(num)s ebooks"
+msgstr[0] "%(num)s электронная книга"
+msgstr[1] "%(num)s электронные книги"
+msgstr[2] "%(num)s электронных книг"
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s ebook could not be checked reliably and is not listed."
+msgid_plural "%(num)s ebooks could not be checked reliably and are not listed."
+msgstr[0] "%(num)s электронную книгу не удалось надёжно проверить, она не показана."
+msgstr[1] "%(num)s электронные книги не удалось надёжно проверить, они не показаны."
+msgstr[2] "%(num)s электронных книг не удалось надёжно проверить, они не показаны."
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s eligible"
+msgid_plural "%(num)s eligible"
+msgstr[0] "%(num)s подходит"
+msgstr[1] "%(num)s подходят"
+msgstr[2] "%(num)s подходят"
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s eligible book selected in %(series)s"
+msgid_plural "%(num)s eligible books selected in %(series)s"
+msgstr[0] "Выбрана %(num)s подходящая книга в серии %(series)s"
+msgstr[1] "Выбраны %(num)s подходящие книги в серии %(series)s"
+msgstr[2] "Выбрано %(num)s подходящих книг в серии %(series)s"
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s hidden for now"
+msgid_plural "%(num)s hidden for now"
+msgstr[0] "%(num)s скрыта пока"
+msgstr[1] "%(num)s скрыты пока"
+msgstr[2] "%(num)s скрыто пока"
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s ignored"
+msgid_plural "%(num)s ignored"
+msgstr[0] "%(num)s игнорируется"
+msgstr[1] "%(num)s игнорируются"
+msgstr[2] "%(num)s игнорируются"
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s needs review"
+msgid_plural "%(num)s need review"
+msgstr[0] "%(num)s требует проверки"
+msgstr[1] "%(num)s требуют проверки"
+msgstr[2] "%(num)s требуют проверки"
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s queued"
+msgid_plural "%(num)s queued"
+msgstr[0] "%(num)s в очереди"
+msgstr[1] "%(num)s в очереди"
+msgstr[2] "%(num)s в очереди"
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s selected"
+msgid_plural "%(num)s selected"
+msgstr[0] "%(num)s выбрана"
+msgstr[1] "%(num)s выбраны"
+msgstr[2] "%(num)s выбрано"
+
+#: templates/suggestions.html
+#, python-format
+msgid "%(num)s pair"
+msgid_plural "%(num)s pairs"
+msgstr[0] "%(num)s пара"
+msgstr[1] "%(num)s пары"
+msgstr[2] "%(num)s пар"
+
+#: templates/settings.html
+msgid "Ignore local files in Suggestions"
+msgstr "Игнорировать локальные файлы в предложениях"
+
+#: templates/settings.html
+msgid "Skip local files in Pair Suggestions and Ebook Only on the next scan. Connected library books stay included."
+msgstr "Не учитывать локальные файлы в парных предложениях и разделе «Только электронная книга» при следующем сканировании. Книги из подключенных библиотек останутся в списке."

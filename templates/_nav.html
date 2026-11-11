@@ -1,11 +1,9 @@
 {# Canonical top navigation, included by base.html on every page that does
    not set hide_chrome. Mirrors the gating semantics of templates/index.html's
-   nav (is_admin = current_user and current_user.is_admin): Stats/Suggestions/
-   Settings are admin-only as before; Logs joins them (it was never advertised
-   to regular users on the dashboard). Add Book stays visible to every
-   logged-in user, matching today's dashboard button and route enforcement.
-   Add Book also carries a count badge whenever the acting user's match
-   queue is non-empty. #}
+   nav (is_admin = current_user and current_user.is_admin): Settings and Logs
+   are admin-only; Stats is shown to every reader (their own data). Discover (the Suggestions page) is visible to every
+   logged-in user (regular users get only its Search tab, which replaced Add Book) and carries
+   a count badge whenever the acting user's match queue is non-empty. #}
 {% set is_admin = current_user and current_user.is_admin %}
 {% set queued_count = match_queue_count() %}
 <nav class="top-nav">
@@ -18,14 +16,9 @@
 
     <div class="nav-tabs">
         <a href="/" class="nav-tab {% if active_page == 'library' %}active{% endif %}">{{ _('Library') }}</a>
-        <a href="{{ url_for('add_book') }}" class="nav-tab {% if active_page == 'add_book' %}active{% endif %}">{{ _('Add Book') }}{% if queued_count > 0 %} <span class="nav-tab-badge">{{ queued_count }}</span>{% endif %}</a>
+        <a href="{{ url_for('suggestions') }}" class="nav-tab {% if active_page == 'suggestions' %}active{% endif %}">{{ _('Discover') }}{% if queued_count > 0 %} <span class="nav-tab-badge">{{ queued_count }}</span>{% endif %}</a>
         <a href="{{ url_for('job_queue_page') }}" class="nav-tab {% if active_page == 'job_queue' %}active{% endif %}">{{ _('Job Queue') }}</a>
-        {% if is_admin %}
         <a href="/stats" class="nav-tab {% if active_page == 'stats' %}active{% endif %}">{{ _('Stats') }}</a>
-        {% endif %}
-        {% if is_admin %}
-        <a href="/suggestions" class="nav-tab {% if active_page == 'suggestions' %}active{% endif %}">{{ _('Suggestions') }}</a>
-        {% endif %}
         {% if is_admin %}
         <a href="/logs" class="nav-tab {% if active_page == 'logs' %}active{% endif %}">{{ _('Logs') }}</a>
         {% endif %}
@@ -52,7 +45,7 @@
 
     <div class="library-links">
         {% set audio_source = '' %}
-        {% if abs_library_url and abs_library_url|lower != 'disabled' %}
+        {% if abs_library_url and abs_library_url|lower != 'disabled' and get_user_val('ABS_ENABLED', '')|lower not in ['false', '0', 'no', 'off'] %}
             {% set audio_source = 'abs' %}
             {{ library_link(abs_library_url, '/static/audiobookshelf.png', _('Audiobookshelf audiobook library')) }}
         {% elif grimmory_configured %}
@@ -93,6 +86,10 @@
     </div>
 
     {% if current_user %}
+    <form class="nav-interface-form" method="POST" action="{{ url_for('account_interface', next=request.path) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" name="ui_mode" value="new" class="nav-interface-button">{{ _('New interface') }}</button>
+    </form>
     <div class="user-menu" id="bbnav-user-menu">
         <button type="button" class="user-menu-trigger" id="bbnav-user-menu-toggle"
             aria-haspopup="true" aria-expanded="false" title="{{ _('Account') }}: {{ current_user.username }}">

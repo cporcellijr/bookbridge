@@ -245,19 +245,18 @@ class RenderedTranslationTests(I18nTestBase):
         self.assertIn('Сменить пароль', body)
         self.assertIn('Вы вошли как <strong>admin</strong>', body)
 
-    def test_add_book_renders_russian(self):
+    def test_search_tab_renders_russian(self):
         _write_catalog(self.translations, 'ru', {
-            'Add / Update Book': 'Добавить / обновить книгу',
+            'Find any book': 'Найти любую книгу',
             'Reader Documents': 'Документы читалки',
-            'Searching...': 'Поиск...',
+            'Search by title, author, or filename...': 'Поиск по названию, автору или файлу...',
         })
         self._login()
         self.client.post('/account/language', data={'language': 'ru'}, follow_redirects=False)
-        body = self.client.get('/add-book').get_data(as_text=True)
-        self.assertIn('<h2>Добавить / обновить книгу</h2>', body)
+        body = self.client.get('/suggestions?tab=search').get_data(as_text=True)
+        self.assertIn('<span class="tab-sub">Найти любую книгу</span>', body)
         self.assertIn('Документы читалки', body)
-        # data-working-label is shown on the button while a search runs.
-        self.assertIn('data-working-label="Поиск..."', body)
+        self.assertIn('placeholder="Поиск по названию, автору или файлу..."', body)
 
     def test_integrations_pages_render_russian(self):
         _write_catalog(self.translations, 'ru', {
@@ -280,7 +279,7 @@ class RenderedTranslationTests(I18nTestBase):
         _write_catalog(self.translations, 'ru', {
             'Application Logs': 'Журнал приложения',
             'Unified activity dashboard': 'Сводная панель активности',
-            'Library Suggestions': 'Предложения по библиотеке',
+            'Discover': 'Обзор',
             # Counts go through ngettext, so Russian gets all three plural forms.
             ('%(num)s item', '%(num)s items'):
                 ('%(num)s элемент', '%(num)s элемента', '%(num)s элементов'),
@@ -290,7 +289,7 @@ class RenderedTranslationTests(I18nTestBase):
         self.assertIn('Журнал приложения', self.client.get('/logs').get_data(as_text=True))
         self.assertIn('Сводная панель активности', self.client.get('/stats').get_data(as_text=True))
         body = self.client.get('/suggestions').get_data(as_text=True)
-        self.assertIn('Предложения по библиотеке', body)
+        self.assertIn('<h2>Обзор</h2>', body)
         self.assertIn('id="queueCount">0 элементов</span>', body)
 
     def test_confirm_survives_an_apostrophe_in_the_translation(self):

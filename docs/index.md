@@ -16,6 +16,16 @@
 
 **BookBridge** is a self-hosted sync engine for audiobooks and ebooks. It keeps your reading and listening position aligned across multiple apps, whether the source is Audiobookshelf, KOReader, BookFusion, Grimmory, BookOrbit, Kavita, Calibre-Web Automated, or Storyteller. With the current Bridge Sync KOReader plugin, it can also move highlights and notes between supported readers.
 
+### Screenshots
+
+The New interface, shown with a demo library of public-domain classics.
+
+![Library in the New interface: book covers with your progress and a strip showing where each book is linked](assets/screenshots/library.png)
+
+![Book drawer showing the position in each app and recent syncs](assets/screenshots/book-drawer.png)
+
+![Discover listing audiobook and ebook pairs to review](assets/screenshots/discover.png)
+
 ### What do you actually need?
 
 Just two things:
@@ -72,9 +82,9 @@ BookBridge does its own audio ↔ text alignment, using built-in Whisper transcr
 - **A Job Queue page** showing waiting, processing and recently finished books, with staged work you can reorder.
 - **Self-service integrations** so each reader can manage their own usernames, passwords, tokens, API keys, and sync toggles from Account -> My Integrations, while admins can still manage them centrally.
 - **Dashboard** for live sync status, reading session details, direct service links, source badges, author/series/format filters, richer sorting, optional one-card-per-series display, and a **Show position** excerpt of the text where you are currently synced.
-- **Add / Update Book** for ABS, Grimmory, or BookOrbit audio; ABS, Grimmory, BookOrbit, Kavita, CWA, BookFusion, or local ebook sources; Storyteller links; ebook-only flows; and reader document fixes.
-- **A match queue** inside Add / Update Book for reviewing and linking books in bulk.
-- **Library Suggestions** for scanning, review, and queue building, with optional scheduled scans and cron full refreshes.
+- **Discover → Search** for ABS, Grimmory, or BookOrbit audio; ABS, Grimmory, BookOrbit, Kavita, CWA, BookFusion, or local ebook sources; Storyteller links; ebook-only flows; and reader document fixes.
+- **A Batch Match Queue** inside Discover for reviewing and linking books in bulk.
+- **Discover (Pairs and Ebook Only)** for scanning, review, and queue building, per reader, with optional scheduled scans and cron full refreshes.
 - **Storyteller Editions** for building and uploading read-along books.
 - **Read-along EPUBs for BookOrbit**, built from BookBridge's own alignment with no
   Storyteller server required, with dashboard pills showing CTC and read-along status.

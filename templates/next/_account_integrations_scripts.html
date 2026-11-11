@@ -1,0 +1,179 @@
+<script>
+        const TEST_URL_BASE = {{ url_for('account_test_connection', service='__service__')|tojson }};
+        const ABS_LIB_URL = {{ url_for('account_abs_libraries')|tojson }};
+        const BOOKLORE_LIB_URL = {{ url_for('account_booklore_libraries')|tojson }};
+
+        function toggleIntegrationGroup(toggle) {
+            const body = document.getElementById(toggle.dataset.bodyId || '');
+            if (body) body.classList.toggle('collapsed', !toggle.checked);
+            const sourceSelectId = toggle.dataset.sourceSelect;
+            if (sourceSelectId) {
+                const select = document.getElementById(sourceSelectId);
+                if (!select) return;
+                if (!toggle.checked) {
+                    select.value = 'off';
+                } else if (!select.value || select.value === 'off') {
+                    select.value = toggle.dataset.sourceDefault || 'grimmory';
+                }
+            }
+        }
+
+        function syncCollectionGateFromSource(select) {
+            const gate = document.getElementById(select.dataset.sourceGate || '');
+            if (!gate) return;
+            gate.checked = !!select.value && select.value !== 'off';
+            toggleIntegrationGroup(gate);
+        }
+
+        function collectIntegrationPayload() {
+            const payload = {};
+            document.querySelectorAll('input[name], select[name]').forEach((field) => {
+                if (field.type === 'checkbox') {
+                    payload[field.name] = field.checked;
+                } else {
+                    payload[field.name] = field.value;
+                }
+            });
+            return payload;
+        }
+
+        function findLibraries(btn, service, fieldKey) {
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '...';
+            const url = service === 'abs' ? ABS_LIB_URL : BOOKLORE_LIB_URL;
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectIntegrationPayload())
+            })
+                .then((r) => r.json())
+                .then((data) => {
+                    if (data && data.error) { alert(bbFormat({{ _('Error: {error}')|tojson }}, { error: data.error })); return; }
+                    const picker = document.getElementById(fieldKey + '_picker');
+                    picker.innerHTML = '<option value=""></option>';
+                    picker.options[0].textContent = {{ _('Select a library...')|tojson }};
+                    (data || []).forEach((lib) => {
+                        const opt = document.createElement('option');
+                        opt.value = lib.id;
+                        opt.textContent = (lib.name || lib.id) + ' (' + lib.id + ')'
+                            + (lib.mediaType ? ' - ' + lib.mediaType : '');
+                        picker.appendChild(opt);
+                    });
+                    if (!data || !data.length) {
+                        alert({{ _('No libraries found. Check the account fields above.')|tojson }});
+                        return;
+                    }
+                    picker.style.display = 'block';
+                })
+                .catch((e) => alert(bbFormat({{ _('Lookup failed: {error}')|tojson }}, { error: e })))
+                .finally(() => { btn.disabled = false; btn.textContent = original; });
+        }
+
+        function testUserIntegration(btn) {
+            const original = btn.textContent;
+            const service = btn.dataset.service;
+            btn.disabled = true;
+            btn.classList.remove('ok', 'fail');
+            btn.textContent = {{ _('Testing...')|tojson }};
+
+            fetch(TEST_URL_BASE.replace('__service__', encodeURIComponent(service)), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectIntegrationPayload())
+            })
+                .then((response) => response.json())
+                .then((data) => {
+                    btn.classList.add(data.ok ? 'ok' : 'fail');
+                    btn.textContent = data.ok ? {{ _('Connected')|tojson }} : {{ _('Failed')|tojson }};
+                    alert(bbFormat(data.ok ? {{ _('Connected: {message}')|tojson }} : {{ _('Failed: {message}')|tojson }}, { message: data.message }));
+                    window.setTimeout(() => {
+                        btn.classList.remove('ok', 'fail');
+                        btn.textContent = original;
+                    }, 3000);
+                })
+                .catch((err) => {
+                    btn.classList.add('fail');
+                    btn.textContent = {{ _('Error')|tojson }};
+                    alert(bbFormat({{ _('Test failed: {error}')|tojson }}, { error: err }));
+                    window.setTimeout(() => {
+                        btn.classList.remove('fail');
+                        btn.textContent = original;
+                    }, 3000);
+                })
+                .finally(() => {
+                    btn.disabled = false;
+                });
+        }
+
+        function setBookFusionStatus(text) {
+            const status = document.getElementById('bookfusion_link_status');
+            if (status) status.textContent = text || '';
+        }
+
+        function setBookFusionLinked(linked) {
+            const pill = document.getElementById('bookfusion_link_pill');
+            if (!pill) return;
+            pill.classList.toggle('linked', linked);
+            pill.classList.toggle('unlinked', !linked);
+            pill.textContent = linked ? {{ _('Linked')|tojson }} : {{ _('Not linked')|tojson }};
+        }
+
+        function startBookFusionLink() {
+            setBookFusionStatus({{ _('Starting BookFusion link...')|tojson }});
+            fetch('/api/bookfusion/device/start', { method: 'POST' })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+                .then(function (result) {
+                    const data = result.data || {};
+                    if (!result.ok || !data.ok) {
+                        setBookFusionStatus(data.message || {{ _('Could not start BookFusion link.')|tojson }});
+                        return;
+                    }
+                    const interval = Number(data.interval || 5);
+                    const expiresIn = Number(data.expires_in || 600);
+                    setBookFusionStatus(bbFormat({{ _('Open {url} and enter code {code}. Waiting for authorization...')|tojson }}, { url: data.verification_uri, code: data.user_code }));
+                    window.open(data.verification_uri, '_blank', 'noopener');
+                    pollBookFusionToken(data.device_code, interval, Date.now() + expiresIn * 1000);
+                })
+                .catch(function (err) {
+                    setBookFusionStatus(bbFormat({{ _('BookFusion link failed: {error}')|tojson }}, { error: err }));
+                });
+        }
+
+        function pollBookFusionToken(deviceCode, intervalSeconds, deadlineMs) {
+            if (Date.now() > deadlineMs) {
+                setBookFusionStatus({{ _('BookFusion link expired. Start a new link and try again.')|tojson }});
+                return;
+            }
+            window.setTimeout(function () {
+                fetch('/api/bookfusion/device/poll', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ device_code: deviceCode })
+                })
+                    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+                    .then(function (result) {
+                        const data = result.data || {};
+                        if (result.ok && data.ok) {
+                            const enabled = document.querySelector('input[name="BOOKFUSION_ENABLED"]');
+                            if (enabled) {
+                                enabled.checked = true;
+                                toggleIntegrationGroup(enabled);
+                            }
+                            setBookFusionLinked(true);
+                            setBookFusionStatus({{ _('BookFusion linked for this account.')|tojson }});
+                            return;
+                        }
+                        if (data.error === 'authorization_pending' || data.error === 'slow_down') {
+                            const nextInterval = data.error === 'slow_down' ? intervalSeconds + 5 : intervalSeconds;
+                            pollBookFusionToken(deviceCode, nextInterval, deadlineMs);
+                            return;
+                        }
+                        setBookFusionStatus(data.message || bbFormat({{ _('BookFusion link failed: {error}')|tojson }}, { error: (data.error || {{ _('unknown error')|tojson }}) }));
+                    })
+                    .catch(function (err) {
+                        setBookFusionStatus(bbFormat({{ _('BookFusion token poll failed: {error}')|tojson }}, { error: err }));
+                    });
+            }, Math.max(1, intervalSeconds) * 1000);
+        }
+    </script>

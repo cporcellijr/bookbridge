@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Optional
 
 from src.api.api_clients import ABSClient
+from src.services.current_audio_chapter import real_chapter_rows
 from src.api.booklore_client import BookloreClient
 from src.api.bookorbit_client import BookOrbitClient
 from src.utils.config_loader import env_truthy
 from src.utils.logging_utils import sanitize_log_data
+from src.utils.series_metadata import extract_series_from_abs_metadata, extract_series_from_library_detail
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,9 @@ class AudioResult:
     provider_book_id: Optional[str] = None
     provider_file_id: Optional[str] = None
     path: str = ""
+    series_name: Optional[str] = None
+    series_sequence: Optional[float] = None
+    series_source: Optional[str] = None
 
 
 def _series_label(series_name: str | None, series_index: str | int | float | None, title: str) -> str:
@@ -88,9 +94,15 @@ class AudioSourceAdapter:
 class ABSAudioSourceAdapter(AudioSourceAdapter):
     source_name = "ABS"
 
-    def __init__(self, abs_client: ABSClient, data_dir: Path | None = None):
+    def __init__(
+        self,
+        abs_client: ABSClient,
+        data_dir: Path | None = None,
+        catalog_items: list[dict] | None = None,
+    ):
         self.abs_client = abs_client
         self.data_dir = Path(data_dir) if data_dir is not None else None
+        self.catalog_items = catalog_items
 
     @staticmethod
     def _parse_library_scope() -> str | None:
@@ -113,6 +125,12 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
 
     def _get_search_pool(self) -> list[dict]:
         library_id = self._parse_library_scope()
+        if self.catalog_items is not None:
+            return [
+                item for item in self.catalog_items
+                if (not library_id or str(item.get("libraryId") or "") == library_id)
+                and self.abs_client._item_has_audio(item)
+            ]
         if library_id:
             return self.abs_client.get_audiobooks_for_lib(library_id)
         return self.abs_client.get_all_audiobooks()
@@ -188,20 +206,26 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
         library_scope = self._parse_library_scope()
         query_mode = bool(query)
         pool = (
-            self.abs_client.search_audiobooks(query, library_id=library_scope)
-            if query_mode
-            else self._get_search_pool()
+            self._get_search_pool()
+            if self.catalog_items is not None or not query_mode
+            else self.abs_client.search_audiobooks(query, library_id=library_scope)
         )
         results: list[AudioResult] = []
+        self.catalog_incomplete = False
         for item in pool:
-            if not query_mode and not self._matches_query(item, query):
-                continue
             item_id = str(item.get("id") or "")
             if not item_id:
                 continue
             media = item.get("media", {}) or {}
             metadata = media.get("metadata", {}) or {}
             title = self._get_title(item)
+            if title == "Unknown" and self.catalog_items is not None:
+                # Catalog mode makes no per-item detail lookups: skip it and report the catalog incomplete.
+                logger.info("ABS catalog item '%s' has no title; skipped and catalog marked incomplete", item_id)
+                self.catalog_incomplete = True
+                continue
+            if (self.catalog_items is not None or not query_mode) and not self._matches_query(item, query):
+                continue
             if title == "Unknown":
                 details = self.get_metadata(item_id) or {}
                 if details:
@@ -212,6 +236,7 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
             authors = self._get_authors(item)
             subtitle = metadata.get("subtitle") or ""
             series_label = (metadata.get("seriesName") or "").strip()
+            series_name, series_seq = extract_series_from_abs_metadata(metadata)
             cover_url = self.get_cover_url(item_id) or ""
             duration = media.get("duration")
             results.append(
@@ -221,6 +246,9 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
                     title=title,
                     subtitle=subtitle,
                     series_label=series_label,
+                    series_name=series_name,
+                    series_sequence=series_seq,
+                    series_source="abs" if series_name else None,
                     authors=authors,
                     language=str(metadata.get("language") or "").strip(),
                     cover_url=cover_url,
@@ -273,9 +301,10 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
 class BookLoreAudioSourceAdapter(AudioSourceAdapter):
     source_name = "BookLore"
 
-    def __init__(self, booklore_client: BookloreClient, data_dir: Path):
+    def __init__(self, booklore_client: BookloreClient, data_dir: Path, catalog_items: list[dict] | None = None):
         self.booklore_client = booklore_client
         self.data_dir = Path(data_dir)
+        self.catalog_items = catalog_items
 
     @staticmethod
     def _format_authors(book: dict) -> str:
@@ -392,7 +421,13 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
     def search(self, query: str) -> list[AudioResult]:
         results: list[AudioResult] = []
         include_info = bool(query and query.strip())
-        for book in self.booklore_client.search_audiobooks(query, include_info=include_info):
+        books = self.catalog_items if self.catalog_items is not None else self.booklore_client.search_audiobooks(query, include_info=include_info)
+        for book in books:
+            if self.catalog_items is not None:
+                if not self.booklore_client._book_supports_audiobook(book):
+                    continue
+                if query and query.casefold() not in str(book.get("title") or "").casefold():
+                    continue
             book_id = book.get("id")
             if book_id is None:
                 continue
@@ -401,21 +436,16 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
             title = book.get("title") or book.get("fileName") or f"Grimmory {book_id}"
             provider_file_id = info.get("bookFileId") or book.get("bookFileId")
             subtitle = (book.get("subtitle") or "").strip()
-            series_name_raw = (
-                book.get("seriesName")
-                or book.get("series_name")
-                or book.get("series")
-            )
-            if isinstance(series_name_raw, dict):
-                series_name = series_name_raw.get("name")
-            else:
-                series_name = series_name_raw
-            series_index = (
+            series_name, series_seq = extract_series_from_library_detail(book)
+            legacy_series = book.get("seriesName") or book.get("series_name") or book.get("series")
+            if isinstance(legacy_series, dict):
+                legacy_series = legacy_series.get("name")
+            legacy_index = (
                 book.get("seriesNumber")
                 or book.get("seriesIndex")
                 or book.get("series_number")
             )
-            series_label = _series_label(series_name, series_index, title)
+            series_label = _series_label(legacy_series, legacy_index, title)
             results.append(
                 AudioResult(
                     source="BookLore",
@@ -423,6 +453,9 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                     title=title,
                     subtitle=subtitle,
                     series_label=series_label,
+                    series_name=series_name,
+                    series_sequence=series_seq,
+                    series_source="booklore" if series_name else None,
                     authors=self._format_authors(book),
                     language=str(book.get("language") or "").strip(),
                     cover_url=self.get_cover_url(str(book_id)) or "",
@@ -514,8 +547,8 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
             )
         return files
 
-    def get_chapters(self, source_id: str) -> list[dict]:
-        info = self.booklore_client.get_audiobook_info(source_id) or {}
+    def _parse_marker_chapters(self, info: dict, source_id: str) -> list[dict]:
+        """Existing Grimmory marker parsing moved unchanged for alignment."""
         chapters = info.get("chapters") or []
         if chapters:
             raw_total_duration = None
@@ -689,6 +722,40 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                 )
                 return valid
 
+        return []
+
+    def get_real_chapters(self, source_id: str) -> list[dict]:
+        """Only true Grimmory chapter rows, without fabricated titles or tracks."""
+        info = self.booklore_client.get_audiobook_info(source_id) or {}
+        raw = info.get("chapters") or []
+        if not isinstance(raw, list):
+            return []
+        result = []
+        start_keys = (
+            "startTimeMs", "start_time_ms", "startTimeMillis", "startMillis",
+            "startMs", "start_ms", "startTime", "start_time", "start",
+            "offsetMs", "offset_ms", "offset",
+        )
+        for row in self._parse_marker_chapters(info, source_id):
+            index = row["id"]
+            if index >= len(raw) or not isinstance(raw[index], dict):
+                continue
+            marker = raw[index]
+            # A start the parser had to infer (from ends or durations) is not a real marker.
+            if not any(self._to_seconds(marker.get(key)) is not None for key in start_keys):
+                continue
+            result.append({
+                "title": marker.get("title"),
+                "start": row["start"], "end": row["end"],
+            })
+        return real_chapter_rows(result)
+
+    def get_chapters(self, source_id: str) -> list[dict]:
+        info = self.booklore_client.get_audiobook_info(source_id) or {}
+        markers = self._parse_marker_chapters(info, source_id)
+        if markers:
+            return markers
+
         tracks = info.get("tracks") or []
         if tracks:
             synthetic = []
@@ -746,9 +813,8 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
             title = book.get("title") or f"BookOrbit {book_id}"
             duration = book.get("duration_seconds")
             subtitle = (book.get("subtitle") or "").strip()
-            series_name = book.get("seriesName")
-            series_index = book.get("seriesIndex")
-            series_label = _series_label(series_name, series_index, title)
+            series_name, series_seq = extract_series_from_library_detail(book)
+            series_label = _series_label(book.get("seriesName"), book.get("seriesIndex"), title)
             results.append(
                 AudioResult(
                     source="BookOrbit",
@@ -756,6 +822,9 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
                     title=title,
                     subtitle=subtitle,
                     series_label=series_label,
+                    series_name=series_name,
+                    series_sequence=series_seq,
+                    series_source="bookorbit" if series_name else None,
                     authors=book.get("authors") or "",
                     language=str(book.get("language") or "").strip(),
                     cover_url=self.get_cover_url(str(book_id)) or "",
@@ -835,16 +904,8 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
             )
         return files
 
-    def get_chapters(self, source_id: str) -> list[dict]:
-        """BookOrbit chapters are clean ``{title, startMs}`` markers (absolute,
-        cumulative across tracks); ends are the next chapter's start. Falls back
-        to per-track synthetic chapters, then a single whole-book chapter."""
-        info = self.bookorbit_client.get_audiobook_info(source_id) or {}
-        try:
-            total_duration = float(info.get("duration_seconds") or 0.0)
-        except (TypeError, ValueError):
-            total_duration = 0.0
-
+    def _parse_marker_chapters(self, info: dict, source_id: str, total_duration: float) -> list[dict]:
+        """Existing BookOrbit marker parsing moved unchanged for alignment."""
         chapters = info.get("chapters") or []
         rows = []
         for chapter in chapters:
@@ -874,6 +935,46 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
                     source_id, len(valid), valid[-1]["end"],
                 )
                 return valid
+
+        return []
+
+    def get_real_chapters(self, source_id: str) -> list[dict]:
+        """Only true BookOrbit startMs markers; never track-based fallbacks."""
+        info = self.bookorbit_client.get_audiobook_info(source_id) or {}
+        try:
+            total = float(info.get("duration_seconds") or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            total = 0.0
+        markers = []
+        for marker in info.get("chapters") or []:
+            if not isinstance(marker, dict) or marker.get("startMs") is None:
+                continue
+            try:
+                start = float(marker["startMs"]) / 1000.0
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(start) and start >= 0:
+                markers.append({"title": marker.get("title"), "start": start})
+        markers.sort(key=lambda row: row["start"])
+        result = []
+        for index, marker in enumerate(markers):
+            end = markers[index + 1]["start"] if index + 1 < len(markers) else total
+            result.append({**marker, "end": end})
+        return real_chapter_rows(result)
+
+    def get_chapters(self, source_id: str) -> list[dict]:
+        """BookOrbit chapters are clean ``{title, startMs}`` markers (absolute,
+        cumulative across tracks); ends are the next chapter's start. Falls back
+        to per-track synthetic chapters, then a single whole-book chapter."""
+        info = self.bookorbit_client.get_audiobook_info(source_id) or {}
+        try:
+            total_duration = float(info.get("duration_seconds") or 0.0)
+        except (TypeError, ValueError):
+            total_duration = 0.0
+
+        markers = self._parse_marker_chapters(info, source_id, total_duration)
+        if markers:
+            return markers
 
         tracks = info.get("tracks") or []
         if tracks:

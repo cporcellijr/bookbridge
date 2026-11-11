@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="{{ get_locale() }}" data-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>{% block title %}BookBridge{% endblock %}</title>
+    <script>try { var t = localStorage.getItem('bookbridge-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+    {% if active_page != 'settings' %}<script>try { if (localStorage.getItem('bookbridge-rail') === 'collapsed') document.documentElement.dataset.rail = 'collapsed'; } catch (e) {}</script>{% endif %}
+    <link rel="icon" type="image/png" href="/static/icon.png">
+    <link rel="stylesheet" href="/static/fonts/next-fonts.css">
+    <link rel="stylesheet" href="/static/css/next.css">
+    <link rel="stylesheet" href="/static/css/next-search.css">
+    <script>
+        // i18n helpers for strings the templates hand to JS (_('...') piped through tojson).
+        // bbFormat fills {name} placeholders. bbPlural picks the ngettext form for n
+        // with Intl.PluralRules; the forms come from plural_forms() in _i18n.html.
+        // These are formatting helpers only: every translation still comes from the
+        // .po catalog through _() / ngettext() in a template.
+        window.bbFormat = function (text, values) {
+            return String(text).replace(/\{(\w+)\}/g, function (match, key) {
+                return values && Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match;
+            });
+        };
+        window.bbPlural = function (forms, n, values) {
+            if (typeof forms === 'string') forms = { other: forms };
+            var category = 'other';
+            try { category = new Intl.PluralRules(document.documentElement.lang || 'en').select(n); } catch (e) { /* unknown locale */ }
+            var text = Object.prototype.hasOwnProperty.call(forms, category) ? forms[category] : forms.other;
+            return window.bbFormat(text, Object.assign({ count: n }, values || {}));
+        };
+        // Strings in static/js files: the including template puts their translations
+        // in window.BB_STRINGS, keyed by the English text (index.html does this for
+        // the files it loads). The English text is the fallback, so a missing key shows English.
+        window.bbT = function (text, values) {
+            var strings = window.BB_STRINGS || {};
+            var translated = Object.prototype.hasOwnProperty.call(strings, text) ? strings[text] : text;
+            return values ? window.bbFormat(translated, values) : translated;
+        };
+    </script>
+    {% block head %}{% endblock %}
+    <link rel="stylesheet" href="/static/css/next-finish.css">
+</head>
+<body>
+    {% if not hide_chrome %}
+    {% set is_admin = current_user and current_user.is_admin %}
+    {% set queued_count = match_queue_count() %}
+    {% set abs_library_url = get_val('ABS_WEB_URL') or get_user_val('ABS_SERVER', abs_server) %}
+    {% set grimmory_url = get_val('BOOKLORE_WEB_URL') or get_user_val('BOOKLORE_SERVER', booklore_server) %}
+    {% set bookorbit_url = get_val('BOOKORBIT_WEB_URL') or get_user_val('BOOKORBIT_SERVER', get_val('BOOKORBIT_SERVER')) %}
+    {% set kavita_url = get_val('KAVITA_WEB_URL') or get_user_val('KAVITA_SERVER', get_val('KAVITA_SERVER')) %}
+    {% set cwa_url = get_val('CWA_WEB_URL') or get_user_val('CWA_SERVER', get_val('CWA_SERVER')) %}
+    {% set grimmory_configured = grimmory_url and get_user_bool('BOOKLORE_ENABLED') %}
+    {% set bookorbit_configured = bookorbit_url and get_user_bool('BOOKORBIT_ENABLED') %}
+    {% set kavita_configured = kavita_url and get_user_bool('KAVITA_ENABLED') %}
+    {% set cwa_configured = cwa_url and get_user_bool('CWA_ENABLED') %}
+    {% set audio_source = '' %}
+    {% if abs_library_url and abs_library_url|lower != 'disabled' and get_user_val('ABS_ENABLED', '')|lower not in ['false', '0', 'no', 'off'] %}{% set audio_source = 'abs' %}
+    {% elif grimmory_configured %}{% set audio_source = 'grimmory' %}
+    {% elif bookorbit_configured %}{% set audio_source = 'bookorbit' %}{% endif %}
+    {% set ebook_source = '' %}
+    {% if cwa_configured %}{% set ebook_source = 'cwa' %}
+    {% elif grimmory_configured %}{% set ebook_source = 'grimmory' %}
+    {% elif bookorbit_configured %}{% set ebook_source = 'bookorbit' %}
+    {% elif kavita_configured %}{% set ebook_source = 'kavita' %}{% endif %}
+    {% macro app_link(url, icon, title, short_name) -%}
+    <a class="app-link" href="{{ url }}" target="_blank" rel="noopener noreferrer" title="{{ title }}" aria-label="{{ title }}">
+        <img src="{{ icon }}" alt=""><span>{{ short_name }}</span><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#external"></use></svg>
+    </a>
+    {%- endmacro %}
+    {% macro your_apps() -%}
+        {% if audio_source == 'abs' %}{{ app_link(abs_library_url, '/static/audiobookshelf.png', _('Audiobookshelf audiobook library'), _('Audiobookshelf')) }}
+        {% elif audio_source == 'grimmory' %}{{ app_link(grimmory_url, '/static/grimmory.webp', _('Grimmory audiobook library'), _('Grimmory')) }}
+        {% elif audio_source == 'bookorbit' %}{{ app_link(bookorbit_url, '/static/bookorbit.svg', _('BookOrbit audiobook library'), _('BookOrbit')) }}{% endif %}
+        {% if ebook_source and ebook_source != audio_source %}
+            {% if ebook_source == 'cwa' %}{{ app_link(cwa_url, '/static/calibre-web.png', _('Calibre-Web ebook library'), _('Calibre-Web')) }}
+            {% elif ebook_source == 'grimmory' %}{{ app_link(grimmory_url, '/static/grimmory.webp', _('Grimmory ebook library'), _('Grimmory')) }}
+            {% elif ebook_source == 'bookorbit' %}{{ app_link(bookorbit_url, '/static/bookorbit.svg', _('BookOrbit ebook library'), _('BookOrbit')) }}
+            {% elif ebook_source == 'kavita' %}{{ app_link(kavita_url, '/static/kavita.svg', _('Kavita ebook library'), _('Kavita')) }}{% endif %}
+        {% endif %}
+        {% if shelfmark_url and (get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and get_val('SHELFMARK_ENABLED') == '')) %}
+        <a class="app-link" href="/shelfmark"{% if active_page == 'shelfmark' %} aria-current="page"{% endif %} title="{{ _('Shelfmark Tool') }}" aria-label="{{ _('Shelfmark Tool') }}">
+            <img src="/static/shelfmark.png" alt=""><span>{{ _('Shelfmark') }}</span>
+        </a>
+        {% endif %}
+    {%- endmacro %}
+    {% macro interface_switch(location) -%}
+    <form class="interface-switch interface-switch-{{ location }}" method="POST" action="{{ url_for('account_interface', next=request.path) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="interface-segment" role="group" aria-label="{{ _('Interface') }}">
+            <button type="submit" name="ui_mode" value="classic" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') != 'new' else 'false' }}">{{ _('Classic') }}</button>
+            <button type="submit" name="ui_mode" value="new" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') == 'new' else 'false' }}">{{ _('New') }}</button>
+        </div>
+    </form>
+    {%- endmacro %}
+    <a class="skip-link" href="#main-content">{{ _('Skip to content') }}</a>
+    <div class="app-shell">
+        <aside class="rail{% if active_page == 'settings' %} rail-settings{% endif %}" aria-label="{{ _('Main navigation') }}">
+            <div class="rail-head">
+                <a class="brand" href="/" aria-label="BookBridge — {{ _('Library') }}">
+                <svg class="brand-mark" aria-hidden="true"><use href="/static/icons.svg#brand"></use></svg><span>BookBridge</span>
+                </a>
+                {% if active_page != 'settings' %}<button class="rail-toggle" type="button" data-rail-toggle aria-expanded="true" aria-label="{{ _('Collapse sidebar') }}" title="{{ _('Collapse sidebar') }}" data-collapse-label="{{ _('Collapse sidebar') }}" data-expand-label="{{ _('Expand sidebar') }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#sidebar"></use></svg></button>{% endif %}
+            </div>
+            {% set yours = your_apps() %}
+            {% block rail_nav %}
+            <nav class="rail-nav" aria-label="{{ _('Sections') }}">
+                <a href="/" {% if active_page == 'library' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#library"></use></svg><span>{{ _('Library') }}</span></a>
+                <a href="{{ url_for('suggestions') }}" {% if active_page == 'suggestions' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#discover"></use></svg><span>{{ _('Discover') }}</span>{% if queued_count %}<span class="count">{{ queued_count }}</span>{% endif %}</a>
+                <a href="/stats" {% if active_page == 'stats' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#stats"></use></svg><span>{{ _('Stats') }}</span></a>
+                {% if yours|trim %}
+                <span class="nav-label">{{ _('Yours') }}</span>
+                <div class="app-links rail-app-links">{{ yours }}</div>
+                {% endif %}
+                {% if is_admin %}
+                <span class="nav-label">{{ _('Admin') }}</span>
+                <a href="{{ url_for('job_queue_page') }}" {% if active_page == 'job_queue' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#processing"></use></svg><span>{{ _('Processing') }}</span></a>
+                <a href="/logs" {% if active_page == 'logs' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logs"></use></svg><span>{{ _('Logs') }}</span></a>
+                <a href="/settings" {% if active_page == 'settings' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#settings"></use></svg><span>{{ _('Settings') }}</span></a>
+                {% else %}
+                <span class="nav-label">{{ _('For you') }}</span>
+                <a href="{{ url_for('job_queue_page') }}" {% if active_page == 'job_queue' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#processing"></use></svg><span>{{ _('Processing') }}</span></a>
+                <a href="/account/integrations"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#apps"></use></svg><span>{{ _('My apps') }}</span></a>
+                {% endif %}
+            </nav>
+            {% endblock %}
+            <div class="rail-foot">
+                {% if current_user %}
+                {{ interface_switch('rail') }}
+                <details class="user-menu" id="bb-next-user-menu">
+                    <summary aria-haspopup="menu" aria-expanded="false"><span class="avatar" aria-hidden="true">{{ (current_user.username or '?')[:1]|upper }}</span><span class="user-name">{{ current_user.username }}<small>{{ _('Account') }}</small></span><svg class="icon menu-caret" aria-hidden="true"><use href="/static/icons.svg#chevron"></use></svg></summary>
+                    <nav class="user-menu-panel" aria-label="{{ _('User menu') }}">
+                        <a href="/account"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#account"></use></svg>{{ _('Account') }}</a>
+                        <a href="https://cporcellijr.github.io/bookbridge/" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#docs"></use></svg>{{ _('Docs') }}</a>
+                        <a href="/logout"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logout"></use></svg>{{ _('Logout') }}</a>
+                    </nav>
+                </details>
+                {% endif %}
+            </div>
+        </aside>
+        <div class="main-column">
+            <header class="topbar">
+                <div class="mobile-brand"><svg class="brand-mark" aria-hidden="true"><use href="/static/icons.svg#brand"></use></svg><span>BookBridge</span></div>
+                {% block topbar_search %}<button class="search-placeholder" id="bb-search-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="bb-search-dialog" aria-keyshortcuts="Control+K Meta+K /"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg><span>{{ _('Search books, pages, settings') }}</span><kbd>{{ _('Ctrl K') }}</kbd></button>{% endblock %}
+                <button class="theme-toggle" type="button" data-theme-toggle aria-pressed="false" aria-label="{{ _('Switch to day theme') }}" title="{{ _('Switch to day theme') }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#theme"></use></svg><span class="theme-label">{{ _('Day theme') }}</span></button>
+                {% if yours|trim %}
+                <details class="mobile-app-menu">
+                    <summary aria-label="{{ _('My apps') }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#apps"></use></svg></summary>
+                    <div class="app-links">{{ yours }}</div>
+                </details>
+                {% endif %}
+                {% if current_user %}
+                <details class="mobile-user-menu" id="bb-next-mobile-user-menu">
+                    <summary aria-label="{{ _('Account menu') }}"><span class="avatar" aria-hidden="true">{{ (current_user.username or '?')[:1]|upper }}</span></summary>
+                    <nav class="user-menu-panel" aria-label="{{ _('User menu') }}">
+                        {{ interface_switch('phone') }}
+                        <a href="/account">{{ _('Account') }}</a>
+                        {% if is_admin %}<a href="/logs">{{ _('Logs') }}</a>{% endif %}
+                        <a href="https://cporcellijr.github.io/bookbridge/" target="_blank" rel="noopener noreferrer">{{ _('Docs') }}</a>
+                        <a href="/logout">{{ _('Logout') }}</a>
+                    </nav>
+                </details>
+                {% endif %}
+            </header>
+    {% endif %}
+    <main id="main-content" class="view" tabindex="-1">{% block content %}{% endblock %}</main>
+    {% if not hide_chrome %}
+        </div>
+    </div>
+    <nav class="tabbar" aria-label="{{ _('Sections') }}">
+        <a href="/" {% if active_page == 'library' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#library"></use></svg><span>{{ _('Library') }}</span></a>
+        <a href="{{ url_for('suggestions') }}" {% if active_page == 'suggestions' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#discover"></use></svg><span>{{ _('Discover') }}</span>{% if queued_count %}<span class="count">{{ queued_count }}</span>{% endif %}</a>
+        <a href="{{ url_for('job_queue_page') }}" {% if active_page == 'job_queue' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#processing"></use></svg><span>{{ _('Processing') }}</span></a>
+        <a href="/stats" {% if active_page == 'stats' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#stats"></use></svg><span>{{ _('Stats') }}</span></a>
+        {% if is_admin %}
+        <a href="/settings" {% if active_page == 'settings' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#settings"></use></svg><span>{{ _('Settings') }}</span></a>
+        {% else %}
+        <a href="/account/integrations"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#apps"></use></svg><span>{{ _('My apps') }}</span></a>
+        {% endif %}
+    </nav>
+    <script>
+        window.BB_STRINGS = Object.assign(window.BB_STRINGS || {}, {
+            "Day theme": {{ _('Day theme')|tojson }},
+            "Night theme": {{ _('Night theme')|tojson }},
+            "Switch to day theme": {{ _('Switch to day theme')|tojson }},
+            "Switch to night theme": {{ _('Switch to night theme')|tojson }}
+        });
+    </script>
+    <div id="bb-search-overlay" class="bb-search-overlay" hidden>
+        <div class="bb-search-backdrop" data-search-close></div>
+        <section id="bb-search-dialog" class="bb-search-dialog" role="dialog" aria-modal="true" aria-labelledby="bb-search-title" aria-describedby="bb-search-help">
+            <h2 id="bb-search-title" class="bb-search-visually-hidden">{{ _('Search books, pages, settings and actions') }}</h2>
+            <div class="bb-search-input-row">
+                <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg>
+                <input id="bb-search-input" type="search" role="combobox" autocomplete="off" autocapitalize="off" spellcheck="false" aria-autocomplete="list" aria-controls="bb-search-results" aria-expanded="false" placeholder="{{ _('Search books, pages, settings') }}">
+                <button type="button" class="bb-search-close" data-search-close aria-label="{{ _('Close search') }}">{{ _('Esc') }}</button>
+            </div>
+            <p id="bb-search-help" class="bb-search-help">{{ _('Use the arrow keys to choose a result and Enter to open it.') }}</p>
+            <div class="bb-search-results-scroll">
+                <div id="bb-search-results" class="bb-search-results" role="listbox" aria-label="{{ _('Search results') }}"></div>
+                <p id="bb-search-empty" class="bb-search-empty" hidden>{{ _('No matching results') }}</p>
+            </div>
+            <div id="bb-search-message" class="bb-search-message" role="status" aria-live="polite"></div>
+        </section>
+    </div>
+    <script>
+        window.BB_SEARCH_CATALOG = {
+            pages: [
+                { title: {{ _('Library')|tojson }}, url: "/" },
+                { title: {{ _('Discover')|tojson }}, url: {{ url_for('suggestions')|tojson }} },
+                { title: {{ _('Stats')|tojson }}, url: "/stats" },
+                { title: {{ _('Processing')|tojson }}, url: {{ url_for('job_queue_page')|tojson }} },
+                { title: {{ _('What\'s new')|tojson }}, url: "/whats-new" },
+                { title: {{ _('Account')|tojson }}, url: "/account" },
+                { title: {{ _('My apps')|tojson }}, url: "/account/integrations" }
+                {% if is_admin %},
+                { title: {{ _('Settings')|tojson }}, url: "/settings" },
+                { title: {{ _('Logs')|tojson }}, url: "/logs" },
+                { title: {{ _('Admin users')|tojson }}, url: "/admin/users" }
+                {% endif %}
+            ],
+            actions: [
+                {% if is_admin %}
+                { title: {{ _('Scan library')|tojson }}, action: "scan", url: "/suggestions" },
+                { title: {{ _('Process queue')|tojson }}, action: "process_queue", url: "/suggestions" }
+                {% endif %}
+            ],
+            labels: {
+                book: {{ _('Book')|tojson }},
+                page: {{ _('Page')|tojson }},
+                setting: {{ _('Setting')|tojson }},
+                action: {{ _('Action')|tojson }},
+                sync: {{ _('Sync now')|tojson }},
+                loading: {{ _('Loading books and settings…')|tojson }},
+                failed: {{ _('Search could not load all results.')|tojson }},
+                syncStarted: {{ _('Sync started')|tojson }},
+                syncFailed: {{ _('Could not start sync')|tojson }}
+            },
+            maySearchSettings: {{ 'true' if is_admin else 'false' }}
+        };
+    </script>
+    <script src="/static/js/next/shell.js" defer></script>
+    <script src="/static/js/next/search.js" defer></script>
+    {% endif %}
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -487,19 +487,19 @@ class TestMultiUserAuth(unittest.TestCase):
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
         self.assertEqual(self.client.get(self._ipath(target.id), follow_redirects=False).status_code, 403)
 
-    def test_batch_match_redirects_to_add_book_for_regular_users(self):
+    def test_batch_match_redirects_to_search_tab_for_regular_users(self):
         self.svc.create_user('reg', 'pw', role='user')
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
         resp = self.client.get('/batch-match', follow_redirects=False)
         self.assertEqual(resp.status_code, 302)
-        self.assertIn('/add-book', resp.headers.get('Location', ''))
-        self.assertEqual(self.client.get('/add-book', follow_redirects=False).status_code, 200)
+        self.assertIn('/suggestions?tab=search', resp.headers.get('Location', ''))
+        self.assertEqual(self.client.get('/suggestions?tab=search', follow_redirects=False).status_code, 200)
 
-    def test_batch_match_redirects_to_add_book_for_admin(self):
+    def test_batch_match_redirects_to_search_tab_for_admin(self):
         self._login()  # admin
         resp = self.client.get('/batch-match', follow_redirects=False)
         self.assertEqual(resp.status_code, 302)
-        self.assertIn('/add-book', resp.headers.get('Location', ''))
+        self.assertIn('/suggestions?tab=search', resp.headers.get('Location', ''))
 
     def test_user_library_lookup_is_admin_only(self):
         self.svc.create_user('reg', 'pw', role='user')
@@ -722,12 +722,14 @@ class TestMultiUserAuth(unittest.TestCase):
     def test_admin_only_pages_forbidden_for_regular_users(self):
         self.svc.create_user("reg", "pw", role="user")
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
-        for path in ('/settings', '/stats', '/logs', '/suggestions'):
+        for path in ('/settings', '/logs'):
             self.assertEqual(self.client.get(path, follow_redirects=False).status_code, 403,
                              f"{path} should be admin-only")
-        # but the home + Add Book flow are reachable
+        # but the home + Discover (pairs/ebook-only/search) are reachable
         self.assertNotEqual(self.client.get('/', follow_redirects=False).status_code, 403)
+        self.assertNotEqual(self.client.get('/suggestions', follow_redirects=False).status_code, 403)
         self.assertNotEqual(self.client.get('/add-book', follow_redirects=False).status_code, 403)
+        self.assertNotEqual(self.client.get('/api/suggestions/discovery', follow_redirects=False).status_code, 403)
 
     def test_regular_user_forbidden_from_global_maintenance_apis(self):
         self.svc.create_user("reg", "pw", role="user")
@@ -1197,7 +1199,7 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(delete_other.status_code, 403)
         self.assertIsNotNone(self.svc.get_kosync_document("9" * 32))
 
-    def test_regular_user_dashboard_hides_pending_suggestions(self):
+    def test_regular_user_dashboard_hides_other_users_pending_suggestions(self):
         admin = self.svc.get_user_by_username("admin")
         reg = self.svc.create_user("reg", "pw", role="user")
         self.svc.save_book(Book(

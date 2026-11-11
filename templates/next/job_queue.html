@@ -1,0 +1,147 @@
+{% extends "next/base.html" %}
+{% set active_page = 'job_queue' %}
+{% block title %}{{ _('Processing') }} — BookBridge{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/css/next-ops.css">
+<link rel="stylesheet" href="/static/css/job-queue.css">
+{% endblock %}
+{% block content %}
+<div class="job-queue-page ops-queue"{% if queue_view['running'] %} data-auto-refresh="20"{% endif %}>
+    <header class="job-queue-header">
+        <div>
+            <h1 class="h1">{{ _('Processing') }}</h1>
+            <p>{{ _('See books waiting, processing, or recently finished. Move staged books or pending alignments before they start.') }}</p>
+        </div>
+        <a class="job-queue-refresh" href="{{ url_for('job_queue_page') }}">{{ _('Refresh status') }}</a>
+    </header>
+    {% if queue_view['running'] %}
+    <p class="job-queue-auto-refresh-note">{{ _('Updates every 20 seconds while books are processing.') }}</p>
+    {% endif %}
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages mb-16">
+        {% for category, msg in messages %}
+        <div class="flash flash-{{ category }} flash-msg-container">
+            {{ msg }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% set sections = [
+        ('running', _('Processing now')),
+        ('pending', _('Waiting')),
+        ('recent', _('Finished (7 days)'))
+    ] %}
+    {% for key, heading in sections %}
+    <section class="job-queue-section" aria-labelledby="job-queue-{{ key }}">
+        <div class="job-queue-section-title">
+            <div>
+                <h2 id="job-queue-{{ key }}">{{ heading }}</h2>
+            </div>
+            <span class="job-queue-count">{{ queue_view[key]|length }}</span>
+        </div>
+        {% set rows = queue_view[key] %}
+        {% if key == 'recent' %}
+            {% set failures = rows|selectattr('status', 'equalto', 'failed')|list %}
+            {% set successes = rows|rejectattr('status', 'equalto', 'failed')|list %}
+            {% set rows = failures + successes %}
+        {% endif %}
+        {% if rows %}
+        <div class="job-queue-table-scroll">
+            <table class="job-queue-table">
+                <thead>
+                    <tr>
+                        <th scope="col">{{ _('Book') }}</th>
+                        <th scope="col">{{ _('Operation') }}</th>
+                        <th scope="col">{{ _('Status / stage') }}</th>
+                        <th scope="col">{{ _('Progress') }}</th>
+                        <th scope="col">{{ _('Requested') }}</th>
+                        <th scope="col">{{ _('Order') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for job in rows %}
+                    <tr{% if job.status == "failed" %} class="job-queue-failed"{% endif %}>
+                        <td>
+                            <strong>{{ job.title }}</strong>
+                            {% if job.order is not none %}
+                            <span class="job-queue-sequence">{{ _('#%(position)s in its list', position=job.order) }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ job.operation }}</td>
+                        <td>
+                            <span class="job-queue-status job-queue-status-{{ job.status|replace(' ', '-') }}">{{ job.status|replace('_', ' ')|title }}</span>
+                            {% if job.detail %}<small class="job-queue-detail">{{ job.detail }}</small>{% endif %}
+                            {% if job.timestamp %}<small class="job-queue-detail">{{ _('Last attempt %(ago)s ago', ago=job.timestamp|format_time_ago) }}</small>{% endif %}
+                        </td>
+                        <td>
+                            {% if job.percent is not none %}
+                            <div class="job-queue-progress" role="progressbar" aria-valuenow="{{ job.percent }}" aria-valuemin="0" aria-valuemax="100" aria-label="{{ _('%(title)s progress', title=job.title) }}">
+                                <span style="width: {{ job.percent }}%"></span>
+                            </div>
+                            <small>{{ job.percent }}%</small>
+                            {% else %}&mdash;{% endif %}
+                        </td>
+                        <td>{% if job.epub3 %}<span class="job-queue-epub">EPUB3</span>{% else %}&mdash;{% endif %}</td>
+                        <td>
+                        {% if job.queue_key %}
+                            <div class="job-queue-move-actions">
+                            {% for direction, text, available, label, hint in [
+                                ('up', '↑', job.can_move_up, _('Move %(title)s up', title=job.title), _('Move up')),
+                                ('down', '↓', job.can_move_down, _('Move %(title)s down', title=job.title), _('Move down')),
+                                ('top', '⇈', job.can_move_up, _('Move %(title)s to top', title=job.title), _('Move to top'))] %}
+                                <form method="POST" action="{{ url_for('job_queue_reorder') }}">
+                                    <input type="hidden" name="queue_key" value="{{ job.queue_key }}">
+                                    <input type="hidden" name="queue" value="{{ job.queue }}">
+                                    <input type="hidden" name="direction" value="{{ direction }}">
+                                    <button type="submit" aria-label="{{ label }}" title="{{ hint }}" {% if not available %}disabled{% endif %}>{{ text }}</button>
+                                </form>
+                            {% endfor %}
+                            </div>
+                        {% else %}&mdash;{% endif %}
+                        </td>
+                    </tr>
+                    {% if job.preflight %}
+                    <tr>
+                        <td colspan="6">
+                            <aside class="job-queue-preflight" aria-label="{{ _('EPUB/audio pre-flight') }}">
+                                <strong>{{ _('EPUB/audio pre-flight') }}: {{ _('Not calibrated') if job.preflight.assessment == 'uncalibrated' else _('Inconclusive') }}</strong>
+                                <span>{{ '{:,}'.format(job.preflight.token_count) }} {{ _('EPUB word tokens') }}</span>
+                                {% if job.preflight.duration_seconds is not none %}
+                                <span>{{ (job.preflight.duration_seconds / 3600)|round(2) }} {{ _('audio hours') }}</span>
+                                {% if job.preflight.epub_tokens_per_audio_hour is not none %}<span>{{ '{:,.1f}'.format(job.preflight.epub_tokens_per_audio_hour) }} {{ _('EPUB tokens per audio hour') }}</span>{% endif %}
+                                {% if job.preflight.library_ratio is defined %}<span>{{ _('%(ratio)s× your library median', ratio=job.preflight.library_ratio) }} · {{ ngettext('your library: %(low)s–%(high)s across %(num)s book that passed the content check', 'your library: %(low)s–%(high)s across %(num)s books that passed the content check', job.preflight.library_count, low='{:,.0f}'.format(job.preflight.library_min), high='{:,.0f}'.format(job.preflight.library_max), num=job.preflight.library_count) }}</span>{% endif %}
+                                {% else %}
+                                <span>{{ _('Audio duration unavailable') }}</span>
+                                {% endif %}
+                                <small>{{ _('EPUB words per audio hour are not calibrated against transcript word rates, and catalog durations can be wrong. Check the ebook edition or omnibus pairing; this is not a mismatch verdict.') if job.preflight.assessment == 'uncalibrated' else _('The word rate cannot be measured for this book: the EPUB text is empty or unspaced, or the audio duration is missing.') }}</small>
+                                {% if job.preflight.acknowledged %}
+                                <small>{{ _('Advisory acknowledged; final content-match checks still apply.') }}</small>
+                                {% else %}
+                                <form method="POST" action="{{ url_for('job_queue_preflight_ack') }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <input type="hidden" name="abs_id" value="{{ job.book_id }}">
+                                    <input type="hidden" name="identity" value="{{ job.preflight.identity }}">
+                                    <button type="submit">{{ _('Dismiss') }}</button>
+                                </form>
+                                <small>{{ _('Work continues automatically. Dismissing only hides this advisory; it cannot override a content mismatch.') }}</small>
+                                {% endif %}
+                            </aside>
+                        </td>
+                    </tr>
+                    {% endif %}
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="job-queue-empty">{{ _('Nothing to show here.') }}</p>
+        {% endif %}
+    </section>
+    {% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}{% include 'next/_job_queue_scripts.html' %}{% endblock %}

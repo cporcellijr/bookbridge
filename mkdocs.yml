@@ -53,7 +53,9 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - User Guide: user-guide.md
+  - New Interface (Beta): new-interface.md
   - Configuration: configuration.md
+  - Device API: device-api.md
   - Backup & Restore: backup-restore.md
   - Troubleshooting: troubleshooting.md
   - Changelog: changelog.md

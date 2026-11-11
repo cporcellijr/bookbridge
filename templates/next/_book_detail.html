@@ -1,0 +1,88 @@
+{% set status_text = {
+    'active': pgettext('book state', 'active'),
+    'pending': pgettext('book state', 'pending'),
+    'processing': pgettext('book state', 'processing'),
+    'forging': pgettext('book state', 'forging'),
+    'manual_forge': pgettext('book state', 'manual_forge'),
+    'error': pgettext('book state', 'error'),
+    'failed': pgettext('book state', 'failed'),
+    'crashed': pgettext('book state', 'crashed'),
+    'failed_retry_later': pgettext('book state', 'failed_retry_later'),
+    'failed_permanent': pgettext('book state', 'failed_permanent')
+}.get(mapping.status, mapping.status) %}
+{% set app_labels = {'abs': _('Audiobookshelf'), 'absebook': _('Audiobookshelf Ebook'), 'kosync': _('KoSync'), 'storyteller': _('Storyteller'), 'booklore': _('Grimmory'), 'bookloreaudio': _('Grimmory Audio'), 'bookorbit': _('BookOrbit'), 'bookorbitaudio': _('BookOrbit Audio'), 'kavita': _('Kavita'), 'cwa': _('CWA Kobo Sync'), 'hardcover': _('Hardcover'), 'storygraph': _('StoryGraph'), 'bookfusion': _('BookFusion')} %}
+{% macro app(key, label, url=none, tracker=false, action=none, linked=false) %}
+{% if integrations.get(key) %}
+{% set state = mapping.states.get(key, {}) %}
+{% set raw = book_states.get(key) %}
+<div class="book-app-row" data-service="{{ key }}" {% if key == 'storyteller' and mapping.storyteller_uuid %}title="{{ _('Linked via UUID') }}: {{ mapping.storyteller_uuid }}"{% endif %}>
+{% if url %}<a class="book-app-main" href="{{ url }}" target="_blank" rel="noopener noreferrer">{% else %}<div class="book-app-main">{% endif %}
+<strong>{{ label }}</strong>
+{% if state %}<span class="book-position">{% if key in ['abs', 'bookorbitaudio', 'bookloreaudio'] %}{{ '%d:%02d:%02d'|format(state.get('timestamp', 0)|int // 3600, (state.get('timestamp', 0)|int % 3600) // 60, state.get('timestamp', 0)|int % 60) }} · {% endif %}{{ '%.1f'|format(state.get('percentage', 0)) }}%</span>{% endif %}
+<span class="book-app-state">{% if tracker %}{{ _('Tracker') }}{% if not linked %} · {{ _('Not linked') }}{% endif %}{% elif mapping.last_leader_service|default('') == key %}{{ _('Leading') }}{% elif raw and raw.status in ['error', 'failed', 'unsupported'] %}{{ _("Can't update") }}{% elif not state %}{{ _('Waiting for device') }}{% else %}{{ _('In sync') if not mapping.is_out_of_sync else _('Out of sync') }}{% endif %}</span>
+<small>{% if key == 'kosync' and kosync_devices %}{{ _('Device') }}: {% for device in kosync_devices %}{{ device.device or device.device_id or _('Unknown') }}{% if not loop.last %}, {% endif %}{% endfor %} · {% endif %}{% if raw and raw.service_updated_at %}{{ _('Last moved') }}: {{ raw.service_updated_at|format_time_ago }}{% elif state.get('last_updated') %}{{ _('Last updated') }}: {{ state.last_updated|format_time_ago }}{% endif %}</small>
+{% if url %}</a>{% else %}</div>{% endif %}
+{% if action %}<button type="button" data-abs-id="{{ mapping.abs_id }}" data-title="{{ mapping.display_title }}" data-hash="{{ mapping.kosync_doc_id }}" data-has-local-epub="{{ 'true' if mapping.has_local_epub else 'false' }}" data-has-storyteller="{{ 'true' if mapping.storyteller_uuid else 'false' }}" onclick="{{ action }}(event)">{{ _('Change link') if linked else _('Link') }}</button>{% endif %}
+{% if key == 'storyteller' %}<button type="button" onclick='openStorytellerModal({{ mapping.abs_id|tojson }}, {{ mapping.display_title|tojson }})'>{{ _('Fix Link') if mapping.storyteller_legacy_link else (_('Change link') if mapping.storyteller_uuid else _('Link')) }}</button>{% endif %}
+{% if key == 'bookfusion' and linked %}<button type="button" data-bookfusion-unlink>{{ _('Unlink') }}</button>{% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+<article class="book-detail book-card" data-abs-id="{{ mapping.abs_id }}" data-sync-mode="{{ mapping.sync_mode }}" data-filename="{{ mapping.ebook_filename or '' }}">
+<a class="book-back" href="/" target="_top">{{ _('Library') }}</a>
+<header class="book-hero">
+<div class="book-cover-wrap">
+{% if mapping.kosync_doc_id or mapping.cover_url %}<img class="book-cover" src="{{ '/covers/' ~ mapping.kosync_doc_id ~ '.jpg' if mapping.kosync_doc_id else mapping.cover_url }}" alt="{{ _('Cover') }}" data-cover-fallback="{{ mapping.cover_url or '' }}" onerror="if(this.dataset.coverFallback && this.src!==this.dataset.coverFallback){this.src=this.dataset.coverFallback;this.dataset.coverFallback='';}else{this.hidden=true;this.nextElementSibling.hidden=false;}">{% endif %}
+<div class="typographic-cover" {% if mapping.kosync_doc_id or mapping.cover_url %}hidden{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#library"></use></svg><span>{{ mapping.display_title }}</span></div>
+</div>
+<div><p class="eyebrow">{{ _('Your book') }}</p><h1>{{ mapping.display_title }}{% if mapping.display_subtitle %}<small>{{ mapping.display_subtitle }}</small>{% endif %}</h1><p>{{ mapping.display_author }}</p>
+{% macro chip(url=none) %}{% if url %}<a href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ caller() }}</a>{% else %}<span>{{ caller() }}</span>{% endif %}{% endmacro %}
+<div class="book-chips">{% call chip(mapping.audio_url) %}{{ _('Audio') if mapping.sync_mode != 'ebook_only' else _('Ebook only') }}{% endcall %}{% if mapping.ebook_filename %}{% call chip(mapping.bookorbit_url or mapping.kavita_url or mapping.booklore_url) %}{{ _('Ebook') }}{% endcall %}{% endif %}<span>{{ status_text }}{% if mapping.job_progress is defined %} {{ mapping.job_progress }}%{% endif %}</span>
+<span class="ctc-alignment-badge" {% if not mapping.ctc_aligned %}hidden{% endif %}>{{ _('CTC') }}</span><span class="readalong-badge" {% if not mapping.readalong_ready %}hidden{% endif %}>{{ _('Read-along EPUB ready') }}</span>
+{% for source, label in [('storygraph', _('StoryGraph')), ('goodreads', _('Goodreads'))] %}{% if mapping.get(source ~ '_rating') is not none %}{% call chip(mapping.get(source ~ '_url')) %}{{ label }} {{ mapping.get(source ~ '_rating') }}{% if mapping.get(source ~ '_review_count') %} · {{ ngettext('%(num)s review', '%(num)s reviews', mapping.get(source ~ '_review_count'), num=mapping.get(source ~ '_review_count')) }}{% endif %}{% endcall %}{% endif %}{% endfor %}</div>
+</div></header>
+<section class="book-section"><h2>{{ _('Where you are') }}</h2><div class="book-thread" aria-label="{{ _('App positions') }}">{% for key,state in mapping.states.items() %}<span style="--position:{{ state.percentage }}%" title="{{ app_labels.get(key,key) }} {{ state.percentage }}%">{{ app_labels.get(key,key) }} {{ state.percentage }}%</span>{% endfor %}</div>
+<progress max="100" value="{{ mapping.unified_progress }}">{{ mapping.unified_progress }}%</progress><p class="your-place">{{ '%.1f'|format(mapping.unified_progress) }}%{% if mapping.last_leader_service %} · {{ _('Last: %(app)s', app=app_labels.get(mapping.last_leader_service, mapping.last_leader)) }}{% endif %}</p>
+{% if mapping.is_out_of_sync %}<p class="sync-warning">{{ _('Out of sync by %(pct)s%%', pct=mapping.sync_warning_pct) }}</p>{% endif %}
+{% set audio_state_key = {'ABS': 'abs', 'BookOrbit': 'bookorbitaudio', 'BookLore': 'bookloreaudio'}.get(mapping.audio_source or 'ABS') %}
+{% set chapter_audio_state = mapping.states.get(audio_state_key, {}) %}
+{% if mapping.sync_mode != 'ebook_only' and chapter_audio_state.get('timestamp', 0) > 0 %}
+<div class="book-current-chapter" data-current-chapter data-book-id="{{ mapping.abs_id }}" data-position-format="{{ _('{index} of {count}') }}" hidden>
+  <p class="chapter-eyebrow">{{ _('Current audio chapter') }}</p>
+  <p class="chapter-title" data-chapter-title hidden></p>
+  <p class="chapter-position" data-chapter-position></p>
+  <p class="chapter-time" data-chapter-time></p>
+</div>
+{% endif %}
+<div class="book-info"></div>
+</section>
+<section class="book-section"><h2>{{ _('Your apps') }}</h2>
+{% if mapping.audio_source == 'BookLore' %}{{ app('bookloreaudio', _('Grimmory Audio'), mapping.audio_url) }}{% endif %}
+{% if mapping.audio_source == 'BookOrbit' %}{{ app('bookorbitaudio', _('BookOrbit Audio'), mapping.bookorbit_audio_url) }}{% endif %}
+{% if mapping.sync_mode != 'ebook_only' %}{{ app('abs', _('Audiobookshelf'), mapping.abs_url) }}{% endif %}
+{{ app('absebook', _('Audiobookshelf Ebook'), get_val('ABS_WEB_URL') or get_user_val('ABS_SERVER')) }}
+{{ app('kosync', _('KoSync'), action='updateKoSyncHash', linked=true) }}
+{{ app('storyteller', _('Storyteller'), get_user_val('STORYTELLER_API_URL') if mapping.storyteller_uuid else none) }}
+{% if mapping.states.booklore is defined or mapping.booklore_id %}{{ app('booklore', _('Grimmory'), mapping.booklore_url) }}{% endif %}
+{% if mapping.states.bookorbit is defined or mapping.ebook_source == 'BookOrbit' %}{{ app('bookorbit', _('BookOrbit'), mapping.bookorbit_url) }}{% endif %}
+{% if mapping.states.kavita is defined or mapping.ebook_source == 'Kavita' %}{{ app('kavita', _('Kavita'), mapping.kavita_url) }}{% endif %}
+{% if mapping.states.cwa is defined or mapping.ebook_source == 'CWA' %}{{ app('cwa', _('CWA Kobo Sync'), get_user_val('CWA_WEB_URL') or get_user_val('CWA_SERVER')) }}{% endif %}
+{{ app('hardcover', _('Hardcover'), mapping.hardcover_url, true, 'linkHardcover', mapping.hardcover_book_id) }}
+{{ app('storygraph', _('StoryGraph'), mapping.storygraph_url, true, 'linkStorygraph', mapping.storygraph_book_id) }}
+{{ app('bookfusion', _('BookFusion'), 'https://www.bookfusion.com', true, 'linkBookFusion', mapping.bookfusion_linked) }}
+</section>
+<section class="book-section"><h2>{{ _('Recent syncs') }}</h2><p>{{ _('Synced %(when)s', when=mapping.last_sync) }}</p>
+<ul>{% for state in recent_syncs %}<li>{{ app_labels.get(state.client_name,state.client_name) }} · {{ '%.1f'|format((state.percentage or 0)*100) }}% · {{ state.last_updated|format_time_ago if state.last_updated else _('Unknown') }}</li>{% else %}<li>{{ _('No saved sync positions yet.') }}</li>{% endfor %}</ul>
+{% if mapping.reading_stats %}<p>{{ _('Listening') }}: {{ mapping.reading_stats.listen_seconds|format_duration }} · {{ _('Reading') }}: {{ mapping.reading_stats.read_seconds|format_duration }} · {{ ngettext('%(num)s session', '%(num)s sessions', mapping.reading_stats.session_count, num=mapping.reading_stats.session_count) }} · {{ _('Average session') }}: {{ mapping.reading_stats.avg_session_seconds|format_duration }}</p>{% endif %}</section>
+<section class="book-section"><h2>{{ _('Formats and files') }}</h2>{% if mapping.audio_url %}<a href="{{ mapping.audio_url }}" target="_blank" rel="noopener noreferrer">{{ _('Open Audio') }}</a>{% endif %}<p>{{ mapping.display_filename or _('No ebook file') }}</p>{% if mapping.original_ebook_filename %}<p>{{ mapping.original_ebook_filename }}</p>{% endif %}</section>
+<section class="book-section"><h2>{{ _('Tools') }}</h2>
+<div class="book-tools">
+<button type="button" onclick='syncNow({{ mapping.abs_id|tojson }}, this)'>{{ _('Sync Now') }}</button>
+<button type="button" onclick='markComplete({{ mapping.abs_id|tojson }}, {{ mapping.display_title|tojson }})'>{{ _('Mark Complete') }}</button>
+<button type="button" onclick='clearPosition({{ mapping.abs_id|tojson }})'>{{ _('Clear position') }}</button>
+<button type="button" class="remap-alignment-btn" data-ctc-aligned="{{ 'true' if mapping.ctc_aligned else 'false' }}" {% if mapping.ctc_aligned %}disabled{% endif %} onclick='remapAlignment({{ mapping.abs_id|tojson }}, this)'>{{ _('Already using CTC') if mapping.ctc_aligned else _('Remap alignment') }}</button>
+<button type="button" class="readalong-generate-btn" {% if mapping.readalong_ready %}disabled {% endif %}title="{{ mapping.readalong_ineligible_reason or '' }}" onclick='generateReadalongEpub({{ mapping.abs_id|tojson }}, this)'>{{ _('Create read-along EPUB') }}</button>
+{% if mapping.readalong_audio_ok %}<button type="button" class="readalong-remove-btn" {% if not mapping.readalong_ready %}disabled {% endif %}onclick='removeReadalongEpub({{ mapping.abs_id|tojson }}, this)'>{{ _('Remove read-along EPUB') }}</button>{% endif %}
+<form class="book-delete" method="POST" target="_top" action="/delete/{{ mapping.abs_id }}"><button type="submit" onclick='return confirm({{ _("Delete this mapping?")|tojson }})'>{{ _('Delete Mapping') }}</button></form>
+</div>{% if mapping.job_last_error %}<div class="book-alert"><h3>{{ _('Alignment needs attention') }}</h3><p>{{ mapping.job_last_error }}</p></div>{% endif %}</section>
+{% if current_user and current_user.is_admin %}<section class="book-section"><h2>{{ _('Technical details') }}</h2><dl><dt>{{ _('Book ID') }}</dt><dd>{{ mapping.abs_id }}</dd><dt>{{ _('KoSync hash') }}</dt><dd>{{ mapping.kosync_doc_id }}</dd><dt>{{ _('Transcript') }}</dt><dd>{{ mapping.transcript_file }}</dd>{% for key,state in mapping.states.items() %}<dt>{{ key }}</dt><dd>{{ state.xpath or state.get('cfi') or '' }}</dd>{% endfor %}</dl></section>{% endif %}</article>

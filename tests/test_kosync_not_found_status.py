@@ -67,6 +67,9 @@ class TestKosyncNotFoundStatus(unittest.TestCase):
         from src.api import kosync_server
 
         db = web_server.database_service
+        database_binding = patch.object(kosync_server, '_database_service', db)
+        database_binding.start()
+        self.addCleanup(database_binding.stop)
         with db.get_session() as session:
             session.query(ReadingSession).delete()
             session.query(KosyncDocument).delete()
@@ -77,8 +80,9 @@ class TestKosyncNotFoundStatus(unittest.TestCase):
             session.query(UserCredential).delete()
             session.query(Book).delete()
 
-        if db.count_users() == 0:
+        if not any(user.is_admin for user in db.list_users()):
             db.create_user("admin", "secret", role="admin")
+        db._default_uid = None
 
         # Reset kosync server module state so tests don't leak into each other
         # regardless of collection order.

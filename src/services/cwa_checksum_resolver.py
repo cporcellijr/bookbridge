@@ -30,6 +30,12 @@ def _metadata_db_path() -> Optional[Path]:
     return path if path.is_file() else None
 
 
+def calibre_library_root() -> Optional[Path]:
+    """The Calibre library folder holding metadata.db, or None when not configured."""
+    db_path = _metadata_db_path()
+    return db_path.parent.resolve() if db_path else None
+
+
 def find_calibre_book_id(doc_hash: str) -> Optional[str]:
     """Return the Calibre book id whose EPUB CWA served with this KOReader hash."""
     global _missing_table_logged
@@ -55,7 +61,42 @@ def find_calibre_book_id(doc_hash: str) -> Optional[str]:
             _missing_table_logged = True
         return None
     except sqlite3.Error as e:
-        logger.warning(f"CWA checksum lookup failed: {e}")
+        logger.warning(f"CWA checksum lookup failed: {e}", exc_info=True)
         return None
 
-    return str(row[0]) if row and row[0] is not None else None
+    if not row or row[0] is None:
+        logger.debug(f"CWA checksum lookup: no EPUB checksum row for {doc_hash}")
+        return None
+    return str(row[0])
+
+
+def find_calibre_epub_path(calibre_book_id: str) -> Optional[Path]:
+    """Return the library EPUB of a Calibre book, or None when missing or outside the library."""
+    db_path = _metadata_db_path()
+    if db_path is None or not calibre_book_id:
+        return None
+    try:
+        with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)) as conn:
+            row = conn.execute(
+                "SELECT b.path, d.name FROM books b JOIN data d ON d.book = b.id "
+                "WHERE b.id = ? AND d.format = 'EPUB' LIMIT 1",
+                (calibre_book_id,),
+            ).fetchone()
+    except sqlite3.Error as e:
+        logger.warning(f"CWA library EPUB lookup failed: {e}", exc_info=True)
+        return None
+    if not row or not row[0] or not row[1]:
+        logger.info(f"CWA checksum: Calibre book {calibre_book_id} has no EPUB in metadata.db")
+        return None
+
+    root = db_path.parent.resolve()
+    path = (root / row[0] / f"{row[1]}.epub").resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        logger.warning(f"CWA checksum: refused EPUB path outside the Calibre library for book {calibre_book_id}", exc_info=True)
+        return None
+    if not path.is_file():
+        logger.info(f"CWA checksum: EPUB for Calibre book {calibre_book_id} is missing at {path}")
+        return None
+    return path

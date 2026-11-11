@@ -1,0 +1,16 @@
+{% if queue_view['running'] %}
+<script>
+(function () {
+    let reorderSubmitting = false;
+    document.querySelectorAll('.job-queue-move-actions form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            reorderSubmitting = true;
+        });
+    });
+    window.setInterval(function () {
+        if (document.hidden || reorderSubmitting) return;
+        window.location.reload();
+    }, 20000);
+})();
+</script>
+{% endif %}
