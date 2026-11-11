@@ -2,11 +2,39 @@
 {% from "_i18n.html" import plural_forms %}
 {% set active_page = 'library' %}
 {% block title %}{{ _('Library') }} · BookBridge{% endblock %}
-{# Wide screens: the Library filter lives in the top bar and Ctrl K opens the full search. #}
-{% block topbar_search %}<div class="library-search" data-library-search-slot><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg>{{ super() }}</div>{% endblock %}
+
 {% block content %}
 <div id="library-page" class="library-page" data-view="covers" data-select-mode="off">
-    <header class="page-head"><div><p class="eyebrow">{{ _('YOUR LIBRARY') }}</p><h1 class="h1">{{ _('Library') }}</h1></div></header>
+    {% set attention = namespace(items=[]) %}
+    {% for book in mappings %}
+        {% if book.is_out_of_sync or book.status in ['failed','failed_retry_later','failed_permanent','error','processing','forging','pending'] %}
+            {% set _ = attention.items.append(book) %}
+        {% endif %}
+    {% endfor %}
+    <header class="page-head">
+        <div class="page-head-main">
+            <h1 class="h1">{{ _('Library') }}</h1>
+            <span class="book-count">{{ ngettext('%(num)s book', '%(num)s books', mappings|length, num=mappings|length) }}</span>
+        </div>
+        <div class="page-head-meta">
+            {% if suggestions %}
+            <button type="button" id="suggestions-banner" class="meta-link matches-heading" aria-controls="suggestions-content" aria-expanded="false">
+                {{ _('Matches to review') }} <span class="count">{{ suggestions|length }}</span>
+            </button>
+            {% endif %}
+            {% if attention.items %}
+            <details id="needs-attention">
+                <summary class="meta-link">{{ _('Needs attention') }} <span class="count">{{ attention.items|length }}</span></summary>
+                <div class="attention-list">
+                    <label class="attention-only"><input id="attention-only-filter" type="checkbox"> {{ _('Show affected books only') }}</label>
+                    {% for mapping in attention.items %}
+                    <a href="{{ url_for('book_page', abs_id=mapping.abs_id) }}" onclick="openBookDrawer(this.href,this);return false;">{{ mapping.display_title }} <span>{% if mapping.is_out_of_sync %}{{ _('Out of sync') }}{% elif mapping.status in ['failed','failed_retry_later','failed_permanent','error'] %}{{ _('Alignment failed') }}{% else %}{{ _('Waiting to process') }}{% endif %}</span></a>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endif %}
+        </div>
+    </header>
 
     {% if whats_new %}<section id="whats-new-banner" class="library-banner whats-new-banner">
         <div><strong>{{ _('BookBridge updated to %(version)s', version=whats_new.version) }}</strong>
@@ -18,10 +46,7 @@
         <span class="spinner-sm" aria-hidden="true"></span><span id="forge-task-list">{{ _('Creating Storyteller edition...') }}</span>
         <small>{{ _('Processing in background') }}</small>
     </section>
-    {% if suggestions %}<section id="suggestions-section" class="matches-banner">
-        <div id="suggestions-banner" class="matches-heading" role="button" tabindex="0" aria-controls="suggestions-content" aria-expanded="false">
-            <span><strong>{{ _('Matches to review') }}</strong><span class="count">{{ suggestions|length }}</span></span><span>{{ _('Review') }} ↓</span>
-        </div>
+    {% if suggestions %}<section id="suggestions-section" class="matches-banner" hidden>
         <div id="suggestions-content" class="suggestions-content"><div class="matches-list">
             {% for suggestion in suggestions %}<article class="match-item" id="suggestion-{{ suggestion.source_id }}">
                 <div><strong>{{ suggestion.title }}</strong><small>{{ suggestion.author }}</small></div>
@@ -39,34 +64,35 @@
     {% set series_options = mappings|map(attribute='series_name')|reject('none')|unique|sort(case_sensitive=false) %}
     {% set author_options = mappings|map(attribute='display_author')|reject('none')|reject('equalto','')|unique|sort(case_sensitive=false) %}
     {% if mappings %}
-    <section class="attention-wrap">
-        {% set attention = namespace(items=[]) %}{% for book in mappings %}{% if book.is_out_of_sync or book.status in ['failed_retry_later','failed_permanent','error','processing','forging','pending'] %}{% set _ = attention.items.append(book) %}{% endif %}{% endfor %}
-        {% if attention.items %}<details id="needs-attention"><summary>{{ ngettext('%(num)s need attention', '%(num)s need attention', attention.items|length, num=attention.items|length) }} <span>▸</span></summary>
-            <div class="attention-list">{% for mapping in attention.items %}<a href="{{ url_for('book_page', abs_id=mapping.abs_id) }}" onclick="openBookDrawer(this.href,this);return false;">{{ mapping.display_title }} <span>{% if mapping.is_out_of_sync %}{{ _('Out of sync') }}{% elif mapping.status in ['failed_retry_later','failed_permanent','error'] %}{{ _('Alignment failed') }}{% else %}{{ _('Waiting to process') }}{% endif %}</span></a>{% endfor %}</div>
-        </details>{% endif %}
-    </section>
+
     <section class="library-toolbar" aria-label="{{ _('Library controls') }}">
-        <label class="search-field"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg><input id="dashboard-search" aria-label="{{ _('Search books') }}" type="search" class="field" placeholder="{{ _('Search books...') }}" autocomplete="off"></label>
-        <select id="filter-select" class="hidden" aria-label="{{ _('Format') }}"><option value="all">{{ _('All') }}</option><option value="paired">{{ _('Listening and reading') }}</option><option value="has_audio">{{ _('Has Audio') }}</option><option value="audiobook_only">{{ _('Audio only') }}</option><option value="ebook_only">{{ _('Ebook only') }}</option><option value="needs_attention">{{ _('Needs attention') }}</option></select>
-        <div class="format-chips" role="group" aria-label="{{ _('Format') }}">
-            <button type="button" data-format="all" class="chip is-active">{{ _('All') }}</button>
-            <button type="button" data-format="paired" class="chip">{{ _('Listening and reading') }}</button>
-            <button type="button" data-format="has_audio" class="chip">{{ _('Has Audio') }}</button>
-            <button type="button" data-format="audiobook_only" class="chip">{{ _('Audio only') }}</button>
-            <button type="button" data-format="ebook_only" class="chip">{{ _('Ebook only') }}</button>
-            <button type="button" data-format="needs_attention" class="chip">{{ _('Needs attention') }}</button>
+        <div class="toolbar-primary">
+            <label class="toolbar-select">{{ _('Format') }}
+                <select id="filter-select" class="field" aria-label="{{ _('Format') }}">
+                    <option value="all">{{ _('All formats') }}</option>
+                    <option value="paired">{{ _('Listening and reading') }}</option>
+                    <option value="has_audio">{{ _('Has Audio') }}</option>
+                    <option value="audiobook_only">{{ _('Audio only') }}</option>
+                    <option value="ebook_only">{{ _('Ebook only') }}</option>
+                </select>
+            </label>
+            <label class="toolbar-select">{{ _('Author') }}<select id="author-filter" class="field"><option value="all">{{ _('All authors') }}</option><option value="none">{{ _('No author') }}</option>{% for name in author_options %}<option value="author:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
+            <label class="toolbar-select">{{ _('Series') }}<select id="series-filter" class="field"><option value="all">{{ _('All series') }}</option><option value="none">{{ _('No series') }}</option>{% for name in series_options %}<option value="series:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
         </div>
-        <label class="toolbar-select">{{ _('Series') }}<select id="series-filter" class="field"><option value="all">{{ _('All series') }}</option><option value="none">{{ _('No series') }}</option>{% for name in series_options %}<option value="series:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
-        <label class="toolbar-select">{{ _('Author') }}<select id="author-filter" class="field"><option value="all">{{ _('All authors') }}</option><option value="none">{{ _('No author') }}</option>{% for name in author_options %}<option value="author:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
-        <label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field">
-            <option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="status">{{ _('Status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option>
-        </select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button>
-        <label class="group-toggle"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
-        <div class="view-switch" role="group" aria-label="{{ _('View') }}"><button type="button" id="view-covers" data-view="covers" aria-pressed="true">{{ _('Covers') }}</button><button type="button" id="view-spines" data-view="spines" aria-pressed="false">{{ _('Spines') }}</button><button type="button" id="view-list" data-view="list" aria-pressed="false">{{ _('List') }}</button></div>
-        <button type="button" id="select-mode-button" class="btn" aria-pressed="false" aria-controls="selection-bar">{{ _('Select') }}</button>
-        <span id="filter-count" role="status" aria-live="polite"></span>
+        <div class="toolbar-secondary">
+            <div class="toolbar-left">
+                <label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field">
+                    <option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="status">{{ _('Status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option>
+                </select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button>
+                <label class="group-toggle"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
+            </div>
+            <div class="toolbar-right">
+                <div class="view-switch" role="group" aria-label="{{ _('View') }}"><button type="button" id="view-covers" data-view="covers" aria-pressed="true">{{ _('Covers') }}</button><button type="button" id="view-spines" data-view="spines" aria-pressed="false">{{ _('Spines') }}</button><button type="button" id="view-list" data-view="list" aria-pressed="false">{{ _('List') }}</button></div>
+                <button type="button" id="select-mode-button" class="btn" aria-pressed="false" aria-controls="selection-bar">{{ _('Select') }}</button>
+                <span id="filter-count" role="status" aria-live="polite"></span>
+            </div>
+        </div>
     </section>
-    <div id="search-handoff" class="search-handoff hidden"><span id="search-handoff-msg"></span><a id="search-handoff-link" class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Search Discover') }}</a></div>
     <div id="selection-bar" class="selection-bar" role="toolbar" aria-label="{{ _('Selected books') }}" hidden><span id="selection-count" aria-live="polite">{{ _('0 selected') }}</span>
         <button type="button" onclick="selectAllFilteredBooks()">{{ _('Select all filtered') }}</button><button type="button" data-selection-clear onclick="clearBookSelection()">{{ _('Clear') }}</button>
         <button type="button" data-bulk-action onclick="bulkSyncNow()">{{ _('Sync now') }}</button><button type="button" data-bulk-action onclick="bulkMarkFinished()">{{ _('Mark finished') }}</button><button type="button" data-bulk-action onclick="bulkGenerateReadalong()">{{ _('Create read-along EPUB') }}</button><button type="button" data-bulk-action onclick="bulkDeleteBooks()">{{ _('Remove') }}</button>

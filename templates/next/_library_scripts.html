@@ -41,7 +41,9 @@
                     if (!content || !banner) return;
 
                     const isShowing = content.classList.toggle('show');
-                    banner.classList.toggle('active');
+                    banner.classList.toggle('active', isShowing);
+                    banner.setAttribute('aria-expanded', String(isShowing));
+                    document.getElementById('suggestions-section').hidden = !isShowing;
 
                     // Persist state in localStorage safely
                     try {
@@ -67,6 +69,8 @@
                             if (content && banner) {
                                 content.classList.add('show');
                                 banner.classList.add('active');
+                                banner.setAttribute('aria-expanded', 'true');
+                                document.getElementById('suggestions-section').hidden = false;
                             }
                         }
                     } catch (e) {
@@ -109,8 +113,9 @@
             const seriesFilter = document.getElementById('series-filter');
             const authorFilter = document.getElementById('author-filter');
             const filterCount = document.getElementById('filter-count');
+            const attentionOnlyFilter = document.getElementById('attention-only-filter');
             const directionBtn = document.getElementById('sort-direction');
-            const dashboardSearch = document.getElementById('dashboard-search');
+            const dashboardSearch = null; // Global search owns the sole text search input.
             const searchHandoff = document.getElementById('search-handoff');
             const searchHandoffMsg = document.getElementById('search-handoff-msg');
             const searchHandoffLink = document.getElementById('search-handoff-link');
@@ -227,13 +232,15 @@
                 applyFacetCounts(
                     seriesFilter,
                     cards.filter(card => matchesFormatFilter(card, formatValue)
-                        && matchesAuthorFilter(card, authorValue)),
+                        && matchesAuthorFilter(card, authorValue)
+                        && (!attentionOnlyFilter?.checked || needsAttention(card))),
                     matchesSeriesFilter,
                 );
                 applyFacetCounts(
                     authorFilter,
                     cards.filter(card => matchesFormatFilter(card, formatValue)
-                        && matchesSeriesFilter(card, seriesValue)),
+                        && matchesSeriesFilter(card, seriesValue)
+                        && (!attentionOnlyFilter?.checked || needsAttention(card))),
                     matchesAuthorFilter,
                 );
             }
@@ -275,10 +282,14 @@
 
             // Format and series are orthogonal axes, so each is its own predicate over
             // one card rather than a branch in a single mutually-exclusive filter.
+            function needsAttention(card) {
+                return card.classList.contains('out-of-sync')
+                    || ['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', 'pending'].includes(card.dataset.status);
+            }
+
             function matchesFormatFilter(card, formatValue) {
                 if (formatValue === 'all') return true;
                 if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';
-                if (formatValue === 'needs_attention') return card.classList.contains('out-of-sync') || ['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', 'pending'].includes(card.dataset.status);
                 const syncMode = card.dataset.syncMode || 'audiobook';
                 if (formatValue === 'has_audio') {
                     return syncMode === 'audiobook' || syncMode === 'audiobook_only';
@@ -338,7 +349,8 @@
 
                     let isVisible = matchesFormatFilter(card, filterValue)
                         && matchesSeriesFilter(card, seriesValue)
-                        && matchesAuthorFilter(card, authorValue);
+                        && matchesAuthorFilter(card, authorValue)
+                        && (!attentionOnlyFilter?.checked || needsAttention(card));
                     if (isVisible) {
                         passesFilters.add(card);
                     }
@@ -393,7 +405,8 @@
                     localStorage.setItem('abs_kosync_filters', JSON.stringify({
                         format: filterValue,
                         series: seriesValue,
-                        author: authorValue
+                        author: authorValue,
+                        attention: !!attentionOnlyFilter?.checked
                     }));
                 } catch (e) {
                     console.debug('LocalStorage error:', e);
@@ -804,10 +817,12 @@
                 filterSelect.addEventListener('change', filterBooks);
                 if (seriesFilter) seriesFilter.addEventListener('change', filterBooks);
                 if (authorFilter) authorFilter.addEventListener('change', filterBooks);
+                if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', filterBooks);
 
                 let savedFormat = 'all';
                 let savedSeries = 'all';
                 let savedAuthor = 'all';
+                let savedAttention = false;
                 try {
                     const savedFilters = localStorage.getItem('abs_kosync_filters');
                     if (savedFilters) {
@@ -821,6 +836,7 @@
                         if (savedSeries === 'standalone') savedSeries = 'none';
                         else if (savedSeries === 'in_series') savedSeries = 'all';
                         savedAuthor = parsed.author || 'all';
+                        savedAttention = !!parsed.attention;
                     } else {
                         // Migrate the pre-multi-filter scalar key. Its "audiobook" meant
                         // sync_mode 'audiobook' alone, which silently hid audiobook-only
@@ -832,7 +848,15 @@
                     console.debug('LocalStorage error:', e);
                 }
 
+                // Older Library preferences stored attention as a format.
+                // It is now an independent filter, so keep the user's intent.
+                if (savedFormat === 'needs_attention') {
+                    savedFormat = 'all';
+                    savedAttention = true;
+                }
                 filterSelect.value = savedFormat;
+                if (!filterSelect.value) filterSelect.value = 'all';
+                if (attentionOnlyFilter) attentionOnlyFilter.checked = savedAttention;
                 if (seriesFilter) {
                     seriesFilter.value = savedSeries;
                     // A remembered series that is no longer in the library matches no
@@ -979,31 +1003,9 @@
                 });
             }
 
-    // One search box: wide screens move the Library filter into the top bar; phones keep it in the toolbar.
-    (function () {
-        const slot = document.querySelector('[data-library-search-slot]');
-        const input = document.getElementById('dashboard-search');
-        const home = input ? input.parentElement : null;
-        if (!slot || !home || !window.matchMedia) return;
-        const wide = window.matchMedia('(min-width: 761px)');
-        const place = function () {
-            const target = wide.matches ? slot : home;
-            if (input.parentElement === target) return;
-            if (wide.matches) slot.insertBefore(input, document.getElementById('bb-search-open'));
-            else home.appendChild(input);
-        };
-        place();
-        if (wide.addEventListener) wide.addEventListener('change', place);
-        else wide.addListener(place);
-    }());
     const libraryPage = document.getElementById('library-page');
     const selectModeButton = document.getElementById('select-mode-button');
     let librarySelectMode = false;
-    document.querySelectorAll('[data-format]').forEach(button => button.addEventListener('click', () => {
-        filterSelect.value = button.dataset.format;
-        document.querySelectorAll('[data-format]').forEach(chip => { chip.classList.toggle('is-active', chip === button); chip.setAttribute('aria-pressed', String(chip === button)); });
-        filterBooks();
-    }));
     /* Spine colours: [main, band, ink] from a cover image, or null when it can't be read. */
     function spineColours(img) {
         const canvas = document.createElement('canvas');
@@ -1077,17 +1079,6 @@
         if (savedView && document.querySelector('.view-switch [data-view="' + savedView + '"]')) document.querySelector('.view-switch [data-view="' + savedView + '"]').click();
     } catch (e) { console.debug('LocalStorage error:', e); }
     paintSpines(false);
-    document.querySelectorAll('[data-format]').forEach(chip => {
-        const active = chip.dataset.format === filterSelect.value;
-        chip.classList.toggle('is-active', active);
-        chip.setAttribute('aria-pressed', String(active));
-    });
-    document.getElementById('suggestions-banner')?.addEventListener('keydown', event => {
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.currentTarget.click(); }
-    });
-    document.getElementById('suggestions-banner')?.addEventListener('click', event => {
-        event.currentTarget.setAttribute('aria-expanded', String(document.getElementById('suggestions-content').classList.contains('show')));
-    });
     function selectedBookIds() {
         return Array.from(new Set(Array.from(document.querySelectorAll('[data-select-book]:checked'), input => input.value)));
     }

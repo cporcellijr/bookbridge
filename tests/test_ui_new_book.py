@@ -240,7 +240,7 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
         library = library.replace('// Initial Sort Defaults', '</script><script>// Initial Sort Defaults')
         # Exact allowed changes: new paired/attention predicates; localized counts;
         # storage denial handling; duplicate-card/spine updates and live sort values.
-        changes = LIBRARY_ALLOWED_CHANGES
+        changes = LIBRARY_HEADER_ALLOWED_CHANGES + LIBRARY_ALLOWED_CHANGES
         for new, original in changes:
             new = normalize(new)
             self.assertIn(new, library, 'Allowed change moved: review it explicitly')
@@ -257,10 +257,6 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
 
 # (New lines, original Classic lines): deliberate P3 compatibility changes only.
 LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';", ''),
- ("if (formatValue === 'needs_attention') return card.classList.contains('out-of-sync') || "
-  "['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', "
-  "'pending'].includes(card.dataset.status);",
-  ''),
  ('filterCount.textContent = shown === total\n'
   "? bbPlural({% call(n) plural_forms() %}{{ ngettext('{count} book', '{count} books', n) }}{% "
   'endcall %}, total)\n'
@@ -319,6 +315,40 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   'book.last_slot_sync);\n'
   '                            });',
   ''))
+
+
+# Each Library-header exception to the Classic script is pinned explicitly.
+# This test removes only these approved deltas before comparing shared blocks.
+LIBRARY_HEADER_ALLOWED_CHANGES = (
+    ("                    banner.classList.toggle('active', isShowing);\n                    banner.setAttribute('aria-expanded', String(isShowing));\n                    document.getElementById('suggestions-section').hidden = !isShowing;",
+     "                    banner.classList.toggle('active');"),
+    ("                                banner.setAttribute('aria-expanded', 'true');\n                                document.getElementById('suggestions-section').hidden = false;",
+     ""),
+    ("            const attentionOnlyFilter = document.getElementById('attention-only-filter');",
+     ""),
+    ("            const dashboardSearch = null; // Global search owns the sole text search input.",
+     "            const dashboardSearch = document.getElementById('dashboard-search');"),
+    ("                        && matchesAuthorFilter(card, authorValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card))),",
+     "                        && matchesAuthorFilter(card, authorValue)),"),
+    ("                        && matchesSeriesFilter(card, seriesValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card))),",
+     "                        && matchesSeriesFilter(card, seriesValue)),"),
+    ("            function needsAttention(card) {\n                return card.classList.contains('out-of-sync')\n                    || ['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', 'pending'].includes(card.dataset.status);\n            }",
+     ""),
+    ("                        && matchesAuthorFilter(card, authorValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card));",
+     "                        && matchesAuthorFilter(card, authorValue);"),
+    ("                        author: authorValue,\n                        attention: !!attentionOnlyFilter?.checked",
+     "                        author: authorValue"),
+    ("                if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', filterBooks);",
+     ""),
+    ("                let savedAttention = false;",
+     ""),
+    ("                        savedAttention = !!parsed.attention;",
+     ""),
+    ("                // Older Library preferences stored attention as a format.\n                // It is now an independent filter, so keep the user's intent.\n                if (savedFormat === 'needs_attention') {\n                    savedFormat = 'all';\n                    savedAttention = true;\n                }",
+     ""),
+    ("                if (!filterSelect.value) filterSelect.value = 'all';\n                if (attentionOnlyFilter) attentionOnlyFilter.checked = savedAttention;",
+     ""),
+)
 
 
 # P4 Discover: every deviation from the copied Classic script is intentional.

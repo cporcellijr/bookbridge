@@ -1,73 +1,46 @@
-// The Library has one search box: wide screens move the filter input into the top bar
-// (before the Ctrl K launcher); phones keep it in the toolbar. Runs the real script.
+// Library header contracts: one global search input and independent attention filtering.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const source = fs.readFileSync('templates/next/_library_scripts.html', 'utf8');
-const start = source.indexOf('// One search box:');
-const end = source.indexOf('}());', start) + '}());'.length;
-assert(start >= 0 && end > start, 'search placement script not found');
-const script = source.slice(start, end);
+const library = fs.readFileSync('templates/next/index.html', 'utf8');
+const base = fs.readFileSync('templates/next/base.html', 'utf8');
+const scripts = fs.readFileSync('templates/next/_library_scripts.html', 'utf8');
+const globalSearch = fs.readFileSync('static/js/next/search.js', 'utf8');
 
-function node(name) {
-  return {
-    name, children: [], parentElement: null,
-    appendChild(child) { return this.insertBefore(child, null); },
-    insertBefore(child, before) {
-      if (child.parentElement) {
-        const siblings = child.parentElement.children;
-        siblings.splice(siblings.indexOf(child), 1);
-      }
-      const at = before ? this.children.indexOf(before) : -1;
-      if (before) assert(at >= 0, 'insertBefore reference must be a child');
-      this.children.splice(at >= 0 ? at : this.children.length, 0, child);
-      child.parentElement = this;
-      return child;
-    },
-  };
-}
+assert.ok(!library.includes('block topbar_search'), 'Library must inherit global search');
+assert.ok(!library.includes('id="dashboard-search"'), 'No duplicate text search in Library');
+assert.ok(!scripts.includes('[data-library-search-slot]'), 'No moved Library-only search field');
+assert.ok(base.includes('id="bb-search-open"'), 'Shared top bar has the launcher');
+assert.ok(base.includes('id="bb-search-input"'), 'Shared search dialog owns the input');
+assert.ok(globalSearch.includes("fetch('/api/me/books'"), 'Global search indexes books');
+assert.ok(globalSearch.includes("fetch('/settings'"), 'Global search can index settings');
+assert.ok(globalSearch.includes('catalog.pages'), 'Global search indexes pages');
+assert.ok(globalSearch.includes('event.ctrlKey || event.metaKey'), 'Ctrl/Command K remains supported');
 
-const home = node('toolbar label');
-const slot = node('top bar slot');
-const launch = node('Ctrl K launcher');
-const input = node('dashboard-search');
-slot.appendChild(launch);
-home.appendChild(input);
+const format = library.match(/<select id="filter-select"[^>]*>([\s\S]*?)<\/select>/);
+assert.ok(format, 'Format is a visible select');
+assert.ok(!format[0].includes('class="hidden"'), 'Format cannot be hidden');
+assert.ok(!format[1].includes('needs_attention'), 'Attention is not a format');
+assert.ok(library.includes('id="attention-only-filter"'), 'Attention filter stays available');
+assert.ok(scripts.includes("savedFormat === 'needs_attention'"), 'Old saved attention filter migrates');
 
-let changeHandler = null;
-const media = {
-  matches: true,
-  addEventListener(type, handler) { assert.equal(type, 'change'); changeHandler = handler; },
-};
-const document = {
-  querySelector(selector) { return selector === '[data-library-search-slot]' ? slot : null; },
-  getElementById(id) { return ({'dashboard-search': input, 'bb-search-open': launch})[id] ?? null; },
-};
-const window = {matchMedia(query) { assert.equal(query, '(min-width: 761px)'); return media; }};
-
-vm.runInNewContext(script, {document, window});
-assert.equal(input.parentElement, slot, 'wide screens put the filter in the top bar');
-assert.deepEqual(slot.children.map(child => child.name), ['dashboard-search', 'Ctrl K launcher']);
-assert.equal(home.children.length, 0);
-
-media.matches = false;
-changeHandler();
-assert.equal(input.parentElement, home, 'phones keep the filter in the toolbar');
-assert.deepEqual(slot.children.map(child => child.name), ['Ctrl K launcher']);
-
-media.matches = true;
-changeHandler();
-changeHandler();
-assert.deepEqual(slot.children.map(child => child.name), ['dashboard-search', 'Ctrl K launcher']);
-
-// Other pages have no slot: nothing moves.
-const otherInput = node('dashboard-search');
-const otherHome = node('toolbar label');
-otherHome.appendChild(otherInput);
-vm.runInNewContext(script, {
-  document: {querySelector() { return null; }, getElementById() { return otherInput; }},
-  window,
+// Execute the production attention predicate against independent card states.
+const start = scripts.indexOf('function needsAttention(card)');
+const end = scripts.indexOf('// \'all\', \'none\' (no series at all)', start);
+assert.ok(start > 0 && end > start, 'Attention predicate must be present');
+const sandbox = {};
+vm.runInNewContext(scripts.slice(start, end), sandbox);
+const card = (status, outOfSync = false, syncMode = 'audiobook') => ({
+    dataset: {status, syncMode},
+    classList: {contains(className) { return className === 'out-of-sync' && outOfSync; }},
 });
-assert.equal(otherInput.parentElement, otherHome);
-console.log('library search placement ok');
+for (const status of ['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', 'pending']) {
+    assert.equal(sandbox.needsAttention(card(status)), true, status);
+}
+assert.equal(sandbox.needsAttention(card('active', true)), true);
+assert.equal(sandbox.needsAttention(card('active')), false);
+assert.equal(sandbox.matchesFormatFilter(card('active'), 'all'), true);
+assert.equal(sandbox.matchesFormatFilter(card('active'), 'has_audio'), true);
+assert.equal(sandbox.matchesFormatFilter(card('active'), 'ebook_only'), false);
+console.log('global search and independent Library attention filter ok');

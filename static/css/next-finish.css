@@ -33,8 +33,7 @@
 #bb-search-input:focus-visible { outline-offset: -3px !important; }
 .view .settings-tab, .view .settings-main button, .view .integrations-wrap button,
 .view .account-wrap button, .view .admin-users-wrap button { min-height: 44px; }
-.library-page .format-chips .chip, .library-page .view-switch button,
-.library-page .selection-bar button, .library-page .section-collapse,
+.library-page .view-switch button, .library-page .selection-bar button, .library-page .section-collapse,
 .library-page .library-banner button { min-height: 44px; }
 .discover-page .tab, .discover-page .btn, .discover-page button,
 .discover-page .form-input, .discover-page .form-select { min-height: 44px; }
@@ -105,7 +104,6 @@
     .mobile-brand { min-width: 0; }
     .mobile-brand span { overflow: hidden; text-overflow: ellipsis; }
     .library-toolbar { padding: 10px; }
-    .format-chips { max-width: 100%; }
     .selection-bar { max-height: 50dvh; overflow-y: auto; bottom: calc(72px + env(safe-area-inset-bottom)); }
     .library-page .book-copy { padding: 10px; }
     .library-page .book-copy h3 {
@@ -149,7 +147,7 @@
 
 /* The touch hit area includes padding, not just the icon or label. */
 .skip-link { min-height: 44px; }
-.library-page .format-chips .chip, .library-page .view-switch button { min-width: 44px; }
+.library-page .view-switch button { min-width: 44px; }
 .library-page .hc-modal-close { min-width: 44px; min-height: 44px; }
 .library-page .hc-modal details summary { min-height: 44px; display: flex; align-items: center; }
 .view .integrations-wrap .test-btn, .view .admin-users-wrap .test-btn,
