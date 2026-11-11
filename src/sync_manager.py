@@ -48,6 +48,7 @@ from src.utils.user_config import user_preference_enabled
 from src.utils.storyteller_transcript import StorytellerTranscript
 # Logging utilities (placed at top to ensure availability during sync)
 from src.utils.cache_paths import safe_cache_path, is_plain_basename
+from src.services.audio_cache_ownership import owned_cache_names, remove_book_cache_dirs
 from src.utils.transcription_cancel import (
     CancellationToken,
     is_cancelled,
@@ -1903,6 +1904,8 @@ class SyncManager:
             for book in books:
                 if book.ebook_filename:
                     valid_filenames.add(book.ebook_filename)
+                if book.original_ebook_filename:
+                    valid_filenames.add(book.original_ebook_filename)
             
             # From Pending Suggestions (covers auto-discovery matches)
             suggestions = self.database_service.get_all_pending_suggestions(all_users=True)
@@ -4057,14 +4060,23 @@ class SyncManager:
                 
                 # Keep the completed transcript so correcting the pairing does not repeat Whisper.
                 if self.data_dir and not recovery_mode:
-                    audio_cache_dir = Path(self.data_dir) / "audio_cache" / abs_id
-                    if audio_cache_dir.exists():
+                    audio_cache_root = Path(self.data_dir) / "audio_cache"
+                    try:
+                        from src.utils.transcriber import AudioTranscriber
                         try:
-                            from src.utils.transcriber import AudioTranscriber
-                            AudioTranscriber._prune_audio_cache(audio_cache_dir, remove_directories=True)
+                            known_ids = [b.abs_id for b in self.database_service.get_all_books()]
+                        except Exception:
+                            known_ids = None
+                        pruned = False
+                        for cache_name in owned_cache_names(abs_id, known_ids):
+                            if (audio_cache_root / cache_name).exists():
+                                pruned = AudioTranscriber._prune_audio_cache(
+                                    audio_cache_root / cache_name, remove_directories=True,
+                                    cache_root=audio_cache_root, own_token=cancellation_token) or pruned
+                        if pruned:
                             logger.info(f"✅ Cleaned up audio cache for {sanitize_log_data(abs_title)}")
-                        except Exception as cleanup_err:
-                            logger.warning(f"⚠️ Failed to clean audio cache: {cleanup_err}", exc_info=True)
+                    except Exception as cleanup_err:
+                        logger.warning(f"⚠️ Failed to clean audio cache: {cleanup_err}", exc_info=True)
             else:
                 book.status = 'failed_retry_later'
                 # Log which claimant was used so cross-user identity mismatches
@@ -4081,14 +4093,21 @@ class SyncManager:
 
         finally:
             if is_cancelled(abs_id, cancellation_token) and self.data_dir:
-                import shutil
-                audio_cache_dir = Path(self.data_dir) / "audio_cache" / abs_id
-                if audio_cache_dir.exists():
+                try:
                     try:
-                        shutil.rmtree(audio_cache_dir)
+                        other_ids = [b.abs_id for b in self.database_service.get_all_books()]
+                    except Exception:
+                        other_ids = None
+                    delete_errors = []
+                    removed_dirs = remove_book_cache_dirs(Path(self.data_dir) / "audio_cache", abs_id,
+                                                          other_ids=other_ids, own_token=cancellation_token,
+                                                          errors=delete_errors)
+                    for delete_error in delete_errors:
+                        logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {delete_error}", exc_info=delete_error)
+                    if removed_dirs:
                         logger.info(f"✅ Cleaned cancelled transcription cache for {sanitize_log_data(abs_title)}")
-                    except Exception as cleanup_err:
-                        logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {cleanup_err}", exc_info=True)
+                except Exception as cleanup_err:
+                    logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {cleanup_err}", exc_info=True)
             unregister_worker(abs_id, cancellation_token)
             if library_token is not None:
                 _library_service_override.reset(library_token)

@@ -10,6 +10,7 @@ from typing import Optional
 from src.api.api_clients import ABSClient
 from src.services.current_audio_chapter import real_chapter_rows
 from src.api.booklore_client import BookloreClient
+from src.services.audio_cache_ownership import cache_dir_name, remove_owned
 from src.api.bookorbit_client import BookOrbitClient
 from src.utils.config_loader import env_truthy
 from src.utils.logging_utils import sanitize_log_data
@@ -273,7 +274,7 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
         if not files or self.data_dir is None or not env_truthy("CTC_ENABLED"):
             return files
 
-        cache_key = str(bridge_key or source_id).replace(":", "_")
+        cache_key = cache_dir_name(bridge_key or source_id)
         source_cache_dir = self.data_dir / "audio_cache" / cache_key / "source_tracks"
         for idx, audio_file in enumerate(files):
             if audio_file.get("local_path"):
@@ -860,7 +861,7 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
         logger.debug("BookOrbit audio files: source_id=%s count=%s", source_id, len(tracks))
 
         # ':' in bridge keys ('bookorbit:42') is not a legal path char on Windows.
-        cache_key = str(bridge_key or f"bookorbit-{source_id}").replace(":", "_")
+        cache_key = cache_dir_name(bridge_key or f"bookorbit-{source_id}")
         source_cache_dir = self.data_dir / "audio_cache" / cache_key / "source_tracks"
         source_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -887,7 +888,7 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
                     )
                 downloaded_size = local_path.stat().st_size
                 if not downloaded_size or (expected_size and downloaded_size != expected_size):
-                    local_path.unlink()
+                    remove_owned(local_path, self.data_dir / "audio_cache")
                     raise RuntimeError(
                         f"Incomplete BookOrbit audio download for book_id={source_id} "
                         f"file_id={track.get('id')}: got {downloaded_size} bytes, "

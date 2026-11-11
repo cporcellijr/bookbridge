@@ -63,3 +63,24 @@ def unregister_worker(abs_id: str, token: CancellationToken) -> None:
         key = str(abs_id)
         if _active.get(key) is token:
             _active.pop(key, None)
+
+
+def active_workers() -> dict[str, CancellationToken]:
+    """Snapshot of the currently registered worker generations by book id."""
+    with _lock:
+        return dict(_active)
+
+
+def run_unless_other_worker(book_id, own_token, action, key=str):
+    """Run ``action()`` while holding the registry lock, only if no other generation is live.
+
+    ``key`` maps ids to a comparison key (so ``a:1`` and ``a_1`` can be treated as one book).
+    A worker registering concurrently either registers first (the action is skipped) or after
+    the action finished. ``action`` must be fast and must not register or unregister workers.
+    Returns ``(ran, result)``.
+    """
+    wanted = key(book_id)
+    with _lock:
+        if any(key(other) == wanted and token is not own_token for other, token in _active.items()):
+            return False, None
+        return True, action()

@@ -491,19 +491,24 @@
         }
 
         async function cleanInactiveCache() {
-            if (!confirm({{ _('Clean all cached audio and transcript files for inactive books?\n\nActive books will not be affected.')|tojson }})) {
+            if (!confirm({{ _('Review inactive cache ownership without deleting any files?')|tojson }})) {
                 return;
             }
 
             try {
                 const response = await fetch('/api/cache/clean', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dry_run: true })
                 });
 
                 const data = await response.json();
-                if (data.success) {
-                    alert(bbFormat({{ _('Cleaned {audio} audio cache(s), {transcripts} transcript folder(s), and {epubs} cached epub(s).')|tojson }}, { audio: data.deleted_audio, transcripts: data.deleted_transcripts, epubs: data.deleted_epubs }));
+                if (data.success && data.dry_run) {
+                    alert(bbFormat({{ _('Review only: {potential} potentially inactive folders ({size} GiB), {unverified} unverified folders. No files were deleted.')|tojson }}, {
+                        potential: (data.potential_inactive_audio || []).length,
+                        size: ((data.potential_inactive_audio_bytes || 0) / (1024 ** 3)).toFixed(2),
+                        unverified: data.unverified_audio_directories || 0
+                    }));
                 } else {
                     alert(bbFormat({{ _('Failed: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
                 }
