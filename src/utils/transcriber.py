@@ -625,6 +625,36 @@ class AudioTranscriber:
             except OSError as cleanup_err:
                 logger.debug(f"Transcript cache cleanup skipped {artifact.name}: {cleanup_err}")
 
+    def _discard_progress_from_other_audio(
+        self, abs_id: str, book_cache_dir: Path, progress_file: Path,
+        source_fingerprints: dict,
+    ) -> None:
+        """Drop saved progress and derived audio parts not made from these mounted sources.
+
+        Progress records the fingerprints of the mounted originals it was built from.
+        Progress with no record (downloaded-copy books, written before this existed)
+        keeps resuming. Recorded progress that differs from the freshly acquired
+        sources is discarded together with the cached parts decoded from the old audio.
+        With no progress file at all, parts of unknown origin are dropped for mounted
+        sources.
+        """
+        if progress_file.exists():
+            try:
+                recorded = json.loads(progress_file.read_text()).get('source_fingerprints')
+            except (OSError, ValueError):
+                return
+            if recorded is None or recorded == source_fingerprints:
+                return
+        elif not source_fingerprints:
+            return
+        logger.info(
+            f"♻️ Cached transcription for {abs_id} was not made from the current source audio; "
+            f"discarding it and re-transcribing"
+        )
+        # Files only: source_tracks may hold tracks downloaded for this very run.
+        self._prune_audio_cache(book_cache_dir)
+        progress_file.unlink(missing_ok=True)
+
     _CHUNK_NAME = re.compile(r"part_(\d+)(?:_normalized)?(?:_split_(\d+))?\.wav")
 
     @classmethod
@@ -680,7 +710,12 @@ class AudioTranscriber:
         book_cache_dir.mkdir(parents=True, exist_ok=True)
 
         progress_file = book_cache_dir / "_progress.json"
-        
+        source_fingerprints = {
+            f["local_path"]: list(f["source_fingerprint"])
+            for f in audio_urls if isinstance(f, dict) and f.get("local_path") and f.get("source_fingerprint")
+        }
+        self._discard_progress_from_other_audio(abs_id, book_cache_dir, progress_file, source_fingerprints)
+
         # If we have a fully completed progress file, we can just return the result!
         if progress_file.exists():
              try:
@@ -973,7 +1008,8 @@ class AudioTranscriber:
                             'cumulative_duration': cumulative_duration,
                             'transcript': full_transcript,
                             'vad_filter': vad_used,
-                            'done': (chunks_completed == total_chunks)
+                            'done': (chunks_completed == total_chunks),
+                            **({'source_fingerprints': source_fingerprints} if source_fingerprints else {}),
                         }, f)
                 except (FileNotFoundError, NotADirectoryError):
                     logger.info(f"🛑 Progress cache for {abs_id} vanished (mapping deleted); stopping cleanly")
