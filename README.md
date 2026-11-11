@@ -20,6 +20,25 @@
 
 **BookBridge** is a powerful synchronization engine for **Audiobookshelf**, **KOReader**, **Storyteller**, **Grimmory**, **BookOrbit**, **Kavita**, **Calibre-Web Automated**, and reading trackers. It keeps supported reading, listening, and annotation state aligned across your devices and web readers.
 
+## 📸 Screenshots
+
+The New interface, shown with a demo library of public-domain classics.
+
+<p align="center"><img src="docs/assets/screenshots/library.png" alt="Library in the New interface: book covers with your progress and a strip showing where each book is linked" width="100%"></p>
+
+<table>
+<tr>
+<td width="38%"><img src="docs/assets/screenshots/book-drawer.png" alt="Book drawer showing the position in each app and recent syncs"></td>
+<td width="38%"><img src="docs/assets/screenshots/discover.png" alt="Discover listing audiobook and ebook pairs to review"></td>
+<td width="24%"><img src="docs/assets/screenshots/phone.png" alt="Library on a phone"></td>
+</tr>
+<tr>
+<td align="center">Book drawer: where you are in every app</td>
+<td align="center">Discover: audiobook + ebook pairs to review</td>
+<td align="center">On a phone</td>
+</tr>
+</table>
+
 ## ✨ Key Features
 
 - **Multi-Service Sync**: Syncs supported progress paths across Audiobookshelf, KOReader, Storyteller, Grimmory, BookOrbit, Kavita, CWA/Kobo sync, and reading trackers.
@@ -33,7 +52,7 @@
 - **Read-Along EPUBs for BookOrbit**: Generate a read-along EPUB directly from a book's own audiobook, ebook, and alignment — no Storyteller server required.
 - **Richer Dashboard Controls**: Filter by author, series, or format; sort by author, series, progress, status, last sync, date added, or rating; optionally show each series as the book you're reading.
 - **Web UI**: Management dashboard for tracking syncs and matching books.
-- **Library Suggestions Page**: Scan your library for likely audiobook + ebook pairs, review them, and queue matches in bulk. Optional scheduled scans and cron full refreshes keep suggestions current.
+- **Discover**: Scan your library for likely audiobook + ebook pairs, review them, and queue matches in bulk. Optional scheduled scans and cron full refreshes keep suggestions current.
 - **Scripted Reader Setup**: Provision readers and their integrations through an optional [admin API](docs/configuration.md#admin-api-optional).
 - **Interface Languages**: Each reader chooses English or Russian on their Account page.
 - **Job Queue**: See which books are waiting, processing or recently finished, and move staged work up or down before it starts.

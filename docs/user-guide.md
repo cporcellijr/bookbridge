@@ -18,7 +18,7 @@ It shows:
 - Annotation sync status when the updated Bridge Sync KOReader plugin is in use
 - A **CTC pill** and a blue **read-along pill** under a book's ratings, marking a book whose
   alignment came from forced alignment or one that has a finished read-along EPUB
-- Quick access to **Add / Update Book**, **Suggestions**, **Stats**, **Settings**, and **Logs**
+- Quick access to **Discover**, **Job Queue**, **Stats**, **Settings**, and **Logs**
 
 If a book is significantly out of sync, the card is highlighted so you can spot it quickly.
 
@@ -30,7 +30,7 @@ related books together and use title or volume order to break ties.
 
 The search box filters the books you already sync. If you search for a book you
 have not matched yet, BookBridge offers to look for that title in your libraries
-instead and carries what you typed straight into **Add / Update Book**.
+instead and carries what you typed straight into Discover's **Search** tab.
 
 Use the **Author**, **Series**, and **Format** filters together to narrow the library.
 Each menu shows only choices that can still match your other filters, while retaining a
@@ -88,6 +88,8 @@ pulling you backward.
 ---
 
 ## Stats
+
+Every reader can open **Stats** for their own reading and listening activity.
 
 The **Listening** section shows daily totals, a heatmap, recent sessions and the
 yearly recap. If your own Audiobookshelf account is configured, its listening
@@ -149,7 +151,7 @@ Use this when you want listening and reading progress to stay aligned.
 
 This mode tracks an audiobook without attaching an ebook or Storyteller text.
 
-- Create it by choosing an audiobook and **Audio only (no ebook)** in **Add / Update Book**.
+- Create it by choosing an audiobook and **Audio only (no ebook)** in Discover's **Search** tab.
 - The audio source can be **Audiobookshelf**, **Grimmory**, or **BookOrbit**.
 - It activates immediately and skips EPUB lookup, transcript generation, alignment, and Storyteller edition creation.
 
@@ -159,7 +161,7 @@ Use this when you want to track or mirror audiobook progress without a text edit
 
 This mode tracks reading progress without attaching an audiobook source.
 
-- Create it by leaving audio on **None / Skip** in **Add / Update Book**.
+- Create it by leaving audio on **None / Skip** in Discover's **Search** tab.
 - You can still link a standard ebook, a Storyteller title, or both.
 - Ebook-only links skip audiobook preparation work, so they activate faster.
 
@@ -340,9 +342,11 @@ This does not send your reading progress to Readest. Readest already syncs progr
 Audiobookshelf and KOReader directly, so BookBridge stays out of that to avoid two writers
 fighting over the same position.
 
-## Add / Update Book
+## Discover: Search
 
-**Add / Update Book** is the main manual linking tool.
+The **Search** tab in **Discover** is the main manual linking tool (it replaced
+**Add / Update Book** in 7.13.0, and old Add Book links open it). Search your libraries
+by title, author or file name, then make your picks. Reader Documents are here too.
 
 ### Step 1: Choose audio
 
@@ -382,23 +386,25 @@ mounted files fall back to the cache or provider.
 
 ### Final actions
 
-- **Create Mapping** creates the link immediately.
-- **Create Storyteller Edition & Match All** uploads the book to Storyteller for processing first, then finishes the link when processing completes. This appears only when the current reader has a Storyteller account configured.
-- **Create Storyteller Edition Only** uploads the book to Storyteller for processing without creating a sync mapping yet. It appears under the same condition.
+**Add to Queue** puts your pick in the **Batch Match Queue**. From the queue:
 
-If you skip audio, **Create Mapping** makes an ebook-only link instead.
+- **Match All** creates the links.
+- **Create Storyteller Edition & Match All** uploads the books to Storyteller for processing first, then finishes the links when processing completes. This appears only when the current reader has a Storyteller account configured.
+- **Create Storyteller Edition Only** uploads the books to Storyteller for processing without creating a sync mapping yet. It appears under the same condition.
+
+If you skip audio, the entry becomes an ebook-only link.
 If you choose **Audio only (no ebook)**, the mapping activates immediately without EPUB or transcript processing.
 
 ### The match queue
 
 Instead of creating one link at a time, you can build a queue and process the whole
-batch together. The queue survives leaving the page, and the **Add Book** tab shows a
-count whenever books are waiting in it.
+batch together. The queue survives leaving the page and shows how many items are
+waiting in it.
 
 - Queue entries can use **Audiobookshelf**, **Grimmory**, or **BookOrbit** as the audio source.
 - Each entry can carry a standard ebook, a Storyteller title, or both.
 - **Audio only (no ebook)** entries are also queueable and activate immediately.
-- Picks approved on the **Suggestions** page land in this same queue.
+- Picks from Discover's **Pairs** and **Ebook Only** tabs land in this same queue.
 - When the queue holds a BookOrbit audiobook, tick **Also generate read-along EPUBs**
   to request a [read-along EPUB](#read-along-epubs-for-bookorbit) for those books.
 
@@ -412,11 +418,11 @@ process it.
 ## Job Queue
 
 **Job Queue** in the top navigation shows the book work that is waiting, processing
-or recently finished: staged Add Book items, Add Book batches being processed,
+or recently finished: staged queue items, match batches being processed,
 alignment, and requested read-along EPUBs with their progress. The page refreshes
 itself while books are processing.
 
-- **Move Up**, **Move Down** and **Move to Top** change the order of staged Add Book
+- **Move Up**, **Move Down** and **Move to Top** change the order of staged queue
   items before you submit the batch.
 - Books waiting for alignment show their place (for example *#3 of 7*) and can be
   moved the same way. The alignment worker starts the first book in that order, and
@@ -424,18 +430,42 @@ itself while books are processing.
 - You can move only your own books; other readers' books keep their places, and
   work that is already processing can't be moved.
 
+### Transcription pre-flight
+
+Before a book falls back to a full Whisper transcription, BookBridge counts the EPUB's
+words and divides by the audiobook's catalog duration, and **Processing** shows the
+result below the job. Once five of your books have been measured and passed the content
+check, it also shows how the new book compares with them (for example "2.01× your
+library median"), so a wrong pairing such as an omnibus with one narrated volume stands
+out before the long run ends. It is a measurement, not a verdict: work never pauses,
+**Dismiss** only hides the advisory, and the final content-match check still refuses
+real mismatches.
+
 ---
 
-## Suggestions
+## Discover: Pairs and Ebook Only
 
-The **Suggestions** page is a review workspace for likely matches that are not linked yet.
+**Discover** (called **Suggestions** before 7.13.0) is a review workspace for likely
+matches that are not linked yet. Every reader can use it, and each reader sees only
+their own scans, suggestions, ignores and queue. When several readers scan, the scans
+run one at a time, and opening a tab never starts a scan.
 
 ### What it does
 
-- Scans unmatched titles in your library
-- Shows likely audiobook + ebook pairs
-- Lets you review one suggestion at a time
-- Sends approved picks into the same match queue used by Add / Update Book
+- **Pairs** scans unmatched titles in your library and shows likely audiobook + ebook
+  pairs for review.
+- **Ebook Only** lists ebooks the last scan found no qualifying audiobook for, dated
+  "as of" that scan. Each offers **Find audiobook** (opens Search with the ebook already
+  chosen), **Create ebook-only** (or **Add to your library** when another reader already
+  added the same ebook), **Hide for now**, and a saved **Ignore** you can undo.
+- Both tabs group books by series (collapsed, in series order, with an Other / No Series
+  group; switch to a flat list any time) and have search, series, source, status and sort
+  filters that each tab remembers separately. Ticking a series selects every exact match in
+  it; review matches are never selected that way.
+- A scan that could not read every source says the results may be incomplete.
+- Approved picks go into the same Batch Match Queue the **Search** tab uses.
+- An admin can turn on **Ignore local files in Suggestions** (**Settings -> Library &
+  Matching**) to leave locally scanned files out of Pairs and Ebook Only on the next scan.
 
 ### Scan options
 
@@ -447,7 +477,7 @@ the background (`0` is off; enabled intervals are at least five minutes). Enable
 **Scheduled Full Refresh** to rescan on a five-field cron schedule in your `TZ`
 timezone, for example `20 4 * * sun` for Sunday at 04:20. An existing weekly
 schedule carries over. Scheduled scans use the primary admin's own libraries and
-credentials, never overlap another scan, and appear when Suggestions next loads.
+credentials, never overlap another scan, and appear when Discover next loads.
 
 ### Actions
 
@@ -479,7 +509,7 @@ upload it to your Storyteller server, and link the finished result as a mapping.
 
 ### Two ways to use it
 
-1. **Create Storyteller Edition & Match All** — from Add / Update Book or Suggestions.
+1. **Create Storyteller Edition & Match All** — from Discover's Batch Match Queue.
    Starts the Storyteller upload and processing workflow, then finishes the mapping
    once processing completes.
 
@@ -544,10 +574,9 @@ A book that already carries its own read-along narration is refused rather than 
 
 Two ways to start a generation job:
 
-1. **At match time.** In **Add / Update Book**, once you pick a **BookOrbit audiobook**, a
-   checkbox appears: *Also generate a read-along EPUB for BookOrbit once this book finishes
-   forging.* Tick it and finish the match (**Create Mapping** or **Match All** — a Storyteller
-   account is not required). Generation starts automatically as soon as the book's alignment
+1. **At match time.** When Discover's Batch Match Queue holds a **BookOrbit audiobook**,
+   tick *Also generate read-along EPUBs for the BookOrbit audiobooks in this queue* and
+   finish with **Match All** (a Storyteller account is not required). Generation starts automatically as soon as the book's alignment
    finishes.
 2. **From an existing book card.** Open the card's reset menu and choose **Create read-along
    EPUB**. The button shows live progress by stage while the job runs, and the card's
@@ -687,7 +716,7 @@ With **Auto-match books you start reading in BookOrbit** on (BookOrbit card, **S
 past 1% of a BookOrbit ebook that BookBridge hasn't matched, it looks for the
 audiobook:
 
-- **A match** always goes to **Suggestions** for you to confirm; nothing is linked
+- **A match** always goes to **Discover** for you to confirm; nothing is linked
   without you.
 - **No audiobook** — the book is added as **ebook-only**, so its progress syncs.
 
@@ -717,7 +746,7 @@ automatically:
 3. If a likely audio match exists, it creates a **Suggestion** for review. If no
    audiobook source is found, it can create an **ebook-only** workflow instead.
 
-Suggestions always require your approval before a real mapping is created.
+Discover suggestions always require your approval before a real mapping is created.
 
 A single push never creates work: the bridge waits until the device reports you reading forward,
 by at least **Min Ebook Change**, before it looks for a match. A book you removed from BookBridge
@@ -741,8 +770,8 @@ reliable fix; failing that, link the document by hand under
 
 ### Library suggestions
 
-The **Suggestions** page scans your unmatched library in the background and proposes
-audiobook and ebook pairings for review. See [Suggestions](#suggestions) above.
+**Discover** scans your unmatched library in the background and proposes audiobook
+and ebook pairings for review. See [Discover](#discover-pairs-and-ebook-only) above.
 
 ---
 

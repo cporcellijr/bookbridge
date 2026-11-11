@@ -148,9 +148,9 @@ same names, in the same order.
 
 You can start in either of these ways:
 
-### Suggestions
+### Discover: Pairs
 
-1. Open **Suggestions**.
+1. Open **Discover**.
 2. Click **Scan Library**.
 3. Review the likely pairs.
 4. Add the good ones to the queue.
@@ -160,13 +160,13 @@ If your audiobook and ebook services point at the same mounted `/books` tree,
 sibling audio and ebook files in the same title folder appear as high-confidence
 same-folder matches.
 
-### Add / Update Book
+### Discover: Search
 
-1. Open **Add / Update Book**.
-2. Pick an ABS, Grimmory, or BookOrbit audiobook, or leave audio on **None / Skip** for an ebook-only link.
+1. Open **Discover** and choose the **Search** tab.
+2. Search for the book, then pick an ABS, Grimmory, or BookOrbit audiobook, or leave audio on **None / Skip** for an ebook-only link.
 3. Optionally pick a Storyteller title (skip this unless you use the Storyteller app).
-4. Pick the standard ebook.
-5. Click **Create Mapping**.
+4. Pick the standard ebook and click **Add to Queue**.
+5. Click **Match All** in the Batch Match Queue.
 
 That is enough to get syncing started. The normal background cycle runs every 5 minutes by default, and instant sync can react faster when supported by the source.
 

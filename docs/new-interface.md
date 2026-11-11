@@ -10,7 +10,7 @@ The choice saves as soon as you click, without a separate Save step or JavaScrip
 
 ## Find your way around
 
-- **Library:** Switch between Covers, Spines and List. Filter, sort, or group by series. Open a book to see its progress across apps, its links and its actions. Covers arrange cards into a compact masonry grid.
+- **Library:** Switch between Covers, Spines and List. Filter, sort, or group by series. Open a book to see its progress across apps, its links and its actions. Covers arrange cards into a compact masonry grid. Each cover shows your progress (a percentage badge and a thin line, or a check once finished) and a strip of where the book is linked (ebook, audiobook, read-along, KOReader), with the app that led its last sync lit. With a mouse the strip appears when you hover over a card; on a touch screen it stays visible, and tapping an icon shows that app's position. The book drawer shows your current audiobook chapter for Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter information.
 - **Discover:** Find audiobook/ebook pairs, ebooks without an audio match, or search for another book. Review suggestions and add them to the queue.
 - **Processing:** See work in progress and waiting or recently finished jobs.
 - **Stats:** Every reader can see their own reading and listening statistics.

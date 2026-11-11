@@ -6,7 +6,44 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+## [7.13.0] - 2026-11-10
+
 ### Added
+
+- **The New interface (beta) gives BookBridge a fresh look while keeping Classic available.** Switch
+  interfaces immediately: choose **New interface** beside the Classic account menu, or use
+  **Classic | New** above the user menu in New (also in the phone account menu). The page reopens in
+  your chosen interface without a Save step, and Classic stays the default. New has a redesigned
+  Library with Covers, Spines and List, Discover, a book drawer, search with Ctrl K (or ⌘K on Mac),
+  day and night themes, and phone navigation. A strip on each Library cover shows where the book is
+  linked (ebook, audiobook, read-along, KOReader) and lights the app that led its last sync; on a
+  touch screen it stays visible, and tapping an icon shows that app's position. Library cards show
+  your progress on the cover (a percentage badge and a thin line, or a check once finished), with the
+  author under the title; books you haven't started show none. The book window shows your current
+  audiobook chapter (#428) for Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter
+  information: its title, where it falls in the book (for example 18 of 32) and how far into it you are.
+
+- **Suggestions is now Discover, with three tabs: Pairs, Ebook Only and Search, open to every reader.**
+  Each reader sees only their own scans, suggestions, ignores and queue, and when several readers
+  scan, the scans run one at a time.
+  - **Pairs** keeps the audiobook/ebook matching, candidate review and Batch Match Queue.
+  - **Ebook Only** lists ebooks the last scan found no qualifying audiobook for, dated "as of" that
+    scan, with Find audiobook (opens Search with the ebook already chosen), Create ebook-only (or Add
+    to your library, when another reader already added the same ebook), Hide for now and a saved
+    Ignore you can undo.
+  - Both tabs group books by series (collapsed, numbered in series order, with an Other / No Series
+    group; switch to a flat list any time), and have search, series, source, status and sort filters
+    that each tab remembers separately. Ticking a series selects every exact match in it; review
+    matches are never selected that way. A scan that could not read every source says the results
+    may be incomplete instead of presenting them as final, and opening a tab never starts a scan.
+  - **Search replaces Add Book.** Search your libraries by title, author or file name, pick the
+    audiobook (or none, for an ebook by itself), then the ebook, a Storyteller title or Audio only,
+    and add it to the Batch Match Queue, which now also offers Create Storyteller Edition Only and a
+    read-along EPUB for BookOrbit audiobooks. Reader Documents moved there too, and old Add Book links
+    open it. The server's own ebook folder is listed for admins only.
+  - **Ignore local files in Suggestions** is a new admin setting, off by default. Enable it to leave
+    locally scanned files out of Pairs and Ebook Only on the next Scan Library while keeping ebooks
+    from your library services.
 
 - **Device API for reader apps** (#579). An app that pairs an ebook with its audiobook can now
   find a book by its Grimmory or BookOrbit id, download a word map (when each matched word is
@@ -23,31 +60,12 @@ All notable changes to BookBridge will be documented in this file.
   with them, for example "2.01× your library median · your library: 7,000–8,000 across 5
   books", so an omnibus paired with one narrated volume stands out before the long run ends.
   It is a measurement, not a verdict: work never pauses, **Dismiss** only hides the advisory,
-  and the final content-match check still refuses real mismatches. **Deploy requires
-  migration + restart**. Chapter comparison and audio sampling are not included yet.
+  and the final content-match check still refuses real mismatches. Chapter comparison and audio
+  sampling are not included yet.
 
-- **The New book window shows your current audiobook chapter** (#428). For Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter information, it shows the chapter's title, where it falls in the book (for example 18 of 32) and how far into it you are. Audiobooks without chapters show nothing extra.
+### Changed
 
-- **The New interface (beta) gives BookBridge a fresh look while keeping Classic available.** Switch interfaces immediately: choose **New interface** beside the Classic account menu, or use **Classic | New** above the user menu in New (also in the phone account menu). The page reopens in your chosen interface without a Save step. New has a redesigned Library with Covers, Spines and List, Discover, a book drawer, search with Ctrl K (or ⌘K on Mac), day and night themes, and phone navigation. A strip on each Library cover shows where the book is linked (ebook, audiobook, read-along, KOReader) and lights the app that led its last sync as soon as that sync reaches another app, independent of when reading sessions close. Library cards show your progress on the cover (a percentage badge and a thin line, or a check once finished), with the author under the title; books you haven't started, or whose progress you cleared, show none. **Stats is now open to every reader** for their own reading and listening activity.
-
-- **Ignore local files in Suggestions** is a new admin setting, off by default. Enable it to exclude locally scanned files from Discover's Pairs and Ebook Only on the next Scan Library while keeping ebooks from your library services.
-- **Suggestions is now Discover, with three tabs: Pairs, Ebook Only and Search.** Every reader can use
-  all of it, and each reader sees only their own scans, suggestions, ignores and queue. Pairs keeps the
-  audiobook/ebook matching, candidate review and Batch Match Queue; Ebook Only lists ebooks the last
-  scan found no qualifying audiobook for, dated "as of" that scan, with Find audiobook (opens Search with
-  the ebook already chosen), Create ebook-only (or Add to your library, when another reader already
-  added the same ebook), Hide for now and a saved Ignore you can undo. Both tabs group books by series
-  (collapsed, numbered in series order, with an Other / No Series group; switch to a flat list any
-  time), and have search, series, source, status and sort filters that each tab remembers separately.
-  Ticking a series selects every exact match in it, even books in a collapsed group; review matches are
-  never selected that way. A scan that could not read every source says the results may be incomplete
-  instead of presenting them as final. Opening a tab never starts a scan, and when several readers
-  scan, the scans run one at a time.
-- **Add Book is now Discover's Search tab.** Search your libraries by title, author or file name, pick
-  the audiobook (or none, for an ebook by itself), then the ebook, a Storyteller title or Audio only,
-  and add it to the Batch Match Queue, which now also offers Create Storyteller Edition Only and a
-  read-along EPUB for BookOrbit audiobooks. Reader Documents moved there too, and old Add Book links
-  open it. The server's own ebook folder is listed for admins only.
+- **Stats is open to every reader** for their own reading and listening activity.
 
 ### Fixed
 
@@ -61,14 +79,12 @@ All notable changes to BookBridge will be documented in this file.
   instead, the book gets CWA as its ebook source on your next sync. A different file with the
   same name elsewhere in your library is never mistaken for the book. The Calibre library must
   be set in `CALIBRE_LIBRARY_PATH` and sit under `BOOKS_DIR` or `EXTRA_EBOOK_DIRS`.
-
 - **Forced alignment no longer over-subscribes a CPU-limited container** (#580). QuartzNet
   used up to 8 threads based on the host's core count, so a container capped with `cpus: 4`
   ran 8 threads on 4 CPUs' worth of time and was throttled. It now uses the CPUs the
   container can actually use (still at most 8), and the model-load log line names the
   count. The new `ALIGN_THREADS` environment variable overrides it, including above 8; a
   change needs a restart. Contributed by [@eschatus](https://github.com/eschatus) in #580.
-
 - **BookOrbit ebooks you have not opened yet receive their first synced position.** Current
   BookOrbit servers reject the older progress route BookBridge used for a never-started ebook
   ("BookOrbit ebook update failed: 403"), so the ebook stayed at 0% while the audiobook moved on.
@@ -77,8 +93,9 @@ All notable changes to BookBridge will be documented in this file.
   still use the older route.
 - **Hardcover progress syncs again for a matched book that is missing from your Hardcover
   library.** If the book never made it onto your Hardcover shelf, or was removed there, BookBridge
-  skipped its progress on every sync ("get_user_book returned None"). It now adds the book back as
-  Want to Read and syncs the progress.
+  skipped its progress on every sync ("get_user_book returned None"). When Hardcover confirms the
+  book isn't in your library, BookBridge now adds it back as Want to Read and syncs the progress;
+  a failed or rate-limited lookup changes nothing.
 - **Ebook details are read from EPUBs whose navigation page has no table of contents.** Such books
   failed with "Could not read EPUB metadata ... list index out of range", so Hardcover and
   StoryGraph matching got no title or ISBN for them. They now read normally.
