@@ -7048,7 +7048,16 @@ def _prefetch_bookorbit_authors(books: list, integrations: dict | None) -> dict:
         if not client or not client.is_configured():
             return {}
         authors = {}
-        for info in client.get_all_books() or []:
+        cached, stale = client.book_cache_snapshot()
+        if cached:
+            # Serve the last listing and refresh it off the request: an hourly
+            # TTL expiry must not hold the page behind paginated provider calls.
+            if stale:
+                _spawn_user_background(client.get_all_books, label="bookorbit-cache-refresh")
+            catalog = cached
+        else:
+            catalog = client.get_all_books() or []
+        for info in catalog:
             book_id = info.get("id")
             if book_id is None:
                 continue
@@ -7631,9 +7640,8 @@ def whats_new_dismiss():
 
 
 # ---------------- ROUTES ----------------
-def index():
-    """Dashboard - loads books and progress from database service"""
-    user = current_user()
+def _dashboard_mappings_for_user(user) -> tuple[list, float, dict]:
+    """Mappings, overall progress and integration flags for one user's dashboard."""
     user_id = user.id if user else None
     books = database_service.get_all_books(user_id=user_id)
     all_states = database_service.get_all_states(
@@ -7656,6 +7664,38 @@ def index():
         cached_booklore_by_filename=cached_booklore_by_filename,
         claim_times_by_book=claim_times_by_book,
     )
+    return mappings, overall_progress, integrations
+
+
+def _warm_dashboard_sync_warnings() -> None:
+    """Build every user's dashboard mappings once at startup.
+
+    The drift memo is empty after a restart and each audio-axis book then parses its
+    whole alignment map, so the first dashboard load would pay for all of them.
+    Running the real mapping build here fills the memo for the current positions.
+    """
+    registry = container.user_client_registry()
+    for user in database_service.list_users():
+        user_token = credentials_token = None
+        try:
+            bundle = registry.get_clients(user.id)
+            user_token = set_current_user_id(user.id)
+            credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))
+            mappings, _progress, _integrations = _dashboard_mappings_for_user(user)
+            logger.info("Dashboard warm-up built %d mapping(s) for user %s", len(mappings), user.id)
+        except Exception as exc:
+            logger.warning("Dashboard warm-up failed for user %s: %s", user.id, exc, exc_info=True)
+        finally:
+            if credentials_token is not None:
+                reset_current_user_credentials(credentials_token)
+            if user_token is not None:
+                reset_current_user_id(user_token)
+
+
+def index():
+    """Dashboard - loads books and progress from database service"""
+    user = current_user()
+    mappings, overall_progress, integrations = _dashboard_mappings_for_user(user)
 
     suggestions = [s for s in database_service.get_all_pending_suggestions(user_id=get_current_user_id()) if len(s.matches) > 0]
     grouped_mappings = _group_dashboard_mappings_by_series(mappings)
@@ -16916,6 +16956,7 @@ if __name__ == '__main__':
     sync_daemon_thread = threading.Thread(target=sync_daemon, daemon=True)
     sync_daemon_thread.start()
     threading.Thread(target=get_update_status, daemon=True).start()
+    threading.Thread(target=_warm_dashboard_sync_warnings, daemon=True, name="dashboard-warmup").start()
     logger.info("🚀 Sync daemon thread started")
 
     # Start ABS Socket.IO listener for real-time / instant sync
