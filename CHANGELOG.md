@@ -65,7 +65,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Changed
 
-- **Stats is open to every reader** for their own reading and listening activity.
+- **Stats is now open to every reader** for their own reading and listening activity.
 
 ### Fixed
 
