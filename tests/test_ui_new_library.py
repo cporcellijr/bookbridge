@@ -91,7 +91,7 @@ class TestNewLibrary(unittest.TestCase):
         # Title size follows the spine: a short title fills it, a long one shrinks to fit more of itself.
         self.assertIn("--spine-font:26px", tag("audio-only"))
         self.assertIn("--spine-font:20px", tag("library-book"))
-        self.assertIn('style="--spine-font:14px"', tag("no-length"))
+        self.assertIn('style="--spine-font:14px;--spine-h:', tag("no-length"))
         self.assertIn(" data-reading ", tag("library-book"))
         for abs_id in ("library-finished", "audio-only"):
             with self.subTest(abs_id=abs_id):
@@ -101,7 +101,7 @@ class TestNewLibrary(unittest.TestCase):
         # A spine carries its cover's artwork behind the title; the sampled colour stays as the fallback.
         self.assertIn('.library-page[data-view="spines"] .book-card:not([data-reading]) .cover-wrap { display: block; position: absolute; inset: 0;', css)
         self.assertIn('.book-card:has(.cover-image:not([hidden])) .book-open { color: #f6f1e7;', css)
-        self.assertIn('.book-card:not([data-reading]) .cover-image { right: auto; width: calc(var(--spine-w, 42px) * 8); object-fit: fill;', css)
+        self.assertIn('.book-card:not([data-reading]) .cover-image { right: auto; width: calc(var(--spine-w, 42px) * 8); object-fit: fill; filter: brightness(.8) saturate(1.2); }', css)
         # Night only: a thin light edge between spines; Day keeps the page showing through.
         self.assertIn(':root:not([data-theme="light"]) .library-page[data-view="spines"] .book-card:not([data-reading]) { box-shadow: 0 0 0 1px rgba(255,255,255,.16),', css)
 
@@ -110,6 +110,81 @@ class TestNewLibrary(unittest.TestCase):
         self.service.save_storygraph_details(StorygraphDetails(abs_id="library-book", storygraph_book_id="sg-1", storygraph_pages=400))
         unpatched = self.client.get("/").get_data(as_text=True)
         self.assertIn('style="--spine-w:46px;', re.search(r'<article[^>]*data-abs-id="library-book"[^>]*>', unpatched).group())
+
+    def test_spine_height_tooltip_band_and_face_out_cover_rules(self):
+        import zlib
+        from src import web_server
+        original = web_server._build_dashboard_mappings
+        order = {"shift": False}
+
+        def mappings(*args, **kwargs):
+            result, progress = original(*args, **kwargs)
+            base = next(m for m in result if m["abs_id"] == "library-book")
+            base["display_subtitle"] = "A Subtitle"
+            if order["shift"]:
+                # Three more unstarted books ahead of it move library-book further along the shelf.
+                result[:0] = [{**base, "abs_id": f"ahead-{n}", "display_title": f"Ahead {n}", "series_name": None} for n in range(3)]
+            return result, progress
+
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        heights, positions = [], []
+        with patch.object(web_server, "_build_dashboard_mappings", side_effect=mappings):
+            for shift in (False, True):
+                order["shift"] = shift
+                text = self.client.get("/").get_data(as_text=True)
+                ids = re.findall(r'<article[^>]*data-abs-id="([^"]+)"', text)
+                positions.append(ids.index("library-book"))
+                heights.append({abs_id: re.search(rf'<article[^>]*--spine-h:(\d+)px[^>]*data-abs-id="{abs_id}"', text).group(1) for abs_id in ("library-book", "library-finished")})
+        # Each book keeps its own height whatever its position on the shelf, picked from the four shelf heights.
+        self.assertNotEqual(positions[0], positions[1])
+        self.assertEqual(heights[0], heights[1])
+        for abs_id, height in heights[0].items():
+            with self.subTest(abs_id=abs_id):
+                self.assertEqual(int(height), (196, 204, 214, 224)[zlib.crc32(abs_id.encode("utf-8")) % 4])
+        # Hovering a spine shows its full title, subtitle included.
+        self.assertIn('title="Library Example: A Subtitle"', re.search(r'<a class="book-open"[^>]*>', text.split('data-abs-id="library-book"', 1)[1]).group())
+
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        spines = '.library-page[data-view="spines"] '
+        self.assertIn(spines + ".book-card { --spine: #41546b; flex: none; display: flex; flex-direction: column; width: var(--spine-w, 42px); height: var(--spine-h, 214px);", css)
+        self.assertNotRegex(css, r'data-view="spines"\] \.book-card:nth-child\([^)]*\) \{ height')
+        # Cover art replaces the flat top band; a coverless spine keeps it.
+        self.assertIn(spines + ".book-card:has(.cover-image:not([hidden]))::before { display: none; }", css)
+        # The finished tick is gold and shadowed like the title when it sits on cover art.
+        self.assertIn(spines + ".spine-progress { display: block; padding: 0 0 8px; text-align: center; line-height: 0; color: #F7C766; }", css)
+        self.assertIn(spines + ".book-card:has(.cover-image:not([hidden])) .spine-progress { filter: drop-shadow(", css)
+        # A square cover fills the face-out card instead of leaving bands.
+        self.assertIn(spines + ".book-card[data-reading] .cover-image { object-fit: cover; }", css)
+        self.assertIn(spines + ".book-card[data-reading] { width: 142px; height: 214px;", css)
+
+    def test_covers_band_colour_and_resting_sync_cue(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        # The letterbox bands take the book's sampled colour, grey until it is known.
+        self.assertIn(".cover-wrap { position: relative; display: grid; height: 250px; place-items: center; overflow: hidden; background: var(--spine, var(--surface-2)); }", css)
+        hover_block = re.search(r"@media \(hover: hover\) \{(.*?)\n\}", css, re.S).group(1)
+        # At rest on a pointer device the bar goes and only the last-synced and out-of-sync icons stay.
+        self.assertIn('html:not([data-input="touch"]) .library-book-card:not(:hover):not(:focus-within) .format-strip { background: transparent; box-shadow: none;', hover_block)
+        self.assertIn('html:not([data-input="touch"]) .library-book-card:not(:hover):not(:focus-within) .format-slot:not(.is-last):not(.is-oos) { opacity: 0; }', hover_block)
+        # Without the bar, the two resting icons get a small dark backing so they read on pale or busy covers.
+        self.assertIn(':not(:focus-within) :is(.format-slot.is-last, .format-slot.is-oos) { background-color: rgba(11,13,18,.62); }', hover_block)
+        self.assertNotIn(".format-strip { opacity: 0;", css)
+
+    def test_covers_paint_lazily_and_spines_force_covers_to_load(self):
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required to execute the cover painter")
+        result = subprocess.run(
+            [node, str(_ROOT / "tests/test_ui_new_library_paint.js")],
+            capture_output=True, text=True, timeout=15, cwd=_ROOT,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
+        self.assertIn("if (view === 'spines') paintSpines(true);", scripts)
+        self.assertIn("    paintSpines(false);\n", scripts)
 
     def test_library_batch_actions_execute_sequentially_and_prompt_once(self):
         import shutil
@@ -281,7 +356,7 @@ class TestNewLibrary(unittest.TestCase):
         # iPadOS matches (hover: hover), so the hover-only strip stayed invisible and a tap opened the book.
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         hover_block = re.search(r"@media \(hover: hover\) \{(.*?)\n\}", css, re.S).group(1)
-        self.assertIn('html[data-input="touch"] .format-strip', hover_block)
+        self.assertIn('html:not([data-input="touch"]) .library-book-card:not(:hover):not(:focus-within) .format-strip {', hover_block)
         self.assertIn(".format-slot.tip-open .format-tip", css)
         script = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
         self.assertIn("event.pointerType === 'mouse' ? 'mouse' : 'touch'", script)
@@ -318,16 +393,20 @@ class TestNewLibrary(unittest.TestCase):
                 self.assertEqual(shown(card(abs_id)), [])
 
         reading = card("library-book")
-        self.assertEqual(shown(reading), ["progress-percent", "progress-track", "spine-progress"])
+        # A reading book stands face-out in Spines, so its spine foot shows nothing.
+        self.assertEqual(shown(reading), ["progress-percent", "progress-track"])
         self.assertIn('class="progress-percent" >47%</span>', reading)
         self.assertIn('style="width:47.6%"', reading)
         # Progress sits on the cover; under it come the title then the author.
-        self.assertRegex(reading, r'(?s)class="cover-wrap">.*class="progress-percent".*</div>\s*<div class="book-copy"><div class="book-heading"><h3>.*?</h3><span class="book-author">')
+        self.assertRegex(reading, r'(?s)class="cover-wrap">.*class="progress-percent".*</div>\s*<div class="book-copy"><div class="book-heading"><h3>.*?</h3><span class="book-byline"><span class="book-author">')
         self.assertNotIn("progress-line", reading)
 
         finished = card("library-finished")
         self.assertEqual(shown(finished), ["progress-done", "spine-progress"])
         self.assertIn('class="progress-done" role="img" aria-label="Finished"', finished)
+        # A finished spine's foot carries the gold tick, never a "100%".
+        self.assertRegex(finished, r'class="spine-progress"\s+role="img" aria-label="Finished"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg></span>')
+        self.assertNotRegex(finished, r'class="spine-progress"[^>]*>[^<]*%')
         self.assertNotIn('class="state-label"', finished)
 
     def test_live_refresh_hides_the_cover_progress_again_at_zero(self):
@@ -354,6 +433,8 @@ class TestNewLibrary(unittest.TestCase):
                     mapping.update(storygraph_rating=4.0, goodreads_rating=3.0)
                 else:
                     mapping.update(storygraph_rating=None, goodreads_rating=4.4)
+            base = next(m for m in result if m["abs_id"] == "library-book")
+            result.append({**base, "abs_id": "unrated", "display_title": "Unrated", "storygraph_rating": None, "goodreads_rating": None})
             return result, progress
 
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
@@ -362,15 +443,22 @@ class TestNewLibrary(unittest.TestCase):
             text = self.client.get("/").get_data(as_text=True)
         both = re.search(r'<article[^>]*data-abs-id="library-book"[^>]*>.*?</article>', text, re.S).group()
         gr_only = re.search(r'<article[^>]*data-abs-id="library-finished"[^>]*>.*?</article>', text, re.S).group()
+        unrated = re.search(r'<article[^>]*data-abs-id="unrated"[^>]*>.*?</article>', text, re.S).group()
         self.assertIn('data-rating="3.5"', both)
-        self.assertIn("SG 4.0 · GR 3.0", both)
-        # Ratings sit under the title; CTC and read-along badges live in the book drawer, not on the card.
-        self.assertRegex(both, r'class="book-heading"><h3>.*?</h3><span class="book-author">[^<]*</span><span class="book-ratings"[^>]*>SG 4.0 · GR 3.0')
+        # One averaged figure at the end of the author line; the per-source figures are its tooltip.
+        self.assertRegex(both, r'class="book-heading"><h3>.*?</h3><span class="book-byline"><span class="book-author">[^<]*</span><span class="book-ratings" role="img" title="SG 4.0 · GR 3.0" aria-label="Book ratings: SG 4.0 · GR 3.0">★ 3.5</span></span>')
+        # CTC and read-along badges live in the book drawer, not on the card.
         self.assertNotIn("cover-badge", both)
         self.assertNotIn("ctc-alignment-badge", both)
         self.assertIn('data-rating="4.4"', gr_only)
-        self.assertIn("GR 4.4", gr_only)
+        self.assertIn('title="GR 4.4" aria-label="Book ratings: GR 4.4">★ 4.4</span>', gr_only)
         self.assertNotIn("SG ", gr_only)
+        self.assertRegex(unrated, r'<span class="book-byline"><span class="book-author">[^<]*</span></span>')
+        self.assertNotIn("book-ratings", unrated)
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        # A long author truncates instead of pushing the rating off the line.
+        self.assertIn(".book-author { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", css)
+        self.assertIn(".book-ratings { flex: none;", css)
 
     def test_out_of_sync_line_uses_only_that_books_app_positions(self):
         from src import web_server

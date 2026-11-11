@@ -291,10 +291,7 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
  ('                            card.dataset.progress = book.unified_progress;\n'
   "                            card.querySelectorAll('[data-app-pct]').forEach(node => { const app = book.states && book.states[node.dataset.appPct]; if (app) node.textContent = app.percentage.toFixed(1) + '%'; });\n"
   "                            const spine = card.querySelector('.spine-progress');\n"
-  '                            if (spine) {\n'
-  "                                spine.textContent = book.unified_progress.toFixed(0) + '%';\n"
-  '                                spine.hidden = !hasPosition;\n'
-  '                            }\n'
+  '                            if (spine) spine.hidden = !finished;\n'
   "                            card.toggleAttribute('data-reading', hasPosition && !finished);\n"
   '                            if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = '
   'book.last_sync_unix;\n'
