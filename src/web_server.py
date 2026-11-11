@@ -4451,6 +4451,10 @@ def get_searchable_ebooks(
                 fname = b.get('fileName') or ''
                 if not fname and local_index is not None:
                     fname = local_index.get(_ebook_title_key(b.get('title'))) or ''
+                if not fname and (discovery or local_index is not None):
+                    # Index miss, or no index for a regular user: ask BookOrbit for this one
+                    # file (#586). Interactive picker calls skip it; detail is cached 1h.
+                    fname = (bookorbit_client._enrich_ebook(b.get('id'), b) or {}).get('fileName') or ''
                 if not is_linkable_ebook_filename(fname):
                     continue
                 if fname.lower() in found_filenames:
