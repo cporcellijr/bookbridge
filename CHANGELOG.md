@@ -35,6 +35,11 @@ All notable changes to BookBridge will be documented in this file.
   for running jobs every 30 seconds instead of every 5, a tab in the background makes no
   requests at all and catches up the moment you return to it, and starting a sync, re-map or
   read-along build still shows progress right away.
+- **The New Library loads much smaller cover images.** Cards and series previews now
+  use a reduced copy of each cover (about 86% less to download on a sample of real
+  covers), made in the background the first time a cover is shown. Your original
+  artwork is never changed, and a cover that can't be reduced shows the original as
+  before. Classic is unchanged.
 
 - **CTC alignment jobs now show progress throughout the model pass.** QuartzNet
   and MMS report the amount of audiobook audio processed, so the first CTC
