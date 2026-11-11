@@ -434,10 +434,19 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
 .library-page[data-view="spines"] .book-card:nth-child(4n+3) { height: 224px; }
 .library-page[data-view="spines"] .book-card:nth-child(4n) { height: 204px; }
 .library-page[data-view="spines"] .book-open { flex: 1; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 18px 0 6px; color: var(--spine-ink, #f3eee4); }
-.library-page[data-view="spines"] .book-copy { min-width: 0; max-height: 100%; padding: 0; }
-.library-page[data-view="spines"] .book-copy h3 { display: block; min-height: 0; -webkit-line-clamp: none; -webkit-box-orient: initial; max-height: 136px; margin: 0; overflow: hidden; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; text-overflow: ellipsis; font: 600 13px/1.1 var(--font-book); color: inherit; }
+.library-page[data-view="spines"] .book-copy, .library-page[data-view="spines"] .book-heading { display: flex; justify-content: center; align-items: center; width: 100%; min-width: 0; max-height: 100%; margin: 0; padding: 0; }
+.library-page[data-view="spines"] .book-copy h3 { display: block; min-height: 0; -webkit-line-clamp: none; -webkit-box-orient: initial; max-height: 168px; margin: 0; overflow: hidden; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; text-overflow: ellipsis; font: 600 var(--spine-font, 16px)/1.1 var(--font-book); color: inherit; }
 .library-page[data-view="spines"] .book-copy h3 small { display: none; }
 .library-page[data-view="spines"] .spine-progress { display: block; padding: 0 0 8px; text-align: center; font: 600 10px/1 var(--font-mono); color: var(--spine-ink, #F7C766); }
+/* The cover's outer left edge, stretched across the spine like a wrap, is its artwork, darkened so the title reads; the sampled colour shows while it loads or when there is none. */
+.library-page[data-view="spines"] .book-card:not([data-reading]) .cover-wrap { display: block; position: absolute; inset: 0; z-index: 0; height: auto; border-radius: inherit; background: none; }
+.library-page[data-view="spines"] .book-card:not([data-reading]) .cover-wrap > :not(.cover-image) { display: none; }
+.library-page[data-view="spines"] .book-card:not([data-reading]) .cover-image { right: auto; width: calc(var(--spine-w, 42px) * 8); object-fit: fill; filter: brightness(.62) saturate(1.2); }
+.library-page[data-view="spines"] .book-card::before { z-index: 2; }
+.library-page[data-view="spines"] .book-copy, .library-page[data-view="spines"] .spine-progress { position: relative; z-index: 1; }
+.library-page[data-view="spines"] .book-card:has(.cover-image:not([hidden])) .book-open { color: #f6f1e7; text-shadow: 0 1px 3px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6); }
+/* Night: a thin light edge separates dark spines, the way the light page does by day. */
+:root:not([data-theme="light"]) .library-page[data-view="spines"] .book-card:not([data-reading]) { box-shadow: 0 0 0 1px rgba(255,255,255,.16), inset -2px 0 0 rgba(0,0,0,.28), inset 2px 0 0 rgba(255,255,255,.08); }
 /* A book in progress stands face-out among the spines, showing its cover and progress. */
 .library-page[data-view="spines"] .book-card[data-reading] { width: 142px; height: 214px; background: var(--surface-2); box-shadow: 0 3px 8px rgba(0,0,0,.35); }
 .library-page[data-view="spines"] .book-card[data-reading]::before, .library-page[data-view="spines"] .book-card[data-reading] .book-copy, .library-page[data-view="spines"] .book-card[data-reading] .spine-progress { display: none; }

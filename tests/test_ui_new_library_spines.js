@@ -30,6 +30,12 @@ const pale = coverOf(fill(216, [240, 220, 120]));
 assert.equal(pale[0], '#f0dc78');
 assert.equal(pale[2], '#1c1a17');
 
+// A mostly black cover with a dark red title takes the red, not the black.
+assert.equal(coverOf([...fill(180, [8, 8, 10]), ...fill(36, [150, 20, 25])])[0], '#961419');
+
+// A dark navy cover reads as navy rather than black.
+assert.equal(coverOf([...fill(150, [12, 12, 12]), ...fill(66, [20, 30, 70])])[0], '#141e46');
+
 // A plain black cover stays black rather than falling back to a generic colour.
 assert.equal(coverOf(fill(216, [10, 10, 10]))[0], '#0a0a0a');
 
