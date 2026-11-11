@@ -738,6 +738,8 @@ class _GlobalClients:
     @property
     def storygraph_client(self): return container.storygraph_client()
     @property
+    def shelfmark_client(self): return container.shelfmark_client()
+    @property
     def library_service(self): return container.library_service()
     @property
     def sync_clients(self): return container.sync_clients()
@@ -1621,6 +1623,7 @@ _USER_TEST_SERVICES = {
     "Calibre-Web Automated": "cwa",
     "Hardcover": "hardcover",
     "StoryGraph": "storygraph",
+    "Shelfmark": "shelfmark",
 }
 
 
@@ -1639,6 +1642,7 @@ _TEST_CONNECTION_FIELDS = {
     'readest': ['READEST_ANNOTATION_SYNC', 'READEST_EMAIL', 'READEST_PASSWORD', 'READEST_SUPABASE_URL'],
     'hardcover': ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
     'storygraph': ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
+    'shelfmark': ['SHELFMARK_URL', 'SHELFMARK_USER', 'SHELFMARK_PASSWORD'],
 }
 
 
@@ -15401,6 +15405,10 @@ def _run_test_connection(service: str, payload: dict):
             _coerce_test_str(data.get('STORYGRAPH_SESSION_COOKIE')),
             _coerce_test_str(data.get('STORYGRAPH_REMEMBER_USER_TOKEN')),
         ),
+        'shelfmark': lambda data: _test_shelfmark(
+            _coerce_test_str(data.get('SHELFMARK_USER')),
+            _coerce_test_str(data.get('SHELFMARK_PASSWORD')),
+        ),
         'telegram': lambda data: _test_telegram(
             _coerce_test_bool(data.get('TELEGRAM_ENABLED')),
             _coerce_test_str(data.get('TELEGRAM_BOT_TOKEN')),
@@ -16378,6 +16386,18 @@ def _test_bookfusion(enabled: bool, api_url: str, access_token: str) -> dict:
     if client.check_connection():
         return {"ok": True, "message": "Connected to BookFusion"}
     return {"ok": False, "message": "BookFusion API rejected the token"}
+
+
+def _test_shelfmark(user: str, pwd: str) -> dict:
+    """Check a Shelfmark login with one sign-in, using only the posted values (no admin fallback)."""
+    from src.api.shelfmark_client import ShelfmarkClient
+    from src.utils.user_config import _ALLOW_GLOBAL_FALLBACK_KEY
+
+    if not os.environ.get("SHELFMARK_URL"):
+        return {"ok": False, "message": "Shelfmark has no URL yet (set it in Settings)"}
+    creds = {"SHELFMARK_USER": user, "SHELFMARK_PASSWORD": pwd, _ALLOW_GLOBAL_FALLBACK_KEY: False}
+    ok, message = ShelfmarkClient(credentials=creds).check_connection()
+    return {"ok": ok, "message": message}
 
 
 def _test_storygraph(enabled: bool, session_cookie: str, remember_user_token: str) -> dict:

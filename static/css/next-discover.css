@@ -181,6 +181,10 @@
     #acqModal .form-input { margin-bottom: 12px; }
     .acq-formats { border: 0; padding: 0; margin: 0 0 4px; display: flex; flex-wrap: wrap; gap: 16px; }
     .acq-formats legend { padding: 0; }
+    .acq-releases { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-height: 260px; overflow-y: auto; }
+    .acq-release { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; width: 100%; padding: 8px 10px; text-align: left; color: inherit; font: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+    .acq-release:hover, .acq-release:focus-visible { border-color: var(--ribbon); }
+    .acq-release-title { flex: 1 1 100%; overflow-wrap: anywhere; }
     .acq-result { margin-top: 12px; min-height: 1.4em; color: var(--muted); font-size: 13px; }
     /* Forge staging modal (shared .modal-overlay/.modal visuals, page-toggled) */
     #forgeStageModal { display: none; }

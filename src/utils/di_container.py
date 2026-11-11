@@ -15,6 +15,7 @@ from src.api.api_clients import ABSClient, KoSyncClient
 from src.api.booklore_client import BookloreClient
 from src.api.bookfusion_client import BookFusionClient
 from src.api.bookorbit_client import BookOrbitClient
+from src.api.shelfmark_client import ShelfmarkClient
 from src.api.cwa_client import CWAClient
 from src.api.cwa_sync_api import CWASyncApi
 from src.api.hardcover_client import HardcoverClient
@@ -122,6 +123,7 @@ class Container(containers.DeclarativeContainer):
 
     hardcover_client = providers.Singleton(HardcoverClient)
     storygraph_client = providers.Singleton(StorygraphClient)
+    shelfmark_client = providers.Singleton(ShelfmarkClient)
 
     cwa_client = providers.Singleton(CWAClient)
 
