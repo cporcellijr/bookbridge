@@ -36,6 +36,7 @@ from src.services.forge_service import ForgeService
 from src.services.koreader_device_sync_service import KOReaderDeviceSyncService
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.calibre_identifier_resolver import CalibreIdentifierResolver
+from src.services.acquisition_service import AcquisitionService
 from src.services.book_mapping_service import BookMappingService
 from src.services.shelf_watch_service import ShelfWatchService
 from src.services.user_client_registry import UserClientRegistry
@@ -462,6 +463,14 @@ class Container(containers.DeclarativeContainer):
         Kavita=shelf_watch_service_kavita,
     )
 
+    # Follows readers' BookOrbit requests to arrival and pairs them with the book they already had.
+    acquisition_service = providers.Singleton(
+        AcquisitionService,
+        database_service=database_service,
+        book_mapping_service=book_mapping_service,
+        shelf_watch_service=shelf_watch_service_bookorbit,
+    )
+
     # Sync Manager
     sync_manager = providers.Singleton(
         SyncManager,
@@ -483,6 +492,7 @@ class Container(containers.DeclarativeContainer):
         migration_service=migration_service,
         shelf_watch_service=shelf_watch_service,
         shelf_watch_services=shelf_watch_services,
+        acquisition_service=acquisition_service,
         audio_source_adapters=audio_source_adapters,
 
         epub_cache_dir=epub_cache_dir,

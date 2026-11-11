@@ -86,6 +86,10 @@ class MockContainer:
     def user_client_registry(self):
         return self.mock_user_client_registry
 
+    def acquisition_service(self):
+        from src.services.acquisition_service import AcquisitionService
+        return AcquisitionService(self.mock_database_service, Mock())
+
     def sync_clients(self):
         """Return mock sync clients for integrations."""
         return {

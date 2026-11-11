@@ -208,6 +208,7 @@ class SyncManager:
                  migration_service: MigrationService = None,
                  shelf_watch_service=None,
                  shelf_watch_services=None,
+                 acquisition_service=None,
                  audio_source_adapters: dict | None = None,
                  epub_cache_dir=None,
                  data_dir=None,
@@ -239,6 +240,7 @@ class SyncManager:
         self.shelf_watch_services = list(shelf_watch_services) if shelf_watch_services else (
             [shelf_watch_service] if shelf_watch_service else []
         )
+        self.acquisition_service = acquisition_service
         self.audio_source_adapters = audio_source_adapters or {}
         # Injected by web_server.create_app (ForgeService.generate_readalong_if_requested),
         # like the Forge read-along callbacks, so this module never imports web_server.
@@ -5291,6 +5293,34 @@ class SyncManager:
             except Exception as e:
                 logger.error("Sync cycle failed for user %s: %s", getattr(user, "id", None), e, exc_info=True)
 
+    def _refresh_acquisition_requests(self, user_id: int) -> None:
+        """Check one user's BookOrbit book requests with their own client; never raises.
+
+        Makes no HTTP call unless the database shows a request that needs checking.
+        """
+        acquisition = getattr(self, 'acquisition_service', None)
+        registry = getattr(self, 'user_client_registry', None)
+        if acquisition is None or registry is None:
+            return
+        user_token = credentials_token = None
+        try:
+            if not acquisition.has_work(user_id):
+                return
+            bundle = registry.get_clients(user_id)
+            client = getattr(bundle, 'bookorbit_client', None)
+            if client is None or not client.is_configured():
+                return
+            user_token = set_current_user_id(user_id)
+            credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))
+            acquisition.refresh_user(user_id, client)
+        except Exception:
+            logger.warning("Acquisition check failed for user %s", user_id, exc_info=True)
+        finally:
+            if credentials_token is not None:
+                reset_current_user_credentials(credentials_token)
+            if user_token is not None:
+                reset_current_user_id(user_token)
+
     def _filter_books_for_current_user(self, books, bulk_states_per_client=None):
         """Limit a per-user cycle to the books this user has matched/claimed.
 
@@ -5490,6 +5520,10 @@ class SyncManager:
                         shelf_watch.process_watch_shelf(user_id=shelf_user)
                     except Exception as e:
                         logger.warning(f"Shelf-watch run failed: {e}", exc_info=True)
+
+            for acquisition_user in user_ids_to_watch:
+                if acquisition_user is not None:
+                    self._refresh_acquisition_requests(acquisition_user)
 
         # Optimization: Pre-fetch bulk data from all clients that support it
         # Only do this if we are in a full cycle (target_abs_id is None)

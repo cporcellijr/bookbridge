@@ -2788,6 +2788,36 @@ class DatabaseService:
             ).first()
             return self._acquisition_dict(row) if row else None
 
+    def get_refreshable_acquisition_requests(self, user_id: int, arrived_since) -> list[dict]:
+        """Return the user's BookOrbit requests still worth asking BookOrbit about.
+
+        That is every open request, plus a request that arrived on or after
+        ``arrived_since`` and still has to be paired (it has a partner or a
+        "Both" sibling but no mapping yet).
+        """
+        from sqlalchemy import and_, or_
+
+        with self.get_session() as session:
+            rows = session.query(AcquisitionRequest).filter(
+                AcquisitionRequest.user_id == user_id,
+                AcquisitionRequest.service == "BookOrbit",
+                AcquisitionRequest.remote_id.isnot(None),
+                AcquisitionRequest.dismissed.is_(False),
+                or_(
+                    AcquisitionRequest.status.in_(("waiting", "in_progress", "needs_look")),
+                    and_(
+                        AcquisitionRequest.status == "arrived",
+                        AcquisitionRequest.linked_abs_id.is_(None),
+                        AcquisitionRequest.created_at >= arrived_since,
+                        or_(
+                            AcquisitionRequest.partner_source_id.isnot(None),
+                            AcquisitionRequest.group_key.isnot(None),
+                        ),
+                    ),
+                ),
+            ).order_by(AcquisitionRequest.id.desc()).all()
+            return [self._acquisition_dict(row) for row in rows]
+
     def update_acquisition_request(self, user_id: int, request_id: int, **fields) -> Optional[dict]:
         """Update fields on one of the user's requests; None when it is not theirs."""
         with self.get_session() as session:
