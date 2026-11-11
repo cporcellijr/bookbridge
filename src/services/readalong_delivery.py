@@ -42,6 +42,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from src.api.bookorbit_client import _AUDIO_FORMATS, BookOrbitUploadError
+from src.services.audio_cache_ownership import safe_owned_path
 from src.services.audio_source_adapters import BookOrbitAudioSourceAdapter
 from src.services.readalong_builder import (
     ReadalongBuildResult,
@@ -729,6 +730,11 @@ def remove_readalong_epub(
     """
     output_path = Path(output_path)
     filename = output_path.name
+    if not is_generated_readalong_epub(filename):
+        logger.warning(
+            "🛡️ Refused read-along cleanup of '%s': not a generated %s file", filename, _READALONG_SUFFIX,
+        )
+        return False
 
     detail = bookorbit_client.get_book_detail(audio_book_id, force=True)
     file_id = None
@@ -748,13 +754,16 @@ def remove_readalong_epub(
 
     disk_ok = True
     if output_path.is_absolute() and output_path.exists():
-        try:
-            output_path.unlink()
-        except OSError as e:
-            logger.error(
-                "Read-along cleanup: could not remove '%s' from disk: %s",
-                output_path, e, exc_info=True,
-            )
-            disk_ok = False
+        safe_output = safe_owned_path(output_path, _audiobooks_root(), protect_sources=False)
+        disk_ok = False
+        if safe_output is not None:
+            try:
+                safe_output.unlink()
+                disk_ok = True
+            except OSError as e:
+                logger.error(
+                    "Read-along cleanup: could not remove '%s' from disk: %s",
+                    output_path, e, exc_info=True,
+                )
 
     return bookorbit_ok and disk_ok

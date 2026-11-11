@@ -79,6 +79,7 @@ from src.version import APP_VERSION, get_update_status
 from src.db.models import State, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.services.audio_source_adapters import AudioResult, ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
+from src.services.audio_cache_ownership import inventory_audio_cache, remove_book_cache_dirs, remove_owned
 from src.services.current_audio_chapter import resolve_current_chapter
 from src.utils.storyteller_transcript import StorytellerTranscript
 from src.services.readalong_delivery import (
@@ -12017,29 +12018,24 @@ def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
                 remaining_storyteller_uuids.add(remaining_uuid)
                 remaining_cache_filenames.add(f"storyteller_{remaining_uuid}.epub")
 
-    if book.transcript_file:
-        try:
-            Path(book.transcript_file).unlink()
-        except Exception:
-            pass
+    if book.transcript_file and book.transcript_file != "DB_MANAGED":
+        remove_owned(book.transcript_file, DATA_DIR / "transcripts")
 
-    # Clean up audio cache directory (WAV files from whisper transcription)
-    audio_cache_dir = DATA_DIR / "audio_cache" / book.abs_id
-    if audio_cache_dir.exists() and not defer_audio_cache:
-        try:
-            shutil.rmtree(audio_cache_dir)
-            logger.info(f"🗑️ Deleted audio cache: {audio_cache_dir}")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to delete audio cache: {e}", exc_info=True)
+    # Clean up audio cache directories (source tracks + WAV chunks from whisper transcription)
+    other_ids = None if remaining_books is None else [b.abs_id for b in remaining_books]
+    if not defer_audio_cache:
+        errors = []
+        for removed in remove_book_cache_dirs(DATA_DIR / "audio_cache", book.abs_id, other_ids=other_ids, errors=errors):
+            logger.info(f"🗑️ Deleted audio cache: {removed}")
+        for e in errors:
+            logger.warning(f"⚠️ Failed to delete audio cache: {e}", exc_info=e)
 
     # Clean up full transcript directory (chapter JSON files + manifest)
-    transcript_dir = DATA_DIR / "transcripts" / "storyteller" / book.abs_id
-    if transcript_dir.exists():
-        try:
-            shutil.rmtree(transcript_dir)
-            logger.info(f"🗑️ Deleted transcript directory: {transcript_dir}")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to delete transcript directory: {e}", exc_info=True)
+    errors = []
+    for removed in remove_book_cache_dirs(DATA_DIR / "transcripts" / "storyteller", book.abs_id, other_ids=other_ids, errors=errors):
+        logger.info(f"🗑️ Deleted transcript directory: {removed}")
+    for e in errors:
+        logger.warning(f"⚠️ Failed to delete transcript directory: {e}", exc_info=e)
 
     cached_ebook_filename = local_ebook_filename(book)
     preserve_cached_ebook = (
@@ -14608,55 +14604,47 @@ def clear_stale_suggestions():
 
 
 def clean_inactive_cache():
-    """Delete audio_cache, transcript dirs, and cached EPUBs for books that are not active."""
-    active_books = database_service.get_books_by_status('active')
-    active_ids = {b.abs_id for b in active_books}
-    active_ebook_files = {b.ebook_filename for b in active_books if b.ebook_filename}
-    active_orig_files = {b.original_ebook_filename for b in active_books if b.original_ebook_filename}
-    protected_files = active_ebook_files | active_orig_files
+    """Preview inactive cache ownership without deleting uncertain files.
 
-    deleted_audio = 0
-    deleted_transcripts = 0
-    deleted_epubs = 0
+    Previous cleanup compared raw book IDs with normalized adapter cache
+    directories, and did not protect retryable or job-held source tracks.
+    Until safe deletion can be coordinated with active workers and complete
+    ownership provenance, the endpoint must stay non-destructive.
+    """
+    payload = request.get_json(silent=True) or {}
+    if payload.get("dry_run") is False:
+        return jsonify({
+            "success": False, "dry_run": True,
+            "error": "Cache deletion is disabled until ownership and running-job safety are verified",
+        }), 409
 
-    audio_cache_root = DATA_DIR / "audio_cache"
-    if audio_cache_root.exists():
-        for entry in audio_cache_root.iterdir():
-            if entry.is_dir() and entry.name not in active_ids:
-                try:
-                    shutil.rmtree(entry)
-                    deleted_audio += 1
-                    logger.info(f"Cleaned audio cache: {entry.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean audio cache {entry.name}: {e}", exc_info=True)
+    books = database_service.get_all_books()
+    jobs = database_service.get_all_jobs()
+    inventory = inventory_audio_cache(DATA_DIR / "audio_cache", books, jobs)
+    status_by_book = {book.abs_id: getattr(book, "status", None) for book in books}
 
-    transcript_root = DATA_DIR / "transcripts" / "storyteller"
-    if transcript_root.exists():
-        for entry in transcript_root.iterdir():
-            if entry.is_dir() and entry.name not in active_ids:
-                try:
-                    shutil.rmtree(entry)
-                    deleted_transcripts += 1
-                    logger.info(f"Cleaned transcript dir: {entry.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean transcript dir {entry.name}: {e}", exc_info=True)
-
-    try:
-        epub_cache_dir = Path(container.epub_cache_dir())
-    except Exception:
-        epub_cache_dir = DATA_DIR / "epub_cache"
-    if epub_cache_dir.exists():
-        for entry in epub_cache_dir.iterdir():
-            if entry.is_file() and entry.name not in protected_files:
-                try:
-                    entry.unlink()
-                    deleted_epubs += 1
-                    logger.info(f"Cleaned cached epub: {entry.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean cached epub {entry.name}: {e}", exc_info=True)
-
-    logger.info(f"Cache cleanup complete: {deleted_audio} audio, {deleted_transcripts} transcript, {deleted_epubs} epub(s) removed")
-    return jsonify({"success": True, "deleted_audio": deleted_audio, "deleted_transcripts": deleted_transcripts, "deleted_epubs": deleted_epubs})
+    possible_inactive = [
+        entry for entry in inventory.entries
+        if entry.state == "mapped"
+        and len(entry.book_ids) == 1
+        and not entry.job_ids
+        and status_by_book.get(entry.book_ids[0]) == "inactive"
+    ]
+    unverified = [entry for entry in inventory.entries
+                  if entry.state in ("unverified", "ambiguous", "unsafe_symlink", "tombstone")]
+    return jsonify({
+        "success": True, "dry_run": True, "cleanup_disabled": True,
+        "deleted_audio": 0, "deleted_transcripts": 0, "deleted_epubs": 0,
+        "potential_inactive_audio": [
+            {"cache_name": entry.directory.name, "bytes": entry.total_bytes}
+            for entry in possible_inactive
+        ],
+        "potential_inactive_audio_bytes": sum(entry.total_bytes for entry in possible_inactive),
+        "protected_audio_directories": len(inventory.entries) - len(possible_inactive),
+        "unverified_audio_directories": len(unverified),
+        "unverified_audio_bytes": sum(entry.total_bytes for entry in unverified),
+        "note": "Preview only. No audio, transcript, EPUB or original audiobook files were deleted.",
+    })
 
 
 def _run_storyteller_backfill():

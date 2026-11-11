@@ -6,6 +6,15 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cache Cleanup now provides a safe preview instead of deleting uncertain files.**
+  The old action could mistake BookOrbit `bookorbit_123` cache folders for
+  inactive entries whose mapping IDs were `bookorbit:123`. Both Settings
+  interfaces now offer Review Inactive Cache, with protected, unverified and
+  potentially inactive storage reported separately. Deletion is intentionally
+  disabled until running-job ownership and retention guarantees are complete.
+
 ### Added
 
 - **CTC alignment jobs now show progress throughout the model pass.** QuartzNet
