@@ -25,7 +25,7 @@
       
       
       <link rel="icon" href="../assets/icon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
       
@@ -285,6 +285,25 @@
   
   
     <li class="md-tabs__item">
+      <a href="../new-interface/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  New Interface (Beta)
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
       <a href="../configuration/" class="md-tabs__link">
         
   
@@ -292,6 +311,25 @@
     
   
   Configuration
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../device-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Device API
 
       </a>
     </li>
@@ -638,10 +676,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#suggestions" class="md-nav__link">
+  <a href="#discover-pairs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Suggestions
+        Discover: Pairs
       
     </span>
   </a>
@@ -649,10 +687,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#add-update-book" class="md-nav__link">
+  <a href="#discover-search" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Add / Update Book
+        Discover: Search
       
     </span>
   </a>
@@ -717,6 +755,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../new-interface/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    New Interface (Beta)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../configuration/" class="md-nav__link">
         
   
@@ -725,6 +790,33 @@
     
   
     Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../device-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Device API
   
 
     
@@ -990,10 +1082,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#suggestions" class="md-nav__link">
+  <a href="#discover-pairs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Suggestions
+        Discover: Pairs
       
     </span>
   </a>
@@ -1001,10 +1093,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#add-update-book" class="md-nav__link">
+  <a href="#discover-search" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Add / Update Book
+        Discover: Search
       
     </span>
   </a>
@@ -1163,9 +1255,9 @@ same names, in the same order.</p>
 <hr />
 <h2 id="step-6-create-your-first-mapping">Step 6: Create your first mapping</h2>
 <p>You can start in either of these ways:</p>
-<h3 id="suggestions">Suggestions</h3>
+<h3 id="discover-pairs">Discover: Pairs</h3>
 <ol>
-<li>Open <strong>Suggestions</strong>.</li>
+<li>Open <strong>Discover</strong>.</li>
 <li>Click <strong>Scan Library</strong>.</li>
 <li>Review the likely pairs.</li>
 <li>Add the good ones to the queue.</li>
@@ -1174,13 +1266,13 @@ same names, in the same order.</p>
 <p>If your audiobook and ebook services point at the same mounted <code>/books</code> tree,
 sibling audio and ebook files in the same title folder appear as high-confidence
 same-folder matches.</p>
-<h3 id="add-update-book">Add / Update Book</h3>
+<h3 id="discover-search">Discover: Search</h3>
 <ol>
-<li>Open <strong>Add / Update Book</strong>.</li>
-<li>Pick an ABS, Grimmory, or BookOrbit audiobook, or leave audio on <strong>None / Skip</strong> for an ebook-only link.</li>
+<li>Open <strong>Discover</strong> and choose the <strong>Search</strong> tab.</li>
+<li>Search for the book, then pick an ABS, Grimmory, or BookOrbit audiobook, or leave audio on <strong>None / Skip</strong> for an ebook-only link.</li>
 <li>Optionally pick a Storyteller title (skip this unless you use the Storyteller app).</li>
-<li>Pick the standard ebook.</li>
-<li>Click <strong>Create Mapping</strong>.</li>
+<li>Pick the standard ebook and click <strong>Add to Queue</strong>.</li>
+<li>Click <strong>Match All</strong> in the Batch Match Queue.</li>
 </ol>
 <p>That is enough to get syncing started. The normal background cycle runs every 5 minutes by default, and instant sync can react faster when supported by the source.</p>
 <hr />
@@ -1270,7 +1362,7 @@ path is wrong rather than the password — see
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>

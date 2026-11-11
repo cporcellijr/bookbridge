@@ -15,17 +15,17 @@
         <link rel="canonical" href="https://cporcellijr.github.io/bookbridge/configuration/">
       
       
-        <link rel="prev" href="../user-guide/">
+        <link rel="prev" href="../new-interface/">
       
       
-        <link rel="next" href="../backup-restore/">
+        <link rel="next" href="../device-api/">
       
       
         
       
       
       <link rel="icon" href="../assets/icon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
       
@@ -281,6 +281,25 @@
   
   
   
+  
+    <li class="md-tabs__item">
+      <a href="../new-interface/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  New Interface (Beta)
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
     
   
   
@@ -292,6 +311,25 @@
     
   
   Configuration
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../device-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Device API
 
       </a>
     </li>
@@ -468,6 +506,33 @@
     
   
     User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../new-interface/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    New Interface (Beta)
   
 
     
@@ -959,6 +1024,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../device-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Device API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1512,7 +1604,7 @@ Environment variables only seed the settings database. On first boot BookBridge 
 <ul>
 <li><strong>Integrations</strong> — one card per service, in the same order and with the same names as each reader's <strong>My Integrations</strong> page</li>
 <li><strong>Sync</strong> — sync behavior, instant sync, and alignment health</li>
-<li><strong>Features</strong> — Telegram notifications, Shelfmark, and Suggestions</li>
+<li><strong>Features</strong> — Telegram notifications, Shelfmark, and Suggestions (the Discover page)</li>
 <li><strong>AI</strong> — the optional LLM assist provider and its feature toggles</li>
 <li><strong>System</strong> — timezone and logging, paths, and advanced maintenance tools (transcription, cache cleanup, backfills)</li>
 <li><strong>Users</strong> — reader accounts and their per-reader integrations</li>
@@ -2209,7 +2301,7 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 </table>
 <p>Grimmory notes:</p>
 <ul>
-<li>Add / Update Book, the match queue, and Suggestions can all use <strong>Grimmory audiobooks</strong> as the audio source.</li>
+<li>Discover (Pairs and Search) and the match queue can use <strong>Grimmory audiobooks</strong> as the audio source.</li>
 <li>The dashboard shows <strong>BL Audio</strong> progress when a mapping is driven by Grimmory audio.</li>
 <li>When <strong>Record Reading Sessions</strong> is enabled, Grimmory gets session updates as you make progress.</li>
 <li>Enable <strong>Highlight Sync</strong> in each reader's Grimmory integration if you want Grimmory web-reader highlights and notes to round-trip through the bridge.</li>
@@ -2501,7 +2593,7 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 </table>
 <p>BookOrbit notes:</p>
 <ul>
-<li>BookOrbit is available across Add / Update Book, the match queue, Suggestions, and the dashboard. Pick it as the ebook source, the audio source, or both when you create a mapping.</li>
+<li>BookOrbit is available across Discover, the match queue, and the dashboard. Pick it as the ebook source, the audio source, or both when you create a mapping.</li>
 <li>Use the <strong>Test</strong> button in Settings to check the connection before saving.</li>
 <li>To sync BookOrbit web-reader highlights through the bridge, fill in the BookOrbit KOReader sync username/password in each reader's Integrations. BookBridge only relays annotations when ownership is clear.</li>
 <li>
@@ -2518,7 +2610,7 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 </ul>
 <h4 id="kavita">Kavita</h4>
 <p>Kavita is a supported EPUB source and bidirectional reading-progress client. It can
-provide books to Add / Update Book, the match queue, Suggestions, managed KOReader devices,
+provide books to Discover, the match queue, managed KOReader devices,
 and ebook-only mappings. BookBridge uses Kavita's native KOReader progress endpoint,
 so the same Kavita position is visible in its web reader and other compatible
 clients.</p>
@@ -2725,10 +2817,10 @@ bridge auto-matches it on the next poll:</p>
 </table>
 <p>CWA notes:</p>
 <ul>
-<li>CWA appears as a standard ebook source in Add / Update Book, the match queue, and Suggestions.</li>
+<li>CWA appears as a standard ebook source in Discover and the match queue.</li>
 <li>Kobo sync lets CWA-sourced ebook progress participate alongside KOReader, Grimmory, BookOrbit, Storyteller, and ABS ebook progress.</li>
 <li>The CWA username/password and Kobo sync token are per-reader integration credentials.</li>
-<li>With <strong>Embed Metadata</strong> on, CWA rewrites an EPUB's metadata on every download, so a copy a reader downloads from CWA does not hash the same as the file BookBridge matched. When <code>CALIBRE_LIBRARY_PATH</code> points at the library, BookBridge looks an unknown KOReader hash up in CWA's checksum history (<code>book_format_checksums</code>, which CWA creates and writes only while its KOReader sync is enabled) and links it to the matching book on the reader's first sync.</li>
+<li>With <strong>Embed Metadata</strong> on, CWA rewrites an EPUB's metadata on every download, so a copy a reader downloads from CWA does not hash the same as the file BookBridge matched. When <code>CALIBRE_LIBRARY_PATH</code> points at the library, BookBridge looks an unknown KOReader hash up in CWA's checksum history (<code>book_format_checksums</code>, which CWA creates and writes only while its KOReader sync is enabled) and links it to the matching book on the reader's first sync. If BookBridge has no mapping for that book yet, the hash leads to the book's EPUB in the Calibre library, and auto-discovery maps it on the reader's first forward sync, with CWA as the ebook source when no other library hosts the file. A match you accept from a suggestion gets the CWA source on the reader's next sync, provided the mapping uses that same library file. The EPUB must also be under <code>BOOKS_DIR</code> or <code>EXTRA_EBOOK_DIRS</code>, and <code>AUTO_CREATE_EBOOK_MAPPING</code> must be on.</li>
 <li>If you use the Audiobookshelf Calibre plugin, the bridge can read the <code>audiobookshelf_id</code> identifier from Calibre metadata or CWA as a fallback to avoid fuzzy matching already-linked books.</li>
 </ul>
 <h4 id="hardcover">Hardcover</h4>
@@ -3096,7 +3188,7 @@ passed. See <a href="../troubleshooting/#hardcover-or-storygraph-gets-many-reque
 <li>Finer tuning knobs (score bands, judge margins, similarity thresholds) are available in the Settings UI if you want them, but the defaults are a sensible starting point.</li>
 </ul>
 <h3 id="suggestions">Suggestions</h3>
-<p>Enabled under <strong>Settings -&gt; Library &amp; Matching</strong>. The Suggestions page is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.</p>
+<p>Enabled under <strong>Settings -&gt; Library &amp; Matching</strong>. The Discover page (Pairs and Ebook Only) is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.</p>
 <table>
 <thead>
 <tr>
@@ -3111,7 +3203,7 @@ passed. See <a href="../troubleshooting/#hardcover-or-storygraph-gets-many-reque
 <td>Enable Suggestions</td>
 <td><code>SUGGESTIONS_ENABLED</code></td>
 <td><code>false</code></td>
-<td>Enables the Suggestions page and background suggestion discovery.</td>
+<td>Enables Discover's suggestions and background suggestion discovery.</td>
 </tr>
 <tr>
 <td>Auto-match suggestions at or above a score</td>
@@ -3138,6 +3230,12 @@ passed. See <a href="../troubleshooting/#hardcover-or-storygraph-gets-many-reque
 <td>Minutes between scheduled library scans, counted from the end of the previous one (0 = off, minimum 5). Runs as the primary admin, reusing cached results like a normal scan.</td>
 </tr>
 <tr>
+<td>Ignore local files in Suggestions</td>
+<td><code>SUGGESTIONS_EXCLUDE_LOCAL_FILES</code></td>
+<td><code>false</code></td>
+<td>Leaves locally scanned files (<code>BOOKS_DIR</code>, <code>EXTRA_EBOOK_DIRS</code>) out of Pairs and Ebook Only on the next scan; ebooks from your connected library services stay included.</td>
+</tr>
+<tr>
 <td>Scheduled Full Refresh</td>
 <td><code>SUGGESTIONS_FULL_REFRESH_ENABLED</code></td>
 <td><code>false</code></td>
@@ -3162,8 +3260,8 @@ passed. See <a href="../troubleshooting/#hardcover-or-storygraph-gets-many-reque
 <li>A normal scan reuses cached results so repeat scans are faster.</li>
 <li><strong>Full Refresh</strong> rescans the whole unmatched library from scratch.</li>
 <li>Scheduled scans never overlap a running scan, and a slow scan pushes the next one back instead of queueing it. The time of the last scheduled scan and the day of the last weekly refresh are stored, so a restart neither scans straight away nor repeats a refresh already done that day.</li>
-<li>A scheduled scan uses the primary admin's own credentials, the same as that account pressing the buttons on the Suggestions page. An open Suggestions page shows the scheduled results the next time it loads.</li>
-<li>Suggestions can queue audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit, and can use CWA as the ebook side for audiobook-backed, ebook-only, and Storyteller-assisted links.</li>
+<li>A scheduled scan uses the primary admin's own credentials, the same as that account pressing the buttons on Discover. An open Discover page shows the scheduled results the next time it loads.</li>
+<li>Discover can queue audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit, and can use CWA as the ebook side for audiobook-backed, ebook-only, and Storyteller-assisted links.</li>
 <li>If your audio and ebook providers expose the same mounted <code>/books</code> tree,
   sibling files in the same title folder are treated as same-folder matches
   before fuzzy or Ollama scoring.</li>
@@ -3304,6 +3402,12 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <td><code>CTC_QUARTZNET_MODEL_PATH</code></td>
 <td>empty</td>
 <td>Optional path to a local <code>model.onnx</code> (or the folder holding it). Empty downloads it once (77 MB) from Storyteller's package registry into <code>/data/models/quartznet15x5-en/</code>; set this if that download fails.</td>
+</tr>
+<tr>
+<td>— (environment only)</td>
+<td><code>ALIGN_THREADS</code></td>
+<td>empty</td>
+<td>CPU threads QuartzNet alignment uses. Empty uses the CPUs the container can actually use (its <code>cpus:</code> limit, then its CPU affinity), at most 8; the choice is logged when the model loads. Set it to use more than 8, or fewer to leave CPUs for other work. Read when the model first loads, so a change needs a restart.</td>
 </tr>
 <tr>
 <td>Run the MMS model on</td>
@@ -3690,7 +3794,7 @@ CPU-only pipeline unchanged.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>

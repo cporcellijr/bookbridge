@@ -1,0 +1,1341 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The ultimate bridge for cross-platform reading and listening synchronization.">
+      
+      
+        <meta name="author" content="cporcellijr">
+      
+      
+        <link rel="canonical" href="https://cporcellijr.github.io/bookbridge/suggestions-redesign-backend-handoff/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/icon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+    
+    
+      
+        <title>Suggestions redesign backend handoff - BookBridge</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#suggestions-redesign-backend-handoff" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="BookBridge" class="md-header__button md-logo" aria-label="BookBridge" data-md-component="logo">
+      
+  <img src="../assets/icon.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BookBridge
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Suggestions redesign backend handoff
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/cporcellijr/bookbridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    cporcellijr/bookbridge
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../user-guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  User Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../new-interface/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  New Interface (Beta)
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../configuration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Configuration
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../device-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Device API
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../backup-restore/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Backup & Restore
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../troubleshooting/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Troubleshooting
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="BookBridge" class="md-nav__button md-logo" aria-label="BookBridge" data-md-component="logo">
+      
+  <img src="../assets/icon.png" alt="logo">
+
+    </a>
+    BookBridge
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/cporcellijr/bookbridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    cporcellijr/bookbridge
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../new-interface/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    New Interface (Beta)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../device-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Device API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backup-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup & Restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-branch-checkout-and-commits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Branch, checkout and commits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-files-and-verified-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Files and verified architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Routes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-get-request-filters-and-sorts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. GET request, filters and sorts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-actual-response-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Actual response structure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-field-definitions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Field definitions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-classification-and-identity-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Classification and identity rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-series-grouping-and-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Series grouping and ordering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-identity-based-pair-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Identity-based Pair selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-queue-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Queue integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-ebook-only-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Ebook Only actions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-scan-lifecycle-freshness-and-reliability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Scan lifecycle, freshness and reliability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-loading-and-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Loading and errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-validation-and-live-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Validation and live evidence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#15-limitations-and-frontend-recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        15. Limitations and frontend recommendations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#16-final-validation-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        16. Final validation record
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#17-frontend-integration-branch-featuresuggestions-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        17. Frontend integration (branch feature/suggestions-ui)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="suggestions-redesign-backend-handoff">Suggestions redesign backend handoff</h1>
+<h2 id="1-branch-checkout-and-commits">1. Branch, checkout and commits</h2>
+<ul>
+<li>Branch: <code>feature/suggestions-backend</code>, based on local <code>dev</code> at <code>0e553381d107974dda42010c3ce73ff614475195</code>.</li>
+<li>Worktree: <code>C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-6293ee16</code>.</li>
+<li>Final backend implementation commit: <code>c3d0d78e3751fb8bd51c859a0f676dd90c8cb4c9</code>.</li>
+<li>This handoff is in the subsequent documentation-only commit. Resolve the complete branch-tip SHA with <code>git rev-parse feature/suggestions-backend</code>; the delivery message supplies it. This avoids a document claiming to embed the SHA of the commit containing its own bytes.</li>
+<li>No push, merge, PR, live-checkout edit, service restart or deployment was performed. The next task is frontend implementation on this branch.</li>
+</ul>
+<h2 id="2-files-and-verified-architecture">2. Files and verified architecture</h2>
+<p>Production changes:</p>
+<ul>
+<li><code>src/services/suggestions_service.py</code>: canonical audio-anchor series projection; provider-neutral reverse scoring; scan-local metadata reuse. Existing forward scoring, ambiguity checks, shelf-watch wrapper and queue safeguards remain in place.</li>
+<li><code>src/services/ebook_discovery.py</code> (new): stable identity, inventory, batch mapping/ignore exclusion, bounded audio index and persisted inverse snapshot.</li>
+<li><code>src/services/suggestions_view.py</code> (new): pure persisted projection, filtering, grouping, counts and identity-based Pair selection.</li>
+<li><code>src/api/suggestions_redesign.py</code> (new): five API routes using existing web-server storage and mapping/queue helpers.</li>
+<li><code>src/web_server.py</code>: combined scan lifecycle, raw inventory capture before legacy deduplication, cache persistence, route registration, Add Book preselection, exact-source ebook-only creation and queue-write failure reporting.</li>
+<li><code>src/utils/series_metadata.py</code>: shared series-key normalization and finite decimal/fraction sequence parsing.</li>
+<li><code>src/services/audio_source_adapters.py</code>: structured series fields and preloaded catalog paths.</li>
+<li><code>src/api/api_clients.py</code>: reliable cached ABS raw catalog shared between audio and ebook discovery.</li>
+<li><code>src/api/booklore_client.py</code>: all-ID catalog projection, current summary series/file metadata and pagination completeness checks.</li>
+<li><code>src/api/bookorbit_client.py</code>: bulk series/file/format metadata and reliable pagination.</li>
+<li><code>src/api/cwa_client.py</code>: cached full OPDS EPUB catalog following Atom next links, with same-origin checks.</li>
+<li><code>src/api/kavita_client.py</code>: complete catalog mode and physical paths.</li>
+<li><code>src/services/calibre_identifier_resolver.py</code>: one read-only batch identifier lookup.</li>
+</ul>
+<p>Tests: new <code>test_ebook_discovery</code>, <code>test_ebook_discovery_snapshot</code>, <code>test_suggestions_discovery_lifecycle</code>, <code>test_suggestions_view</code>, <code>test_suggestions_redesign_api</code>, <code>test_suggestions_redesign_series</code>, <code>test_suggestions_provider_catalog</code>, <code>test_suggestions_catalog_completeness</code> and <code>test_calibre_identifier_bulk</code>; existing Suggestions/scheduler/Kavita fixtures updated for the extended contract. <code>CHANGELOG.md</code> describes the backend foundation.</p>
+<p>This implementation follows the actual local dev architecture, not the earlier public-main review. Pair discovery is still <code>SuggestionsService.scan_library_suggestions()</code> and retains <code>scan_cache_by_abs</code> plus <code>scan_cache_no_match_abs_ids</code>. <code>_scan_single_ebook()</code> remains a compatible shelf-watch wrapper; <code>scan_ebook_candidates()</code> supplies the generic reverse path. There is no parallel matching engine, new dependency, runtime setting, schema migration or second queue.</p>
+<p>The inverse inventory and ignores use the existing per-user JSON cache: <code>suggestions_scan_cache_user_&lt;id&gt;.json</code> in the data directory. The legacy global cache remains supported internally; the new API requires an authenticated user and retains the existing Suggestions admin-only policy. Do not expose these controls to regular users without an intentional policy change.</p>
+<h2 id="3-routes">3. Routes</h2>
+<p>All five new API routes are registered by <code>create_app()</code> and inherit the app's authentication/admin checks. POSTs use the app's existing request protection. Send JSON and retain same-origin credentials.</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Route</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/api/suggestions/discovery</code></td>
+<td>Render either persisted tab; no provider crawl</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/suggestions/selection/resolve</code></td>
+<td>Resolve filtered Pair selections without queueing</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/suggestions/selection/queue</code></td>
+<td>Re-resolve eligibility and append to the existing queue</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/suggestions/ebook-only/ignore</code></td>
+<td>Persist an ignore or reset one</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/suggestions/ebook-only/create</code></td>
+<td>Create one mapping through the existing upsert</td>
+</tr>
+</tbody>
+</table>
+<p>Existing <code>/suggestions</code> GET/POST, <code>/api/suggestions</code>, <code>/api/suggestions/scan-status</code>, batch queue processing and shelf-watch routes remain available. Do not reinterpret the legacy <code>/api/suggestions</code> response as the new projection.</p>
+<p>Start a scan through the existing <code>POST /suggestions</code> form: <code>action=scan</code> or <code>action=scan_full</code>. The existing XMLHttpRequest response is <code>{success:true,status:"running",job_id,full_refresh}</code>. Poll the existing scan-status endpoint; the new GET also supplies <code>scan_job</code> for an active job. Opening a tab never starts a scan.</p>
+<h2 id="4-get-request-filters-and-sorts">4. GET request, filters and sorts</h2>
+<p><code>GET /api/suggestions/discovery?tab=pairs&amp;sort=series&amp;filters=&lt;URL-encoded JSON&gt;</code></p>
+<ul>
+<li><code>tab</code>: <code>pairs</code> (default) or <code>ebook_only</code>.</li>
+<li><code>sort</code>: <code>series</code> (default), <code>title</code>, or <code>confidence</code> (Pair only).</li>
+<li><code>filters</code>: JSON object, default <code>{}</code>. Unknown query/filter fields are rejected, not silently ignored.</li>
+</ul>
+<p>Common filters:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type/default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>q</code></td>
+<td>string / empty</td>
+<td>Case-insensitive substring across anchor title, author, series and filename; Pair also searches candidate display names, titles/authors and filenames</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>string / empty</td>
+<td>Exact source after alias normalization; Pair filters the audio source; Ebook Only accepts primary source or retained provenance/aliases</td>
+</tr>
+<tr>
+<td><code>series_key</code></td>
+<td>string / empty</td>
+<td>Exact normalized series key; children of one series, without fuzzy expansion</td>
+</tr>
+</tbody>
+</table>
+<p>Pair <code>status</code>: <code>all</code> (default), <code>eligible</code>, <code>manual_review</code>, <code>queued</code>.
+Ebook <code>ignored</code>: <code>exclude</code> (default), <code>include</code>, <code>only</code>.</p>
+<p>There is no pagination or lazy loading. <code>entries</code> contains every filtered child, including children a UI may collapse. Series selection resolves on the server against the complete filtered dataset. Do not introduce DOM-dependent selection.</p>
+<h2 id="5-actual-response-structure">5. Actual response structure</h2>
+<p>Example Pair projection (abbreviated provider metadata/evidence):</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"schema_version"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"tab"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pairs"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"generation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pair-scan-generation"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"scan"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"complete"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"generation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pair-scan-generation"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"completed_at"</span><span class="p">:</span><span class="w"> </span><span class="mf">1793720000.0</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"attempted_at"</span><span class="p">:</span><span class="w"> </span><span class="mf">1793720000.0</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"source_states"</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
+<span class="w">    </span><span class="nt">"stats"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"scanned_new"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">"reused_cached"</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span><span class="p">},</span>
+<span class="w">    </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"entries"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span>
+<span class="w">    </span><span class="nt">"suggestion_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pair:bookorbit:42"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pair"</span><span class="p">,</span><span class="w"> </span><span class="nt">"bridge_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bookorbit:42"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"audio_source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"BookOrbit"</span><span class="p">,</span><span class="w"> </span><span class="nt">"audio_source_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"42"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"audio_title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"First Journey"</span><span class="p">,</span><span class="w"> </span><span class="nt">"audio_author"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Ada Writer"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"First Journey"</span><span class="p">,</span><span class="w"> </span><span class="nt">"author"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Ada Writer"</span><span class="p">,</span><span class="w"> </span><span class="nt">"filename"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"series_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"River Road"</span><span class="p">,</span><span class="w"> </span><span class="nt">"series_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"river road"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"series_sequence"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="nt">"series_source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bookorbit"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"mapped"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">"ignored"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">"queued"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"bulk_eligible"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"bulk_block_reason"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">"manual_review"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"confidence"</span><span class="p">:</span><span class="w"> </span><span class="mf">100.0</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"matches"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span>
+<span class="w">      </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Kavita"</span><span class="p">,</span><span class="w"> </span><span class="nt">"source_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"chapter-9"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"ebook_filename"</span><span class="p">:</span><span class="w"> </span><span class="s2">"First Journey.epub"</span><span class="p">,</span><span class="w"> </span><span class="nt">"display_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"First Journey"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"source_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/books/First Journey.epub"</span><span class="p">,</span><span class="w"> </span><span class="nt">"score"</span><span class="p">:</span><span class="w"> </span><span class="mf">100.0</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"author_agrees"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"match_reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"exact"</span>
+<span class="w">    </span><span class="p">}]</span>
+<span class="w">  </span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"series"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span>
+<span class="w">    </span><span class="nt">"series_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"river road"</span><span class="p">,</span><span class="w"> </span><span class="nt">"series_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"River Road"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"total"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"eligible"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"queued"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"manual_review"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"ignored"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"sequences"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">0.5</span><span class="p">],</span><span class="w"> </span><span class="nt">"has_unsequenced"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">  </span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"counts"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"total"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"filtered"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"eligible"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"queued"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"manual_review"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"ignored"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"filters"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"q"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span><span class="w"> </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span><span class="w"> </span><span class="nt">"series_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span><span class="w"> </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"all"</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"sort"</span><span class="p">:</span><span class="w"> </span><span class="s2">"series"</span><span class="p">,</span><span class="w"> </span><span class="nt">"scan_job"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Example Ebook Only entry, inside the same envelope with <code>tab:"ebook_only"</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ebook:id:bookorbit:42"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"suggestion_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ebook:id:bookorbit:42"</span><span class="p">,</span><span class="w"> </span><span class="nt">"ebook_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ebook:id:bookorbit:42"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ebook_only"</span><span class="p">,</span><span class="w"> </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"BookOrbit"</span><span class="p">,</span><span class="w"> </span><span class="nt">"source_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"42"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Unaccompanied"</span><span class="p">,</span><span class="w"> </span><span class="nt">"author"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Ada Writer"</span><span class="p">,</span><span class="w"> </span><span class="nt">"filename"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"source_file_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file-8"</span><span class="p">,</span><span class="w"> </span><span class="nt">"ebook_file_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file-8"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"language"</span><span class="p">:</span><span class="w"> </span><span class="s2">"en"</span><span class="p">,</span><span class="w"> </span><span class="nt">"classification"</span><span class="p">:</span><span class="w"> </span><span class="s2">"no_audio"</span><span class="p">,</span><span class="w"> </span><span class="nt">"search_complete"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"checked_at"</span><span class="p">:</span><span class="w"> </span><span class="mf">1793720000.0</span><span class="p">,</span><span class="w"> </span><span class="nt">"fingerprint"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256-content-metadata-fingerprint"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"audio_keys"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span><span class="w"> </span><span class="nt">"candidate_audio_keys"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span><span class="w"> </span><span class="nt">"candidate_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"visited_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"series_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"River Road"</span><span class="p">,</span><span class="w"> </span><span class="nt">"series_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"river road"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"series_sequence"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"series_source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bookorbit"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"aliases"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"BookOrbit"</span><span class="p">,</span><span class="w"> </span><span class="nt">"source_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"42"</span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"provenance"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"BookOrbit"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"mapped"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">"ignored"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">"queued"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"bulk_eligible"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">"bulk_block_reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ebook_only"</span><span class="p">,</span><span class="w"> </span><span class="nt">"manual_review"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>BookOrbit bulk rows genuinely have no filename; render <code>title</code>. The actual primary filename/file ID is resolved on the individual create/link action, never by inventing a title-based file identity.</p>
+<h2 id="6-field-definitions">6. Field definitions</h2>
+<p>Envelope:</p>
+<ul>
+<li><code>schema_version</code>: integer 1; <code>tab</code>, <code>sort</code>, <code>filters</code>: effective request settings.</li>
+<li><code>generation</code>: opaque current completed generation for this tab; null before a completed scan. Pair and inverse generations are separate. A positive legacy Pair <code>scanned_at</code> yields stable <code>legacy:&lt;timestamp&gt;</code> until a new scan; timestamp 0 does not imply a scan.</li>
+<li><code>scan</code>: metadata described below; <code>scan_job</code>: existing active-job object or null, including its progress/status when available.</li>
+<li><code>entries</code>: filtered, sorted copied records. Pair retains all original suggestion fields and candidate evidence. Treat additional legacy/provider fields as optional.</li>
+<li><code>series</code>: summaries of the filtered entries, never full-library series totals.</li>
+<li><code>counts.total</code>: currently available dataset before filters (Ebook includes saved ignored records); <code>filtered</code>: returned rows. Other counts describe returned rows only.</li>
+</ul>
+<p>Common entry projection:</p>
+<ul>
+<li><code>suggestion_key</code>: stable selection identity. Pair <code>pair:&lt;bridge_key&gt;</code>; Ebook equals its opaque <code>ebook_key</code>. Never parse identifiers client-side.</li>
+<li><code>kind</code>: <code>pair</code> or <code>ebook_only</code>; <code>title</code>, <code>author</code>, <code>filename</code>: display/search values, possibly empty filename.</li>
+<li><code>series_name</code>: original authoritative display name or null; <code>series_key</code>: exact shared case/whitespace normalized name or null; <code>series_sequence</code>: finite number, including 0/fractions, or null; <code>series_source</code>: authority label or null.</li>
+<li><code>mapped</code>: false for active rows because current mappings are excluded. <code>ignored</code>: true only for deliberately revealed saved Ebook ignores. Ignored Pair anchors are excluded.</li>
+<li><code>queued</code>: current scoped queue membership for Pair. Queued entries are ineligible with reason <code>already_queued</code> and are not counted as manual review.</li>
+<li><code>bulk_eligible</code>, <code>bulk_block_reason</code>, <code>manual_review</code>: server-derived status. Ebook Only never supports Pair bulk queueing.</li>
+</ul>
+<p>Pair-specific:</p>
+<ul>
+<li><code>bridge_key</code>: existing namespaced audio ID, e.g. raw ABS ID, <code>booklore:&lt;id&gt;</code> or <code>bookorbit:&lt;id&gt;</code>.</li>
+<li><code>audio_source</code>, <code>audio_source_id</code>, <code>audio_title</code>, <code>audio_author</code>, <code>audio_path</code>, <code>audio_language</code>, <code>audio_duration</code>, <code>audio_cover_url</code>, provider book/file IDs: existing audio metadata.</li>
+<li>Generic <code>series_*</code> and optional <code>audio_series_*</code> aliases always come from the audio anchor, never a ranked ebook.</li>
+<li><code>matches</code>: existing ordered candidate objects, including source/source_id, ebook_filename, source_path, display_name, score and available reason/author/edition/title-key evidence. These fields retain existing semantics; do not infer auto-acceptance from score alone.</li>
+<li><code>confidence</code>: first candidate score, or 0; a display/sort value, not permission to queue.</li>
+</ul>
+<p>Inverse inventory fields:</p>
+<ul>
+<li><code>key</code>/<code>ebook_key</code>: durable namespaced source ID first, otherwise an absolute physical file path, otherwise a reliable explicit document identity. IDs 0 are valid. ISBN/DOI/title-author similarity are not physical identity.</li>
+<li><code>source</code>, <code>source_id</code>: primary source. Ebook canonical normalization uses historical <code>Booklore</code> for Grimmory; Pair audio still uses historical <code>BookLore</code>. Display both as Grimmory. Other labels are <code>BookOrbit</code>, <code>Kavita</code>, <code>CWA</code>, <code>ABS</code>, <code>Local File</code>.</li>
+<li><code>path</code>, <code>path_key</code>: actual physical path/normalized identity when known, not a guessed filename or directory. POSIX paths retain case; Windows paths normalize case. HTTP download URLs never become physical identity.</li>
+<li><code>source_file_id</code>, <code>ebook_file_id</code>: optional provider file identities; distinct from book IDs.</li>
+<li><code>aliases</code>: secondary <code>{source,source_id}</code> identities backed by exact physical-file evidence; <code>provenance</code>: source labels. Distinct editions/files remain separate even when titles/authors match. A grouped key remains stable across provider order changes when the same physical path is known.</li>
+<li><code>language</code>, optional <code>isbn</code>, <code>doi</code>, <code>urn</code>, <code>document_id</code>, <code>kosync_doc_id</code>, <code>abs_ebook_item_id</code>: available metadata/document identities; absent values may be null. <code>abs_identifier</code> is an authoritative Calibre-to-ABS <strong>audio</strong> association, not ebook identity.</li>
+<li><code>file_mtime_ns</code>, <code>file_size</code>: local change detection, when known. No library-wide content hashes are calculated.</li>
+<li><code>classification</code>: persisted <code>no_audio</code>, <code>has_audio</code>, or <code>unknown</code>; only <code>no_audio</code> is active in this tab.</li>
+<li><code>fingerprint</code>, <code>checked_at</code>: decision metadata; cached decisions retain their prior checked time.</li>
+<li><code>audio_keys</code>: confirmed matching audio bridge IDs. <code>candidate_audio_keys</code>: narrowed candidate dependencies used for incremental Pair invalidation.</li>
+<li><code>search_complete</code>, <code>candidate_count</code>, <code>visited_count</code>, optional <code>unknown_reason</code>, <code>authoritative_match</code>: reliability and diagnostic fields. They are not action permissions.</li>
+</ul>
+<h2 id="7-classification-and-identity-rules">7. Classification and identity rules</h2>
+<p>An Ebook Only row is an unmapped, unignored unique ebook in the most recent reliable inventory with no qualifying reverse audio match. The existing reverse 60-point floor and same-folder behavior are reused. A below-floor forward Pair review candidate also suppresses Ebook Only by exact ebook identity, so an ebook is not offered in both workflows.</p>
+<p><code>has_audio</code> is an exclusion result, not a promise that a Pair row is currently visible: existing audio mappings, ignored anchors, forward safeguards and physical-audio deduplication still control Pair display. <code>unknown</code> is never shown as no-match. Search-cap exhaustion, missing title and ambiguous legacy filename-only mappings produce unknown decisions.</p>
+<p>Exact physical paths can merge provider copies; aliases remain on the saved discovery record. Titles/authors alone never merge editions. Current user mappings and ignored aliases are checked in batches. The create action repeats legacy filename and global target-ID/hash checks against current database state, preventing stale-snapshot duplicate creation. Legacy filename-only mappings are excluded conservatively when no stronger identity can disambiguate them. The Book model retains its existing primary-source and ABS-secondary fields; discovery provenance does not introduce a generalized multi-provider mapping table.</p>
+<h2 id="8-series-grouping-and-ordering">8. Series grouping and ordering</h2>
+<p>The shared normalizer groups exact case/whitespace variants only, preserving the display name. Fractional strings such as <code>1/2</code> or <code>1 1/2</code> become numbers; invalid, boolean, infinite or missing positions become null. Position 0 is numbered. Numbered children precede unnumbered children, then sort numerically and by title; unnumbered children sort by title. Ungrouped entries sort after grouped entries in series mode. No fuzzy series merge or invented volume occurs.</p>
+<p>A series summary has <code>series_key</code>, <code>series_name</code>, <code>total</code>, <code>eligible</code>, <code>queued</code>, <code>manual_review</code>, <code>ignored</code>, sorted distinct numeric <code>sequences</code>, and <code>has_unsequenced</code>. Every count is scoped to current filtered Suggestions rows. Mapped-library/complete-series totals are intentionally absent because this dataset does not prove them.</p>
+<h2 id="9-identity-based-pair-selection">9. Identity-based Pair selection</h2>
+<p>Both selection endpoints accept the same JSON:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"generation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pair-scan-generation"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"tab"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pairs"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"filters"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"q"</span><span class="p">:</span><span class="w"> </span><span class="s2">"journey"</span><span class="p">,</span><span class="w"> </span><span class="nt">"source"</span><span class="p">:</span><span class="w"> </span><span class="s2">"BookOrbit"</span><span class="p">,</span><span class="w"> </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"all"</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"sort"</span><span class="p">:</span><span class="w"> </span><span class="s2">"series"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"suggestion_keys"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"pair:bookorbit:42"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"series_keys"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"river road"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"all_filtered"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>All selection mechanisms are a union, deduplicated by identity. Omitted arrays/false <code>all_filtered</code> select nothing. A series means every individually eligible child of that series <strong>after these filters</strong>, including collapsed/unrendered children. Unknown/out-of-filter explicit keys and ineligible rows are reported in <code>skipped</code>, not accepted. The server reloads mappings, ignores, queue and persisted results on each request. A generation mismatch returns 409; do not silently retry against a different generation.</p>
+<p>Resolve response:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"generation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pair-scan-generation"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"selected_keys"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"pair:bookorbit:42"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"selected_bridge_keys"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"bookorbit:42"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"selected"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pair:bookorbit:42"</span><span class="p">,</span><span class="w"> </span><span class="nt">"bridge_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bookorbit:42"</span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"skipped"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pair:another"</span><span class="p">,</span><span class="w"> </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tie"</span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"counts"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"selected"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"skipped"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The exact existing <code>_suggestion_bulk_block()</code> remains authoritative: tied/ambiguous candidates, uncertain editions, unconfirmed authors, comics and other manual cases are not bypassed by selecting a group. Never submit source paths, scores, counts or eligibility flags as selection authority; unsupported fields return 400.</p>
+<h2 id="10-queue-integration">10. Queue integration</h2>
+<p><code>POST /api/suggestions/selection/queue</code> resolves the request again, then builds existing <code>_queue_item_from_suggestion()</code> items. It writes one batch under the existing queue lock, preserves other users' queue entries and detects newly queued duplicates under that lock. It does not execute the queue or create mappings immediately.</p>
+<p>Response includes the resolve selection fields plus <code>added_keys</code>, <code>already_queued_keys</code>, <code>skipped</code>, and <code>counts:{added,already_queued,skipped}</code>. Queue counts describe the write result; <code>selected</code>/<code>selected_keys</code> retain the resolution result. A queued row skipped during resolution has reason <code>already_queued</code>; a duplicate added between resolution and locked write appears in <code>already_queued_keys</code>. A failed queue write returns 503 <code>persistence_failed</code>.</p>
+<p>Use the existing Batch Match Queue UI and processing actions. The new API introduces no Ebook Only bulk action.</p>
+<h2 id="11-ebook-only-actions">11. Ebook Only actions</h2>
+<p>All actions address the server's persisted key, not client-submitted file metadata.</p>
+<p><strong>Find audiobook / Link audio:</strong> open <code>/add-book?ebook_key=&lt;URL-encoded key&gt;&amp;generation=&lt;URL-encoded ebook generation&gt;</code>. The existing Add Book page receives exactly one selected ebook, which its existing picker auto-selects, plus its normal targeted audio search. Optional <code>search=</code> overrides the audio query. It does not enumerate every ebook again. Stale or no-longer-actionable records return 409, unavailable exact files return 409, and non-admin access returns 403. BookOrbit resolves one actual primary file and rejects changed selected file IDs. Continue using the existing Add Book form/queue to link audio.</p>
+<p><strong>Create one ebook-only mapping:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"ebook_key"</span><span class="p">:</span><span class="s2">"ebook:id:bookorbit:42"</span><span class="p">,</span><span class="nt">"generation"</span><span class="p">:</span><span class="s2">"ebook-scan-generation"</span><span class="p">}</span>
+</code></pre></div>
+<p>POST to <code>/api/suggestions/ebook-only/create</code>. Response: <code>{ok:true,ebook_key,abs_id}</code>. The server rechecks current mappings/ignores and resolves that exact source document, then invokes the existing <code>_upsert_storyteller_mapping(mode_hint="ebook_only_create")</code> with a server-computed hash. Local paths must be in configured library roots and exist. Provider downloads use the current user's clients; they never fall back to another provider or a same-basename local file. ABS requires one unambiguous EPUB file (or the saved matching file identity). Changed BookOrbit file IDs or missing content fail closed. The normal ownership/hash validation still applies. An existing global hash, occupied target mapping ID, or current ambiguous legacy filename mapping returns 409 <code>already_mapped</code>; this action never silently joins, migrates or rewrites another mapping, even when the saved discovery predates that mapping. The new book is claimed for the acting user.</p>
+<p><strong>Ignore / reset:</strong> POST <code>/api/suggestions/ebook-only/ignore</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"mode"</span><span class="p">:</span><span class="s2">"ignore"</span><span class="p">,</span><span class="nt">"ebook_key"</span><span class="p">:</span><span class="s2">"ebook:id:bookorbit:42"</span><span class="p">,</span><span class="nt">"generation"</span><span class="p">:</span><span class="s2">"ebook-scan-generation"</span><span class="p">}</span>
+</code></pre></div>
+<p>Use <code>mode:"reset"</code> with the saved ignored key to remove the ignore. Response: <code>{ok:true,mode,ebook_key}</code>. Ignore stores the full record, aliases and time, and removes it from active snapshot entries. It survives ordinary scans and Full Refresh. Reset does not resurrect an old no-match decision: the next completed scan must classify it again. Reveal saved ignores through <code>filters:{ignored:"only"}</code> or <code>include</code>. Session-only “Hide for now” remains frontend state and must not call Ignore.</p>
+<h2 id="12-scan-lifecycle-freshness-and-reliability">12. Scan lifecycle, freshness and reliability</h2>
+<p>A combined background scan loads provider catalogs once per provider refresh, collects raw ebook identities before the legacy filename/stem deduplication, and builds one shared reverse index. CWA and ABS bulk inventory supplement the old search-only paths. Local metadata is reused within the scan. Calibre audio IDs are read in one batch rather than one HTTP/SQLite lookup per ebook.</p>
+<p>Ordinary scans reuse decisions when both ebook and audio metadata fingerprints are unchanged. Full Refresh bypasses provider catalog TTLs and decision reuse. Both retain the last completed snapshot and persistent ignores until success. Changed/deleted ebooks and changed audio anchors invalidate related Pair cache entries, not all Pair results by default. Mappings and ignores prune active results. The scan writer merges against current ignores under a lock so a concurrent Ignore cannot be undone; browser Pair-state saves do not replace inverse snapshots.</p>
+<p>Provider coverage:</p>
+<ul>
+<li>BookOrbit: paginated full bulk listing, including filename-free ebooks; no per-ebook detail crawl.</li>
+<li>Grimmory: all provider IDs rather than the filename-keyed view; exact primary/cached companion audio metadata. Some summary rows omit companion-format details. Such rows enter the inverse index as <strong>potential</strong> audio only: a qualifying match yields <code>unknown</code> with <code>companion_audio_coverage_unknown</code>, never a confirmed Pair or a false no-audio result. This avoids hydrating every ebook just to discover audio. Existing interactive audio search can still hydrate an individual search normally.</li>
+<li>CWA: complete EPUB OPDS <code>/opds/new</code> traversal via Atom next links, including short EPUB-filtered pages; cached per user's client for one hour. A reliable empty feed differs from failure.</li>
+<li>ABS: complete accessible-library raw catalog, cached 30 minutes; shared with scoped audio discovery. Missing audio titles fail closed.</li>
+<li>Kavita: strict complete catalog expansion mode, preserving actual file paths.</li>
+<li>Local File: configured local directory inventory with metadata/stat change detection.</li>
+<li>BookFusion: existing interactive search remains supported; no supported bulk inventory, so <code>supported:false</code> is exposed and it is not claimed to be part of Ebook Only coverage.</li>
+</ul>
+<p><code>scan.state</code>: <code>never_scanned</code>, <code>complete</code>, or <code>incomplete</code>. A completed scan can contain individual unknown decisions. On provider failure/partial pagination, keep prior entries, generation, completed time, Pair results and Pair scanned time; update attempt/source-state metadata and <code>error:"source_incomplete"</code>. With no prior reliable scan, show an empty dataset with incomplete state, not “all books have no match.”</p>
+<p><code>completed_at</code> is the reliable snapshot time; <code>attempted_at</code> is the latest attempt. These are Unix epoch seconds. Pair scan metadata reports the latest failed inverse attempt while retaining Pair generation/completion time. Display both freshness and reliability. <code>source_states</code> is a map of provider to <code>roles</code>, each with <code>configured</code>, <code>supported</code>, <code>complete</code>, <code>count</code>, <code>error_type</code>, plus available diagnostic counts such as <code>unknown_companion_count</code>. Counts are catalog/projection counts, not full-library audiobook/series totals.</p>
+<p>Inverse scan <code>stats</code>: inventory_total, mapped, ignored, legacy_filename_ambiguous, no_audio, has_audio, unknown, scanned_new, reused_cached, candidate_count, visited_count, elapsed_seconds. They are diagnostic scan metrics; use projection <code>counts</code> for current filtered UI counts after actions. The bounded candidate/visit budgets default to 500; reaching a cap yields unknown rather than no-audio. Author/title indexes and memoized author shortlists avoid routine ebook-by-audiobook Cartesian scoring. No provider call occurs in the pure projector or GET rendering path.</p>
+<h2 id="13-loading-and-errors">13. Loading and errors</h2>
+<p>Use the existing active-job progress while scanning, retain previous rows, and refresh the projection after completion. Do not clear the last snapshot on Full Refresh. <code>never_scanned</code> asks the user to run discovery; <code>incomplete</code> displays failure/freshness with previous results; <code>complete</code> plus zero filtered rows is a normal empty result. Individual unknowns are represented by diagnostics/counts and are not actionable Ebook Only rows.</p>
+<p>API errors use <code>{error:"code"}</code>:</p>
+<table>
+<thead>
+<tr>
+<th>HTTP</th>
+<th>Examples / UI handling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>400</td>
+<td>invalid_json, invalid_request, invalid_tab, invalid_filters, invalid_sort, unsupported_query/filter/selection_field, invalid_selection, pairs_view_required; fix the request</td>
+</tr>
+<tr>
+<td>401 / 403</td>
+<td>authentication/admin requirement; app auth may redirect a page request or supply its existing auth JSON</td>
+</tr>
+<tr>
+<td>404</td>
+<td>ignored_entry_not_found</td>
+</tr>
+<tr>
+<td>409</td>
+<td>stale_generation: reload projection and ask for a new selection; ebook_not_actionable/ebook_ignored/already_mapped: refresh rows; ebook_file_unavailable/ebook_hash_unavailable: source document changed/unavailable</td>
+</tr>
+<tr>
+<td>422</td>
+<td>unsupported_source (BookFusion cannot create an independent ebook-only mapping)</td>
+</tr>
+<tr>
+<td>503</td>
+<td>persistence_failed; no success confirmation. ebook_create_resolver_unavailable / ebook_create_integration_unavailable guard missing integration, not a normal configured state</td>
+</tr>
+<tr>
+<td>500</td>
+<td>discovery_unavailable or unexpected server failure; display a retryable failure without discarding persisted rows</td>
+</tr>
+</tbody>
+</table>
+<p><code>mapping_failed</code> uses the existing upsert's failure status. Filesystem/provider failures must not be presented as successful mappings. Never expose raw provider credentials in error text. Disabled/unsupported providers and unknown candidate decisions are not silently converted into no-match findings.</p>
+<h2 id="14-validation-and-live-evidence">14. Validation and live evidence</h2>
+<p>Baseline on unmodified local dev: <strong>6,492 passed, 12 skipped, 655 subtests</strong> (<code>-p no:randomly</code>). Final full suite: <strong>6,622 passed, 12 skipped, 659 subtests</strong>, 12 warnings, exit 0, 225.38 seconds. This adds <strong>130 passing tests</strong>. The implementation is committed at <code>c3d0d78e3751fb8bd51c859a0f676dd90c8cb4c9</code>.</p>
+<p>Focused coverage includes current Pair scoring/safeguards, reverse classification, mapped/ignored exclusion, distinct editions, exact cross-provider physical copies, source pagination/failure, unknown companion formats, incremental reuse/Full Refresh/pruning, per-user JSON round trips, concurrent Ignore preservation, series/fractions/zero/ungrouped ordering, filtered group selection across 150+ children, scoped one-write queueing, real SQLite mapping creation/duplicate/foreign-hash/occupied-target/legacy-filename protection, exact BookOrbit file ID 0/CBZ hashing, Add Book preselection, and large indexed candidate pools.</p>
+<p>Regression checks temporarily removed the relevant production guards, ran their tests and restored the exact files in <code>finally</code>: series projection (2 failing tests), failed-source snapshot preservation (2), concurrent-ignore preservation (1), and uncertain-companion no-match protection (1). They fail when the corresponding behavior is removed. No temporary mutations are committed.</p>
+<p>Live checks were <strong>read-only</strong>, without deploying this branch:</p>
+<ul>
+<li>BookOrbit bulk query: 2,411 records; real rows include series and file IDs/formats but no filenames/paths. Hence action-time filename resolution is required.</li>
+<li>Grimmory page: real Boot PagedModel payload with nested metadata/series and primaryFile.</li>
+<li>CWA credentials are under user2. The new CWA catalog code was evaluated in an isolated probe process against that account: <strong>647 EPUBs, 11 cold requests, 4.42 seconds; warm call made 0 further requests; no duplicate IDs</strong>. The installed feed implementation and actual next links were checked.</li>
+</ul>
+<p>A separate synthetic workload used <strong>10,000 ebooks and 5,000 audio records</strong>: cold discovery took <strong>39.04 seconds</strong>, made <strong>619,941 scoring calls</strong> instead of 50,000,000 Cartesian comparisons, and classified 5,000 with audio / 5,000 without audio. The unchanged second scan took <strong>0.676 seconds</strong>, reused all 10,000 decisions, and made <strong>zero scoring calls</strong>. This measures in-memory matching and snapshot reuse; provider reads/local metadata loading and JSON persistence are outside that benchmark.</p>
+<p>These prove provider read shapes/catalog traversal, not a deployed end-to-end redesign. No real mappings, progress, provider content or settings were modified.</p>
+<h2 id="15-limitations-and-frontend-recommendations">15. Limitations and frontend recommendations</h2>
+<ul>
+<li>Frontend work is intentionally unfinished. Existing templates/JS were not redesigned; build the two-tab/grouped UI using this contract.</li>
+<li>No targeted per-ebook rescan endpoint, Ebook bulk create, pagination or speculative series totals were added. Use ordinary scan/Full Refresh and single ebook actions.</li>
+<li>Missing reliable physical paths prevent cross-provider deduplication; distinct source IDs remain separate rather than guessing by title. Saved aliases are available for provenance and identity-based actions.</li>
+<li>Grimmory companion formats missing from lightweight metadata remain unknown until reliable detailed metadata is available. The API never promises absence from that missing information.</li>
+<li>Candidate-cap/legacy filename ambiguities intentionally withhold uncertain no-match results. Offer scan reliability/counts, not automatic acceptance.</li>
+<li>GET payloads contain all filtered rows; measure payload/render costs before adding lazy loading. Keep selection identity-based even if rendering changes later.</li>
+<li>Existing Suggestions access is admin-only. No policy expansion or new user settings are part of this task.</li>
+<li>Deployment later requires <strong>restart</strong> for bind-mounted source; this worktree is not mounted in the live instance. No migration, rebuild dependency change or plugin download is required by this feature itself.</li>
+</ul>
+<p>For the UI: keep Pair and Ebook actions distinct; use original series display names, numeric sequence sorting and dataset-scoped count labels; keep selection generation with filters; show manual-review reasons; reveal/reset ignores explicitly; refresh counts after mutations; use Add Book for linking audio and the existing Batch Match Queue for accepted pairs. Never derive eligibility from score or rendered checkbox presence.</p>
+<h2 id="16-final-validation-record">16. Final validation record</h2>
+<ul>
+<li>Tested backend commit: <code>c3d0d78e3751fb8bd51c859a0f676dd90c8cb4c9</code>.</li>
+<li>Command: existing project <code>.venv/Scripts/python.exe -m pytest tests/ -p no:randomly -q --tb=short</code>, run sequentially from this worktree with Git Bash on PATH and isolated test data.</li>
+<li>Result: <strong>6622 passed, 12 skipped, 12 warnings, 659 subtests passed</strong>, exit 0, 225.38 seconds.</li>
+<li>Focused verification: 612 provider/Suggestions tests passed before final action additions; the final action/core subset passed 183 tests. Earlier baseline and negative-regression results are described above.</li>
+<li><code>git diff --check</code> passed; no new production <code>print()</code> calls, schema changes, runtime settings, dependencies or Lua changes.</li>
+<li><code>BRANCH_STATUS.md</code> was updated locally (it is an ignored operational file). Deployment requirement is restart, deliberately not performed. Frontend implementation is the only planned follow-up, outside this backend task.</li>
+</ul>
+<h2 id="17-frontend-integration-branch-featuresuggestions-ui">17. Frontend integration (branch <code>feature/suggestions-ui</code>)</h2>
+<p>The two-tab page in <code>templates/suggestions.html</code> renders every row client-side from <code>GET /api/suggestions/discovery</code>; Jinja no longer renders suggestion cards. The scan forms, scan-status polling, review panel (candidate grid + Storyteller picker) and <code>_match_queue_panel.html</code> are unchanged.</p>
+<p>Backend corrections made during integration:</p>
+<ul>
+<li><code>suggestions_view.project_suggestions</code>: Pair entries carry <code>audio_source</code> inferred from a <code>booklore:</code>/<code>bookorbit:</code> bridge key when an older cached row has none. Without it the source filter skipped those rows and the badge fell back to Audiobookshelf (the #407 defect).</li>
+<li><code>counts.active</code>: Pair = <code>total</code>; Ebook Only = non-ignored records only (<code>total</code> includes saved ignores). Used for the tab badges.</li>
+<li>The discovery route passes Pair entries through <code>_sanitize_cover_urls</code> (issue #353; the legacy page already did this).</li>
+<li><code>suggestions_tab_counts()</code> gives <code>/suggestions</code> both tabs' <code>active</code> counts for the first paint; each later fetch updates its own tab.</li>
+</ul>
+<p>Selection and queueing as built:</p>
+<ul>
+<li>Selection is a <code>Set</code> of <code>suggestion_key</code>s held in page state. A series checkbox adds or removes that group's <code>bulk_eligible</code> children from the loaded filtered dataset (collapsed groups included); it is tri-state over eligible children only. Selections survive sort, filter, flat/grouped and tab changes, and are cleared when the Pair <code>generation</code> changes.</li>
+<li>"Add selected" and "Add all exact" post to the existing <code>add_many_to_queue</code> form action, which rechecks each key on the server (ties always; any manual case when <code>bulk_intent=exact</code>) and returns the queue fragment. Individually ticked review rows (below 100 or another manual reason, but not ties) remain queueable through "Add selected", as before. The <code>/selection/resolve</code> and <code>/selection/queue</code> endpoints are not called: the projection is unpaginated, so the whole filtered dataset is already loaded, and the form action returns the queue panel the page re-renders.</li>
+<li>Pair "Ignore" posts the legacy <code>action=never</code>; "Hide for now" is browser-session state only (sessionStorage) and calls nothing.</li>
+</ul>
+<p>Remaining limits: no Ebook Only "Open source" link (the contract has no trustworthy provider URL), no author sort (backend sorts are series/title/confidence), and no per-ebook refresh. Russian strings are in the <code>.po</code>; they appear only after a Docker rebuild compiles the catalog.</p>
+<p>Review fixes (after a code review of <code>0e55338..e92517c</code>):</p>
+<ul>
+<li>Ebook-only create is insert-only: <code>_upsert_storyteller_mapping(create_only=True)</code> refuses to reuse a hash or target row, and <code>save_book(create_only=True)</code> returns None instead of updating a row another match inserted concurrently. Both surface as 409 <code>already_mapped</code>. A hash already linked through <code>KosyncDocument.linked_abs_id</code> is refused too.</li>
+<li>Suggestions scans use <code>_scan_user_clients()</code>: a user who may not inherit the admin's configuration gets an incomplete scan (prior results kept) instead of the global clients when their own bundle cannot load.</li>
+<li><code>add_many_to_queue</code> accepts an optional <code>generation</code>; a value that no longer matches the persisted Pair generation returns 409 <code>{"error":"stale_generation"}</code>. The page sends it.</li>
+<li>BookOrbit <code>get_book_detail(..., fresh_only=True)</code> returns None rather than a cached copy when the forced read fails; Add Book preselect and ebook-only create use it.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

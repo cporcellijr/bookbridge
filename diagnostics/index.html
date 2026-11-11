@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/icon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
       
@@ -279,6 +279,25 @@
   
   
     <li class="md-tabs__item">
+      <a href="../new-interface/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  New Interface (Beta)
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
       <a href="../configuration/" class="md-tabs__link">
         
   
@@ -286,6 +305,25 @@
     
   
   Configuration
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../device-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Device API
 
       </a>
     </li>
@@ -481,6 +519,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../new-interface/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    New Interface (Beta)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../configuration/" class="md-nav__link">
         
   
@@ -489,6 +554,33 @@
     
   
     Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../device-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Device API
   
 
     
@@ -1203,9 +1295,15 @@ container (<code>bookbridge_diagnostics</code>), built from <code>python:3.12-sl
 <div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>diagnostics_receiver
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
 </code></pre></div>
-<p>The public <code>DIAGNOSTICS_ENDPOINT_URL</code> that opted-in instances POST to
-is still TBD; when deployed behind a reverse proxy, the URL will point
-at the proxy's external address (port 20129 on the internal network).</p>
+<p>The receiver copies its source into the image, so source changes require rebuilding
+this standalone container. Updating or restarting the main BookBridge container does
+not update the receiver. Take a SQLite online backup before deployment; startup adds
+missing columns and query indexes automatically while preserving findings and analyses.
+The first startup can take several minutes on a large database while these indexes
+are built; wait for the receiver serving message before checking the public API.</p>
+<p>Set <code>DIAGNOSTICS_ENDPOINT_URL</code> to the receiver's public HTTPS reverse-proxy
+address. Opted-in instances POST there; the proxy forwards to port 20129 on
+the internal network.</p>
 <h3 id="input-sanitization">Input Sanitization</h3>
 <p>All attacker-authored text fields (templates, messages, context lines,
 version strings) are sanitized at ingest before any storage:</p>
@@ -1599,7 +1697,7 @@ non-loopback Host headers, disables browser caching, and binds Docker to
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>
