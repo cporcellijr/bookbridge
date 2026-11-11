@@ -14,6 +14,8 @@
         partial: {{ _('Only part of the request was accepted.')|tojson }},
         cancel: {{ _('Cancel')|tojson }},
         dismiss: {{ _('Dismiss')|tojson }},
+        openBook: {{ _('Open book')|tojson }},
+        review: {{ _('Review in Discover')|tojson }},
         ebook: {{ _('Ebook')|tojson }},
         audiobook: {{ _('Audiobook')|tojson }},
         service: {{ _('BookOrbit')|tojson }},
@@ -23,11 +25,12 @@
         in_progress: {{ _('In progress')|tojson }},
         needs_look: {{ _('Needs a look')|tojson }},
         arrived: {{ _('Arrived')|tojson }},
+        paired: {{ _('Paired')|tojson }},
         declined: {{ _('Declined')|tojson }},
         failed: {{ _('Failed')|tojson }},
         cancelled: {{ _('Cancelled')|tojson }},
     };
-    const ACQ_CHIP_CLASS = { waiting: 'manual', in_progress: 'reason', needs_look: 'manual', arrived: 'queued', declined: 'ignored', failed: 'ignored', cancelled: 'reason' };
+    const ACQ_CHIP_CLASS = { waiting: 'manual', in_progress: 'reason', needs_look: 'manual', arrived: 'queued', paired: 'exact', declined: 'ignored', failed: 'ignored', cancelled: 'reason' };
     const ACQ_OPEN = ['waiting', 'in_progress', 'needs_look'];
     const ACQ_ERRORS = {
         not_allowed: {{ _('Getting books is not turned on for readers.')|tojson }},
@@ -81,8 +84,26 @@
         return prefill;
     }
 
-    function openAcqDialog(kind) {
-        const prefill = acqPrefill(kind);
+    // An ebook-only row asks for its own audiobook; the row's ebook travels as the pairing partner.
+    function acqPrefillFromEbookRow(key) {
+        const entry = ((views.ebook_only || {}).entries || []).find((item) => item.suggestion_key === key);
+        if (!entry) return null;
+        return {
+            title: entry.title || entry.filename || '', authors: acqAuthors(entry.author), format: 'audiobook',
+            partner: { source: entry.source, source_id: entry.source_id, filename: entry.filename || '' },
+        };
+    }
+
+    function decorateEbookRows() {
+        if (!acqUsable || activeTab !== 'ebook_only') return;
+        document.querySelectorAll('#resultsList .ebook-row:not(.is-ignored) .row-actions').forEach((actions) => {
+            const key = actions.closest('.ebook-row').dataset.key;
+            actions.insertAdjacentHTML('beforeend', `<button type="button" class="btn btn-small btn-muted" data-acq="open-row" data-key="${esc(key)}">${esc(ACQ.getAudiobook)}</button>`);
+        });
+    }
+
+    function openAcqDialog(kind, prefillOverride) {
+        const prefill = prefillOverride || acqPrefill(kind);
         acqPartner = prefill.partner;
         $('acqTitle').value = prefill.title;
         $('acqAuthor').value = prefill.authors;
@@ -141,8 +162,12 @@
     function renderAcqStrip() {
         $('acqStrip').hidden = !acqRows.length;
         $('acqList').innerHTML = acqRows.map((row) => {
-            const open = ACQ_OPEN.includes(row.status);
+            const reviewing = row.status === 'needs_look' && row.remote_status === 'available';
+            const open = ACQ_OPEN.includes(row.status) && !reviewing;
             const action = open ? 'cancel' : 'dismiss';
+            const link = row.status === 'paired' && row.linked_abs_id
+                ? `<a class="btn btn-small btn-muted" href="/book/${encodeURIComponent(row.linked_abs_id)}">${esc(ACQ.openBook)}</a>`
+                : reviewing ? `<a class="btn btn-small btn-muted" href="/suggestions?tab=pairs">${esc(ACQ.review)}</a>` : '';
             return `<div class="acq-row" role="listitem">
                 <div class="acq-main">
                     <span class="row-title-text">${esc(row.title)}</span>
@@ -150,6 +175,7 @@
                 </div>
                 <span class="source-badge ${ACQ_CHIP_CLASS[row.status] || 'reason'}">${esc(ACQ_STATUS[row.status] || row.status)}</span>
                 ${row.status_detail ? `<span class="acq-note">${esc(row.status_detail)}</span>` : ''}
+                ${link}
                 <button type="button" class="btn btn-small btn-muted" data-acq-act="${action}" data-id="${esc(row.id)}">${esc(open ? ACQ.cancel : ACQ.dismiss)}</button>
             </div>`;
         }).join('');
@@ -197,14 +223,19 @@
             return;
         }
         if (!acqUsable) return;
-        if (activeTab === 'search') renderList();
+        const renderListBase = renderList;
+        renderList = () => { renderListBase(); decorateEbookRows(); };
+        if (activeTab === 'search' || activeTab === 'ebook_only') renderList();
         loadAcqMine();
     }
 
     function bindAcquisitionEvents() {
         $('resultsList').addEventListener('click', (event) => {
             const opener = event.target.closest('[data-acq="open"]');
-            if (opener) openAcqDialog(opener.dataset.acqKind);
+            if (opener) { openAcqDialog(opener.dataset.acqKind); return; }
+            const rowOpener = event.target.closest('[data-acq="open-row"]');
+            const prefill = rowOpener && acqPrefillFromEbookRow(rowOpener.dataset.key);
+            if (prefill) openAcqDialog('audiobook', prefill);
         });
         $('acqList').addEventListener('click', (event) => {
             const button = event.target.closest('[data-acq-act]');

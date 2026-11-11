@@ -4,35 +4,19 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import timedelta
 from typing import Any, Optional
 
 from flask import current_app, jsonify, request
 
+from src.services.acquisition_service import OPEN_STATUSES, STATUS_MAP
 from src.utils.config_loader import env_truthy
-from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
 _MEDIA_KINDS = ("ebook", "audiobook")
-_REFRESH_INTERVAL = timedelta(seconds=30)
-_OPEN_STATUSES = ("waiting", "in_progress", "needs_look")
-_STATUS_MAP = {
-    "pending": "waiting",
-    "approved": "in_progress",
-    "searching": "in_progress",
-    "grabbed": "in_progress",
-    "downloading": "in_progress",
-    "importing": "in_progress",
-    "needs_review": "needs_look",
-    "available": "arrived",
-    "rejected": "declined",
-    "failed": "failed",
-    "cancelled": "cancelled",
-}
 _PUBLIC_FIELDS = (
-    "id", "service", "media_kind", "title", "authors", "status", "status_detail",
-    "partner_source", "partner_source_id", "group_key", "arrived_source_id",
+    "id", "service", "media_kind", "title", "authors", "status", "status_detail", "remote_status",
+    "partner_source", "partner_source_id", "group_key", "arrived_source_id", "linked_abs_id",
 )
 
 _WEB_MODULE = None
@@ -229,7 +213,7 @@ def acquisition_bookorbit():
             "remote_id": str(item["id"]), "title": fields["title"],
             "authors": ", ".join(fields["authors"]) or None, "isbn13": fields["isbn13"],
             "series_name": fields["series_name"], "series_index": fields["series_index"],
-            "status": _STATUS_MAP.get(item.get("status"), "waiting"),
+            "status": STATUS_MAP.get(item.get("status"), "waiting"),
             "remote_status": item.get("status"),
             "partner_source": fields["partner_source"],
             "partner_source_id": fields["partner_source_id"],
@@ -260,37 +244,6 @@ def acquisition_bookorbit():
     })
 
 
-def _refresh_open_rows(web, user_id: int, rows: list[dict]) -> list[dict]:
-    """Refresh open BookOrbit rows from BookOrbit, each at most once per 30 s."""
-    due = [
-        row for row in rows
-        if row["service"] == "BookOrbit" and row["status"] in _OPEN_STATUSES and row["remote_id"]
-        and (row["last_checked_at"] is None or utcnow() - row["last_checked_at"] >= _REFRESH_INTERVAL)
-    ]
-    client = _bookorbit_client(web) if due else None
-    if client is None:
-        return rows
-    for row in due:
-        remote = client.get_request(row["remote_id"]) or {}
-        changes: dict[str, Any] = {"last_checked_at": utcnow()}
-        status = remote.get("status")
-        if status:
-            changes.update(
-                status=_STATUS_MAP.get(status, "in_progress"),
-                remote_status=status,
-                status_detail=remote.get("statusReason") or remote.get("failureCode"),
-            )
-            if status == "available" and remote.get("matchedBookId") is not None:
-                changes.update(arrived_source="BookOrbit", arrived_source_id=str(remote["matchedBookId"]))
-            if changes["status"] != row["status"]:
-                logger.info(
-                    "📥 Acquisition: user %s request %s moved %s -> %s (BookOrbit status %s)",
-                    user_id, row["id"], row["status"], changes["status"], status,
-                )
-        web.database_service.update_acquisition_request(user_id, row["id"], **changes)
-    return web.database_service.get_acquisition_requests(user_id)
-
-
 def acquisition_mine():
     """The caller's non-dismissed requests, with open ones refreshed from BookOrbit."""
     web = _web_server()
@@ -299,7 +252,7 @@ def acquisition_mine():
         return _api_error("authentication_required", 401)
     if not _is_allowed(web):
         return _api_error("not_allowed", 403)
-    rows = _refresh_open_rows(web, user_id, web.database_service.get_acquisition_requests(user_id))
+    rows = web.container.acquisition_service().refresh_user(user_id, _bookorbit_client(web))
     return jsonify({"requests": [_public(row) for row in rows]})
 
 
@@ -320,7 +273,7 @@ def acquisition_cancel(request_id: int):
     row, error = _owned_row(web, user_id, request_id)
     if error:
         return error
-    if row["status"] not in _OPEN_STATUSES:
+    if row["status"] not in OPEN_STATUSES:
         return _api_error("not_open", 409)
     client = _bookorbit_client(web)
     if client is None:
