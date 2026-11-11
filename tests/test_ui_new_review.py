@@ -21,10 +21,15 @@ class TestP9ReviewFixes(unittest.TestCase):
                 self.assertNotRegex(text, r"btn\.innerHTML = '(❌|⏳) ' \+ (stagePrefix|label|\(data\.error)")
                 self.assertEqual(text.count("btn.textContent = '❌ '"), 4)
 
-    def test_has_audio_filter_is_a_visible_chip_like_classics_option(self):
+    def test_has_audio_format_is_visible_and_attention_is_separate(self):
         page = source("templates/next/index.html")
-        chip = re.search(r'<button[^>]*data-format="has_audio"[^>]*>', page).group()
-        self.assertNotIn("hidden", chip)
+        dropdown = re.search(r'<select id="filter-select"([^>]*)>(.*?)</select>', page, re.S)
+        self.assertIsNotNone(dropdown)
+        self.assertNotIn("hidden", dropdown.group(1))
+        self.assertIn('<option value="has_audio">', dropdown.group(2))
+        self.assertNotIn('value="needs_attention"', dropdown.group(2))
+        self.assertIn('id="attention-only-filter"', page)
+        self.assertNotIn("data-format=", page)
         self.assertNotIn("data-legacy-format", page + source("templates/next/_library_scripts.html"))
 
     def test_edition_picker_styles_the_classes_the_shared_builders_create(self):

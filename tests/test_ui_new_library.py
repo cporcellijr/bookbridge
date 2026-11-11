@@ -273,14 +273,65 @@ class TestNewLibrary(unittest.TestCase):
         self._login("ui-reader")
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
         text = self.client.get("/").get_data(as_text=True)
-        slot = text.index('data-library-search-slot')
-        self.assertLess(slot, text.index('id="bb-search-open"'))
-        self.assertLess(text.index('id="bb-search-open"'), text.index('</div>', slot))
-        self.assertEqual(text.count('id="dashboard-search"'), 1)
+        topbar = text.split('<header class="topbar">', 1)[1].split('</header>', 1)[0]
         self.assertEqual(text.count('id="bb-search-open"'), 1)
+        self.assertIn('id="bb-search-open"', topbar)
+        self.assertIn('aria-controls="bb-search-dialog"', topbar)
+        self.assertIn('aria-keyshortcuts="Control+K Meta+K /"', topbar)
+        self.assertEqual(text.count('id="bb-search-input"'), 1)
+        self.assertNotIn('id="dashboard-search"', text)
+        self.assertNotIn('data-library-search-slot', text)
+        self.assertEqual(text.count('type="search"'), 1)
         stats = self.client.get("/stats").get_data(as_text=True)
-        self.assertNotIn('data-library-search-slot', stats)
         self.assertIn('id="bb-search-open"', stats)
+        self.assertIn('id="bb-search-input"', stats)
+
+    def test_library_header_renders_count_actionable_notices_and_two_control_rows(self):
+        from types import SimpleNamespace
+        from src import web_server
+
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        original = web_server._build_dashboard_mappings
+
+        def with_attention(*args, **kwargs):
+            mappings, progress = original(*args, **kwargs)
+            next(m for m in mappings if m["abs_id"] == "library-book")["status"] = "error"
+            return mappings, progress
+
+        suggestion = SimpleNamespace(
+            source_id="test-suggestion", title="Match Candidate", author="Example Author",
+            audiobook_count=1, origin="shelf_watch", matches=[{"id": "match"}],
+        )
+        with patch.object(web_server, "_build_dashboard_mappings", side_effect=with_attention), \
+             patch.object(web_server.database_service, "get_all_pending_suggestions", return_value=[suggestion]):
+            text = self.client.get("/").get_data(as_text=True)
+
+        header = text.split('<header class="page-head">', 1)[1].split("</header>", 1)[0]
+        toolbar = text.split('<section class="library-toolbar"', 1)[1].split("</section>", 1)[0]
+        self.assertIn("2 books", header)
+        self.assertNotIn("YOUR LIBRARY", header)
+        self.assertRegex(header, r'<button[^>]*id="suggestions-banner"[^>]*aria-expanded="false"')
+        self.assertIn('aria-controls="suggestions-content"', header)
+        self.assertIn("Matches to review", header)
+        self.assertIn('<details id="needs-attention">', header)
+        self.assertIn('id="attention-only-filter"', header)
+        self.assertIn("Library Example", header)
+        self.assertIn("Alignment failed", header)
+        self.assertIn('id="suggestions-section" class="matches-banner" hidden', text)
+        self.assertIn('id="suggestion-test-suggestion"', text)
+        self.assertIn("dismissSuggestion(event", text)
+        self.assertIn("review=test-suggestion", text)
+        self.assertLess(toolbar.index('id="filter-select"'), toolbar.index('id="author-filter"'))
+        self.assertLess(toolbar.index('id="author-filter"'), toolbar.index('id="series-filter"'))
+        self.assertLess(toolbar.index('class="toolbar-primary"'), toolbar.index('class="toolbar-secondary"'))
+        self.assertLess(toolbar.index('id="sort-select"'), toolbar.index('id="view-covers"'))
+        self.assertLess(toolbar.index('id="view-covers"'), toolbar.index('id="select-mode-button"'))
+        self.assertNotIn('id="dashboard-search"', text)
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 741px", css)
+        self.assertIn(".library-toolbar .toolbar-primary .toolbar-select:first-child { grid-column: 1 / -1; }", css)
+        self.assertIn(".view-switch button { min-height: 44px;", css)
 
     def test_reader_gets_new_library_with_classic_default_unchanged(self):
         observed = []
@@ -310,7 +361,7 @@ class TestNewLibrary(unittest.TestCase):
             self.assertIn("Not started", text)
             self.assertIn("Finished", text)
             for control in (
-                'id="library-page"', 'id="dashboard-search"',
+                'id="library-page"', 'id="bb-search-open"',
                 'id="filter-select"', 'id="series-filter"', 'id="author-filter"',
                 'id="sort-select"', 'id="sort-direction"',
                 'id="series-grouping-toggle"', 'id="view-covers"',
@@ -499,10 +550,14 @@ class TestNewLibrary(unittest.TestCase):
         scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
         classic = (_ROOT / "templates/index.html").read_text(encoding="utf-8")
 
-        for value in ("all", "paired", "audiobook_only", "ebook_only", "needs_attention"):
-            self.assertIn(f'data-format="{value}"', page)
-        for value in ("all", "paired", "has_audio", "audiobook_only", "ebook_only", "needs_attention", "title", "author", "series", "progress", "status", "last_sync", "added", "rating"):
+        self.assertNotIn('data-format=', page)
+        self.assertNotIn('id="dashboard-search"', page)
+        self.assertIn('id="attention-only-filter"', page)
+        self.assertNotIn('<option value="needs_attention"', page)
+        for value in ("all", "paired", "has_audio", "audiobook_only", "ebook_only", "title", "author", "series", "progress", "status", "last_sync", "added", "rating"):
             self.assertIn(f'<option value="{value}"', page)
+        self.assertIn("savedFormat === 'needs_attention'", scripts)
+        self.assertIn('needsAttention(card)', scripts)
         for label in (
             "Title", "Author", "Series", "Progress", "Status",
             "Last Synced", "Date Added", "Rating", "Covers", "Spines", "List",
