@@ -1016,7 +1016,8 @@ class SyncManager:
 
     def _try_ctc_alignment(self, abs_id: str, audio_paths: list, book_text: str,
                            spine_chapters: Optional[list], abs_title: str,
-                           audio_duration: Optional[float], source_label: str) -> bool:
+                           audio_duration: Optional[float], source_label: str,
+                           progress_callback=None) -> bool:
         """Run one CTC forced-alignment attempt and log its outcome (issue #426).
 
         `_run_background_job` calls `AlignmentService.align_forced_and_store` from
@@ -1030,12 +1031,16 @@ class SyncManager:
         ``"upgrade"`` for the post-transcript one; it selects each site's existing,
         byte-identical success and failure log text (the two sites word their
         failure log differently, so this is not just a success-message suffix).
+
+        `progress_callback`, when given, receives the model pass's 0.0-1.0 progress.
         """
         is_upgrade = source_label == "upgrade"
+        ctc_kwargs = {"spine_chapters": spine_chapters, "audio_duration": audio_duration}
+        if progress_callback is not None:
+            ctc_kwargs["progress_callback"] = progress_callback
         try:
             stored = self.alignment_service.align_forced_and_store(
-                abs_id, audio_paths, book_text, spine_chapters=spine_chapters,
-                audio_duration=audio_duration,
+                abs_id, audio_paths, book_text, **ctc_kwargs,
             )
         except TranscriptionCancelled:
             raise
@@ -3576,14 +3581,19 @@ class SyncManager:
             audio_source_id = getattr(book, "audio_source_id", None) or abs_id
             abs_client = self.active_abs_client
 
-            def update_progress(local_pct, phase):
+            def update_progress(local_pct, phase, check_active=True):
                 """
                 Map local phase progress to global 0-100% progress.
                 Phase 1: 0-10%
                 Phase 2: 10-90%
                 Phase 3: 90-100%
+
+                CTC passes ``check_active=False``: its progress is reported from inside
+                the aligner, whose catch-all error handling would log a cancellation as
+                a failed pass. Cancellation is still checked around the CTC calls.
                 """
-                ensure_active()
+                if check_active:
+                    ensure_active()
                 global_pct = 0.0
                 if phase == 1:
                     global_pct = 0.0 + (local_pct * 0.1)
@@ -3809,6 +3819,7 @@ class SyncManager:
                             abs_id, ctc_local_paths, book_text, spine_chapters, abs_title,
                             getattr(book, "audio_duration", None) or getattr(book, "duration", None),
                             source_label="attempt",
+                            progress_callback=lambda p: update_progress(p, 2, check_active=False),
                         ):
                             direct_aligned = True
                             transcript_source = "ctc"
@@ -3901,6 +3912,9 @@ class SyncManager:
                                 abs_id, upgrade_paths, book_text, spine_chapters, abs_title,
                                 getattr(book, "audio_duration", None) or getattr(book, "duration", None),
                                 source_label="upgrade",
+                                # Fills the 91% -> 95% step that follows.
+                                progress_callback=lambda p: update_progress(
+                                    0.1 + 0.4 * p, 3, check_active=False),
                             ):
                                 transcript_source = "ctc"
                         except TranscriptionCancelled:

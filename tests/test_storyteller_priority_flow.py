@@ -607,3 +607,105 @@ def test_try_ctc_alignment_passes_audio_duration_through(tmp_path):
         "abs-1", ["/a.m4b"], "book text", spine_chapters=[{"start": 0, "end": 1}],
         audio_duration=106703.0,
     )
+
+
+def _run_ctc_job(tmp_path, monkeypatch, forced_side_effect, abs_id="ctc-progress-1"):
+    monkeypatch.setenv("CTC_ENABLED", "true")
+    manager, db, _abs, transcriber, alignment_service = _build_manager(tmp_path)
+    transcriber.transcribe_from_smil.return_value = None        # force the Whisper path on fallback
+    transcriber.process_audio.return_value = [{"start": 0.0, "end": 1.0, "text": "x"}]
+    alignment_service.align_and_store.return_value = True
+    alignment_service.align_forced_and_store.side_effect = forced_side_effect
+
+    audio = tmp_path / "a.m4b"
+    audio.write_text("x", encoding="utf-8")
+    adapter = MagicMock()
+    adapter.get_audio_files.return_value = [{"local_path": str(audio)}]
+    adapter.get_chapters.return_value = [{"start": 0.0, "end": 12.0}]
+    manager.audio_source_adapters = {"BookOrbit": adapter}
+
+    book = Book(
+        abs_id=abs_id, abs_title="Progress Book", ebook_filename="book.epub",
+        kosync_doc_id="h", status="pending", duration=12.0,
+        audio_source="BookOrbit", audio_source_id="5961", sync_mode="audiobook",
+    )
+    manager._run_background_job(book)
+    progress = [c.kwargs["progress"] for c in db.update_latest_job.call_args_list if "progress" in c.kwargs]
+    return book, db, alignment_service, progress
+
+
+def test_ctc_attempt_moves_the_job_through_the_transcription_stage(tmp_path, monkeypatch):
+    """The CTC model pass fills 10% -> 90%, where the job used to sit at 10%."""
+    def forced(*_args, **kwargs):
+        for fraction in (0.0, 0.25, 0.5, 1.0):
+            kwargs["progress_callback"](fraction)
+        return True
+
+    book, _db, _alignment_service, progress = _run_ctc_job(tmp_path, monkeypatch, forced)
+
+    assert book.transcript_source == "ctc"
+    # Stage 1 ends at 10%; the model pass then takes the bar from 10% to 90%.
+    start = len(progress) - progress[::-1].index(pytest.approx(0.1)) - 1
+    assert progress[start:start + 4] == pytest.approx([0.1, 0.3, 0.5, 0.9])
+
+
+def test_ctc_upgrade_fills_the_step_before_ninety_five_percent(tmp_path, monkeypatch):
+    calls = []
+
+    def forced(*_args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return False          # first attempt: no prior map yet
+        kwargs["progress_callback"](0.5)
+        return True               # post-transcript upgrade
+
+    book, _db, _alignment_service, progress = _run_ctc_job(
+        tmp_path, monkeypatch, forced, abs_id="ctc-progress-2")
+
+    assert book.transcript_source == "ctc"
+    assert pytest.approx(0.93) in progress   # 91% + half of the 4 points up to 95%
+    assert progress.index(pytest.approx(0.93)) < progress.index(pytest.approx(0.95))
+
+
+def test_ctc_progress_never_raises_a_cancellation_inside_the_aligner(tmp_path, monkeypatch):
+    """The aligner's catch-all would log a cancellation as a failed CTC pass, so CTC
+    progress skips the liveness check; the pipeline still checks it around the call."""
+    reports = []
+
+    def forced(*_args, **kwargs):
+        db.get_book.return_value = None   # mapping deleted mid-pass
+        kwargs["progress_callback"](0.5)
+        reports.append("returned")
+        return True
+
+    monkeypatch.setenv("CTC_ENABLED", "true")
+    manager, db, _abs, _transcriber, alignment_service = _build_manager(tmp_path)
+    alignment_service.align_forced_and_store.side_effect = forced
+    audio = tmp_path / "a.m4b"
+    audio.write_text("x", encoding="utf-8")
+    adapter = MagicMock()
+    adapter.get_audio_files.return_value = [{"local_path": str(audio)}]
+    adapter.get_chapters.return_value = [{"start": 0.0, "end": 12.0}]
+    manager.audio_source_adapters = {"BookOrbit": adapter}
+    book = Book(
+        abs_id="ctc-progress-3", abs_title="Deleted Book", ebook_filename="book.epub",
+        kosync_doc_id="h", status="pending", duration=12.0,
+        audio_source="BookOrbit", audio_source_id="5961", sync_mode="audiobook",
+    )
+    manager._run_background_job(book)
+
+    assert reports == ["returned"]
+    db.update_book_if_exists.assert_not_called()   # the job still stopped before saving
+
+
+def test_try_ctc_alignment_passes_a_progress_callback_through(tmp_path):
+    manager, _db, _abs, _transcriber, alignment_service = _build_manager(tmp_path)
+    alignment_service.align_forced_and_store.return_value = False
+    callback = MagicMock()
+
+    manager._try_ctc_alignment(
+        "abs-1", ["/a.m4b"], "book text", None, "My Book", 100.0,
+        source_label="attempt", progress_callback=callback,
+    )
+
+    assert alignment_service.align_forced_and_store.call_args.kwargs["progress_callback"] is callback
