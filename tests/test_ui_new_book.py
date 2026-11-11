@@ -315,6 +315,7 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   "                                spine.textContent = book.unified_progress.toFixed(0) + '%';\n"
   '                                spine.hidden = !hasPosition;\n'
   '                            }\n'
+  "                            card.toggleAttribute('data-reading', hasPosition && !finished);\n"
   '                            if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = '
   'book.last_sync_unix;\n'
   '                            if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, '

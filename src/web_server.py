@@ -7217,6 +7217,7 @@ def _build_dashboard_mapping(
             "storygraph_matched_by": storygraph_details.matched_by,
             "storygraph_rating": _coerce_dashboard_rating(getattr(storygraph_details, "storygraph_rating", None)),
             "storygraph_review_count": _coerce_dashboard_count(getattr(storygraph_details, "storygraph_review_count", None)),
+            "storygraph_pages": storygraph_details.storygraph_pages,
         })
     else:
         mapping.update({
@@ -7227,6 +7228,7 @@ def _build_dashboard_mapping(
             "storygraph_matched_by": None,
             "storygraph_rating": None,
             "storygraph_review_count": None,
+            "storygraph_pages": None,
         })
 
     goodreads_details = (goodreads_by_book or {}).get(book.abs_id)
