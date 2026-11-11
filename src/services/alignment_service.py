@@ -428,7 +428,8 @@ class AlignmentService:
     def align_forced_and_store(self, abs_id: str, audio_path: str, ebook_text: str,
                                spine_chapters: Optional[List[Dict]] = None,
                                audio_duration: Optional[float] = None,
-                               progress_callback: Optional[Callable[[float], None]] = None) -> bool:
+                               progress_callback: Optional[Callable[[float], None]] = None,
+                               source_check: Optional[Callable[[str], None]] = None) -> bool:
         """Build an alignment map by CTC forced alignment (issue #426, method 'ctc').
 
         Aligns the audio directly against ``ebook_text`` — no transcript — and stores
@@ -444,6 +445,10 @@ class AlignmentService:
         ``progress_callback``, when supplied with ``audio_duration``, receives the
         model pass's progress as a 0.0-1.0 fraction of the audio, in steps of at
         least 1%. The model pass is nearly all of a CTC run's time.
+
+        ``source_check``, when supplied, is called with a seam name before the model
+        pass and again before the map is published; it raises if a mounted source
+        track changed, so no map built from changed audio is stored.
         """
         if not ebook_text:
             return False
@@ -531,6 +536,9 @@ class AlignmentService:
             logger.info("⚙️ CTC: excluding likely unnarrated interior text for %s: %s",
                         abs_id, exclude_spans)
 
+        if source_check:
+            source_check("the CTC model pass")
+
         # Chapter search (src/services/ctc_search.py): with no usable prior, run the
         # model once, locate each spine chapter in its greedy decode, and use that as
         # the prior, so a long book aligns without a Whisper transcript. The emissions
@@ -579,6 +587,8 @@ class AlignmentService:
         if not self._ctc_map_accepted(abs_id, alignment_map, exclude_spans):
             return False
 
+        if source_check:
+            source_check("publishing the CTC map")
         if not self._publish_map(abs_id, alignment_map, "ctc", total_chars=len(ebook_text),
                                  exclude_spans=exclude_spans):
             return False

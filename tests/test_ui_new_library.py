@@ -38,6 +38,37 @@ class TestNewLibrary(unittest.TestCase):
         self.service.link_user_book(self.reader.id, "library-book")
         self.service.link_user_book(self.reader.id, "library-finished")
 
+    def test_rendered_new_library_uses_thumbnails_with_original_proxy_fallback(self):
+        from src import web_server
+
+        original = web_server._build_dashboard_mappings
+
+        def covers(*args, **kwargs):
+            mappings, progress = original(*args, **kwargs)
+            for mapping in mappings:
+                mapping["kosync_doc_id"] = "cover" + mapping["abs_id"].replace("-", "")
+                mapping["cover_url"] = "/api/cover-proxy/" + mapping["abs_id"]
+            return mappings, progress
+
+        self._login("ui-reader")
+        with patch.object(web_server, "_build_dashboard_mappings", side_effect=covers):
+            self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+            response = self.client.get("/")
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            self.assertIn('data-thumb-url="/covers/thumb/coverlibrarybook.jpg"', html)
+            self.assertIn('data-thumb-url="/covers/thumb/coverlibraryfinished.jpg"', html)
+            self.assertIn('hidden loading="lazy" decoding="async"', html)
+            self.assertIn('/static/js/next/cover-loader.js', html)
+            self.assertIn('this.src=&#34;/api/cover-proxy/library-book&#34;', html)
+            # One thumbnail is used in the collapsed series preview too.
+            self.assertGreaterEqual(html.count('data-thumb-url="/covers/thumb/coverlibrarybook.jpg"'), 2)
+
+            self.service.set_user_credential(self.reader.id, "UI_MODE", "classic")
+            classic = self.client.get("/").get_data(as_text=True)
+            self.assertIn('src="/covers/coverlibrarybook.jpg"', classic)
+            self.assertNotIn('data-thumb-url="/covers/thumb/coverlibrarybook.jpg"', classic)
+
     def test_card_heading_does_not_reserve_empty_space(self):
         # A one-line title left a blank band above the progress bar; the heading hugs its content.
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")

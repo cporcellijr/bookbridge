@@ -213,6 +213,7 @@ from src.services.readalong_segments import SentenceClip, build_sentence_clips
 from src.utils.audio_duration import probe_duration_seconds as _probe_duration_seconds
 from src.utils.forced_aligner import container_timeline_filter
 from src.utils.smil_extractor import AUDIO_DURATIONS_ENTRY
+from src.utils.source_fingerprint import SourceAudioChanged, fingerprint, verify_unchanged
 
 if TYPE_CHECKING:
     from src.services.alignment_service import AlignmentService
@@ -2301,6 +2302,10 @@ def _build_readalong_epub_impl(
         )
         return None
 
+    source_fingerprints = {
+        str(p): fingerprint(str(p)) for p in source_audio_paths if os.path.exists(p)
+    }
+
     _safe_progress(progress_callback, "parsing_epub", _STAGE_START["parsing_epub"])
     clip_result = build_sentence_clips(parser, epub_path, alignment_service, abs_id)
     if clip_result is None or not clip_result.clips:
@@ -2760,6 +2765,10 @@ def _build_readalong_epub_impl(
             for archive_path, (disk_path, _real_duration) in zip(audio_archive_paths, audio_files_on_disk)
         }
         _safe_progress(progress_callback, "packaging", _STAGE_START["packaging"])
+        try:
+            verify_unchanged(abs_id, source_fingerprints, "packaging the read-along EPUB")
+        except SourceAudioChanged:
+            return None
         try:
             _package_epub(epub_path, output_path, modified_files, new_bytes_files, new_disk_files)
         except ValueError as e:

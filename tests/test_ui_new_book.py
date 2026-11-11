@@ -276,13 +276,54 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   '} catch (e) { /* storage unavailable */ }',
   "localStorage.setItem('abs_kosync_sort', sortBy);\n"
   "localStorage.setItem('abs_kosync_sort_state', JSON.stringify(sortState));"),
- ('                            const cards = '
-  'document.querySelectorAll(`.book-card[data-abs-id="${book.abs_id}"]`);\n'
-  '                            if (!cards.length) return;\n'
+ ('                        const cardsById = new Map();\n'
+  "                        document.querySelectorAll('.book-card').forEach(card => {\n"
+  '                            const list = cardsById.get(card.dataset.absId);\n'
+  '                            if (list) list.push(card); else cardsById.set(card.dataset.absId, [card]);\n'
+  '                        });\n'
+  '                        data.mappings.forEach(book => {\n'
+  '                            const cards = cardsById.get(String(book.abs_id));\n'
+  '                            if (!cards) return;\n'
   '                            cards.forEach(card => {\n'
   '    ',
+  'data.mappings.forEach(book => {\n'
   'const card = document.querySelector(`.book-card[data-abs-id="${book.abs_id}"]`);\n'
   'if (!card) return;\n'),
+ # Forge and progress polling run on the activity- and visibility-aware bbPoller.
+ ("function checkForgeStatus(signal) {", "function checkForgeStatus() {"),
+ ("return fetch('/api/forge/active', { signal })", "fetch('/api/forge/active')"),
+ ('return !!(tasks && tasks.length > 0);\n'
+  '})\n'
+  '.catch(e => console.debug("Forge status check failed", e));',
+  '})\n'
+  '.catch(e => console.debug("Forge status check failed", e));'),
+ ("// 5s while a forge task is running or work was just started, 30s when idle\n"
+  "// (tasks started elsewhere show up within one slow tick or on tab focus).\n"
+  "window.bbForgePoll = bbPoller({ name: 'forge', fastMs: 5000, slowMs: 30000, run: checkForgeStatus });\n"
+  "['syncNow', 'remapAlignment', 'generateReadalongEpub'].forEach(function (name) {\n"
+  "var original = window[name];\n"
+  "if (typeof original !== 'function') return;\n"
+  "window[name] = function () {\n"
+  "window.bbForgePoll.kick();\n"
+  "return original.apply(this, arguments);\n"
+  "};\n"
+  "});",
+  "// Poll every 5s\n"
+  "setInterval(checkForgeStatus, 5000);\n"
+  "// Initial check\n"
+  "document.addEventListener('DOMContentLoaded', checkForgeStatus);"),
+ ("if (refreshPaused) return;",
+  "// A hidden tab redraws nothing, so skip the round trip entirely.\n"
+  "if (refreshPaused || document.hidden) {\n"
+  "setTimeout(refreshDashboard, 30000);\n"
+  "return;\n"
+  "}"),
+ ("function refreshDashboard(signal) {", "function refreshDashboard() {"),
+ ("return fetch('/api/status/progress', { signal })", "fetch('/api/status/progress')"),
+ ('})\n.catch(() => { });\n}',
+  '})\n.catch(() => { })\n.finally(() => setTimeout(refreshDashboard, 30000));\n}'),
+ ("bbPoller({ name: 'library-progress', fastMs: 30000, slowMs: 30000, immediate: false, run: refreshDashboard });",
+  "setTimeout(refreshDashboard, 30000);"),
  # Cover badge/check/line: whole number, shown only when a state is above 0%.
  ("// Clear progress leaves 0% reset snapshots, so only a state above 0 counts as a position.\n"
   "const hasPosition = Object.values(book.states || {}).some(s => s.percentage > 0);\n"

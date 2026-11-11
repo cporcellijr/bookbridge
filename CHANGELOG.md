@@ -6,7 +6,40 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cache Cleanup now provides a safe preview instead of deleting uncertain files.**
+  The old action could mistake BookOrbit `bookorbit_123` cache folders for
+  inactive entries whose mapping IDs were `bookorbit:123`. Both Settings
+  interfaces now offer Review Inactive Cache, with protected, unverified and
+  potentially inactive storage reported separately. Deletion is intentionally
+  disabled until running-job ownership and retention guarantees are complete.
+
 ### Added
+
+- **BookOrbit audiobook tracks can be processed directly from a verified shared mount.**
+  When BookOrbit supplies an absolute track path, matching filename, file ID
+  and file size, BookBridge validates containment under `AUDIOBOOKS_DIR` and
+  reuses the original read-only path in player order. Unsafe, missing or
+  unverified files use the existing download cache as before. No original
+  audiobook files are modified, and track order, indices and durations stay
+  unchanged for CTC/transcription. The fallback cache directory rejects
+  traversal and symlink escapes before any downloaded files are written.
+  If BookBridge notices an original changed or disappeared while a job was running, the job fails
+  and retries instead of saving timings built from the changed audio.
+- **The Library opens faster after a restart and when BookOrbit's book list is due a refresh.**
+  The out-of-sync checks that made the first page load after a restart slow are now prepared in
+  the background at startup, and a BookOrbit book list that is due a refresh no longer holds
+  the page: the last list is shown and the refresh happens in the background.
+- **The New Library asks the server for status far less often.** An idle Library tab checks
+  for running jobs every 30 seconds instead of every 5, a tab in the background makes no
+  requests at all and catches up the moment you return to it, and starting a sync, re-map or
+  read-along build still shows progress right away.
+- **The New Library loads much smaller cover images.** Cards and series previews now
+  use a reduced copy of each cover (about 86% less to download on a sample of real
+  covers), made in the background the first time a cover is shown. Your original
+  artwork is never changed, and a cover that can't be reduced shows the original as
+  before. Classic is unchanged.
 
 - **CTC alignment jobs now show progress throughout the model pass.** QuartzNet
   and MMS report the amount of audiobook audio processed, so the first CTC

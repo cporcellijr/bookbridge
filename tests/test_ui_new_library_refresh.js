@@ -4,9 +4,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const source = fs.readFileSync('templates/next/_library_scripts.html', 'utf8');
-const start = source.indexOf('function refreshDashboard()');
+const start = source.indexOf('function refreshDashboard(');
 assert.notEqual(start, -1, 'refreshDashboard missing');
-const end = source.indexOf('.finally(', start);
+const end = source.indexOf('.catch(() => { });', start);
 const close = source.indexOf('\n            }', end);
 const script = source.slice(start, close + 14).replace(/\{\{[\s\S]*?\}\}/g, '""');
 
@@ -17,12 +17,15 @@ function makeCard() {
     '.progress-bar-fill': node(), '.spine-progress': node(),
   };
   const attrs = new Set();
-  return { nodes, attrs, dataset: {}, querySelector: sel => nodes[sel] || null, querySelectorAll: () => [], toggleAttribute: (name, on) => { if (on) attrs.add(name); else attrs.delete(name); } };
+  return { nodes, attrs, dataset: { absId: 'b' }, querySelector: sel => nodes[sel] || null, querySelectorAll: () => [], toggleAttribute: (name, on) => { if (on) attrs.add(name); else attrs.delete(name); } };
 }
+
+const other = makeCard();
+other.dataset.absId = 'other';
 
 async function refresh(card, book) {
   const context = {
-    document: { hidden: false, querySelectorAll: () => [card] },
+    document: { hidden: false, querySelectorAll: () => [other, card] },
     fetch: async () => ({ json: async () => ({ mappings: [{ abs_id: 'b', ...book }] }) }),
     setTimeout() {}, bbFormat: s => s,
     updateCtcAlignmentStatus() {}, updateReadalongStatus() {}, updateFormatStrip() {},
@@ -61,5 +64,8 @@ const visible = card => Object.keys(card.nodes).filter(sel => sel !== '.progress
   const fresh = makeCard();
   await refresh(fresh, { unified_progress: 0, states: {} });
   assert.deepEqual(visible(fresh), []);
+  // The single card index must route a mapping only to the cards with its abs_id.
+  assert.equal(other.nodes['.progress-percent'].textContent, '');
+  assert.equal(other.dataset.progress, undefined);
   console.log('ok');
 })().catch(error => { console.error(error); process.exit(1); });

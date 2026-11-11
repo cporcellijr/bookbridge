@@ -48,6 +48,7 @@ from src.utils.user_config import user_preference_enabled
 from src.utils.storyteller_transcript import StorytellerTranscript
 # Logging utilities (placed at top to ensure availability during sync)
 from src.utils.cache_paths import safe_cache_path, is_plain_basename
+from src.services.audio_cache_ownership import owned_cache_names, remove_book_cache_dirs
 from src.utils.transcription_cancel import (
     CancellationToken,
     is_cancelled,
@@ -56,6 +57,7 @@ from src.utils.transcription_cancel import (
     unregister_worker,
 )
 from src.utils.transcriber import TranscriptionCancelled
+from src.utils.source_fingerprint import AcquiredPaths, SourceAudioChanged, verify_unchanged
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
 from src.utils.progress_metadata import state_metadata_kwargs
 from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename
@@ -996,7 +998,10 @@ class SyncManager:
         files = audio_adapter.get_audio_files(audio_source_id, bridge_key=abs_id)
         paths = [f.get("local_path") for f in (files or []) if f.get("local_path")]
         if files and len(paths) == len(files):
-            return paths
+            return AcquiredPaths(paths, {
+                f["local_path"]: tuple(f["source_fingerprint"])
+                for f in files if f.get("source_fingerprint")
+            })
         return None
 
     def _dispatch_readalong_intent(self, book) -> None:
@@ -1041,15 +1046,19 @@ class SyncManager:
         """
         is_upgrade = source_label == "upgrade"
         ctc_kwargs = {"spine_chapters": spine_chapters, "audio_duration": audio_duration}
+        fingerprints = getattr(audio_paths, "fingerprints", None)
+        if fingerprints:
+            ctc_kwargs["source_check"] = lambda seam: verify_unchanged(abs_id, fingerprints, seam)
         if progress_callback is not None:
             ctc_kwargs["progress_callback"] = progress_callback
         try:
             stored = self.alignment_service.align_forced_and_store(
                 abs_id, audio_paths, book_text, **ctc_kwargs,
             )
-        except TranscriptionCancelled:
+        except (TranscriptionCancelled, SourceAudioChanged):
             raise
         except Exception as ctc_err:
+            verify_unchanged(abs_id, fingerprints, "falling back after a CTC failure")
             if is_upgrade:
                 logger.warning(f"CTC upgrade failed for '{abs_id}': {ctc_err}", exc_info=True)
             else:
@@ -1906,6 +1915,8 @@ class SyncManager:
             for book in books:
                 if book.ebook_filename:
                     valid_filenames.add(book.ebook_filename)
+                if book.original_ebook_filename:
+                    valid_filenames.add(book.original_ebook_filename)
             
             # From Pending Suggestions (covers auto-discovery matches)
             suggestions = self.database_service.get_all_pending_suggestions(all_users=True)
@@ -3742,6 +3753,7 @@ class SyncManager:
             # Local audio paths for CTC, resolved once and reused for the post-transcript
             # CTC upgrade (new long books have no prior map to chunk against up front).
             ctc_local_paths = None
+            whisper_fingerprints = {}
 
             # [MOVED UP] Fetch item details to get chapters (for time alignment) and for Ebook Acquisition
             # item_details = self.abs_client.get_item_details(abs_id) # Already fetched above
@@ -3842,9 +3854,11 @@ class SyncManager:
                             update_progress(1.0, 2)
                     else:
                         logger.info(f"CTC enabled but audio for '{abs_id}' is not fully local; using SMIL/Whisper")
-                except TranscriptionCancelled:
+                except (TranscriptionCancelled, SourceAudioChanged):
                     raise
                 except Exception as ctc_err:
+                    verify_unchanged(abs_id, getattr(ctc_local_paths, "fingerprints", None),
+                                     "falling back after a CTC failure")
                     logger.warning(f"CTC alignment failed for '{abs_id}': {ctc_err}", exc_info=True)
 
             # Attempt SMIL extraction
@@ -3877,6 +3891,10 @@ class SyncManager:
                 if not audio_adapter:
                     raise RuntimeError(f"No audio source adapter configured for '{audio_source}'")
                 audio_files = audio_adapter.get_audio_files(audio_source_id, bridge_key=abs_id)
+                whisper_fingerprints = {
+                    f["local_path"]: tuple(f["source_fingerprint"])
+                    for f in (audio_files or []) if f.get("source_fingerprint")
+                }
                 raw_transcript = self.transcriber.process_audio(
                     abs_id, audio_files,
                     full_book_text=book_text, # Passed for context/alignment inside transcriber if old logic used
@@ -3910,6 +3928,11 @@ class SyncManager:
                 success = True
             else:
                 ensure_active()
+                try:
+                    verify_unchanged(abs_id, whisper_fingerprints, "storing the transcript alignment")
+                except SourceAudioChanged:
+                    self.transcriber.invalidate_transcript_cache(abs_id)
+                    raise
                 success = self.alignment_service.align_and_store(
                     abs_id, raw_transcript, book_text, spine_chapters
                 )
@@ -3933,9 +3956,11 @@ class SyncManager:
                                     0.1 + 0.4 * p, 3, check_active=False),
                             ):
                                 transcript_source = "ctc"
-                        except TranscriptionCancelled:
+                        except (TranscriptionCancelled, SourceAudioChanged):
                             raise
                         except Exception as ctc_err:
+                            verify_unchanged(abs_id, getattr(upgrade_paths, "fingerprints", None),
+                                             "falling back after a CTC failure")
                             logger.warning(f"CTC upgrade failed for '{abs_id}': {ctc_err}", exc_info=True)
 
             # Alignment done
@@ -4060,14 +4085,23 @@ class SyncManager:
                 
                 # Keep the completed transcript so correcting the pairing does not repeat Whisper.
                 if self.data_dir and not recovery_mode:
-                    audio_cache_dir = Path(self.data_dir) / "audio_cache" / abs_id
-                    if audio_cache_dir.exists():
+                    audio_cache_root = Path(self.data_dir) / "audio_cache"
+                    try:
+                        from src.utils.transcriber import AudioTranscriber
                         try:
-                            from src.utils.transcriber import AudioTranscriber
-                            AudioTranscriber._prune_audio_cache(audio_cache_dir, remove_directories=True)
+                            known_ids = [b.abs_id for b in self.database_service.get_all_books()]
+                        except Exception:
+                            known_ids = None
+                        pruned = False
+                        for cache_name in owned_cache_names(abs_id, known_ids):
+                            if (audio_cache_root / cache_name).exists():
+                                pruned = AudioTranscriber._prune_audio_cache(
+                                    audio_cache_root / cache_name, remove_directories=True,
+                                    cache_root=audio_cache_root, own_token=cancellation_token) or pruned
+                        if pruned:
                             logger.info(f"✅ Cleaned up audio cache for {sanitize_log_data(abs_title)}")
-                        except Exception as cleanup_err:
-                            logger.warning(f"⚠️ Failed to clean audio cache: {cleanup_err}", exc_info=True)
+                    except Exception as cleanup_err:
+                        logger.warning(f"⚠️ Failed to clean audio cache: {cleanup_err}", exc_info=True)
             else:
                 book.status = 'failed_retry_later'
                 # Log which claimant was used so cross-user identity mismatches
@@ -4084,14 +4118,21 @@ class SyncManager:
 
         finally:
             if is_cancelled(abs_id, cancellation_token) and self.data_dir:
-                import shutil
-                audio_cache_dir = Path(self.data_dir) / "audio_cache" / abs_id
-                if audio_cache_dir.exists():
+                try:
                     try:
-                        shutil.rmtree(audio_cache_dir)
+                        other_ids = [b.abs_id for b in self.database_service.get_all_books()]
+                    except Exception:
+                        other_ids = None
+                    delete_errors = []
+                    removed_dirs = remove_book_cache_dirs(Path(self.data_dir) / "audio_cache", abs_id,
+                                                          other_ids=other_ids, own_token=cancellation_token,
+                                                          errors=delete_errors)
+                    for delete_error in delete_errors:
+                        logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {delete_error}", exc_info=delete_error)
+                    if removed_dirs:
                         logger.info(f"✅ Cleaned cancelled transcription cache for {sanitize_log_data(abs_title)}")
-                    except Exception as cleanup_err:
-                        logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {cleanup_err}", exc_info=True)
+                except Exception as cleanup_err:
+                    logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {cleanup_err}", exc_info=True)
             unregister_worker(abs_id, cancellation_token)
             if library_token is not None:
                 _library_service_override.reset(library_token)

@@ -80,7 +80,9 @@ from src.version import APP_VERSION, get_update_status
 from src.db.models import State, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.services.audio_source_adapters import AudioResult, ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
+from src.services.audio_cache_ownership import inventory_audio_cache, remove_book_cache_dirs, remove_owned
 from src.services.current_audio_chapter import resolve_current_chapter
+from src.services.cover_thumbnail_service import cover_thumbnail_cache
 from src.utils.storyteller_transcript import StorytellerTranscript
 from src.services.readalong_delivery import (
     deliver_readalong_epub,
@@ -7061,7 +7063,16 @@ def _prefetch_bookorbit_authors(books: list, integrations: dict | None) -> dict:
         if not client or not client.is_configured():
             return {}
         authors = {}
-        for info in client.get_all_books() or []:
+        cached, stale = client.book_cache_snapshot()
+        if cached:
+            # Serve the last listing and refresh it off the request: an hourly
+            # TTL expiry must not hold the page behind paginated provider calls.
+            if stale:
+                _spawn_user_background(client.get_all_books, label="bookorbit-cache-refresh")
+            catalog = cached
+        else:
+            catalog = client.get_all_books() or []
+        for info in catalog:
             book_id = info.get("id")
             if book_id is None:
                 continue
@@ -7658,9 +7669,8 @@ def whats_new_dismiss():
 
 
 # ---------------- ROUTES ----------------
-def index():
-    """Dashboard - loads books and progress from database service"""
-    user = current_user()
+def _dashboard_mappings_for_user(user) -> tuple[list, float, dict]:
+    """Mappings, overall progress and integration flags for one user's dashboard."""
     user_id = user.id if user else None
     books = database_service.get_all_books(user_id=user_id)
     all_states = database_service.get_all_states(
@@ -7685,6 +7695,38 @@ def index():
         cached_booklore_by_filename=cached_booklore_by_filename,
         claim_times_by_book=claim_times_by_book,
     )
+    return mappings, overall_progress, integrations
+
+
+def _warm_dashboard_sync_warnings() -> None:
+    """Build every user's dashboard mappings once at startup.
+
+    The drift memo is empty after a restart and each audio-axis book then parses its
+    whole alignment map, so the first dashboard load would pay for all of them.
+    Running the real mapping build here fills the memo for the current positions.
+    """
+    registry = container.user_client_registry()
+    for user in database_service.list_users():
+        user_token = credentials_token = None
+        try:
+            bundle = registry.get_clients(user.id)
+            user_token = set_current_user_id(user.id)
+            credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))
+            mappings, _progress, _integrations = _dashboard_mappings_for_user(user)
+            logger.info("Dashboard warm-up built %d mapping(s) for user %s", len(mappings), user.id)
+        except Exception as exc:
+            logger.warning("Dashboard warm-up failed for user %s: %s", user.id, exc, exc_info=True)
+        finally:
+            if credentials_token is not None:
+                reset_current_user_credentials(credentials_token)
+            if user_token is not None:
+                reset_current_user_id(user_token)
+
+
+def index():
+    """Dashboard - loads books and progress from database service"""
+    user = current_user()
+    mappings, overall_progress, integrations = _dashboard_mappings_for_user(user)
 
     suggestions = [s for s in database_service.get_all_pending_suggestions(user_id=get_current_user_id()) if len(s.matches) > 0]
     grouped_mappings = _group_dashboard_mappings_by_series(mappings)
@@ -12047,29 +12089,24 @@ def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
                 remaining_storyteller_uuids.add(remaining_uuid)
                 remaining_cache_filenames.add(f"storyteller_{remaining_uuid}.epub")
 
-    if book.transcript_file:
-        try:
-            Path(book.transcript_file).unlink()
-        except Exception:
-            pass
+    if book.transcript_file and book.transcript_file != "DB_MANAGED":
+        remove_owned(book.transcript_file, DATA_DIR / "transcripts")
 
-    # Clean up audio cache directory (WAV files from whisper transcription)
-    audio_cache_dir = DATA_DIR / "audio_cache" / book.abs_id
-    if audio_cache_dir.exists() and not defer_audio_cache:
-        try:
-            shutil.rmtree(audio_cache_dir)
-            logger.info(f"🗑️ Deleted audio cache: {audio_cache_dir}")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to delete audio cache: {e}", exc_info=True)
+    # Clean up audio cache directories (source tracks + WAV chunks from whisper transcription)
+    other_ids = None if remaining_books is None else [b.abs_id for b in remaining_books]
+    if not defer_audio_cache:
+        errors = []
+        for removed in remove_book_cache_dirs(DATA_DIR / "audio_cache", book.abs_id, other_ids=other_ids, errors=errors):
+            logger.info(f"🗑️ Deleted audio cache: {removed}")
+        for e in errors:
+            logger.warning(f"⚠️ Failed to delete audio cache: {e}", exc_info=e)
 
     # Clean up full transcript directory (chapter JSON files + manifest)
-    transcript_dir = DATA_DIR / "transcripts" / "storyteller" / book.abs_id
-    if transcript_dir.exists():
-        try:
-            shutil.rmtree(transcript_dir)
-            logger.info(f"🗑️ Deleted transcript directory: {transcript_dir}")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to delete transcript directory: {e}", exc_info=True)
+    errors = []
+    for removed in remove_book_cache_dirs(DATA_DIR / "transcripts" / "storyteller", book.abs_id, other_ids=other_ids, errors=errors):
+        logger.info(f"🗑️ Deleted transcript directory: {removed}")
+    for e in errors:
+        logger.warning(f"⚠️ Failed to delete transcript directory: {e}", exc_info=e)
 
     cached_ebook_filename = local_ebook_filename(book)
     preserve_cached_ebook = (
@@ -13336,6 +13373,40 @@ def serve_cover(filename):
             logger.debug(f"Lazy cover extraction failed: {e}")
 
     return "Cover not found", 404
+
+def serve_thumbnail_cover(filename: str):
+    """Serve a verified thumbnail, or the original while a worker prepares it."""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+\.jpg", filename):
+        abort(404)
+    original_response = serve_cover(filename)
+    if not isinstance(original_response, Response):
+        return original_response
+
+    source = COVERS_DIR / filename
+    target = COVERS_DIR / "thumbs" / filename
+    if cover_thumbnail_cache.is_current(source, target):
+        original_response.close()
+        response = send_from_directory(
+            target.parent, filename, max_age=_COVER_BROWSER_MAX_AGE_SECONDS
+        )
+        response.headers['Cache-Control'] = (
+            f'private, max-age={_COVER_BROWSER_MAX_AGE_SECONDS}'
+        )
+        return response
+
+    if source.is_file():
+        if cover_thumbnail_cache.failed_recently(source, target):
+            original_response.close()
+            return Response(status=503, headers={'Cache-Control': 'private, no-store'})
+        cover_thumbnail_cache.enqueue(source, target)
+        original_response.close()
+        # A cold thumbnail must not transfer the original multi-megapixel cover.
+        # The New Library checks readiness with HEAD before assigning image.src.
+        return Response(status=202, headers={
+            'Cache-Control': 'private, no-store', 'Retry-After': '1',
+        })
+    return original_response
+
 
 def api_storyteller_search():
     query = request.args.get('q', '')
@@ -14668,55 +14739,47 @@ def clear_stale_suggestions():
 
 
 def clean_inactive_cache():
-    """Delete audio_cache, transcript dirs, and cached EPUBs for books that are not active."""
-    active_books = database_service.get_books_by_status('active')
-    active_ids = {b.abs_id for b in active_books}
-    active_ebook_files = {b.ebook_filename for b in active_books if b.ebook_filename}
-    active_orig_files = {b.original_ebook_filename for b in active_books if b.original_ebook_filename}
-    protected_files = active_ebook_files | active_orig_files
+    """Preview inactive cache ownership without deleting uncertain files.
 
-    deleted_audio = 0
-    deleted_transcripts = 0
-    deleted_epubs = 0
+    Previous cleanup compared raw book IDs with normalized adapter cache
+    directories, and did not protect retryable or job-held source tracks.
+    Until safe deletion can be coordinated with active workers and complete
+    ownership provenance, the endpoint must stay non-destructive.
+    """
+    payload = request.get_json(silent=True) or {}
+    if payload.get("dry_run") is False:
+        return jsonify({
+            "success": False, "dry_run": True,
+            "error": "Cache deletion is disabled until ownership and running-job safety are verified",
+        }), 409
 
-    audio_cache_root = DATA_DIR / "audio_cache"
-    if audio_cache_root.exists():
-        for entry in audio_cache_root.iterdir():
-            if entry.is_dir() and entry.name not in active_ids:
-                try:
-                    shutil.rmtree(entry)
-                    deleted_audio += 1
-                    logger.info(f"Cleaned audio cache: {entry.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean audio cache {entry.name}: {e}", exc_info=True)
+    books = database_service.get_all_books()
+    jobs = database_service.get_all_jobs()
+    inventory = inventory_audio_cache(DATA_DIR / "audio_cache", books, jobs)
+    status_by_book = {book.abs_id: getattr(book, "status", None) for book in books}
 
-    transcript_root = DATA_DIR / "transcripts" / "storyteller"
-    if transcript_root.exists():
-        for entry in transcript_root.iterdir():
-            if entry.is_dir() and entry.name not in active_ids:
-                try:
-                    shutil.rmtree(entry)
-                    deleted_transcripts += 1
-                    logger.info(f"Cleaned transcript dir: {entry.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean transcript dir {entry.name}: {e}", exc_info=True)
-
-    try:
-        epub_cache_dir = Path(container.epub_cache_dir())
-    except Exception:
-        epub_cache_dir = DATA_DIR / "epub_cache"
-    if epub_cache_dir.exists():
-        for entry in epub_cache_dir.iterdir():
-            if entry.is_file() and entry.name not in protected_files:
-                try:
-                    entry.unlink()
-                    deleted_epubs += 1
-                    logger.info(f"Cleaned cached epub: {entry.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean cached epub {entry.name}: {e}", exc_info=True)
-
-    logger.info(f"Cache cleanup complete: {deleted_audio} audio, {deleted_transcripts} transcript, {deleted_epubs} epub(s) removed")
-    return jsonify({"success": True, "deleted_audio": deleted_audio, "deleted_transcripts": deleted_transcripts, "deleted_epubs": deleted_epubs})
+    possible_inactive = [
+        entry for entry in inventory.entries
+        if entry.state == "mapped"
+        and len(entry.book_ids) == 1
+        and not entry.job_ids
+        and status_by_book.get(entry.book_ids[0]) == "inactive"
+    ]
+    unverified = [entry for entry in inventory.entries
+                  if entry.state in ("unverified", "ambiguous", "unsafe_symlink", "tombstone")]
+    return jsonify({
+        "success": True, "dry_run": True, "cleanup_disabled": True,
+        "deleted_audio": 0, "deleted_transcripts": 0, "deleted_epubs": 0,
+        "potential_inactive_audio": [
+            {"cache_name": entry.directory.name, "bytes": entry.total_bytes}
+            for entry in possible_inactive
+        ],
+        "potential_inactive_audio_bytes": sum(entry.total_bytes for entry in possible_inactive),
+        "protected_audio_directories": len(inventory.entries) - len(possible_inactive),
+        "unverified_audio_directories": len(unverified),
+        "unverified_audio_bytes": sum(entry.total_bytes for entry in unverified),
+        "note": "Preview only. No audio, transcript, EPUB or original audiobook files were deleted.",
+    })
 
 
 def _run_storyteller_backfill():
@@ -16837,6 +16900,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/me/books', 'api_me_books', api_me_books, methods=['GET'])
     app.add_url_rule('/update-hash/<abs_id>', 'update_hash', update_hash, methods=['POST'])
     app.add_url_rule('/covers/<path:filename>', 'serve_cover', serve_cover)
+    app.add_url_rule('/covers/thumb/<path:filename>', 'serve_thumbnail_cover', serve_thumbnail_cover)
     app.add_url_rule('/api/health', 'api_health', api_health)
     app.add_url_rule('/api/restart', 'api_restart', api_restart, methods=['POST'])
     app.add_url_rule('/api/status', 'api_status', api_status)
@@ -17003,6 +17067,7 @@ if __name__ == '__main__':
     sync_daemon_thread = threading.Thread(target=sync_daemon, daemon=True)
     sync_daemon_thread.start()
     threading.Thread(target=get_update_status, daemon=True).start()
+    threading.Thread(target=_warm_dashboard_sync_warnings, daemon=True, name="dashboard-warmup").start()
     logger.info("🚀 Sync daemon thread started")
 
     # Start ABS Socket.IO listener for real-time / instant sync

@@ -524,6 +524,12 @@ class BookOrbitClient:
         ):
             self._refresh_book_cache()
 
+    def book_cache_snapshot(self) -> tuple[list, bool]:
+        """The cached book listing and whether it is past its TTL, with no network call."""
+        with self._cache_lock:
+            books = list(self._book_cache.values())
+        return books, time.time() - self._cache_timestamp > _CACHE_TTL
+
     def get_all_books(self, force_refresh: bool = False) -> list:
         if force_refresh:
             self._refresh_book_cache()
