@@ -4,11 +4,14 @@ import io
 import tempfile
 import unittest
 import zipfile
+from importlib.metadata import version
 from pathlib import Path
 
 from ebooklib import epub
 
 from src.utils.ebook_utils import EbookParser
+
+_EBOOKLIB_VERSION = tuple(int(part) for part in version("ebooklib").split(".")[:2])
 
 CONTAINER = (
     '<?xml version="1.0"?><container version="1.0" '
@@ -59,7 +62,11 @@ class TestNavWithoutToc(unittest.TestCase):
         self.parser = EbookParser(books_dir=self._tmp.name)
 
     def test_fixture_reproduces_ebooklib_crash(self):
-        with self.assertRaises(IndexError):
+        # ebooklib 0.21 fixed this crash upstream; the fallback still covers older releases.
+        if _EBOOKLIB_VERSION < (0, 21):
+            with self.assertRaises(IndexError):
+                epub.read_epub(str(self.path))
+        else:
             epub.read_epub(str(self.path))
 
     def _assert_metadata(self, meta):
