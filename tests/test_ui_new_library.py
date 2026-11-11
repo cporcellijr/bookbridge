@@ -158,6 +158,8 @@ class TestNewLibrary(unittest.TestCase):
         # A square cover fills the face-out card instead of leaving bands.
         self.assertIn(spines + ".book-card[data-reading] .cover-image { object-fit: cover; }", css)
         self.assertIn(spines + ".book-card[data-reading] { width: 142px; height: 214px;", css)
+        # Phones: two face-out covers fit one shelf (base 214px height + 10px top = 168 + 56).
+        self.assertIn("@media (max-width:760px) { " + spines + ".book-card[data-reading] { width: 112px; height: 168px; margin-top: 56px;", css)
 
     def test_spine_depth_plank_theme_and_fixed_row_pitches(self):
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")

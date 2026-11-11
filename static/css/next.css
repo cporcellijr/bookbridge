@@ -538,3 +538,5 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
 .library-page[data-view="spines"] .book-card[data-reading] .book-open { display: block; padding: 0; }
 .library-page[data-view="spines"] .book-card[data-reading] .cover-wrap { display: grid; height: 100%; }
 .library-page[data-view="spines"] .book-card[data-reading] .cover-image { object-fit: cover; }
+/* Phones: a smaller 2:3 face-out cover still standing on the plank, so two share a shelf. */
+@media (max-width:760px) { .library-page[data-view="spines"] .book-card[data-reading] { width: 112px; height: 168px; margin-top: 56px; margin-inline: 8px 12px; } }
