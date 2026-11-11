@@ -15492,8 +15492,17 @@ def _run_test_connection(service: str, payload: dict):
 
 @admin_required
 def test_connection(service: str):
-    """Test connectivity with diagnostic error messages."""
-    return _run_test_connection(service, request.get_json(silent=True) or {})
+    """Test connectivity with diagnostic error messages.
+
+    Settings posts only the global fields (server URLs, enable flags); account
+    fields live per-user, so fill the ones not posted from the admin's own
+    saved credentials (#584).
+    """
+    submitted = request.get_json(silent=True) or {}
+    user = current_user()
+    if user is None:
+        return _run_test_connection(service, submitted)
+    return _run_test_connection(service, {**_posted_user_test_credentials(user, {}), **submitted})
 
 
 def api_bookfusion_device_start() -> object:
