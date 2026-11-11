@@ -2274,7 +2274,7 @@
                 {% set shelfmark_enabled = get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and
                 get_val('SHELFMARK_ENABLED') == '') %}
                 <div class="section-header">
-                    <h3>{{ _('Shelfmark View') }}</h3>
+                    <h3>{{ _('Shelfmark') }}</h3>
                     <div class="toggle-switch-wrapper">
                         <span class="toggle-label">{{ _('Enable') }}</span>
                         <label class="toggle-switch">
@@ -2289,7 +2289,7 @@
                     <div class="form-group full-width">
                         <label>{{ _('Shelfmark URL') }}</label>
                         <input type="text" name="SHELFMARK_URL" value="{{ get_val('SHELFMARK_URL') }}">
-                        <div class="help-text">{{ _('The address of your Shelfmark site. When set, a Shelfmark tab appears in BookBridge.') }}</div>
+                        <div class="help-text">{{ _('The address of your Shelfmark site. BookBridge uses it to find missing books for readers who sign in to Shelfmark.') }}</div>
                     </div>
                 </div>
             </div>

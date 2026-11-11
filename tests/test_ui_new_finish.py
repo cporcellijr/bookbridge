@@ -59,7 +59,6 @@ class TestP8Finish(unittest.TestCase):
         self.assertIn("<span>{{ short_name }}</span>", text)
         for name in ("Audiobookshelf", "Calibre-Web", "Grimmory", "BookOrbit", "Kavita"):
             self.assertIn(f"_('{name}')", text)
-        self.assertIn('aria-label="{{ _(\'Shelfmark Tool\') }}"', text)
 
     def test_settings_categories_keep_distinct_icons_after_p11_navigation(self):
         markup = source("templates/next/settings.html")

@@ -139,7 +139,7 @@ class TestSignIn(ClientCase):
         self.assertEqual(len(self.server.paths("/api/auth/login")), 2)
         self.assertEqual(self.server.paths("/api/activity/snapshot")[-1][2]["headers"], {"Cookie": "shelfmark_session=two"})
 
-    def test_enable_rule_matches_the_nav_item(self):
+    def test_enable_rule_matches_the_settings_toggle(self):
         client = ShelfmarkClient(credentials=_CREDS)
         for value, expected in (("true", True), ("on", True), ("false", False), ("", True)):
             with patch.dict(os.environ, {"SHELFMARK_ENABLED": value}):

@@ -141,7 +141,6 @@ class ServiceIconUiTestCase(unittest.TestCase):
             "koreader.png": index_html,
             "bookfusion.png": index_html,
             "hardcover.svg": index_html,
-            "shelfmark.png": nav_html,
             "calibre-web.png": index_html,
             "kavita.svg": index_html,
         }

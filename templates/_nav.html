@@ -78,11 +78,6 @@
             {% endif %}
         {% endif %}
 
-        {% if shelfmark_url and (get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and get_val('SHELFMARK_ENABLED') == '')) %}
-        <a href="/shelfmark" class="nav-icon-link" target="_blank" rel="noopener noreferrer" title="{{ _('Shelfmark Tool') }}">
-            <img src="/static/shelfmark.png" alt="{{ _('Shelfmark Tool') }}">
-        </a>
-        {% endif %}
     </div>
 
     {% if current_user %}

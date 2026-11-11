@@ -107,7 +107,7 @@ class ShelfmarkClient:
         )
 
     def is_enabled(self) -> bool:
-        """Whether Shelfmark is switched on: a URL is set and the nav rule for the Shelfmark page holds."""
+        """Whether Shelfmark is switched on: a URL is set and the Shelfmark settings toggle is on (or was never set)."""
         if not self._base_url():
             return False
         return env_truthy("SHELFMARK_ENABLED") or os.environ.get("SHELFMARK_ENABLED", "") == ""
