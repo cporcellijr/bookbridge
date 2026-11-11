@@ -102,8 +102,9 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('.library-page[data-view="spines"] .book-card:not([data-reading]) .cover-wrap { display: block; position: absolute; inset: 0;', css)
         self.assertIn('.book-card:has(.cover-image:not([hidden])) .book-open { color: #f6f1e7;', css)
         self.assertIn('.book-card:not([data-reading]) .cover-image { right: auto; width: calc(var(--spine-w, 42px) * 8); object-fit: fill; filter: brightness(.8) saturate(1.2); }', css)
-        # Night only: a thin light edge between spines; Day keeps the page showing through.
-        self.assertIn(':root:not([data-theme="light"]) .library-page[data-view="spines"] .book-card:not([data-reading]) { box-shadow: 0 0 0 1px rgba(255,255,255,.16),', css)
+        # The physical spine uses the same dark outline in both themes, over its cover edge.
+        self.assertIn('box-shadow: 0 0 0 1px rgba(0,0,0,.5), 7px -1px 12px -4px var(--shelf-shadow);', css)
+        self.assertNotIn('box-shadow: 0 0 0 1px rgba(255,255,255,.16)', css)
 
         # The real dashboard row carries StoryGraph's page count through to the spine.
         from src.db.models import StorygraphDetails
@@ -150,13 +151,128 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn(spines + ".book-card { --spine: #41546b; flex: none; display: flex; flex-direction: column; width: var(--spine-w, 42px); height: var(--spine-h, 214px);", css)
         self.assertNotRegex(css, r'data-view="spines"\] \.book-card:nth-child\([^)]*\) \{ height')
         # Cover art replaces the flat top band; a coverless spine keeps it.
-        self.assertIn(spines + ".book-card:has(.cover-image:not([hidden]))::before { display: none; }", css)
+        self.assertIn(spines + ".book-card:not([data-reading]):has(.cover-image:not([hidden]))::before { display: none; }", css)
         # The finished tick is gold and shadowed like the title when it sits on cover art.
         self.assertIn(spines + ".spine-progress { display: block; padding: 0 0 8px; text-align: center; line-height: 0; color: #F7C766; }", css)
         self.assertIn(spines + ".book-card:has(.cover-image:not([hidden])) .spine-progress { filter: drop-shadow(", css)
         # A square cover fills the face-out card instead of leaving bands.
         self.assertIn(spines + ".book-card[data-reading] .cover-image { object-fit: cover; }", css)
         self.assertIn(spines + ".book-card[data-reading] { width: 142px; height: 214px;", css)
+
+    def test_spine_depth_plank_theme_and_fixed_row_pitches(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertIn('--shelf-pitch: 282px;', css)
+        self.assertIn('--plank-back: #1E2430; --plank-top: #303949;', css)
+        self.assertIn('--plank-back: #B9955F; --plank-top: #D8BA8A;', css)
+        self.assertIn('--shelf-wall-shade: rgba(40,32,24,.07);', css)
+        self.assertIn(':root[data-theme="light"] .library-page[data-view="spines"] {', css)
+        self.assertIn('.library-page[data-view="spines"] .book-grid {', css)
+        self.assertIn('gap: 58px 4px; padding: 14px 18px 50px;', css)
+        self.assertIn('background-size: 100% var(--shelf-pitch);', css)
+        self.assertIn('background-origin: content-box;', css)
+        self.assertIn('margin-top: calc(224px - var(--spine-h, 214px));', css)
+        self.assertNotIn('bottom: -9px; height: 5px; background: var(--line-2)', css)
+
+    def test_spine_depth_contact_shadows_without_blur(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertIn('top: 100%; height: 7px; background: linear-gradient(to bottom, var(--shelf-shadow), transparent);', css)
+        self.assertNotIn('filter: blur(1.5px)', css)
+
+    def test_spine_depth_overlay_is_above_cover_below_titles(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertIn('.book-card:not([data-reading]) .book-open::after {', css)
+        self.assertIn('position: absolute; inset: 0; z-index: 1; pointer-events: none;', css)
+        self.assertIn('rgba(255,255,255,.17) 40%', css)
+        self.assertIn('.book-copy, .library-page[data-view="spines"] .spine-progress { position: relative; z-index: 4; }', css)
+        self.assertIn('.book-card:not([data-reading]) .cover-wrap { display: block; position: absolute; inset: 0; z-index: 0;', css)
+        self.assertIn('.book-card:has(.cover-image:not([hidden])) .book-open { color: #f6f1e7; text-shadow:', css)
+        self.assertIn('.book-card:hover, .library-page[data-view="spines"] .book-card:focus-within { transform: translateY(-8px);', css)
+
+    def test_spine_depth_pages_open_at_top_with_cover_sides(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertIn('.book-card[data-page-top]:not([data-reading]) .book-open::before {', css)
+        self.assertIn('top: 0; left: 5px; right: 5px; height: 20px;', css)
+        self.assertIn('repeating-linear-gradient(90deg, var(--book-paper) 0 2px, var(--book-paper-line) 2px 3px)', css)
+        self.assertIn('.book-card[data-page-top]:not([data-reading]) .book-open { padding-top: 30px; }', css)
+        self.assertIn('.book-card:not([data-reading]) .book-open::before { display: none; }', css)
+
+    def test_spine_depth_page_top_threshold_uses_real_width(self):
+        from src import web_server
+        original = web_server._build_dashboard_mappings
+
+        def mappings(*args, **kwargs):
+            rows, progress = original(*args, **kwargs)
+            for row in rows:
+                if row["abs_id"] == "library-book":
+                    row.update(storygraph_pages=360, hardcover_pages=None)
+                elif row["abs_id"] == "library-finished":
+                    row.update(storygraph_pages=320, hardcover_pages=None)
+            return rows, progress
+
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        with patch.object(web_server, "_build_dashboard_mappings", side_effect=mappings):
+            html = self.client.get("/").get_data(as_text=True)
+        # A 44px spine has exposed page paper; a 42px spine does not.
+        wide = re.search(r'<article[^>]*data-abs-id="library-book"[^>]*>', html).group()
+        narrow = re.search(r'<article[^>]*data-abs-id="library-finished"[^>]*>', html).group()
+        self.assertIn('--spine-w:44px;', wide)
+        self.assertIn(' data-page-top ', wide)
+        self.assertIn('--spine-w:42px;', narrow)
+        self.assertNotIn('data-page-top', narrow)
+        self.assertIn('spine_w >= 44', (_ROOT / 'templates/next/index.html').read_text(encoding='utf-8'))
+        self.assertNotIn('data-page-top', (_ROOT / "templates/index.html").read_text(encoding="utf-8"))
+
+    def test_spine_depth_face_out_wrap_and_page_edge(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertIn('.book-card[data-reading] { width: 142px; height: 214px; margin-top: 10px; margin-inline: 12px 16px;', css)
+        self.assertIn('top: -1px; left: 10px; right: -1px; height: 8px;', css)
+        self.assertIn('repeating-linear-gradient(0deg, var(--book-paper) 0 1px, var(--book-paper-line) 1px 2px)', css)
+        self.assertIn('.book-card[data-reading] .cover-wrap::after {', css)
+        self.assertIn('inset: 0 auto 0 0; width: 10px;', css)
+        self.assertIn('.book-card[data-reading] .cover-image { object-fit: cover; }', css)
+
+    def test_spine_depth_face_out_page_edge_wins_css_specificity(self):
+        """A loaded face-out cover must not hide its paper-top pseudo-element."""
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        rules = []
+        for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+            display = re.search(r"\bdisplay\s*:\s*(block|none)\s*;", match.group(2))
+            if not display:
+                continue
+            for selector in match.group(1).split(","):
+                selector = selector.strip()
+                if ('.library-page[data-view="spines"]' in selector
+                        and '.book-card' in selector
+                        and '.book-open' not in selector
+                        and selector.endswith("::before")):
+                    rules.append((selector, display.group(1)))
+
+        def before_display(*, reading, cover_loaded):
+            applicable = []
+            for order, (selector, display) in enumerate(rules):
+                if ':has(.cover-image:not([hidden]))' in selector and not cover_loaded:
+                    continue
+                if ':not([data-reading])' in selector and reading:
+                    continue
+                if ('[data-reading]' in selector
+                        and ':not([data-reading])' not in selector
+                        and not reading):
+                    continue
+                # :not() and :has() contribute their argument specificity, not
+                # the functional pseudo-class itself.
+                simplified = selector.replace(':has(', '(').replace(':not(', '(')
+                spec = (len(re.findall(r'#[\w-]+', simplified)),
+                        len(re.findall(r'\.[\w-]+|\[[^]]+\]', simplified)))
+                applicable.append((spec, order, display))
+            return max(applicable)[-1] if applicable else None
+
+        # With the old :has() rule, specificity beats [data-reading]::before
+        # and this first assertion fails: it computes "none" rather than "block".
+        self.assertEqual(before_display(reading=True, cover_loaded=True), "block")
+        self.assertEqual(before_display(reading=True, cover_loaded=False), "block")
+        self.assertEqual(before_display(reading=False, cover_loaded=True), "none")
+        self.assertIsNone(before_display(reading=False, cover_loaded=False))
 
     def test_covers_band_colour_and_resting_sync_cue(self):
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")

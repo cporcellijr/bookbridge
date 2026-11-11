@@ -8,6 +8,15 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Spines now have the depth of books resting on real shelves.** Every visible row stands
+  above a full-width slate shelf in the night theme or a wood shelf in the day theme;
+  the spines have rounded, shaded cover edges, right-cast shadows, and soft contact
+  shadows without costly per-book blur. Spines at least 44px wide reveal the paper
+  block at the top while their artwork still wraps both sides; a face-out reading
+  book retains its page edge even when its cover image loads. The daytime wall shade
+  is softened to preserve contrast. Titles, finished ticks, hover lift, the original
+  cover-edge art, and Covers-only series grouping remain unchanged.
+
 - **The New Library header is easier to scan and filter.** Library shows its book count once,
   next to the title, with compact Matches to review, a neutral Processing link, and Needs attention
   for failed or out-of-sync books only. The attention panel remains on-screen on phones, closes
