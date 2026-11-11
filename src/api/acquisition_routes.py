@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from flask import current_app, jsonify, request
 
+from src.api.shelfmark_client import release_media_kind
 from src.services.acquisition_service import OPEN_STATUSES, STATUS_MAP
 from src.utils.config_loader import env_truthy
 
@@ -326,6 +327,9 @@ def acquisition_shelfmark():
         release = client.release_for(str(payload["release_key"]))
         if release is None:
             return _api_error("release_expired", 409)
+        if client.found_for(str(payload["release_key"])) != kind or release_media_kind(release) not in (None, kind):
+            logger.info("📥 Acquisition: user %s Shelfmark release refused: it is not a %s", user_id, kind)
+            return _api_error("release_wrong_format", 409)
     result, failure = client.submit({"title": fields["title"], "authors": fields["authors"]}, release, kind)
     if failure:
         logger.info("📥 Acquisition: user %s Shelfmark did not accept the %s (%s)", user_id, kind, failure)
