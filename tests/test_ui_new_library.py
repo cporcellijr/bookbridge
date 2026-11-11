@@ -64,7 +64,7 @@ class TestNewLibrary(unittest.TestCase):
             "library-book": dict(storygraph_pages=400, states={"abs": {"percentage": 30.0}}, unified_progress=30.0),
             "hardcover-only": dict(hardcover_pages=2000, duration=0),
             "audio-only": dict(duration=36000),
-            "no-length": dict(duration=0),
+            "no-length": dict(duration=0, display_title="A Very Long Title That Goes On And On Forever"),
         }
 
         def mappings(*args, **kwargs):
@@ -82,22 +82,34 @@ class TestNewLibrary(unittest.TestCase):
             text = self.client.get("/").get_data(as_text=True)
         tag = lambda abs_id: re.search(rf'<article[^>]*data-abs-id="{abs_id}"[^>]*>', text).group()
 
-        self.assertIn('style="--spine-w:46px"', tag("library-book"))
-        self.assertIn('style="--spine-w:60px"', tag("hardcover-only"))
-        self.assertIn('style="--spine-w:41px"', tag("audio-only"))
+        self.assertIn('style="--spine-w:46px;', tag("library-book"))
+        self.assertIn('style="--spine-w:64px;', tag("hardcover-only"))
+        # A short book (an hour of audio, about 30 pages) still gets a spine wide enough for its title.
+        self.assertIn('style="--spine-w:36px;', tag("library-finished"))
+        self.assertIn('style="--spine-w:41px;', tag("audio-only"))
         self.assertNotIn("--spine-w", tag("no-length"))
+        # Title size follows the spine: a short title fills it, a long one shrinks to fit more of itself.
+        self.assertIn("--spine-font:26px", tag("audio-only"))
+        self.assertIn("--spine-font:20px", tag("library-book"))
+        self.assertIn('style="--spine-font:14px"', tag("no-length"))
         self.assertIn(" data-reading ", tag("library-book"))
         for abs_id in ("library-finished", "audio-only"):
             with self.subTest(abs_id=abs_id):
                 self.assertNotIn("data-reading", tag(abs_id))
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         self.assertIn('.library-page[data-view="spines"] .book-card[data-reading] .cover-wrap { display: grid;', css)
+        # A spine carries its cover's artwork behind the title; the sampled colour stays as the fallback.
+        self.assertIn('.library-page[data-view="spines"] .book-card:not([data-reading]) .cover-wrap { display: block; position: absolute; inset: 0;', css)
+        self.assertIn('.book-card:has(.cover-image:not([hidden])) .book-open { color: #f6f1e7;', css)
+        self.assertIn('.book-card:not([data-reading]) .cover-image { right: auto; width: calc(var(--spine-w, 42px) * 8); object-fit: fill;', css)
+        # Night only: a thin light edge between spines; Day keeps the page showing through.
+        self.assertIn(':root:not([data-theme="light"]) .library-page[data-view="spines"] .book-card:not([data-reading]) { box-shadow: 0 0 0 1px rgba(255,255,255,.16),', css)
 
         # The real dashboard row carries StoryGraph's page count through to the spine.
         from src.db.models import StorygraphDetails
         self.service.save_storygraph_details(StorygraphDetails(abs_id="library-book", storygraph_book_id="sg-1", storygraph_pages=400))
         unpatched = self.client.get("/").get_data(as_text=True)
-        self.assertIn('style="--spine-w:46px"', re.search(r'<article[^>]*data-abs-id="library-book"[^>]*>', unpatched).group())
+        self.assertIn('style="--spine-w:46px;', re.search(r'<article[^>]*data-abs-id="library-book"[^>]*>', unpatched).group())
 
     def test_library_batch_actions_execute_sequentially_and_prompt_once(self):
         import shutil
