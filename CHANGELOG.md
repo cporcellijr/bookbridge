@@ -28,6 +28,12 @@ All notable changes to BookBridge will be documented in this file.
   app icons stay visible on a cover without hovering, and each book's rating shows as one star figure beside
   the author (hover it for the StoryGraph and Goodreads figures).
 
+### Fixed
+
+- **Test on a Settings integration page in the New interface uses your saved account.** It reported
+  "Missing URL, username, or password" because logins live under your own Integrations; it now tests
+  the server URL on the page with the login you saved there (#584).
+
 ## [7.13.0] - 2026-11-10
 
 ### Added

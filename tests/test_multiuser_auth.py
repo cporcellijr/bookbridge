@@ -633,6 +633,25 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(resp.get_json()['message'], 'Missing API token')
         mock_post.assert_not_called()
 
+    @patch('src.web_server.requests.post')
+    def test_settings_test_uses_admins_own_saved_account_584(self, mock_post):
+        """#584: Settings > BookOrbit > Test posts only URL + enable flag; the
+        login lives in the admin's own integrations, so it must be filled in."""
+        admin = self.svc.get_user_by_username("admin")
+        self.svc.set_user_credential(admin.id, 'BOOKORBIT_USER', 'admin-bo')
+        self.svc.set_user_credential(admin.id, 'BOOKORBIT_PASSWORD', 'admin-pw')
+        mock_post.return_value = MagicMock(status_code=200)
+
+        self._login()
+        resp = self.client.post('/api/test-connection/bookorbit', json={
+            'BOOKORBIT_ENABLED': True,
+            'BOOKORBIT_SERVER': 'http://bookorbit:3000',
+        })
+
+        self.assertEqual(resp.get_json(), {"ok": True, "message": "Authenticated successfully"})
+        self.assertEqual(mock_post.call_args.args[0], 'http://bookorbit:3000/api/v1/auth/login')
+        self.assertEqual(mock_post.call_args.kwargs['json'], {"username": "admin-bo", "password": "admin-pw"})
+
     # --- admin user management (Phase 6c) ---
     def test_admin_users_requires_admin(self):
         # a non-admin user is forbidden
