@@ -50,6 +50,10 @@ All notable changes to BookBridge will be documented in this file.
 - **Test on a Settings integration page in the New interface uses your saved account.** It reported
   "Missing URL, username, or password" because logins live under your own Integrations; it now tests
   the server URL on the page with the login you saved there (#584).
+- **Suggestions no longer miss BookOrbit ebooks whose file name differs from their title.** The scan
+  matched BookOrbit books to files by title, and dropped a book when neither the file name nor the
+  title inside the file matched; it now asks BookOrbit for that book's file. Readers who are not
+  admins now get BookOrbit ebooks in their Suggestions scan too (#586).
 
 ## [7.13.0] - 2026-11-10
 

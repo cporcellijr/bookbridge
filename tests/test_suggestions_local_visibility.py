@@ -172,6 +172,22 @@ class TestLocalVisibility(SearchTabBase):
             self._discover()
             build.assert_called()
 
+    def test_regular_user_scan_gets_bookorbit_ebooks_from_bookorbit_not_the_local_folder(self):
+        """#586: with no local index, a regular user's scan pool held no BookOrbit ebooks."""
+        clients = _no_clients()
+        clients.bookorbit_client = MagicMock(
+            is_configured=MagicMock(return_value=True), catalog_complete=True,
+            get_all_ebooks=MagicMock(return_value=[{"id": 9, "title": "Local Title", "fileName": None}]),
+            _enrich_ebook=MagicMock(return_value={"fileName": "Local Title.epub"}),
+        )
+        self._as(self.reg)
+        with patch.object(self.web, "uc", return_value=clients), \
+                patch.object(self.web, "_build_local_ebook_title_index") as build:
+            found, _inventory, _states = self._discover()
+            build.assert_not_called()
+            self.assertEqual([(b.name, b.source, b.source_id) for b in found], [("Local Title.epub", "BookOrbit", 9)])
+            self.assertEqual(self.web.get_searchable_ebooks(""), [])
+
     def test_exclude_setting_still_applies_to_admin_scans_only(self):
         self._as(self._admin())
         _found, inventory, _s = self._discover()
