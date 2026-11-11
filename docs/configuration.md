@@ -13,7 +13,7 @@ The Settings sidebar is organized into:
 
 - **Integrations** — one card per service, in the same order and with the same names as each reader's **My Integrations** page
 - **Sync** — sync behavior, instant sync, and alignment health
-- **Features** — Telegram notifications, Shelfmark, and Suggestions
+- **Features** — Telegram notifications, Shelfmark, and Suggestions (the Discover page)
 - **AI** — the optional LLM assist provider and its feature toggles
 - **System** — timezone and logging, paths, and advanced maintenance tools (transcription, cache cleanup, backfills)
 - **Users** — reader accounts and their per-reader integrations
@@ -313,7 +313,7 @@ Grimmory is a supported ebook and audiobook source. You can use it for ebook syn
 
 Grimmory notes:
 
-- Add / Update Book, the match queue, and Suggestions can all use **Grimmory audiobooks** as the audio source.
+- Discover (Pairs and Search) and the match queue can use **Grimmory audiobooks** as the audio source.
 - The dashboard shows **BL Audio** progress when a mapping is driven by Grimmory audio.
 - When **Record Reading Sessions** is enabled, Grimmory gets session updates as you make progress.
 - Enable **Highlight Sync** in each reader's Grimmory integration if you want Grimmory web-reader highlights and notes to round-trip through the bridge.
@@ -391,7 +391,7 @@ Optional matching of books you start reading — under **Books You Start Reading
 
 BookOrbit notes:
 
-- BookOrbit is available across Add / Update Book, the match queue, Suggestions, and the dashboard. Pick it as the ebook source, the audio source, or both when you create a mapping.
+- BookOrbit is available across Discover, the match queue, and the dashboard. Pick it as the ebook source, the audio source, or both when you create a mapping.
 - Use the **Test** button in Settings to check the connection before saving.
 - To sync BookOrbit web-reader highlights through the bridge, fill in the BookOrbit KOReader sync username/password in each reader's Integrations. BookBridge only relays annotations when ownership is clear.
 - **Moving from Grimmory to BookOrbit?** You do not need to rematch. A helper script, `scripts/migrate_grimmory_to_bookorbit.py`, re-points your existing Grimmory ebook links at BookOrbit by filename, leaving the audio link and reading progress untouched. Enable and scan BookOrbit first, then run it from inside the container (it is a dry run by default; add `--apply` to commit):
@@ -408,7 +408,7 @@ BookOrbit notes:
 #### Kavita
 
 Kavita is a supported EPUB source and bidirectional reading-progress client. It can
-provide books to Add / Update Book, the match queue, Suggestions, managed KOReader devices,
+provide books to Discover, the match queue, managed KOReader devices,
 and ebook-only mappings. BookBridge uses Kavita's native KOReader progress endpoint,
 so the same Kavita position is visible in its web reader and other compatible
 clients.
@@ -467,7 +467,7 @@ CWA is a supported ebook source and optional Kobo-sync progress source. Use it t
 
 CWA notes:
 
-- CWA appears as a standard ebook source in Add / Update Book, the match queue, and Suggestions.
+- CWA appears as a standard ebook source in Discover and the match queue.
 - Kobo sync lets CWA-sourced ebook progress participate alongside KOReader, Grimmory, BookOrbit, Storyteller, and ABS ebook progress.
 - The CWA username/password and Kobo sync token are per-reader integration credentials.
 - With **Embed Metadata** on, CWA rewrites an EPUB's metadata on every download, so a copy a reader downloads from CWA does not hash the same as the file BookBridge matched. When `CALIBRE_LIBRARY_PATH` points at the library, BookBridge looks an unknown KOReader hash up in CWA's checksum history (`book_format_checksums`, which CWA creates and writes only while its KOReader sync is enabled) and links it to the matching book on the reader's first sync. If BookBridge has no mapping for that book yet, the hash leads to the book's EPUB in the Calibre library, and auto-discovery maps it on the reader's first forward sync, with CWA as the ebook source when no other library hosts the file. A match you accept from a suggestion gets the CWA source on the reader's next sync, provided the mapping uses that same library file. The EPUB must also be under `BOOKS_DIR` or `EXTRA_EBOOK_DIRS`, and `AUTO_CREATE_EBOOK_MAPPING` must be on.
@@ -604,15 +604,16 @@ Ollama notes:
 
 ### Suggestions
 
-Enabled under **Settings -> Library & Matching**. The Suggestions page is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.
+Enabled under **Settings -> Library & Matching**. The Discover page (Pairs and Ebook Only) is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
-| Enable Suggestions | `SUGGESTIONS_ENABLED` | `false` | Enables the Suggestions page and background suggestion discovery. |
+| Enable Suggestions | `SUGGESTIONS_ENABLED` | `false` | Enables Discover's suggestions and background suggestion discovery. |
 | Auto-match suggestions at or above a score | `SUGGESTIONS_AUTO_MATCH_ENABLED` | `false` | Links a book automatically when a scan finds a candidate at or above the threshold; lower-scoring suggestions stay on the page for review. |
 | Auto-Match Threshold (%) | `SUGGESTIONS_AUTO_MATCH_THRESHOLD` | `100` | 100 links only exact matches (an identifier agreement, or an identical title and author). Below 95 the top candidate is often a different book. |
 | Also generate a read-along EPUB for books auto-matched to a BookOrbit audiobook | `SUGGESTIONS_AUTO_MATCH_READALONG` | `false` | Requests a [read-along EPUB](user-guide.md#read-along-epubs-for-bookorbit) for each auto-match to a BookOrbit audiobook, generated once alignment finishes. |
 | Scheduled Scan Interval | `SUGGESTIONS_AUTO_SCAN_MINUTES` | `0` | Minutes between scheduled library scans, counted from the end of the previous one (0 = off, minimum 5). Runs as the primary admin, reusing cached results like a normal scan. |
+| Ignore local files in Suggestions | `SUGGESTIONS_EXCLUDE_LOCAL_FILES` | `false` | Leaves locally scanned files (`BOOKS_DIR`, `EXTRA_EBOOK_DIRS`) out of Pairs and Ebook Only on the next scan; ebooks from your connected library services stay included. |
 | Scheduled Full Refresh | `SUGGESTIONS_FULL_REFRESH_ENABLED` | `false` | Turns the scheduled full refresh on; the schedule field appears once it is ticked. |
 | Full Refresh Schedule | `SUGGESTIONS_FULL_REFRESH_CRON` | _(empty)_ | Five-field cron expression (minute hour day-of-month month day-of-week, in the `TZ` timezone; `*`, ranges, steps, lists and `jan`/`sun`-style names). Each time it fires the scan cache is cleared and the whole unmatched library is rescanned. A fire missed while BookBridge was down runs when it comes back, up to a day late. Used only while the full refresh is enabled; empty = off; an invalid expression turns it off and logs a warning. |
 | Weekly Full Refresh Day / Time | `SUGGESTIONS_FULL_REFRESH_DAY` / `SUGGESTIONS_FULL_REFRESH_TIME` | `off` / `04:00` | Legacy weekly schedule, used only while `SUGGESTIONS_FULL_REFRESH_ENABLED` is off (`sunday` + `04:20` behaves like `20 4 * * sun`). Saving the Features page converts it to the cron setting. |
@@ -622,8 +623,8 @@ Suggestions notes:
 - A normal scan reuses cached results so repeat scans are faster.
 - **Full Refresh** rescans the whole unmatched library from scratch.
 - Scheduled scans never overlap a running scan, and a slow scan pushes the next one back instead of queueing it. The time of the last scheduled scan and the day of the last weekly refresh are stored, so a restart neither scans straight away nor repeats a refresh already done that day.
-- A scheduled scan uses the primary admin's own credentials, the same as that account pressing the buttons on the Suggestions page. An open Suggestions page shows the scheduled results the next time it loads.
-- Suggestions can queue audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit, and can use CWA as the ebook side for audiobook-backed, ebook-only, and Storyteller-assisted links.
+- A scheduled scan uses the primary admin's own credentials, the same as that account pressing the buttons on Discover. An open Discover page shows the scheduled results the next time it loads.
+- Discover can queue audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit, and can use CWA as the ebook side for audiobook-backed, ebook-only, and Storyteller-assisted links.
 - If your audio and ebook providers expose the same mounted `/books` tree,
   sibling files in the same title folder are treated as same-folder matches
   before fuzzy or Ollama scoring.

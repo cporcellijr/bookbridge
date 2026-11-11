@@ -71,11 +71,11 @@ are renamed, replaced or removed.
 - If the missing books should come from BookOrbit, confirm BookOrbit is enabled, test the connection, and retry the matching flow.
 - If the missing books should come from CWA, confirm CWA is enabled, test the connection, and make sure the book is visible in Calibre-Web Automated.
 
-### Suggestions look stale or new imports are missing
+### Discover looks stale or new imports are missing
 
 - A normal **Scan Library** run reuses cached results on purpose.
 - Use **Full Refresh** after large imports, removals, or metadata cleanup.
-- If Grimmory titles are missing from Suggestions, refresh the Grimmory cache first.
+- If Grimmory titles are missing from Discover, refresh the Grimmory cache first.
 - If BookOrbit titles are missing, confirm BookOrbit is enabled and reachable, then retry the scan.
 - If CWA titles are missing, confirm CWA is enabled and reachable, then retry the scan.
 
@@ -317,7 +317,7 @@ docker compose logs -f
 
 Useful places to look:
 
-- Match and Suggestions actions
+- Match and Discover actions
 - Storyteller transcript ingest
 - Library refreshes
 - Background job failures

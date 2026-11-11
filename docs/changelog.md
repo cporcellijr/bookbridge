@@ -4,6 +4,47 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [7.13.0]
+
+BookBridge has a New interface (beta), Suggestions grows into Discover for every reader,
+and reader apps get a Device API for word-level read-along.
+
+### What's New
+
+- **New interface (beta)**, opt-in per reader with **Classic | New**; Classic stays the
+  default. Redesigned Library, a format strip on each cover, progress on the cover, a book
+  drawer with your current audiobook chapter (#428), Ctrl K / ⌘K search and phone navigation.
+- **Discover replaces Suggestions and Add Book**, with **Pairs**, **Ebook Only** and
+  **Search** tabs, open to every reader with per-reader results. New admin setting
+  **Ignore local files in Suggestions**.
+- **Device API for reader apps (#579)**: book lookup by Grimmory/BookOrbit id, word maps
+  and sync-now. Contributed by [@adam-fox](https://github.com/adam-fox).
+- **Transcription pre-flight (#528)** on **Processing**: words per audiobook minute, compared
+  with your library once five books are measured.
+- **Stats is open to every reader.**
+
+### Fixed
+
+- CWA downloads in KOReader match without adding the book first (#582).
+- Forced alignment uses the CPUs a limited container can actually use; `ALIGN_THREADS`
+  overrides it (#580). Contributed by [@eschatus](https://github.com/eschatus).
+- BookOrbit ebooks you haven't opened yet receive their first synced position.
+- Hardcover re-adds a matched book that is missing from your library, then syncs progress.
+- EPUBs whose navigation page has no table of contents read normally; read-along EPUBs
+  build for books with Windows line endings.
+- Audiobookshelf collections: repeated adds aren't failures, and books land in the right
+  library's collection.
+- Diagnostics no longer include ebook file names.
+- Removing a running job no longer brings it back.
+- One reader's automatic matching no longer re-points another reader's matched audiobook.
+
+### Known issue
+
+- A targeted sync of an unstarted book whose audiobook narrates its parts out of order can
+  move the ebook to the middle of the book (already in 7.12.0; fix planned).
+
+---
+
 ## [7.12.0]
 
 BookBridge's interface is available in Russian, Settings are reorganized and apply
