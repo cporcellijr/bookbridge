@@ -27,6 +27,10 @@ All notable changes to BookBridge will be documented in this file.
   traversal and symlink escapes before any downloaded files are written.
   If BookBridge notices an original changed or disappeared while a job was running, the job fails
   and retries instead of saving timings built from the changed audio.
+- **The Library opens faster after a restart and when BookOrbit's book list is due a refresh.**
+  The out-of-sync checks that made the first page load after a restart slow are now prepared in
+  the background at startup, and a BookOrbit book list that is due a refresh no longer holds
+  the page: the last list is shown and the refresh happens in the background.
 
 - **CTC alignment jobs now show progress throughout the model pass.** QuartzNet
   and MMS report the amount of audiobook audio processed, so the first CTC
