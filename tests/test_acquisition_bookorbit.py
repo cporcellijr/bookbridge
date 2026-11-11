@@ -43,6 +43,7 @@ def _bookorbit(**overrides):
         }),
         get_request=MagicMock(return_value=None),
         cancel_request=MagicMock(return_value=True),
+        can_pick_releases=MagicMock(return_value=True),
     )
     for key, value in overrides.items():
         setattr(client, key, value)
@@ -425,7 +426,7 @@ class TestAcquisitionMigration(unittest.TestCase):
             self._run(engine, module, module.upgrade)
             inspector = sa.inspect(engine)
             columns = {c["name"] for c in inspector.get_columns("acquisition_requests")}
-            self.assertEqual(columns, {c.name for c in AcquisitionRequest.__table__.columns})
+            self.assertEqual(columns, {c.name for c in AcquisitionRequest.__table__.columns} - {"progress_mark", "progress_changed_at"})
             self.assertIn("ix_acquisition_requests_user_id", {i["name"] for i in inspector.get_indexes("acquisition_requests")})
             self._run(engine, module, module.downgrade)
             self.assertNotIn("acquisition_requests", sa.inspect(engine).get_table_names())
@@ -449,7 +450,7 @@ class TestAcquisitionMigration(unittest.TestCase):
 
         cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
         cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["c4d9a2e6b8f1"])
+        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["a7e3c9d1b5f2"])
 
 
 class TestSettingRegistration(unittest.TestCase):

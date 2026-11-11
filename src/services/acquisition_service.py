@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 REFRESH_INTERVAL = timedelta(seconds=30)
 ARRIVED_REFRESH_INTERVAL = timedelta(minutes=10)
 GIVE_UP_AFTER = timedelta(days=30)
+STALLED_AFTER = timedelta(minutes=30)
 OPEN_STATUSES = ("waiting", "in_progress", "needs_look")
 STATUS_MAP = {
     "pending": "waiting",
@@ -46,6 +47,15 @@ _SHELFMARK_TASK_PRECEDENCE = {"queued": 3, "resolving": 3, "locating": 3, "downl
 _DOWNLOADED = "Downloaded, waiting for the library"
 _AUDIO_SOURCES = {"abs": "ABS", "bookorbit": "BookOrbit", "booklore": "BookLore"}
 _UNIDENTIFIED = "The arrived book could not be identified yet."
+
+
+def is_stalled(row: dict) -> bool:
+    """Whether an in-progress download has shown no progress for STALLED_AFTER."""
+    changed = row.get("progress_changed_at")
+    return bool(
+        row.get("status") == "in_progress" and row.get("progress_mark") and changed
+        and utcnow() - changed >= STALLED_AFTER
+    )
 
 
 def _audio_source(name: Optional[str]) -> Optional[str]:
@@ -124,8 +134,7 @@ class AcquisitionService:
         remote = client.get_request(row["remote_id"]) or {}
         status = remote.get("status")
         if status:
-            mapped = STATUS_MAP.get(status, "in_progress")
-            changes.update(status=mapped, remote_status=status, status_detail=self._detail(remote, mapped))
+            changes.update(self.remote_changes(row, remote))
             if status == "available":
                 changes.update(self._on_available(user_id, row, remote, client, resolved))
             if changes["status"] != row["status"]:
@@ -134,6 +143,33 @@ class AcquisitionService:
                     user_id, row["id"], row["status"], changes["status"], status,
                 )
         self._update(user_id, row, **changes)
+
+    @classmethod
+    def remote_changes(cls, row: dict, remote: dict) -> dict:
+        """Row changes for a BookOrbit request object: status, detail and the download-progress mark."""
+        status = remote.get("status")
+        mapped = STATUS_MAP.get(status, "in_progress")
+        download = remote.get("download") if isinstance(remote.get("download"), dict) else {}
+        value = download.get("downloadedBytes")
+        value = download.get("progressPercent") if value is None else value
+        mark = f"{download.get('id')}|{download.get('grabbedAt')}|{value}" if status in ("grabbed", "downloading") and download else None
+        return {
+            "status": mapped, "remote_status": status, "status_detail": cls._detail(remote, mapped),
+            **cls._progress_changes(row, mark),
+        }
+
+    @staticmethod
+    def _progress_changes(row: dict, mark: Optional[str]) -> dict:
+        """Stamp when a download's progress mark last changed; clear both once it is not downloading.
+
+        A polling timestamp is no evidence of progress, so only a different mark moves the stamp.
+        """
+        if mark is None:
+            return {"progress_mark": None, "progress_changed_at": None}
+        mark = mark[:64]
+        if row.get("progress_mark") == mark and row.get("progress_changed_at") is not None:
+            return {}
+        return {"progress_mark": mark, "progress_changed_at": utcnow()}
 
     @staticmethod
     def _detail(remote: dict, mapped: str) -> Optional[str]:
@@ -201,7 +237,8 @@ class AcquisitionService:
                 "rejected": request.get("admin_note"),
                 "downloading": f"{round(progress)}%" if isinstance(progress, (int, float)) and not isinstance(progress, bool) else None,
             }.get(status)
-            changes.update(status=mapped, remote_status=status, status_detail=detail)
+            mark = str(progress) if status == "downloading" and isinstance(progress, (int, float)) and not isinstance(progress, bool) else None
+            changes.update(status=mapped, remote_status=status, status_detail=detail, **self._progress_changes(row, mark))
             if status == "complete":
                 changes.update(self._on_downloaded(user_id, row, task, bookorbit))
             if changes["status"] != row["status"]:
