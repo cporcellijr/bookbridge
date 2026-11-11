@@ -51,6 +51,7 @@ from .models import (
     UserBook,
     TranscriptionPreflight,
     BookSyncMarker,
+    AcquisitionRequest,
     UserBookFusionLink,
     UserBookOrbitLink,
     Base,
@@ -2731,6 +2732,60 @@ class DatabaseService:
             count = query.count()
             query.delete()
             return count
+
+    # Acquisition requests (every method is scoped to the owning user).
+    @staticmethod
+    def _acquisition_dict(row: AcquisitionRequest) -> dict:
+        return {c.name: getattr(row, c.name) for c in AcquisitionRequest.__table__.columns}
+
+    def add_acquisition_requests(self, user_id: int, rows: list[dict]) -> list[dict]:
+        """Save one request row per dict for ``user_id`` and return the saved rows."""
+        with self.get_session() as session:
+            saved = [AcquisitionRequest(user_id=user_id, **fields) for fields in rows]
+            session.add_all(saved)
+            session.flush()
+            return [self._acquisition_dict(row) for row in saved]
+
+    def get_acquisition_requests(self, user_id: int) -> list[dict]:
+        """Return the user's non-dismissed requests, newest first."""
+        with self.get_session() as session:
+            rows = session.query(AcquisitionRequest).filter(
+                AcquisitionRequest.user_id == user_id,
+                AcquisitionRequest.dismissed.is_(False),
+            ).order_by(AcquisitionRequest.id.desc()).all()
+            return [self._acquisition_dict(row) for row in rows]
+
+    def get_acquisition_request(self, user_id: int, request_id: int) -> Optional[dict]:
+        """Return one of the user's requests, or None when it is not theirs."""
+        with self.get_session() as session:
+            row = session.query(AcquisitionRequest).filter(
+                AcquisitionRequest.id == request_id, AcquisitionRequest.user_id == user_id,
+            ).first()
+            return self._acquisition_dict(row) if row else None
+
+    def find_acquisition_request(self, user_id: int, service: str, remote_id: str) -> Optional[dict]:
+        """Return the user's non-dismissed request for a service's remote id, if any."""
+        with self.get_session() as session:
+            row = session.query(AcquisitionRequest).filter(
+                AcquisitionRequest.user_id == user_id,
+                AcquisitionRequest.service == service,
+                AcquisitionRequest.remote_id == remote_id,
+                AcquisitionRequest.dismissed.is_(False),
+            ).first()
+            return self._acquisition_dict(row) if row else None
+
+    def update_acquisition_request(self, user_id: int, request_id: int, **fields) -> Optional[dict]:
+        """Update fields on one of the user's requests; None when it is not theirs."""
+        with self.get_session() as session:
+            row = session.query(AcquisitionRequest).filter(
+                AcquisitionRequest.id == request_id, AcquisitionRequest.user_id == user_id,
+            ).first()
+            if row is None:
+                return None
+            for key, value in fields.items():
+                setattr(row, key, value)
+            session.flush()
+            return self._acquisition_dict(row)
 
     # Pre-transcription length advisory (never changes Job.last_error or status).
     def record_sync_marker(self, abs_id: str, leader_client: str, synced_at: float, user_id: int = None) -> None:

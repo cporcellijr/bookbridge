@@ -168,6 +168,20 @@
     .ebook-card.audio-only-card, .sugg-row.ghost-row { border-style: dashed; background: transparent; }
     .queue-action-note { font-size: 12px; color: var(--muted); }
     .reader-docs-wrap { margin-top: 20px; }
+    /* Get the missing half: actions under search results, My requests strip, request dialog */
+    .acq-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; }
+    .acq-note { color: var(--muted); font-size: 13px; }
+    .acq-strip { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+    .acq-strip h3 { font-size: 15px; margin-bottom: 8px; }
+    .acq-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+    .acq-row:first-child { border-top: 0; }
+    .acq-main { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+    #acqModal { display: none; }
+    #acqModal.open { display: flex; }
+    #acqModal .form-input { margin-bottom: 12px; }
+    .acq-formats { border: 0; padding: 0; margin: 0 0 4px; display: flex; flex-wrap: wrap; gap: 16px; }
+    .acq-formats legend { padding: 0; }
+    .acq-result { margin-top: 12px; min-height: 1.4em; color: var(--muted); font-size: 13px; }
     /* Forge staging modal (shared .modal-overlay/.modal visuals, page-toggled) */
     #forgeStageModal { display: none; }
     #forgeStageModal.open { display: flex; }

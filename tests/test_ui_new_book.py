@@ -351,6 +351,9 @@ DISCOVER_ALLOWED_CHANGES = (
      'ec0194e4eeb91021', 'Label the existing review-panel action Compare'),
     ('', '<input type="checkbox" class="ebook-row-check"', '926585e90630e26e',
      'Show ebook-only checkboxes'),
+    ('list.innerHTML = (rows.length ? `<div class="flat-list" role="list">',
+     'list.innerHTML = (rows.length ? `<div class="flat-list" role="list">',
+     '6f071ac6818272b0', 'Offer to get the missing half under Search results (New only)'),
     ('', 'updateEbookSelectionUi();', '931e7fe32e137cb2',
      'Update ebook selection state after every render'),
     ("addManyToQueue(visibleEntries('pairs').filter",
@@ -359,6 +362,8 @@ DISCOVER_ALLOWED_CHANGES = (
     ("if (box.classList.contains('row-check')) {",
      "if (box.classList.contains('ebook-row-check')) {", '46a6e59e4ff26f59',
      'Delegate ebook checkbox events without touching pair handling'),
+    ('', 'initAcquisition();', '3161f7c71c8e28a4',
+     'Start the get-the-missing-half controls (New only)'),
 )
 
 
