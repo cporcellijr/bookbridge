@@ -263,6 +263,9 @@ class ShelfWatchService:
         if bundle is None or client is None:
             logger.warning("Shelf-watch: no client bundle available for user %s", user_id)
             return self._disabled_stats()
+        if not client.is_configured():
+            # This user doesn't use the service; not worth a log line every poll.
+            return self._disabled_stats()
 
         user_token = None
         credentials_token = None
