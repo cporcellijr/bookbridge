@@ -6,6 +6,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Spines in the New Library now look like your books.** Each spine takes its colours from the
+  book's cover, with the title in light or dark ink to stay readable, and its thickness follows the
+  book's length (StoryGraph or Hardcover page count, or the audiobook's duration). Books you're
+  partway through stand face-out on the shelf, showing their cover and progress.
+
 ## [7.13.0] - 2026-11-10
 
 ### Added
