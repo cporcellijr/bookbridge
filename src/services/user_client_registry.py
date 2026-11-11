@@ -30,6 +30,7 @@ from src.api.booklore_client import BookloreClient
 from src.api.kavita_client import KavitaClient, KavitaKoSyncClient
 from src.api.hardcover_client import HardcoverClient
 from src.api.storygraph_client import StorygraphClient
+from src.api.shelfmark_client import ShelfmarkClient
 
 from src.sync_clients.abs_sync_client import ABSSyncClient
 from src.sync_clients.abs_ebook_sync_client import ABSEbookSyncClient
@@ -64,6 +65,7 @@ class UserClients:
     hardcover_client: object
     storygraph_client: object
     kavita_client: object = None
+    shelfmark_client: object = None
     library_service: object = None
     sync_clients: dict = field(default_factory=dict)
     credentials: dict = field(default_factory=dict)
@@ -147,6 +149,7 @@ class UserClientRegistry:
         kavita_kosync_client = KavitaKoSyncClient(credentials=creds)
         hardcover_client = HardcoverClient(credentials=creds)
         storygraph_client = StorygraphClient(credentials=creds)
+        shelfmark_client = ShelfmarkClient(credentials=creds)
 
         # Per-user library service for ebook acquisition/search (uses this
         # user's abs/cwa/booklore/bookorbit clients). Requires an epub cache dir.
@@ -191,6 +194,7 @@ class UserClientRegistry:
             kavita_client=kavita_client,
             hardcover_client=hardcover_client,
             storygraph_client=storygraph_client,
+            shelfmark_client=shelfmark_client,
             library_service=library_service,
             sync_clients=sync_clients,
             credentials=creds,

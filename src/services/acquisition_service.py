@@ -1,9 +1,10 @@
-"""Follows a reader's BookOrbit requests to arrival and pairs each arrival with the book they already had."""
+"""Follows a reader's BookOrbit and Shelfmark requests to arrival and pairs each arrival with the book they already had."""
 
 from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from pathlib import PurePath
 from typing import Any, Optional
 
 from src.api.bookorbit_client import BookOrbitClient
@@ -28,6 +29,21 @@ STATUS_MAP = {
     "failed": "failed",
     "cancelled": "cancelled",
 }
+SHELFMARK_STATUS_MAP = {
+    "pending": "waiting",
+    "rejected": "declined",
+    "queued": "in_progress",
+    "resolving": "in_progress",
+    "locating": "in_progress",
+    "downloading": "in_progress",
+    "complete": "arrived",
+    "error": "failed",
+    "cancelled": "cancelled",
+}
+_ARRIVED_REMOTE = ("available", "complete")
+# A task that is still running decides a Shelfmark request's state, else a finished one, else a failed one.
+_SHELFMARK_TASK_PRECEDENCE = {"queued": 3, "resolving": 3, "locating": 3, "downloading": 3, "complete": 2, "error": 1, "cancelled": 1}
+_DOWNLOADED = "Downloaded, waiting for the library"
 _AUDIO_SOURCES = {"abs": "ABS", "bookorbit": "BookOrbit", "booklore": "BookLore"}
 _UNIDENTIFIED = "The arrived book could not be identified yet."
 
@@ -45,7 +61,7 @@ def _author_set(value: Any) -> frozenset:
 
 
 class AcquisitionService:
-    """Refreshes a reader's BookOrbit requests and pairs arrivals with the book they were asked for."""
+    """Refreshes a reader's BookOrbit and Shelfmark requests and pairs arrivals with the book they were asked for."""
 
     def __init__(self, database_service, book_mapping_service, shelf_watch_service=None) -> None:
         """``shelf_watch_service`` is the BookOrbit watcher, reused to hand uncertain arrivals to Discover's review."""
@@ -54,21 +70,29 @@ class AcquisitionService:
         self.shelf_watch_service = shelf_watch_service
 
     def has_work(self, user_id: int) -> bool:
-        """Whether the user has any request that needs a BookOrbit check (one cheap query, no HTTP)."""
+        """Whether the user has any request that needs a check (one cheap query, no HTTP)."""
         return bool(self._refreshable(user_id))
 
     def _refreshable(self, user_id: int) -> list[dict]:
         return self.database_service.get_refreshable_acquisition_requests(user_id, utcnow() - GIVE_UP_AFTER)
 
-    def refresh_user(self, user_id: int, client: Any) -> list[dict]:
-        """Refresh the user's due requests (each at most once per 30 s) and return all their rows."""
+    def refresh_user(self, user_id: int, client: Any, shelfmark: Any = None) -> list[dict]:
+        """Refresh the user's due requests (each at most once per 30 s) and return all their rows.
+
+        ``client`` is the reader's BookOrbit client (it also finds Shelfmark arrivals in the
+        library); ``shelfmark`` is their Shelfmark client.
+        """
         now = utcnow()
         due = [
             row for row in self._refreshable(user_id)
             if row["last_checked_at"] is None or now - row["last_checked_at"] >= (
-                ARRIVED_REFRESH_INTERVAL if row["remote_status"] == "available" else REFRESH_INTERVAL
+                ARRIVED_REFRESH_INTERVAL if row["remote_status"] in _ARRIVED_REMOTE else REFRESH_INTERVAL
             )
         ]
+        shelfmark_rows = [row for row in due if row["service"] == "Shelfmark"]
+        due = [row for row in due if row["service"] == "BookOrbit"]
+        if shelfmark is not None and shelfmark_rows:
+            self._refresh_shelfmark(user_id, shelfmark_rows, shelfmark, client)
         if client is not None:
             resolved: dict[int, dict] = {}
             for row in due:
@@ -85,11 +109,17 @@ class AcquisitionService:
     def _update(self, user_id: int, row: dict, **changes: Any) -> None:
         self.database_service.update_acquisition_request(user_id, row["id"], **changes)
 
+    def _gave_up(self, user_id: int, row: dict) -> bool:
+        """Fail a request that has been open for 30 days; True when it did."""
+        if row["status"] not in OPEN_STATUSES or utcnow() - row["created_at"] < GIVE_UP_AFTER:
+            return False
+        logger.info("📥 Acquisition: user %s request %s gave up after 30 days (no longer tracked)", user_id, row["id"])
+        self._update(user_id, row, status="failed", status_detail="no longer tracked", last_checked_at=utcnow())
+        return True
+
     def _refresh_row(self, user_id: int, row: dict, client: Any, resolved: dict) -> None:
         changes: dict[str, Any] = {"last_checked_at": utcnow()}
-        if row["status"] in OPEN_STATUSES and utcnow() - row["created_at"] >= GIVE_UP_AFTER:
-            logger.info("📥 Acquisition: user %s request %s gave up after 30 days (no longer tracked)", user_id, row["id"])
-            self._update(user_id, row, status="failed", status_detail="no longer tracked", **changes)
+        if self._gave_up(user_id, row):
             return
         remote = client.get_request(row["remote_id"]) or {}
         status = remote.get("status")
@@ -115,6 +145,97 @@ class AcquisitionService:
         if isinstance(percent, (int, float)) and not isinstance(percent, bool):
             return f"{round(percent)}%"
         return None
+
+    # ---- Shelfmark -----------------------------------------------------------
+
+    def _refresh_shelfmark(self, user_id: int, rows: list[dict], shelfmark: Any, bookorbit: Any) -> None:
+        """Bring the due Shelfmark rows up to date from one activity read; never raises."""
+        activity, error = shelfmark.get_activity()
+        if activity is None:
+            logger.debug("📥 Acquisition: user %s Shelfmark could not be checked (%s)", user_id, error)
+            for row in rows:
+                self._update(user_id, row, last_checked_at=utcnow())
+            return
+        for row in rows:
+            try:
+                if not self._gave_up(user_id, row):
+                    self._refresh_shelfmark_row(user_id, row, activity, bookorbit)
+            except Exception:
+                logger.warning("📥 Acquisition: user %s request %s could not be refreshed", user_id, row["id"], exc_info=True)
+
+    @staticmethod
+    def _shelfmark_remote(row: dict, activity: dict) -> Optional[tuple[str, dict, dict]]:
+        """(status, download task, request) Shelfmark reports for a row, or None when it lists neither.
+
+        A task's status is the name of the activity bucket it sits in.
+        """
+        tasks = [
+            (state, key, payload) for state, bucket in (activity.get("status") or {}).items() if isinstance(bucket, dict)
+            for key, payload in bucket.items() if isinstance(payload, dict) and state in _SHELFMARK_TASK_PRECEDENCE
+        ]
+        remote_id = row["remote_id"]
+        if row["remote_kind"] != "request":
+            for state, key, payload in tasks:
+                if key == remote_id or str(payload.get("id")) == remote_id:
+                    return state, payload, {}
+            return None
+        request = next((r for r in activity.get("requests") or [] if str(r.get("id")) == remote_id), None)
+        if request is None:
+            return None
+        if request.get("status") != "fulfilled":
+            return str(request.get("status")), {}, request
+        linked = [(state, payload) for state, _, payload in tasks if str(payload.get("request_id")) == remote_id]
+        state, task = max(linked, key=lambda item: _SHELFMARK_TASK_PRECEDENCE[item[0]], default=(None, {}))
+        delivery = request.get("delivery_state")
+        return state or (delivery if delivery in _SHELFMARK_TASK_PRECEDENCE else "queued"), task, request
+
+    def _refresh_shelfmark_row(self, user_id: int, row: dict, activity: dict, bookorbit: Any) -> None:
+        changes: dict[str, Any] = {"last_checked_at": utcnow()}
+        remote = self._shelfmark_remote(row, activity)
+        if remote is not None:
+            status, task, request = remote
+            mapped = SHELFMARK_STATUS_MAP.get(status, "in_progress")
+            progress = task.get("progress")
+            detail = {
+                "error": task.get("status_message") or request.get("last_failure_reason"),
+                "rejected": request.get("admin_note"),
+                "downloading": f"{round(progress)}%" if isinstance(progress, (int, float)) and not isinstance(progress, bool) else None,
+            }.get(status)
+            changes.update(status=mapped, remote_status=status, status_detail=detail)
+            if status == "complete":
+                changes.update(self._on_downloaded(user_id, row, task, bookorbit))
+            if changes["status"] != row["status"]:
+                logger.info(
+                    "📥 Acquisition: user %s request %s moved %s -> %s (Shelfmark status %s)",
+                    user_id, row["id"], row["status"], changes["status"], status,
+                )
+        self._update(user_id, row, **changes)
+
+    def _on_downloaded(self, user_id: int, row: dict, task: dict, bookorbit: Any) -> dict:
+        """Changes for a finished download: note the file, then find the book in the reader's BookOrbit."""
+        filename = PurePath(str(task.get("download_path") or "")).name or row["arrived_filename"]
+        changes: dict[str, Any] = {"arrived_filename": filename} if filename else {}
+        if row["status"] == "needs_look" and row["remote_status"] == "complete":
+            return {**changes, **self._after_review(user_id, row)}
+        changes["status_detail"] = _DOWNLOADED
+        if bookorbit is None:
+            return changes
+        book = bookorbit.find_book_by_filename(filename) if row["media_kind"] == "ebook" and filename else None
+        if book and book.get("id") is not None:
+            arrival, how, candidates = {"id": str(book["id"]), "filename": filename}, "file name", []
+        else:
+            arrival, how, candidates = self._resolve_arrival(bookorbit, row, {})
+        if arrival is None:
+            if candidates and row["partner_source_id"]:
+                changes.update(self._unresolved(user_id, row, bookorbit, candidates))
+            return changes
+        logger.info("📥 Acquisition: user %s request %s found in BookOrbit as %s (via %s)", user_id, row["id"], arrival["id"], how)
+        changes.update(arrived_source="BookOrbit", arrived_source_id=arrival["id"], status_detail=None)
+        if arrival["filename"]:
+            changes["arrived_filename"] = arrival["filename"]
+        if row["partner_source_id"]:
+            changes.update(self._pair_with_partner(user_id, row, arrival, how, bookorbit))
+        return changes
 
     # ---- arrival -------------------------------------------------------------
 

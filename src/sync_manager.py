@@ -5272,7 +5272,7 @@ class SyncManager:
                 logger.error("Sync cycle failed for user %s: %s", getattr(user, "id", None), e, exc_info=True)
 
     def _refresh_acquisition_requests(self, user_id: int) -> None:
-        """Check one user's BookOrbit book requests with their own client; never raises.
+        """Check one user's BookOrbit and Shelfmark book requests with their own clients; never raises.
 
         Makes no HTTP call unless the database shows a request that needs checking.
         """
@@ -5285,12 +5285,15 @@ class SyncManager:
             if not acquisition.has_work(user_id):
                 return
             bundle = registry.get_clients(user_id)
-            client = getattr(bundle, 'bookorbit_client', None)
-            if client is None or not client.is_configured():
+            client, shelfmark = (
+                found if found is not None and found.is_configured() else None
+                for found in (getattr(bundle, 'bookorbit_client', None), getattr(bundle, 'shelfmark_client', None))
+            )
+            if client is None and shelfmark is None:
                 return
             user_token = set_current_user_id(user_id)
             credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))
-            acquisition.refresh_user(user_id, client)
+            acquisition.refresh_user(user_id, client, shelfmark)
         except Exception:
             logger.warning("Acquisition check failed for user %s", user_id, exc_info=True)
         finally:

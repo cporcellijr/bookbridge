@@ -62,6 +62,8 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "HARDCOVER_GRIMMORY_LIST_SYNC", "HARDCOVER_GRIMMORY_LIST_PREFIX",
     "HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES",
     "STORYGRAPH_SESSION_COOKIE", "STORYGRAPH_REMEMBER_USER_TOKEN", "STORYGRAPH_ENABLED",
+    # Shelfmark (the server URL stays global; each reader signs in as themselves)
+    "SHELFMARK_USER", "SHELFMARK_PASSWORD",
 })
 
 
@@ -255,6 +257,10 @@ PER_USER_FIELD_GROUPS = [
         ("STORYGRAPH_ENABLED", N_("Enabled"), "bool"),
         ("STORYGRAPH_SESSION_COOKIE", N_("Session cookie"), "secret"),
         ("STORYGRAPH_REMEMBER_USER_TOKEN", N_("Remember-user token"), "secret"),
+    ]),
+    (N_("Shelfmark"), [
+        ("SHELFMARK_USER", N_("Username"), "text"),
+        ("SHELFMARK_PASSWORD", N_("Password"), "secret"),
     ]),
 ]
 

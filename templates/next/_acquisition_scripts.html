@@ -1,6 +1,6 @@
 <script>
-    // ===== Get the missing half (BookOrbit requests) =====
-    // Only offered once GET /api/acquisition/options says BookOrbit is usable for this reader.
+    // ===== Get the missing half (BookOrbit and Shelfmark requests) =====
+    // Each service is offered only once GET /api/acquisition/options says it is usable for this reader.
     const ACQ = {
         noAudio: {{ _('No audiobook in your libraries.')|tojson }},
         noEbook: {{ _('No ebook in your libraries.')|tojson }},
@@ -18,7 +18,14 @@
         review: {{ _('Review in Discover')|tojson }},
         ebook: {{ _('Ebook')|tojson }},
         audiobook: {{ _('Audiobook')|tojson }},
-        service: {{ _('BookOrbit')|tojson }},
+        findShelfmark: {{ _('Find in Shelfmark')|tojson }},
+        searching: {{ _('Searching Shelfmark, this can take a minute…')|tojson }},
+        noReleases: {{ _('Shelfmark found nothing for this book.')|tojson }},
+        pickRelease: {{ _('Choose a result to get.')|tojson }},
+        pickOne: {{ _('Choose one format to use Shelfmark.')|tojson }},
+        notOffered: {{ _('Shelfmark does not offer this format to you.')|tojson }},
+        downloadStarted: {{ _('Download started.')|tojson }},
+        requestedShelfmark: {{ _('Requested from Shelfmark.')|tojson }},
     };
     const ACQ_STATUS = {
         waiting: {{ _('Waiting for approval')|tojson }},
@@ -38,9 +45,24 @@
         invalid_formats: {{ _('Choose a format.')|tojson }},
         bookorbit_not_configured: {{ _('BookOrbit is not set up for your account.')|tojson }},
         request_failed: {{ _('BookOrbit did not accept the request. Try again later.')|tojson }},
-        cancel_failed: {{ _('BookOrbit did not cancel the request. Try again later.')|tojson }},
+        cancel_failed: {{ _('The service did not cancel the request. Try again later.')|tojson }},
+        shelfmark_not_configured: {{ _('Shelfmark is not set up for your account.')|tojson }},
+        no_login_saved: {{ _('Save your Shelfmark username and password in your integrations first.')|tojson }},
+        bad_credentials: {{ _('Shelfmark refused your saved username or password.')|tojson }},
+        locked: {{ _('Shelfmark has locked your account after failed sign-ins. Try again later.')|tojson }},
+        password_login_disabled: {{ _('Shelfmark does not accept a password sign-in here.')|tojson }},
+        unreachable: {{ _('Shelfmark could not be reached. Try again later.')|tojson }},
+        policy_refused: {{ _('Shelfmark does not show results to you. File a request instead.')|tojson }},
+        sources_failed: {{ _('Shelfmark could not search right now. Try again later.')|tojson }},
+        release_expired: {{ _('That result has expired. Search again.')|tojson }},
+        duplicate_pending_request: {{ _('You already have a pending request for this book in Shelfmark.')|tojson }},
+        policy_blocked: {{ _('Shelfmark does not allow this for your account.')|tojson }},
     };
+    const acqError = (code) => ACQ_ERRORS[code] || bbFormat(API_ERRORS.fallback, { code });
     let acqUsable = false;
+    let acqBookorbit = false;
+    let acqShelfmark = null;
+    let acqAbort = null;
     let acqRows = [];
     let acqTimer = null;
     let acqPartner = null;
@@ -107,7 +129,12 @@
         acqPartner = prefill.partner;
         $('acqTitle').value = prefill.title;
         $('acqAuthor').value = prefill.authors;
+        $('acqBothLabel').hidden = !acqBookorbit;
+        $('acqSubmitBtn').hidden = !acqBookorbit;
+        $('acqShelfmarkBtn').hidden = !acqShelfmark;
+        $('acqShelfmarkLink').hidden = !acqShelfmark;
         document.querySelector(`input[name="acqFormat"][value="${prefill.format}"]`).checked = true;
+        resetAcqReleases();
         $('acqResult').textContent = '';
         $('acqModal').classList.add('open');
         $('acqModal').setAttribute('aria-hidden', 'false');
@@ -115,12 +142,14 @@
     }
 
     function closeAcqDialog() {
+        resetAcqReleases();
         $('acqModal').classList.remove('open');
         $('acqModal').setAttribute('aria-hidden', 'true');
     }
 
     async function submitAcq(event) {
         event.preventDefault();
+        if (!acqBookorbit) { findInShelfmark(); return; }
         if (acqSubmitting) return;
         const choice = document.querySelector('input[name="acqFormat"]:checked').value;
         const body = {
@@ -141,7 +170,7 @@
             const data = await response.json().catch(() => null);
             if (!response.ok || !data) {
                 const code = (data && data.error) || `http_${response.status}`;
-                $('acqResult').textContent = ACQ_ERRORS[code] || bbFormat(API_ERRORS.fallback, { code });
+                $('acqResult').textContent = acqError(code);
                 return;
             }
             const messages = [];
@@ -159,11 +188,101 @@
         }
     }
 
+    // Service-neutral list of things to pick from: releases is [{key, title, format, size, source, language, detail}].
+    function renderReleaseList(releases, onPick) {
+        const list = $('acqReleases');
+        list.innerHTML = releases.map((release) => `<button type="button" class="acq-release" role="listitem" data-key="${esc(release.key)}">
+            <span class="acq-release-title">${esc(release.title)}</span>
+            <span class="source-badge reason">${esc(release.format)}</span>
+            ${[release.size, release.source, release.language, release.detail].filter(Boolean).map((part) => `<span class="acq-note">${esc(part)}</span>`).join('')}
+        </button>`).join('');
+        list.onclick = (event) => {
+            const row = event.target.closest('[data-key]');
+            if (row) onPick(row.dataset.key);
+        };
+        list.hidden = !releases.length;
+    }
+
+    function resetAcqReleases() {
+        if (acqAbort) acqAbort.abort();
+        acqAbort = null;
+        $('acqReleases').hidden = true;
+        $('acqReleases').innerHTML = '';
+    }
+
+    function acqSelection() {
+        const format = document.querySelector('input[name="acqFormat"]:checked').value;
+        return { format, title: $('acqTitle').value.trim(), authors: $('acqAuthor').value.trim() };
+    }
+
+    // Shelfmark's own policy decides what the reader gets: a release list, or a one-click request.
+    async function findInShelfmark() {
+        const { format, title, authors } = acqSelection();
+        resetAcqReleases();
+        if (!title) { $('acqResult').textContent = ACQ_ERRORS.title_required; return; }
+        if (format === 'both') { $('acqResult').textContent = ACQ.pickOne; return; }
+        const mode = acqShelfmark.formats[format];
+        if (!mode) { $('acqResult').textContent = ACQ.notOffered; return; }
+        if (mode === 'request_book') { submitShelfmark(null); return; }
+        const controller = new AbortController();
+        acqAbort = controller;
+        $('acqResult').textContent = ACQ.searching;
+        try {
+            const query = new URLSearchParams({ title, author: authors, format });
+            const response = await fetch(`/api/acquisition/shelfmark/releases?${query}`, { headers: { Accept: 'application/json' }, signal: controller.signal });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data) {
+                $('acqResult').textContent = acqError((data && data.error) || `http_${response.status}`);
+                return;
+            }
+            $('acqResult').textContent = data.releases.length ? ACQ.pickRelease : ACQ.noReleases;
+            renderReleaseList(data.releases, (key) => submitShelfmark(key));
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.error('Shelfmark search failed.', err);
+            $('acqResult').textContent = bbFormat(API_ERRORS.fallback, { code: 'network' });
+        } finally {
+            if (acqAbort === controller) acqAbort = null;
+        }
+    }
+
+    async function submitShelfmark(releaseKey) {
+        if (acqSubmitting) return;
+        const { format, title, authors } = acqSelection();
+        const body = { title, authors, format };
+        if (releaseKey) body.release_key = releaseKey;
+        if (acqPartner) body.partner = acqPartner;
+        acqSubmitting = true;
+        $('acqResult').textContent = ACQ.requesting;
+        try {
+            const response = await fetch('/api/acquisition/shelfmark', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data) {
+                $('acqResult').textContent = acqError((data && data.error) || `http_${response.status}`);
+                return;
+            }
+            resetAcqReleases();
+            $('acqResult').textContent = data.kind === 'download' ? ACQ.downloadStarted : ACQ.requestedShelfmark;
+            loadAcqMine();
+        } catch (err) {
+            console.error('Request to Shelfmark failed.', err);
+            $('acqResult').textContent = bbFormat(API_ERRORS.fallback, { code: 'network' });
+        } finally {
+            acqSubmitting = false;
+        }
+    }
+
     function renderAcqStrip() {
         $('acqStrip').hidden = !acqRows.length;
         $('acqList').innerHTML = acqRows.map((row) => {
-            const reviewing = row.status === 'needs_look' && row.remote_status === 'available';
+            const reviewing = row.status === 'needs_look' && ['available', 'complete'].includes(row.remote_status);
             const open = ACQ_OPEN.includes(row.status) && !reviewing;
+            // Shelfmark only lets a reader cancel a request that is still pending, or a plain download.
+            const cancellable = !(row.service === 'Shelfmark' && row.remote_kind === 'request' && row.remote_status !== 'pending');
             const action = open ? 'cancel' : 'dismiss';
             const link = row.status === 'paired' && row.linked_abs_id
                 ? `<a class="btn btn-small btn-muted" href="/book/${encodeURIComponent(row.linked_abs_id)}">${esc(ACQ.openBook)}</a>`
@@ -171,12 +290,12 @@
             return `<div class="acq-row" role="listitem">
                 <div class="acq-main">
                     <span class="row-title-text">${esc(row.title)}</span>
-                    <span class="acq-note">${esc(ACQ[row.media_kind] || row.media_kind)} · ${esc(ACQ.service)}</span>
+                    <span class="acq-note">${esc(ACQ[row.media_kind] || row.media_kind)} · ${esc(row.service)}</span>
                 </div>
                 <span class="source-badge ${ACQ_CHIP_CLASS[row.status] || 'reason'}">${esc(ACQ_STATUS[row.status] || row.status)}</span>
                 ${row.status_detail ? `<span class="acq-note">${esc(row.status_detail)}</span>` : ''}
                 ${link}
-                <button type="button" class="btn btn-small btn-muted" data-acq-act="${action}" data-id="${esc(row.id)}">${esc(open ? ACQ.cancel : ACQ.dismiss)}</button>
+                ${open && !cancellable ? '' : `<button type="button" class="btn btn-small btn-muted" data-acq-act="${action}" data-id="${esc(row.id)}">${esc(open ? ACQ.cancel : ACQ.dismiss)}</button>`}
             </div>`;
         }).join('');
         clearTimeout(acqTimer);
@@ -203,7 +322,7 @@
             if (!response.ok) {
                 const data = await response.json().catch(() => null);
                 const code = (data && data.error) || `http_${response.status}`;
-                setFeedback(ACQ_ERRORS[code] || bbFormat(API_ERRORS.fallback, { code }), true);
+                setFeedback(acqError(code), true);
             }
         } catch (err) {
             console.error('Request action failed.', err);
@@ -217,7 +336,10 @@
             const response = await fetch('/api/acquisition/options', { headers: { Accept: 'application/json' } });
             if (!response.ok) return;
             const data = await response.json();
-            acqUsable = !!(data.services && data.services.bookorbit && data.services.bookorbit.usable);
+            const services = data.services || {};
+            acqBookorbit = !!(services.bookorbit && services.bookorbit.usable);
+            acqShelfmark = services.shelfmark && services.shelfmark.usable ? services.shelfmark : null;
+            acqUsable = acqBookorbit || !!acqShelfmark;
         } catch (err) {
             console.error('Could not load acquisition options.', err);
             return;
@@ -242,6 +364,7 @@
             if (button) actOnAcq(button.dataset.acqAct, button.dataset.id);
         });
         $('acqForm').addEventListener('submit', submitAcq);
+        $('acqShelfmarkBtn').addEventListener('click', findInShelfmark);
         $('acqCancelBtn').addEventListener('click', closeAcqDialog);
         $('acqModal').addEventListener('click', (event) => { if (event.target === $('acqModal')) closeAcqDialog(); });
         document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && $('acqModal').classList.contains('open')) closeAcqDialog(); });
