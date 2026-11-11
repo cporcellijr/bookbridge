@@ -248,7 +248,7 @@ class TestNewLibrary(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_library_filter_moves_into_the_top_bar_on_wide_screens(self):
+    def test_library_filter_preserves_global_search_and_discover_handoff(self):
         import shutil
         import subprocess
 
@@ -269,7 +269,7 @@ class TestNewLibrary(unittest.TestCase):
         empty = page[page.index('<section class="empty-state">'):]
         self.assertIn("Discover books", empty)
 
-    def test_library_has_one_search_box_with_the_ctrl_k_launcher_inside(self):
+    def test_library_restores_local_filter_alongside_global_ctrl_k_search(self):
         self._login("ui-reader")
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
         text = self.client.get("/").get_data(as_text=True)
@@ -279,9 +279,13 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('aria-controls="bb-search-dialog"', topbar)
         self.assertIn('aria-keyshortcuts="Control+K Meta+K /"', topbar)
         self.assertEqual(text.count('id="bb-search-input"'), 1)
-        self.assertNotIn('id="dashboard-search"', text)
+        self.assertIn('id="dashboard-search"', text)
+        self.assertIn('aria-label="Filter books"', text)
+        self.assertIn('placeholder="Filter books…"', text)
+        self.assertIn('id="search-handoff"', text)
+        self.assertIn('id="search-handoff-link"', text)
         self.assertNotIn('data-library-search-slot', text)
-        self.assertEqual(text.count('type="search"'), 1)
+        self.assertEqual(text.count('type="search"'), 2)
         stats = self.client.get("/stats").get_data(as_text=True)
         self.assertIn('id="bb-search-open"', stats)
         self.assertIn('id="bb-search-input"', stats)
@@ -327,11 +331,76 @@ class TestNewLibrary(unittest.TestCase):
         self.assertLess(toolbar.index('class="toolbar-primary"'), toolbar.index('class="toolbar-secondary"'))
         self.assertLess(toolbar.index('id="sort-select"'), toolbar.index('id="view-covers"'))
         self.assertLess(toolbar.index('id="view-covers"'), toolbar.index('id="select-mode-button"'))
-        self.assertNotIn('id="dashboard-search"', text)
+        self.assertIn('id="dashboard-search"', text)
+        self.assertIn('aria-label="Filter books"', text)
+        self.assertIn('aria-label="Author"', text)
+        self.assertIn('aria-label="Series"', text)
+        self.assertIn('aria-label="Sort"', text)
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
-        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 741px", css)
-        self.assertIn(".library-toolbar .toolbar-primary .toolbar-select:first-child { grid-column: 1 / -1; }", css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(230px, 1.7fr)", css)
+        self.assertIn(".library-toolbar .toolbar-search { grid-column: 1 / -1; grid-row: 1; }", css)
+        self.assertIn(".library-toolbar .sort-controls .field { min-width: 112px; }", css)
         self.assertIn(".view-switch button { min-height: 44px;", css)
+
+    def test_tablet_grouping_control_shares_row_and_phone_label_wraps_at_12px(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertIn("@media (min-width:761px) and (max-width:980px)", css)
+        self.assertIn(".library-toolbar .toolbar-left, .library-toolbar .toolbar-right { display: contents; }", css)
+        self.assertIn(".library-toolbar .group-toggle { grid-column: 1; grid-row: 2; justify-self: start; }", css)
+        self.assertIn(".library-toolbar .view-switch { grid-column: 2; grid-row: 2; margin: 0; }", css)
+        self.assertIn(".library-toolbar #select-mode-button { grid-column: 3; grid-row: 2; }", css)
+        self.assertIn("font-size: 12px; line-height: 1.2; white-space: normal;", css)
+        self.assertNotIn(".library-toolbar .group-toggle { font-size: 10px; }", css)
+
+    def test_processing_only_books_have_neutral_link_and_no_attention_control(self):
+        from src import web_server
+
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        original = web_server._build_dashboard_mappings
+
+        def processing_only(*args, **kwargs):
+            mappings, progress = original(*args, **kwargs)
+            for mapping, status in zip(mappings, ("processing", "pending")):
+                mapping["status"] = status
+                mapping["is_out_of_sync"] = False
+            return mappings, progress
+
+        with patch.object(web_server, "_build_dashboard_mappings", side_effect=processing_only):
+            text = self.client.get("/").get_data(as_text=True)
+
+        header = text.split('<header class="page-head">', 1)[1].split("</header>", 1)[0]
+        self.assertNotIn('id="needs-attention"', header)
+        self.assertNotIn('id="attention-only-filter"', header)
+        self.assertRegex(header, r'<a class="meta-link processing-meta" href="/job-queue">Processing <span class="count">2</span></a>')
+        self.assertEqual(header.count('class="book-count"'), 1)
+
+    def test_attention_and_processing_controls_count_disjoint_books(self):
+        from src import web_server
+
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        original = web_server._build_dashboard_mappings
+
+        def mixed(*args, **kwargs):
+            mappings, progress = original(*args, **kwargs)
+            mappings[0]["status"] = "failed"
+            mappings[1]["status"] = "forging"
+            mappings[0]["is_out_of_sync"] = False
+            mappings[1]["is_out_of_sync"] = False
+            return mappings, progress
+
+        with patch.object(web_server, "_build_dashboard_mappings", side_effect=mixed):
+            text = self.client.get("/").get_data(as_text=True)
+
+        header = text.split('<header class="page-head">', 1)[1].split("</header>", 1)[0]
+        self.assertIn('href="/job-queue">Processing <span class="count">1</span>', header)
+        self.assertIn('Needs attention', header)
+        self.assertRegex(header, r'Needs attention\s*<span class="count">1</span>')
+        warning = header.split('<details id="needs-attention">', 1)[1]
+        self.assertIn("Library Example", warning)
+        self.assertNotIn("Finished Example", warning)
+        self.assertIn("Alignment failed", warning)
 
     def test_reader_gets_new_library_with_classic_default_unchanged(self):
         observed = []
@@ -551,7 +620,8 @@ class TestNewLibrary(unittest.TestCase):
         classic = (_ROOT / "templates/index.html").read_text(encoding="utf-8")
 
         self.assertNotIn('data-format=', page)
-        self.assertNotIn('id="dashboard-search"', page)
+        self.assertIn('id="dashboard-search"', page)
+        self.assertIn('id="search-handoff-link"', page)
         self.assertIn('id="attention-only-filter"', page)
         self.assertNotIn('<option value="needs_attention"', page)
         for value in ("all", "paired", "has_audio", "audiobook_only", "ebook_only", "title", "author", "series", "progress", "status", "last_sync", "added", "rating"):

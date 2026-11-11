@@ -114,8 +114,35 @@
             const authorFilter = document.getElementById('author-filter');
             const filterCount = document.getElementById('filter-count');
             const attentionOnlyFilter = document.getElementById('attention-only-filter');
+            const attentionPopover = document.getElementById('needs-attention');
+            const attentionTrigger = attentionPopover?.querySelector('summary');
+            if (attentionPopover) {
+                function positionAttentionPopover() {
+                    if (!attentionPopover.open) return;
+                    const panel = attentionPopover.querySelector('.attention-list');
+                    if (!panel) return;
+                    panel.style.removeProperty('--attention-shift');
+                    const bounds = panel.getBoundingClientRect();
+                    const left = Math.max(14, Math.min(bounds.left, window.innerWidth - bounds.width - 14));
+                    panel.style.setProperty('--attention-shift', (left - bounds.left) + 'px');
+                }
+                attentionPopover.addEventListener('toggle', positionAttentionPopover);
+                window.addEventListener('resize', positionAttentionPopover);
+                document.addEventListener('click', event => {
+                    if (attentionPopover.open && !attentionPopover.contains(event.target)) {
+                        attentionPopover.open = false;
+                    }
+                });
+                document.addEventListener('keydown', event => {
+                    if (event.key === 'Escape' && attentionPopover.open) {
+                        event.preventDefault();
+                        attentionPopover.open = false;
+                        attentionTrigger?.focus();
+                    }
+                });
+            }
             const directionBtn = document.getElementById('sort-direction');
-            const dashboardSearch = null; // Global search owns the sole text search input.
+            const dashboardSearch = document.getElementById('dashboard-search');
             const searchHandoff = document.getElementById('search-handoff');
             const searchHandoffMsg = document.getElementById('search-handoff-msg');
             const searchHandoffLink = document.getElementById('search-handoff-link');
@@ -167,9 +194,14 @@
                 const total = cards.length;
                 const shown = cards.reduce(
                     (n, card) => n + (card.classList.contains('hidden') ? 0 : 1), 0);
-                filterCount.textContent = shown === total
-                    ? bbPlural({% call(n) plural_forms() %}{{ ngettext('{count} book', '{count} books', n) }}{% endcall %}, total)
-                    : bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total});
+                const active = (filterSelect?.value !== 'all')
+                    || (seriesFilter?.value !== 'all')
+                    || (authorFilter?.value !== 'all')
+                    || !!attentionOnlyFilter?.checked
+                    || !!dashboardSearch?.value.trim();
+                filterCount.textContent = active
+                    ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})
+                    : '';
             }
 
             // Narrow the Series and Author lists to what the OTHER filters leave
@@ -284,7 +316,7 @@
             // one card rather than a branch in a single mutually-exclusive filter.
             function needsAttention(card) {
                 return card.classList.contains('out-of-sync')
-                    || ['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', 'pending'].includes(card.dataset.status);
+                    || ['error', 'failed', 'failed_retry_later', 'failed_permanent'].includes(card.dataset.status);
             }
 
             function matchesFormatFilter(card, formatValue) {
@@ -346,6 +378,7 @@
                     const title = (card.dataset.title || '').toLowerCase();
                     const author = (card.dataset.author || '').toLowerCase();
                     const filename = (card.dataset.filename || '').toLowerCase();
+                    const seriesName = (card.dataset.seriesName || '').toLowerCase();
 
                     let isVisible = matchesFormatFilter(card, filterValue)
                         && matchesSeriesFilter(card, seriesValue)
@@ -355,7 +388,7 @@
                         passesFilters.add(card);
                     }
                     if (isVisible && searchString) {
-                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString)) {
+                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString) && !seriesName.includes(searchString)) {
                             isVisible = false;
                         }
                     }

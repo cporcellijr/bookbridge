@@ -257,10 +257,7 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
 
 # (New lines, original Classic lines): deliberate P3 compatibility changes only.
 LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';", ''),
- ('filterCount.textContent = shown === total\n'
-  "? bbPlural({% call(n) plural_forms() %}{{ ngettext('{count} book', '{count} books', n) }}{% "
-  'endcall %}, total)\n'
-  ": bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total});",
+ ("                const active = (filterSelect?.value !== 'all')\n                    || (seriesFilter?.value !== 'all')\n                    || (authorFilter?.value !== 'all')\n                    || !!attentionOnlyFilter?.checked\n                    || !!dashboardSearch?.value.trim();\n                filterCount.textContent = active\n                    ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})\n                    : '';",
   "const noun = total === 1 ? 'book' : 'books';\n"
   'filterCount.textContent = shown === total\n'
   "? total + ' ' + noun\n"
@@ -326,16 +323,19 @@ LIBRARY_HEADER_ALLOWED_CHANGES = (
      ""),
     ("            const attentionOnlyFilter = document.getElementById('attention-only-filter');",
      ""),
-    ("            const dashboardSearch = null; // Global search owns the sole text search input.",
-     "            const dashboardSearch = document.getElementById('dashboard-search');"),
+    ("            const attentionPopover = document.getElementById('needs-attention');\n            const attentionTrigger = attentionPopover?.querySelector('summary');\n            if (attentionPopover) {\n                function positionAttentionPopover() {\n                    if (!attentionPopover.open) return;\n                    const panel = attentionPopover.querySelector('.attention-list');\n                    if (!panel) return;\n                    panel.style.removeProperty('--attention-shift');\n                    const bounds = panel.getBoundingClientRect();\n                    const left = Math.max(14, Math.min(bounds.left, window.innerWidth - bounds.width - 14));\n                    panel.style.setProperty('--attention-shift', (left - bounds.left) + 'px');\n                }\n                attentionPopover.addEventListener('toggle', positionAttentionPopover);\n                window.addEventListener('resize', positionAttentionPopover);\n                document.addEventListener('click', event => {\n                    if (attentionPopover.open && !attentionPopover.contains(event.target)) {\n                        attentionPopover.open = false;\n                    }\n                });\n                document.addEventListener('keydown', event => {\n                    if (event.key === 'Escape' && attentionPopover.open) {\n                        event.preventDefault();\n                        attentionPopover.open = false;\n                        attentionTrigger?.focus();\n                    }\n                });\n            }",
+     ""),
     ("                        && matchesAuthorFilter(card, authorValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card))),",
      "                        && matchesAuthorFilter(card, authorValue)),"),
     ("                        && matchesSeriesFilter(card, seriesValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card))),",
      "                        && matchesSeriesFilter(card, seriesValue)),"),
-    ("            function needsAttention(card) {\n                return card.classList.contains('out-of-sync')\n                    || ['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', 'pending'].includes(card.dataset.status);\n            }",
+    ("            function needsAttention(card) {\n                return card.classList.contains('out-of-sync')\n                    || ['error', 'failed', 'failed_retry_later', 'failed_permanent'].includes(card.dataset.status);\n            }",
      ""),
     ("                        && matchesAuthorFilter(card, authorValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card));",
      "                        && matchesAuthorFilter(card, authorValue);"),
+    ("                    const seriesName = (card.dataset.seriesName || '').toLowerCase();", ""),
+    ("                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString) && !seriesName.includes(searchString)) {",
+     "                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString)) {"),
     ("                        author: authorValue,\n                        attention: !!attentionOnlyFilter?.checked",
      "                        author: authorValue"),
     ("                if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', filterBooks);",

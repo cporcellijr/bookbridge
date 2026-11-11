@@ -8,13 +8,16 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- **The New Library header is easier to scan and filter.** Library shows its book count next to the title,
-  with compact Matches to review and Needs attention controls that still expand for review, dismissal,
-  and affected-book details. Format, Author, and Series have visible dropdowns on their own row;
-  Sort, direction, Group series, Covers/Spines/List, and Select are grouped below. Needs attention
-  is separate from book format and can filter affected books independently. One global search in the
-  top bar continues to find books, pages, and settings with Ctrl/Command+K. The controls adapt to
-  tablet and phone widths without sideways scrolling.
+- **The New Library header is easier to scan and filter.** Library shows its book count once,
+  next to the title, with compact Matches to review, a neutral Processing link, and Needs attention
+  for failed or out-of-sync books only. The attention panel remains on-screen on phones, closes
+  on outside click or Escape, and can filter the affected books. Format, Author, and Series stay
+  visible alongside the restored type-to-filter field, including on phones; its title, author,
+  filename and series matching and Discover search handoff work alongside the other filters.
+  Sort and direction stay paired; at tablet widths Group series shares the row with
+  Covers/Spines/List and Select, while on phones its 12px label wraps without shrinking.
+  The global search in the top bar independently finds books, pages, and settings with
+  Ctrl/Command+K. Controls have accessible names and adapt without sideways scrolling.
 
 - **Spines in the New Library now look like your books.** Each spine carries the edge of its
   cover's art behind the title (or the cover's main colour when it has none), and its thickness follows the
