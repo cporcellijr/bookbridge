@@ -978,3 +978,82 @@ def test_update_ebook_progress_reading_progress_failure_does_not_fall_back(clien
     assert captured == [("PUT", "/api/v1/reading-progress")]
     assert f"BookOrbit ebook update failed: {status}" in caplog.text
     assert client._reading_progress_api is None
+
+
+@pytest.fixture
+def key_client():
+    """A BookOrbit 3.8+ account configured with an API key only (OIDC-only install, #482)."""
+    with patch.dict(os.environ, {
+        "BOOKORBIT_SERVER": "http://mock",
+        "BOOKORBIT_USER": "",
+        "BOOKORBIT_PASSWORD": "",
+        "BOOKORBIT_API_KEY": "bok_testkey",
+    }):
+        yield BookOrbitClient()
+
+
+def test_api_key_alone_counts_as_configured(key_client):
+    assert key_client.is_configured() is True
+    with patch.dict(os.environ, {"BOOKORBIT_API_KEY": ""}):
+        assert key_client.is_configured() is False
+
+
+def test_api_key_is_sent_as_bearer_and_never_logs_in(key_client):
+    with patch.object(key_client.session, "post") as login, \
+            patch.object(key_client.session, "get", return_value=_Resp({"ok": 1})) as get:
+        resp = key_client._make_request("GET", "/api/v1/libraries")
+    assert resp.status_code == 200
+    login.assert_not_called()
+    assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer bok_testkey"
+
+
+def test_api_key_wins_over_username_and_password(key_client):
+    with patch.dict(os.environ, {"BOOKORBIT_USER": "u", "BOOKORBIT_PASSWORD": "p"}), \
+            patch.object(key_client.session, "post") as login:
+        assert key_client._get_fresh_token() == "bok_testkey"
+    login.assert_not_called()
+
+
+def test_refused_api_key_is_not_retried_and_logs_once(key_client, caplog):
+    """A retry with the same key only feeds BookOrbit's per-IP failure limiter."""
+    from src.utils.logging_utils import get_persistent_condition_logger
+    conditions = get_persistent_condition_logger()
+    conditions.reset()
+    try:
+        with patch.object(key_client.session, "get", return_value=_Resp(status_code=401)) as get, \
+                caplog.at_level("WARNING", logger="src.api.bookorbit_client"):
+            assert key_client._make_request("GET", "/api/v1/libraries").status_code == 401
+            key_client._make_request("GET", "/api/v1/libraries")
+    finally:
+        conditions.reset()
+    assert get.call_count == 2
+    refused = [r for r in caplog.records if "BookOrbit API key refused (401)" in r.getMessage()]
+    assert len(refused) == 1
+
+
+def test_upload_does_not_retry_a_refused_api_key(key_client, tmp_path):
+    from src.api.bookorbit_client import BookOrbitUploadError
+    error, post = _upload(key_client, tmp_path, _Resp(status_code=401), _Resp({"id": 5}, status_code=201))
+    assert isinstance(error, BookOrbitUploadError)
+    assert error.status_code == 401
+    assert post.call_count == 1
+
+
+def test_connection_test_uses_api_key_against_auth_me():
+    from src import web_server
+    me = _Resp({"username": "reader"}, content=b"{}")
+    with patch.object(web_server.requests, "get", return_value=me) as get, \
+            patch.object(web_server.requests, "post") as login:
+        result = web_server._test_bookorbit(True, "http://mock", "", "", "bok_testkey")
+    assert result == {"ok": True, "message": "Authenticated with API key as reader"}
+    assert get.call_args.args[0] == "http://mock/api/v1/auth/me"
+    assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer bok_testkey"
+    login.assert_not_called()
+
+
+def test_connection_test_reports_a_refused_api_key():
+    from src import web_server
+    with patch.object(web_server.requests, "get", return_value=_Resp(status_code=401)):
+        result = web_server._test_bookorbit(True, "http://mock", "", "", "bok_bad")
+    assert result["ok"] is False
+    assert "API key refused" in result["message"]

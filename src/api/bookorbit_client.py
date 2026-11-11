@@ -38,7 +38,7 @@ from src.utils.file_transfers import (
     response_declares_size,
     stream_response_to_path,
 )
-from src.utils.logging_utils import sanitize_log_data
+from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -181,10 +181,15 @@ class BookOrbitClient:
     def _get_password(self) -> str:
         return resolve_setting(self._creds, "BOOKORBIT_PASSWORD", "")
 
+    def _get_api_key(self) -> str:
+        """BookOrbit 3.8+ API key; when set it replaces the username/password login."""
+        return str(resolve_setting(self._creds, "BOOKORBIT_API_KEY", "") or "").strip()
+
     def is_configured(self) -> bool:
         if str(resolve_setting(self._creds, "BOOKORBIT_ENABLED", "")).lower() == "false":
             return False
-        return bool(self._get_base_url() and self._get_username() and self._get_password())
+        has_login = self._get_api_key() or (self._get_username() and self._get_password())
+        return bool(self._get_base_url() and has_login)
 
     # ------------------------------------------------------------------
     # Auth
@@ -194,6 +199,10 @@ class BookOrbitClient:
         return bool(self._token) and (time.time() - self._token_timestamp) < _TOKEN_MAX_AGE
 
     def _get_fresh_token(self) -> Optional[str]:
+        # BookOrbit accepts an API key as the Bearer token, so no login is needed.
+        api_key = self._get_api_key()
+        if api_key:
+            return api_key
         if self._token_is_fresh():
             return self._token
         if time.time() < self._login_retry_after:
@@ -252,6 +261,18 @@ class BookOrbitClient:
         url = f"{self._get_base_url()}{endpoint}"
         try:
             resp = self._dispatch(method, url, headers, json_data)
+            if resp is not None and self._get_api_key():
+                # Retrying a refused key only feeds BookOrbit's per-IP failure limiter.
+                conditions = get_persistent_condition_logger()
+                key = f"bookorbit_api_key_refused:{self._get_base_url()}"
+                if resp.status_code == 401:
+                    conditions.warn(
+                        logger, key,
+                        "BookOrbit API key refused (401) — revoked, expired, or API keys turned off on the server",
+                    )
+                else:
+                    conditions.resolve(logger, key, "BookOrbit API key accepted again")
+                return resp
             if resp is not None and resp.status_code == 401:
                 with self._token_lock:
                     self._token = None
@@ -908,7 +929,7 @@ class BookOrbitClient:
                 logger.warning("BookOrbit: upload of '%s' into book %s failed: %s",
                                sanitize_log_data(filename), book_id, exc, exc_info=True)
                 raise BookOrbitUploadError("failed", None, str(exc)) from exc
-            if resp.status_code != 401 or attempt:
+            if resp.status_code != 401 or attempt or self._get_api_key():
                 break
             with self._token_lock:
                 self._token = None

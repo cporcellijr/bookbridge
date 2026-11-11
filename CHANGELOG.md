@@ -8,6 +8,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **BookOrbit can connect with an API key instead of a password.** BookOrbit 3.8 added
+  API keys; paste one into your BookOrbit account settings in BookBridge and it is used in
+  place of the username and password, with no login or token refresh. This makes BookOrbit
+  installs that sign in only through OIDC/SSO (`DISABLE_LOCAL_AUTH=true`) work with
+  BookBridge. Give the key **Write** access plus Download, Upload, Delete books and Manage
+  libraries; the Test button reports which BookOrbit account the key belongs to (#482).
+
 - **Spines now have the depth of books resting on real shelves.** Every visible row stands
   above a full-width slate shelf in the night theme or a wood shelf in the day theme;
   the spines have rounded, shaded cover edges, right-cast shadows, and soft contact

@@ -1632,7 +1632,7 @@ _TEST_CONNECTION_FIELDS = {
     ],
     'storyteller': ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
     'booklore': ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
-    'bookorbit': ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD'],
+    'bookorbit': ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD', 'BOOKORBIT_API_KEY'],
     'kavita': ['KAVITA_ENABLED', 'KAVITA_SERVER', 'KAVITA_API_KEY'],
     'bookfusion': ['BOOKFUSION_ENABLED', 'BOOKFUSION_API_URL', 'BOOKFUSION_ACCESS_TOKEN'],
     'cwa': ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
@@ -15363,6 +15363,7 @@ def _run_test_connection(service: str, payload: dict):
             _normalize_test_url(data.get('BOOKORBIT_SERVER')),
             _coerce_test_str(data.get('BOOKORBIT_USER')),
             _coerce_test_str(data.get('BOOKORBIT_PASSWORD')),
+            _coerce_test_str(data.get('BOOKORBIT_API_KEY')),
         ),
         'kavita': lambda data: _test_kavita(
             _coerce_test_bool(data.get('KAVITA_ENABLED')),
@@ -16219,11 +16220,24 @@ def _test_booklore(enabled: bool, url: str, user: str, pwd: str) -> dict:
     return {"ok": False, "message": f"Login returned {r.status_code}"}
 
 
-def _test_bookorbit(enabled: bool, url: str, user: str, pwd: str) -> dict:
+def _test_bookorbit(enabled: bool, url: str, user: str, pwd: str, api_key: str = "") -> dict:
     if not enabled:
         return {"ok": False, "message": "BookOrbit is disabled"}
+    if url and api_key:
+        r = requests.get(
+            f"{url}/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            body = r.json() if r.content else {}
+            name = body.get("username") if isinstance(body, dict) else None
+            return {"ok": True, "message": f"Authenticated with API key as {name}" if name else "Authenticated with API key"}
+        if r.status_code in (401, 403):
+            return {"ok": False, "message": "API key refused (revoked, expired, or API keys turned off in BookOrbit)"}
+        return {"ok": False, "message": f"API key check returned {r.status_code}"}
     if not url or not user or not pwd:
-        return {"ok": False, "message": "Missing URL, username, or password"}
+        return {"ok": False, "message": "Missing URL, and username + password or API key"}
     r = requests.post(
         f"{url}/api/v1/auth/login",
         json={"username": user, "password": pwd},

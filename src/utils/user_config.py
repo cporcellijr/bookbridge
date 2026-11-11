@@ -39,7 +39,7 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "CWA_USERNAME", "CWA_PASSWORD", "CWA_ENABLED",
     "CWA_SYNC_TOKEN", "CWA_SYNC_ENABLED",
     # BookOrbit (account + the user's own destination collection)
-    "BOOKORBIT_USER", "BOOKORBIT_PASSWORD", "BOOKORBIT_ENABLED",
+    "BOOKORBIT_USER", "BOOKORBIT_PASSWORD", "BOOKORBIT_API_KEY", "BOOKORBIT_ENABLED",
     "BOOKORBIT_SHELF_NAME",
     # BookOrbit KOReader-sync account (annotation hub spoke; kosync-style creds)
     "BOOKORBIT_KOSYNC_USER", "BOOKORBIT_KOSYNC_KEY", "BOOKORBIT_KOSYNC_OWNER",
@@ -72,7 +72,7 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
 ENGINE_MIRROR_KEYS = (
     "ABS_KEY", "ABS_LIBRARY_ID",
     "BOOKLORE_USER", "BOOKLORE_PASSWORD", "BOOKLORE_SHELF_NAME", "BOOKLORE_LIBRARY_ID",
-    "BOOKORBIT_USER", "BOOKORBIT_PASSWORD", "BOOKORBIT_SHELF_NAME",
+    "BOOKORBIT_USER", "BOOKORBIT_PASSWORD", "BOOKORBIT_API_KEY", "BOOKORBIT_SHELF_NAME",
     "KAVITA_API_KEY", "KAVITA_LIBRARY_ID", "KAVITA_COLLECTION_NAME",
     "CWA_USERNAME", "CWA_PASSWORD", "CWA_SYNC_TOKEN",
 )
@@ -207,6 +207,7 @@ PER_USER_FIELD_GROUPS = [
         ("BOOKORBIT_ENABLED", N_("Enabled"), "bool"),
         ("BOOKORBIT_USER", N_("Username"), "text"),
         ("BOOKORBIT_PASSWORD", N_("Password"), "secret"),
+        ("BOOKORBIT_API_KEY", N_("API key (BookOrbit 3.8+; replaces the password, keep the username for highlight sync)"), "secret"),
         ("BOOKORBIT_SHELF_NAME", N_("Collection name (synced books moved here)"), "text"),
         ("BOOKORBIT_KOSYNC_USER", N_("KOReader sync username (highlight sync)"), "text"),
         ("BOOKORBIT_KOSYNC_KEY", N_("KOReader sync password (highlight sync)"), "secret"),
