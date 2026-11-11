@@ -8,6 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **The New Library asks the server for status far less often.** An idle Library tab checks
+  for running jobs every 30 seconds instead of every 5, a tab in the background makes no
+  requests at all and catches up the moment you return to it, and starting a sync, re-map or
+  read-along build still shows progress right away.
+
 - **CTC alignment jobs now show progress throughout the model pass.** QuartzNet
   and MMS report the amount of audiobook audio processed, so the first CTC
   attempt advances the Job Queue from 10% to 90% and the post-transcript CTC
