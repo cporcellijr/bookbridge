@@ -127,6 +127,7 @@
                     <summary aria-haspopup="menu" aria-expanded="false"><span class="avatar" aria-hidden="true">{{ (current_user.username or '?')[:1]|upper }}</span><span class="user-name">{{ current_user.username }}<small>{{ _('Account') }}</small></span><svg class="icon menu-caret" aria-hidden="true"><use href="/static/icons.svg#chevron"></use></svg></summary>
                     <nav class="user-menu-panel" aria-label="{{ _('User menu') }}">
                         <a href="/account"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#account"></use></svg>{{ _('Account') }}</a>
+                        <a href="/account/display"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#theme"></use></svg>{{ _('Display') }}</a>
                         <a href="https://cporcellijr.github.io/bookbridge/" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#docs"></use></svg>{{ _('Docs') }}</a>
                         <a href="/logout"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logout"></use></svg>{{ _('Logout') }}</a>
                     </nav>
@@ -150,6 +151,7 @@
                     <summary aria-label="{{ _('Account menu') }}"><span class="avatar" aria-hidden="true">{{ (current_user.username or '?')[:1]|upper }}</span></summary>
                     <nav class="user-menu-panel" aria-label="{{ _('User menu') }}">
                         <a href="/account">{{ _('Account') }}</a>
+                        <a href="/account/display">{{ _('Display') }}</a>
                         {% if is_admin %}<a href="/logs">{{ _('Logs') }}</a>{% endif %}
                         <a href="https://cporcellijr.github.io/bookbridge/" target="_blank" rel="noopener noreferrer">{{ _('Docs') }}</a>
                         <a href="/logout">{{ _('Logout') }}</a>

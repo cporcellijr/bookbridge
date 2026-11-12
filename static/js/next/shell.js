@@ -28,17 +28,29 @@
         if (media.addEventListener) media.addEventListener('change', onDeviceThemeChange);
         else if (media.addListener) media.addListener(onDeviceThemeChange);
     }
-    if (toggle) toggle.addEventListener('click', function () {
-        preference = theme === 'dark' ? 'day' : 'night';
-        root.dataset.themePref = preference;
+    window.bbApplyThemePreference = function (value) {
+        preference = value;
+        root.dataset.themePref = value;
         applyTheme();
         var themeSelect = document.querySelector('select[name="UI_THEME"]');
-        if (themeSelect) themeSelect.value = preference;
+        if (themeSelect) themeSelect.value = value;
+        if (typeof document.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+            document.dispatchEvent(new CustomEvent('bb:theme-preference', {detail: {value: value}}));
+        }
+    };
+    if (toggle) toggle.addEventListener('click', function () {
+        var before = preference;
+        var next = theme === 'dark' ? 'day' : 'night';
+        window.bbApplyThemePreference(next);
+        if (typeof window.bbDisplaySaveTheme === 'function') {
+            window.bbDisplaySaveTheme(next, before);
+            return;
+        }
         try {
             window.fetch('/account/display', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-                body: JSON.stringify({UI_THEME: preference})
+                body: JSON.stringify({UI_THEME: next})
             }).catch(function () { /* Keep the theme on this page if saving fails. */ });
         } catch (error) { /* Keep the theme on this page if saving fails. */ }
     });

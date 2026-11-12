@@ -35,153 +35,174 @@ class TestAccountDisplayPage(unittest.TestCase):
 
     def test_account_display_shows_interface_and_series_in_both_modes(self):
         self._real_templates()
-        self._login("ui-reader")
-        for mode in ("classic", "new"):
-            with self.subTest(mode=mode):
-                self.service.set_user_credential(self.reader.id, "UI_MODE", mode)
-                response = self.client.get("/account")
-                self.assertEqual(response.status_code, 200)
-                markup = response.get_data(as_text=True)
-                self.assertIn('id="account-display"', markup)
-                form = re.search(
-                    r'<form class="account-interface-form"[^>]*>.*?</form>',
-                    markup, re.S,
-                )
-                self.assertIsNotNone(form)
-                self.assertIn('name="ui_mode" value="classic"', form.group())
-                self.assertIn('name="ui_mode" value="new"', form.group())
-                series_form = re.search(
-                    r'<form class="account-series-form"[^>]*>.*?</form>',
-                    markup, re.S,
-                )
-                self.assertIsNotNone(series_form)
-                self.assertIn('name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="false"', series_form.group())
-                self.assertRegex(
-                    series_form.group(),
-                    r'type="checkbox"[^>]+name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true"',
-                )
-                self.assertIn('action="/account/display?next=/account"', series_form.group())
-                if mode == "new":
-                    theme_form = re.search(
-                        r'<form class="account-theme-form"[^>]*>.*?</form>',
-                        markup, re.S,
-                    )
-                    self.assertIsNotNone(theme_form)
-                    self.assertIn('name="UI_THEME"', theme_form.group())
-                    for value in ("auto", "day", "night"):
-                        self.assertIn(f'value="{value}"', theme_form.group())
-                    library_form = re.search(
-                        r'<form class="account-library-style-form"[^>]*>.*?</form>', markup, re.S,
-                    )
-                    self.assertIsNotNone(library_form)
-                    for style in ("cards", "faceout", "spines", "list"):
-                        self.assertIn(f'value="{style}"', library_form.group())
-                else:
-                    self.assertNotIn('account-library-style-form', markup)
-                    self.assertNotIn('name="UI_LIBRARY_STYLE"', markup)
-                    self.assertNotIn('account-theme-form', markup)
-                    self.assertNotIn('name="UI_THEME"', markup)
-                for future_setting in (
-                    "UI_COVER_SIZE", "UI_SHOW_PROGRESS",
-                    "UI_SHOW_FINISHED", "UI_SHOW_FORMAT_STRIP", "UI_SHOW_RATINGS",
-                    "UI_SHOW_TITLES", "UI_SHELF_FINISH",
-                ):
-                    self.assertNotIn(f'name="{future_setting}"', markup)
+        self._login('ui-reader')
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'classic')
+        classic = self.client.get('/account').get_data(as_text=True)
+        self.assertIn('id="account-display"', classic)
+        self.assertIn('class="account-series-form"', classic)
+        self.assertNotIn('href="/account/display"', classic)
+        redirect = self.client.get('/account/display')
+        self.assertEqual((redirect.status_code, redirect.location), (302, '/account#account-display'))
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        account = self.client.get('/account').get_data(as_text=True)
+        self.assertNotIn('id="account-display"', account)
+        self.assertNotIn('account-series-form', account)
+        self.assertIn('href="/account/display"', account)
+        page = self.client.get('/account/display')
+        self.assertEqual(page.status_code, 200)
+        markup = page.get_data(as_text=True)
+        for name in ('account-interface-form', 'account-theme-form', 'account-library-style-form', 'account-series-form'):
+            self.assertIn(f'class="{name}', markup)
+        self.assertIn('action="/account/interface?next=/account/display"', markup)
+        self.assertIn('action="/account/display?next=/account/display"', markup)
+        self.assertIn('role="switch"', markup)
+        for value in ('cards', 'faceout', 'spines', 'list'):
+            self.assertIn(f'name="UI_LIBRARY_STYLE" value="{value}"', markup)
+        for future in ('UI_COVER_SIZE', 'UI_SHOW_PROGRESS', 'UI_SHOW_FINISHED', 'UI_SHOW_FORMAT_STRIP', 'UI_SHOW_RATINGS', 'UI_SHOW_TITLES', 'UI_SHELF_FINISH'):
+            self.assertNotIn(f'name="{future}"', markup)
+        self.assertRegex(markup, r'id="bb-next-user-menu"[\s\S]*?href="/account/display"')
+        self.assertRegex(markup, r'id="bb-next-mobile-user-menu"[\s\S]*?href="/account/display"')
+
+    def test_display_preview_is_only_the_signed_in_readers_library(self):
+        self._real_templates()
+        from src.db.models import Book
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self.service.set_user_credential(self.admin.id, 'UI_MODE', 'new')
+        self._series_books()
+        self.service.save_book(Book(abs_id='other-user-book', abs_title='Private admin book', status='active', duration=1000))
+        self.service.link_user_book(self.admin.id, 'other-user-book')
+        self._login('ui-reader')
+        markup = self.client.get('/account/display').get_data(as_text=True)
+        self.assertIn('Series book 1', markup)
+        self.assertIn('Series book 2', markup)
+        self.assertNotIn('Private admin book', markup)
+        self.assertIn('display-preview-series-on', markup)
+        self.assertIn('display-preview-series-off', markup)
+        self.client.get('/logout')
+        self._login('ui-admin')
+        markup = self.client.get('/account/display').get_data(as_text=True)
+        self.assertIn('Private admin book', markup)
+        # Admin's shared catalog links may include both books; the reader must never see admin-only titles.
+
+    def test_display_preview_resolves_authors_like_the_library(self):
+        from unittest.mock import patch
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._series_books()
+        self._login('ui-reader')
+        with patch('src.web_server._prefetch_bookorbit_authors', return_value={}) as authors,                 patch('src.web_server._prefetch_bookfusion_links', return_value={}) as links:
+            self.assertEqual(self.client.get('/account/display').status_code, 200)
+        authors.assert_called_once()
+        links.assert_called_once()
+
+    def test_display_get_signed_out_redirects_and_empty_reader_shows_note(self):
+        self._real_templates()
+        response = self.client.get('/account/display')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login', response.location)
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        markup = self.client.get('/account/display').get_data(as_text=True)
+        self.assertIn('Your library is empty', markup)
+        self.assertNotIn('id="display-preview-stage"', markup)
 
     def test_library_style_form_saves_only_the_reader_and_reflects_the_choice(self):
         self._real_templates()
-        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
-        self._login("ui-reader")
-        for preference in ("cards", "faceout", "spines", "list"):
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._series_books()
+        self._login('ui-reader')
+        for preference in ('cards', 'faceout', 'spines', 'list'):
             with self.subTest(preference=preference):
-                response = self.client.post("/account/display?next=/account",
-                                            data={"UI_LIBRARY_STYLE": preference},
-                                            follow_redirects=True)
-                self.assertEqual(response.status_code, 200)
+                response = self.client.post('/account/display?next=/account/display', data={'UI_LIBRARY_STYLE': preference}, follow_redirects=True)
+                self.assertEqual((response.status_code, response.request.path), (200, '/account/display'))
                 markup = response.get_data(as_text=True)
-                form = re.search(r'<form class="account-library-style-form"[^>]*>.*?</form>',
-                                 markup, re.S)
+                form = re.search(r'<form class="account-library-style-form[^"]*"[^>]*>.*?</form>', markup, re.S)
                 self.assertIsNotNone(form)
-                self.assertRegex(form.group(), rf'value="{preference}"\s+selected')
-                self.assertEqual(self.service.get_user_credential(self.reader.id, "UI_LIBRARY_STYLE"), preference)
-                self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_LIBRARY_STYLE"))
-        self.client.get("/logout")
-        self._login("ui-admin")
-        self.service.set_user_credential(self.admin.id, "UI_MODE", "new")
-        markup = self.client.get("/account").get_data(as_text=True)
-        form = re.search(r'<form class="account-library-style-form"[^>]*>.*?</form>', markup, re.S)
-        self.assertRegex(form.group(), r'value="cards"\s+selected')
+                self.assertRegex(form.group(), rf'value="{preference}"[^>]*aria-pressed="true"')
+                self.assertIn(f'data-library-style="{preference}"', markup)
+                self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_LIBRARY_STYLE'), preference)
+                self.assertIsNone(self.service.get_user_credential(self.admin.id, 'UI_LIBRARY_STYLE'))
+        self.client.get('/logout')
+        self._login('ui-admin')
+        self.service.set_user_credential(self.admin.id, 'UI_MODE', 'new')
+        other = self.client.get('/account/display').get_data(as_text=True)
+        self.assertRegex(other, r'value="cards"[^>]*aria-pressed="true"')
+
+    def test_preview_hide_rules_beat_faceout_grid_specificity(self):
+        from pathlib import Path
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next.css').read_text(encoding='utf-8')
+        for view, hidden in (('spines', 'grouped'), ('list', 'grouped'), ('covers', 'flat')):
+            with self.subTest(view=view):
+                selector = f'.display-preview .library-page[data-view="{view}"] > .book-grid.display-preview-{hidden}'
+                self.assertIn(selector, css)
+        self.assertIn('display-preview-grouped,', css)
+
+    def test_no_javascript_buttons_override_hidden_fallback(self):
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        markup = self.client.get('/account/display').get_data(as_text=True)
+        for form_class, field, choice in (
+            ('account-theme-form', 'UI_THEME', 'night'),
+            ('account-library-style-form', 'UI_LIBRARY_STYLE', 'faceout'),
+        ):
+            with self.subTest(field=field):
+                form = re.search(r'<form class="'+form_class+r'[^"]*"[^>]*>.*?</form>', markup, re.S).group()
+                button = f'name="{field}" value="{choice}" data-display-value="{choice}"'
+                self.assertIn(button, form)
+                self.assertIn(f'<input type="hidden" name="{field}" value="', form)
+                self.assertLess(form.index(f'<input type="hidden" name="{field}"'), form.index(button))
+                response = self.client.post('/account/display?next=/account/display',
+                    data=MultiDict([(field, 'cards' if field == 'UI_LIBRARY_STYLE' else 'auto'), (field, choice)]))
+                self.assertEqual((response.status_code, response.location), (302, '/account/display'))
+                self.assertEqual(self.service.get_user_credential(self.reader.id, field), choice)
 
     def test_theme_form_saves_for_one_reader_and_reflects_the_choice(self):
         self._real_templates()
-        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
-        self._login("ui-reader")
-        for preference in ("auto", "day", "night"):
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        for preference in ('auto', 'day', 'night'):
             with self.subTest(preference=preference):
-                response = self.client.post(
-                    "/account/display?next=/account",
-                    data={"UI_THEME": preference},
-                    follow_redirects=True,
-                )
-                self.assertEqual(response.status_code, 200)
+                response = self.client.post('/account/display?next=/account/display', data={'UI_THEME': preference}, follow_redirects=True)
+                self.assertEqual((response.status_code, response.request.path), (200, '/account/display'))
                 markup = response.get_data(as_text=True)
-                form = re.search(
-                    r'<form class="account-theme-form"[^>]*>.*?</form>',
-                    markup, re.S,
-                )
+                form = re.search(r'<form class="account-theme-form[^"]*"[^>]*>.*?</form>', markup, re.S)
                 self.assertIsNotNone(form)
-                self.assertRegex(form.group(), rf'value="{preference}"\s+selected')
+                self.assertRegex(form.group(), rf'value="{preference}"[^>]*aria-pressed="true"')
                 self.assertIn(f'data-theme-pref="{preference}"', markup)
-                self.assertEqual(self.service.get_user_credential(self.reader.id, "UI_THEME"), preference)
-                self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_THEME"))
-                self.assertIsNone(self.service.get_user_credential(self.reader.id, SERIES_KEY))
-
-        self.client.get("/logout")
-        self._login("ui-admin")
-        self.service.set_user_credential(self.admin.id, "UI_MODE", "new")
-        other = self.client.get("/account").get_data(as_text=True)
-        self.assertIn('data-theme-pref="auto"', other)
-        self.assertRegex(other, r'value="auto"\s+selected')
+                self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_THEME'), preference)
+                self.assertIsNone(self.service.get_user_credential(self.admin.id, 'UI_THEME'))
+        self.client.get('/logout')
+        self._login('ui-admin')
+        self.service.set_user_credential(self.admin.id, 'UI_MODE', 'new')
+        other = self.client.get('/account/display').get_data(as_text=True)
+        self.assertRegex(other, r'value="auto"[^>]*aria-pressed="true"')
 
     def test_series_form_saves_only_reader_and_changes_real_library_markup(self):
         self._real_templates()
         self._series_books()
-        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
-        self._login("ui-reader")
-        account_before = self.client.get("/account").get_data(as_text=True)
-        self.assertIn('class="account-series-form"', account_before)
-        self.assertIn('name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="false"', account_before)
-
-        before = self.client.get("/").get_data(as_text=True)
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        display = self.client.get('/account/display').get_data(as_text=True)
+        self.assertIn('class="account-series-form display-row"', display)
+        self.assertIn('name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="false"', display)
+        self.assertIn('data-series-on="false"', display)
+        self.assertIn('display-preview-series-on', display)
+        before = self.client.get('/').get_data(as_text=True)
         self.assertIn('data-series-name="P15b Series"', before)
         self.assertNotIn('class="series-strip series-header"', before)
-
-        enabled = self.client.post(
-            "/account/display?next=/account",
-            data=MultiDict([
-                ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "false"),
-                ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "true"),
-            ]),
-        )
-        self.assertEqual((enabled.status_code, enabled.location), (302, "/account"))
-        self.assertEqual(self.service.get_user_credential(self.reader.id, SERIES_KEY), "true")
+        enabled = self.client.post('/account/display?next=/account/display', data=MultiDict([
+            (SERIES_KEY, 'false'), (SERIES_KEY, 'true')]))
+        self.assertEqual((enabled.status_code, enabled.location), (302, '/account/display'))
+        self.assertEqual(self.service.get_user_credential(self.reader.id, SERIES_KEY), 'true')
         self.assertIsNone(self.service.get_user_credential(self.admin.id, SERIES_KEY))
-        account = self.client.get("/account").get_data(as_text=True)
-        self.assertRegex(
-            account,
-            r'name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true"\s+checked',
-        )
-        after = self.client.get("/").get_data(as_text=True)
-        self.assertIn('class="series-strip series-header"', after)
-
-        disabled = self.client.post(
-            "/account/display?next=/account",
-            data={"SERIES_SHOW_CURRENT_BOOK_DETAIL": "false"},
-        )
-        self.assertEqual((disabled.status_code, disabled.location), (302, "/account"))
-        self.assertEqual(self.service.get_user_credential(self.reader.id, SERIES_KEY), "false")
-        self.assertNotIn('class="series-strip series-header"', self.client.get("/").get_data(as_text=True))
-        self.assertIsNone(self.service.get_user_credential(self.admin.id, SERIES_KEY))
+        display = self.client.get('/account/display').get_data(as_text=True)
+        self.assertRegex(display, r'name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true" role="switch" aria-checked="true"\s+checked')
+        self.assertIn('data-series-on="true"', display)
+        self.assertIn('class="series-strip series-header"', self.client.get('/').get_data(as_text=True))
+        disabled = self.client.post('/account/display?next=/account/display', data={SERIES_KEY: 'false'})
+        self.assertEqual((disabled.status_code, disabled.location), (302, '/account/display'))
+        self.assertNotIn('class="series-strip series-header"', self.client.get('/').get_data(as_text=True))
 
     def test_classic_series_form_saves_per_reader_and_updates_classic_library(self):
         self._real_templates()
@@ -240,28 +261,26 @@ class TestAccountDisplayPage(unittest.TestCase):
     def test_existing_series_value_survives_integrations_save_and_interface_roundtrip(self):
         self._real_templates()
         self._series_books()
-        self.service.set_user_credential(self.reader.id, SERIES_KEY, "true")
-        self._login("ui-reader")
-        self.assertEqual(self.client.post(
-            "/account/integrations", data={SERIES_KEY: "false"},
-        ).status_code, 200)
-        self.assertEqual(self.service.get_user_credential(self.reader.id, SERIES_KEY), "true")
-        for mode in ("classic", "new"):
+        self.service.set_user_credential(self.reader.id, SERIES_KEY, 'true')
+        self._login('ui-reader')
+        self.assertEqual(self.client.post('/account/integrations', data={SERIES_KEY: 'false'}).status_code, 200)
+        self.assertEqual(self.service.get_user_credential(self.reader.id, SERIES_KEY), 'true')
+        for mode in ('classic', 'new'):
             with self.subTest(mode=mode):
-                response = self.client.post(
-                    "/account/interface?next=/account", data={"ui_mode": mode},
-                    follow_redirects=True,
-                )
-                self.assertEqual((response.status_code, response.request.path), (200, "/account"))
-                markup = response.get_data(as_text=True)
-                self.assertIn('id="account-display"', markup)
-                self.assertIn('account-series-form', markup)
-                self.assertRegex(
-                    markup,
-                    r'name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true"\s+checked',
-                )
-        self.assertEqual(self.service.get_user_credential(self.reader.id, SERIES_KEY), "true")
-        self.assertIn('class="series-strip series-header"', self.client.get("/").get_data(as_text=True))
+                response = self.client.post('/account/interface?next=/account', data={'ui_mode': mode}, follow_redirects=True)
+                self.assertEqual((response.status_code, response.request.path), (200, '/account'))
+                account = response.get_data(as_text=True)
+                if mode == 'classic':
+                    self.assertIn('id="account-display"', account)
+                    self.assertIn('account-series-form', account)
+                    self.assertRegex(account, r'name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true"\s+checked')
+                else:
+                    self.assertNotIn('account-series-form', account)
+                    display = self.client.get('/account/display').get_data(as_text=True)
+                    self.assertIn('class="account-series-form display-row"', display)
+                    self.assertIn('data-series-on="true"', display)
+        self.assertEqual(self.service.get_user_credential(self.reader.id, SERIES_KEY), 'true')
+        self.assertIn('class="series-strip series-header"', self.client.get('/').get_data(as_text=True))
 
 
 if __name__ == "__main__":

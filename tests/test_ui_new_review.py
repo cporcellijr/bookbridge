@@ -50,7 +50,8 @@ class TestP9ReviewFixes(unittest.TestCase):
     def test_library_refresh_updates_each_apps_position(self):
         page = source("templates/next/index.html")
         scripts = source("templates/next/_library_scripts.html")
-        self.assertIn('<span data-app-pct="{{ name }}">', page)
+        cards = source("templates/next/_library_cards.html")
+        self.assertIn('<span data-app-pct="{{ name }}">', cards)
         self.assertIn("card.querySelectorAll('[data-app-pct]')", scripts)
 
     def test_discover_starts_when_the_browser_blocks_storage(self):

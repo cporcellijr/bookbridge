@@ -88,26 +88,30 @@ class TestInterfaceSwitch(unittest.TestCase):
         self.assertIn("/login", response.location)
         self.assertIsNone(self.service.get_user_credential(self.reader.id, "UI_MODE"))
 
-    def test_no_navigation_switch_and_account_choice_in_both_interfaces(self):
+    def test_no_navigation_switch_and_interface_choice_on_its_new_page(self):
         self._real_templates()
-        self._login("ui-reader")
-        for mode in ("classic", "new"):
+        self._login('ui-reader')
+        for mode in ('classic', 'new'):
             with self.subTest(mode=mode):
-                self.service.set_user_credential(self.reader.id, "UI_MODE", mode)
-                library = self.client.get("/").get_data(as_text=True)
+                self.service.set_user_credential(self.reader.id, 'UI_MODE', mode)
+                library = self.client.get('/').get_data(as_text=True)
                 self.assertNotIn('nav-interface-form', library)
-                self.assertNotIn('interface-switch', library)
                 self.assertNotIn('name="ui_mode"', library)
-                account = self.client.get("/account").get_data(as_text=True)
-                self.assertIn('id="account-display"', account)
-                form = re.search(r'<form class="account-interface-form"[^>]*>(.*?)</form>',
-                                 account, re.S)
+                account = self.client.get('/account').get_data(as_text=True)
+                if mode == 'classic':
+                    self.assertIn('id="account-display"', account)
+                    page = account
+                    next_path = '/account'
+                else:
+                    self.assertNotIn('id="account-display"', account)
+                    page = self.client.get('/account/display').get_data(as_text=True)
+                    next_path = '/account/display'
+                form = re.search(r'<form class="account-interface-form[^"]*"[^>]*>(.*?)</form>', page, re.S)
                 self.assertIsNotNone(form)
-                self.assertIn('action="/account/interface?next=/account"', form.group(0))
+                self.assertIn(f'action="/account/interface?next={next_path}"', form.group())
                 self.assertEqual(form.group(1).count('name="ui_mode"'), 2)
-                for choice in ("classic", "new"):
-                    expected = "true" if choice == mode else "false"
-                    self.assertIn(f'value="{choice}"', form.group(1))
+                for choice in ('classic', 'new'):
+                    expected = 'true' if choice == mode else 'false'
                     self.assertRegex(form.group(1), rf'value="{choice}"[^>]*aria-pressed="{expected}"')
 
     def test_my_integrations_no_longer_has_interface_field(self):
@@ -138,19 +142,19 @@ class TestInterfaceSwitch(unittest.TestCase):
         for mode, target in (("classic", "new"), ("new", "classic")):
             with self.subTest(mode=mode):
                 self.service.set_user_credential(self.reader.id, "UI_MODE", mode)
-                page = self.client.get("/account")
+                page = self.client.get("/account" if mode == "classic" else "/account/display")
                 self.assertEqual(page.status_code, 200)
-                form = re.search(r'<form class="account-interface-form"[^>]*>(.*?)</form>',
+                form = re.search(r'<form class="account-interface-form[^"]*"[^>]*>(.*?)</form>',
                                  page.get_data(as_text=True), re.S)
                 self.assertIsNotNone(form)
                 token = re.search(r'name="csrf_token" value="([^"]+)"', form.group(1))
                 self.assertIsNotNone(token)
                 response = self.client.post(
-                    "/account/interface?next=/account",
+                    "/account/interface?next=" + ("/account" if mode == "classic" else "/account/display"),
                     data={"ui_mode": target, "csrf_token": token.group(1)},
                     follow_redirects=True,
                 )
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.request.path, "/account")
                 self.assertEqual(self.service.get_user_credential(self.reader.id, "UI_MODE"), target)
-                self.assertIn('id="account-display"', response.get_data(as_text=True))
+                self.assertIn('id="account-display"' if target == "classic" else 'href="/account/display"', response.get_data(as_text=True))

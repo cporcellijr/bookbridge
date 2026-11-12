@@ -338,7 +338,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn(' data-page-top ', wide)
         self.assertIn('--spine-w:42px;', narrow)
         self.assertNotIn('data-page-top', narrow)
-        self.assertIn('spine_w >= 44', (_ROOT / 'templates/next/index.html').read_text(encoding='utf-8'))
+        self.assertIn('spine_w >= 44', (_ROOT / 'templates/next/_library_cards.html').read_text(encoding='utf-8'))
         self.assertNotIn('data-page-top', (_ROOT / "templates/index.html").read_text(encoding="utf-8"))
 
     def test_spine_depth_face_out_wrap_and_page_edge(self):
@@ -438,6 +438,7 @@ class TestNewLibrary(unittest.TestCase):
         classic = (_ROOT / "templates/index.html").read_text(encoding="utf-8")
         styles = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
+        cards = (_ROOT / "templates/next/_library_cards.html").read_text(encoding="utf-8")
         toolbar = re.search(r'<section class="library-toolbar".*?</section>', page, re.S).group()
         bar = re.search(r'<div id="selection-bar".*?</div>', page, re.S).group()
 
@@ -445,8 +446,8 @@ class TestNewLibrary(unittest.TestCase):
         self.assertRegex(toolbar, r'id="select-mode-button"[^>]*aria-pressed="false"')
         self.assertNotIn("selectAllFilteredBooks()", toolbar)
         self.assertNotIn('class="view-switch"', toolbar)
-        self.assertIn('class="book-select-hit"', page)
-        self.assertIn('type="checkbox" data-select-book', page)
+        self.assertIn('class="book-select-hit"', cards)
+        self.assertIn('type="checkbox" data-select-book', cards)
         self.assertIn('data-select-mode="off"] .book-select-hit', styles)
         self.assertIn('data-view="spines"] #select-mode-button', styles)
         self.assertIn('id="selection-bar"', bar)

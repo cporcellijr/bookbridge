@@ -74,6 +74,11 @@ class TestP6Sources(unittest.TestCase):
                 new = (ROOT / "templates" / "next" / f"{page}.html").read_text(encoding="utf-8")
                 script = (ROOT / "templates" / "next" / f"_{page}_scripts.html").read_text(encoding="utf-8")
                 self.assertIn('{% extends "next/base.html" %}', new)
+                if page == "account":
+                    # P15h intentionally moved New's Display forms to /account/display.
+                    self.assertIn("account_display_page", new)
+                    self.assertNotIn('id="account-display"', new)
+                    continue
                 for pattern in (r'fetch\s*\(', r'href="/[^"]*', r'action="/[^"]*', r'url_for\('):
                     old_tokens = Counter(re.findall(pattern, old))
                     new_tokens = Counter(re.findall(pattern, new + script))
@@ -192,13 +197,11 @@ class TestP6RenderedRoutes(unittest.TestCase):
                     old_fields.feed(classic[url])
                     new_fields.feed(modern[url])
                     if url == "/account":
-                        new_only = Counter({
-                            ("csrf_token", "hidden"): 2,
-                            ("UI_THEME", "select"): 1,
-                            ("UI_LIBRARY_STYLE", "select"): 1,
-                        })
-                        self.assertEqual(new_fields.fields - old_fields.fields, new_only)
-                        self.assertEqual(new_fields.fields - new_only, old_fields.fields)
+                        # The Classic-only Display card no longer has a New Account counterpart.
+                        excluded = {"SERIES_SHOW_CURRENT_BOOK_DETAIL", "csrf_token"}
+                        classic_non_display = Counter({k: v for k, v in old_fields.fields.items() if k[0] not in excluded})
+                        new_non_display = Counter({k: v for k, v in new_fields.fields.items() if k[0] not in excluded})
+                        self.assertEqual(classic_non_display, new_non_display)
                     else:
                         self.assertEqual(old_fields.fields, new_fields.fields)
 
@@ -220,14 +223,9 @@ class TestP6RenderedRoutes(unittest.TestCase):
                         old_fields.feed(classic[url])
                         new_fields.feed(modern[url])
                         if url == "/account":
-                            shared_values = Counter({
-                                key: n for key, n in new_fields.values.items()
-                                if key[0] not in ("UI_THEME", "UI_LIBRARY_STYLE", "csrf_token")
-                            })
-                            old_values = Counter({
-                                key: n for key, n in old_fields.values.items()
-                                if key[0] != "csrf_token"
-                            })
+                            excluded = {"SERIES_SHOW_CURRENT_BOOK_DETAIL", "csrf_token"}
+                            shared_values = Counter({k: n for k, n in new_fields.values.items() if k[0] not in excluded})
+                            old_values = Counter({k: n for k, n in old_fields.values.items() if k[0] not in excluded})
                             self.assertEqual(old_values, shared_values)
                         else:
                             self.assertEqual(old_fields.values, new_fields.values)
