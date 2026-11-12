@@ -139,7 +139,8 @@ class Container(containers.DeclarativeContainer):
         EbookParser,
         books_dir,
         epub_cache_dir=epub_cache_dir,
-        ollama_client=ollama_client
+        ollama_client=ollama_client,
+        calibre_file_ids=database_service,
     )
 
     # Smil Extractor Provider
