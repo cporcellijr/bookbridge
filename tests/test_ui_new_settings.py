@@ -193,9 +193,10 @@ class TestP6RenderedRoutes(unittest.TestCase):
                     new_fields.feed(modern[url])
                     if url == "/account":
                         new_only = Counter({
-                            ("csrf_token", "hidden"): 1,
+                            ("csrf_token", "hidden"): 2,
                             ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "hidden"): 1,
                             ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "checkbox"): 1,
+                            ("UI_THEME", "select"): 1,
                         })
                         self.assertEqual(new_fields.fields - old_fields.fields, new_only)
                         self.assertEqual(new_fields.fields - new_only, old_fields.fields)
@@ -222,7 +223,7 @@ class TestP6RenderedRoutes(unittest.TestCase):
                         if url == "/account":
                             shared_values = Counter({
                                 key: n for key, n in new_fields.values.items()
-                                if key[0] not in ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "csrf_token")
+                                if key[0] not in ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "UI_THEME", "csrf_token")
                             })
                             old_values = Counter({
                                 key: n for key, n in old_fields.values.items()

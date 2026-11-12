@@ -1,11 +1,22 @@
 <!doctype html>
-<html lang="{{ get_locale() }}" data-theme="dark">
+{% set theme_pref = display_settings()['UI_THEME'] %}
+<html lang="{{ get_locale() }}" data-theme="{{ 'light' if theme_pref == 'day' else 'dark' }}" data-theme-pref="{{ theme_pref }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark light">
     <title>{% block title %}BookBridge{% endblock %}</title>
-    <script>try { var t = localStorage.getItem('bookbridge-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+    <script>
+        (function () {
+            var root = document.documentElement;
+            var pref = root.dataset.themePref;
+            var light = pref === 'day';
+            if (pref === 'auto' && window.matchMedia) {
+                light = window.matchMedia('(prefers-color-scheme: light)').matches;
+            }
+            root.dataset.theme = light ? 'light' : 'dark';
+        }());
+    </script>
     {% if active_page != 'settings' %}<script>try { if (localStorage.getItem('bookbridge-rail') === 'collapsed') document.documentElement.dataset.rail = 'collapsed'; } catch (e) {}</script>{% endif %}
     <link rel="icon" type="image/png" href="/static/icon.png">
     <link rel="stylesheet" href="/static/fonts/next-fonts.css">
@@ -223,7 +234,9 @@
             maySearchSettings: {{ 'true' if is_admin else 'false' }}
         };
     </script>
+    {% endif %}
     <script src="/static/js/next/shell.js" defer></script>
+    {% if not hide_chrome %}
     <script src="/static/js/next/search.js" defer></script>
     {% endif %}
     {% block scripts %}{% endblock %}

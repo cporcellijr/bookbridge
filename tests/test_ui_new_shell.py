@@ -55,7 +55,7 @@ def _env():
 
 
 def _context(*, admin=False, providers=None, overrides=False, disabled=(), shelfmark=False, shelfmark_legacy=False,
-             shelfmark_off=False, abs_url="", queued=0, hide_chrome=False):
+             shelfmark_off=False, abs_url="", queued=0, hide_chrome=False, theme="auto"):
     providers = providers or {}
     vals = {}
     settings = {}
@@ -108,6 +108,7 @@ def _context(*, admin=False, providers=None, overrides=False, disabled=(), shelf
         ),
         "request": SimpleNamespace(path="/"),
         "csrf_token": lambda: "test-csrf-token",
+        "display_settings": lambda: {"UI_THEME": theme},
         "get_val": get_val,
         "get_user_val": get_user_val,
         "get_user_bool": get_user_bool,
@@ -183,6 +184,16 @@ def test_mobile_app_menu_and_hidden_chrome_fallback():
     hidden = _render("next/base.html", admin=False, hide_chrome=True)
     assert 'class="app-shell"' not in hidden
     assert 'id="main-content"' in hidden
+    assert '/static/js/next/shell.js' in hidden
+    assert '/static/js/next/search.js' not in hidden
+
+
+def test_chrome_hidden_template_without_signed_in_user_keeps_device_default():
+    context = {**_context(hide_chrome=True), "current_user": None}
+    html = _env().get_template("next/base.html").render(**context)
+    assert 'data-theme="dark" data-theme-pref="auto"' in html
+    assert '/static/js/next/shell.js' in html
+    assert 'class="app-shell"' not in html
 
 
 def test_shell_sprite_font_and_static_script_references_exist():
@@ -205,8 +216,35 @@ def test_shell_sprite_font_and_static_script_references_exist():
     defined = set(re.findall(r'<symbol id="([\w-]+)"', sprite))
     assert referenced <= defined
     assert "prefers-reduced-motion" in css
-    assert "localStorage.getItem" in script and "localStorage.setItem" in script
+    assert "bookbridge-theme" not in script and "bookbridge-theme" not in html
+    assert "localStorage.setItem('bookbridge-rail'" in script
+    assert "localStorage.getItem('bookbridge-rail')" in html
     assert "event.key === 'Escape'" in script
+
+
+def test_theme_is_embedded_before_stylesheets_and_does_not_change_classic():
+    for preference, initial in (("auto", "dark"), ("day", "light"), ("night", "dark")):
+        markup = _render("next/base.html", theme=preference)
+        assert f'data-theme="{initial}" data-theme-pref="{preference}"' in markup
+        assert markup.index("root.dataset.theme = light ? 'light' : 'dark'") < markup.index(
+            '<link rel="stylesheet"'
+        )
+        assert "bookbridge-theme" not in markup
+    classic = _render("base.html")
+    assert 'data-theme-pref=' not in classic
+
+
+def test_new_theme_browser_behaviour():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("Node is required for the New theme test")
+    result = subprocess.run([node, str(PROJECT_ROOT / "tests" / "test_ui_new_theme.js")],
+                            capture_output=True, text=True, timeout=15, cwd=PROJECT_ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_rail_collapse_toggle_everywhere_but_settings():
