@@ -426,7 +426,7 @@ class TestAcquisitionMigration(unittest.TestCase):
             self._run(engine, module, module.upgrade)
             inspector = sa.inspect(engine)
             columns = {c["name"] for c in inspector.get_columns("acquisition_requests")}
-            self.assertEqual(columns, {c.name for c in AcquisitionRequest.__table__.columns} - {"progress_mark", "progress_changed_at"})
+            self.assertEqual(columns, {c.name for c in AcquisitionRequest.__table__.columns} - {"progress_mark", "progress_changed_at", "adopted"})
             self.assertIn("ix_acquisition_requests_user_id", {i["name"] for i in inspector.get_indexes("acquisition_requests")})
             self._run(engine, module, module.downgrade)
             self.assertNotIn("acquisition_requests", sa.inspect(engine).get_table_names())
@@ -450,7 +450,7 @@ class TestAcquisitionMigration(unittest.TestCase):
 
         cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
         cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["a7e3c9d1b5f2"])
+        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["b5d2f8a4c7e1"])
 
 
 class TestSettingRegistration(unittest.TestCase):

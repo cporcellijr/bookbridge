@@ -135,6 +135,7 @@ class BookOrbitClient:
         self._token_timestamp: float = 0
         self._token_lock = threading.Lock()
         self._login_retry_after: float = 0
+        self._me_cache: Optional[tuple] = None  # (login identity, BookOrbit user id)
 
         self._book_cache: dict = {}        # id -> light book info
         self._filename_index: dict = {}    # filename.lower() -> id (lazily filled)
@@ -933,6 +934,18 @@ class BookOrbitClient:
             params["mediaKind"] = media_kind
         data = self._request_json("GET", f"/api/v1/book-requests?{urlencode(params)}", ok=(200,))
         return data if isinstance(data, dict) else None
+
+    def current_user_id(self) -> Optional[int]:
+        """BookOrbit's own id for the account in use (cached per login), or None when it cannot be read."""
+        identity = (self._get_base_url(), self._get_api_key(), self._get_username(), self._get_password())
+        if self._me_cache and self._me_cache[0] == identity:
+            return self._me_cache[1]
+        data = self._request_json("GET", "/api/v1/auth/me", ok=(200,))
+        found = data.get("id") if isinstance(data, dict) else None
+        if isinstance(found, bool) or not isinstance(found, int):
+            return None
+        self._me_cache = (identity, found)
+        return found
 
     def get_request(self, request_id) -> Optional[dict]:
         """One request, or None when missing or unreachable."""

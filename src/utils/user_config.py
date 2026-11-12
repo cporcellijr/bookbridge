@@ -40,7 +40,7 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "CWA_SYNC_TOKEN", "CWA_SYNC_ENABLED",
     # BookOrbit (account + the user's own destination collection)
     "BOOKORBIT_USER", "BOOKORBIT_PASSWORD", "BOOKORBIT_API_KEY", "BOOKORBIT_ENABLED",
-    "BOOKORBIT_SHELF_NAME",
+    "BOOKORBIT_SHELF_NAME", "BOOKORBIT_ADOPT_REQUESTS",
     # BookOrbit KOReader-sync account (annotation hub spoke; kosync-style creds)
     "BOOKORBIT_KOSYNC_USER", "BOOKORBIT_KOSYNC_KEY", "BOOKORBIT_KOSYNC_OWNER",
     # Kavita (auth key identifies the Kavita user; collection/library are user choices)
@@ -211,6 +211,7 @@ PER_USER_FIELD_GROUPS = [
         ("BOOKORBIT_PASSWORD", N_("Password"), "secret"),
         ("BOOKORBIT_API_KEY", N_("API key (BookOrbit 3.8+; replaces the password, keep the username for highlight sync)"), "secret"),
         ("BOOKORBIT_SHELF_NAME", N_("Collection name (synced books moved here)"), "text"),
+        ("BOOKORBIT_ADOPT_REQUESTS", N_("Follow audiobook requests I make in BookOrbit and pair them with my ebook"), "bool"),
         ("BOOKORBIT_KOSYNC_USER", N_("KOReader sync username (highlight sync)"), "text"),
         ("BOOKORBIT_KOSYNC_KEY", N_("KOReader sync password (highlight sync)"), "secret"),
         ("BOOKORBIT_KOSYNC_OWNER", N_("KOReader sync owner (must match BookOrbit username)"), "text"),
