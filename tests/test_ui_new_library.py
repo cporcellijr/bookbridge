@@ -53,6 +53,39 @@ class TestNewLibrary(unittest.TestCase):
                 self.assertNotIn('class="view-switch"', markup)
         self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_LIBRARY_STYLE"))
 
+    def test_reader_shelf_finish_reaches_both_shelf_styles_only(self):
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        for style in ("spines", "faceout", "cards", "list"):
+            self.service.set_user_credential(self.reader.id, "UI_LIBRARY_STYLE", style)
+            for finish in ("theme", "wood", "dark", "plain"):
+                with self.subTest(style=style, finish=finish):
+                    self.service.set_user_credential(self.reader.id, "UI_SHELF_FINISH", finish)
+                    html = self.client.get("/").get_data(as_text=True)
+                    self.assertRegex(html, rf'id="library-page"[^>]*data-shelf-finish="{finish}"')
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        for finish, plank in (("wood", "#B9955F"), ("dark", "#1E2430"), ("plain", "#2C333D")):
+            with self.subTest(finish=finish):
+                rule = f':root .library-page[data-view="spines"][data-shelf-finish="{finish}"] {{'
+                self.assertIn(rule, css)
+                content = css[css.index(rule):css.index("}", css.index(rule))]
+                self.assertIn("--shelf-wall-shade:", content)
+                self.assertIn("--shelf-shadow:", content)
+                for variable in ("back", "top", "lip", "front", "under"):
+                    self.assertIn(f"--plank-{variable}:", content)
+                self.assertIn(f"--plank-back: {plank}", content)
+        light_plain = ':root[data-theme="light"] .library-page[data-view="spines"][data-shelf-finish="plain"] {'
+        self.assertIn("--plank-back: #CCD1D7", css[css.index(light_plain):css.index("}", css.index(light_plain))])
+        night = '.library-page[data-view="spines"] {'
+        day = ':root[data-theme="light"] .library-page[data-view="spines"] {'
+        self.assertIn("--plank-back: #1E2430; --plank-top: #303949; --plank-lip: #4A566B;",
+                      css[css.index(night):css.index("}", css.index(night))])
+        self.assertIn("--plank-back: #B9955F; --plank-top: #D8BA8A; --plank-lip: #EBD4AC;",
+                      css[css.index(day):css.index("}", css.index(day))])
+        self.assertNotIn('[data-shelf-finish="theme"]', css)
+        self.assertNotIn('[data-view="covers"][data-shelf-finish=', css)
+        self.assertNotIn('[data-view="list"][data-shelf-finish=', css)
+
     def test_cover_size_steps_and_visibility_rules_affect_only_new_library(self):
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         for size, desktop, phone, face_width, face_cols in (

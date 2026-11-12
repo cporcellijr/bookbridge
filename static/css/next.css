@@ -452,6 +452,24 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
  --plank-back: #B9955F; --plank-top: #D8BA8A; --plank-lip: #EBD4AC; --plank-front: #B48E5A; --plank-under: #8F6E42;
  --book-paper: #EFE9DC; --book-paper-line: #B9B1A0;
 }
+:root .library-page[data-view="spines"][data-shelf-finish="wood"] {
+ --shelf-wall-shade: rgba(40,32,24,.07); --shelf-shadow: rgba(40,32,24,.38);
+ --plank-back: #B9955F; --plank-top: #D8BA8A; --plank-lip: #EBD4AC; --plank-front: #B48E5A; --plank-under: #8F6E42;
+ --book-paper: #EFE9DC; --book-paper-line: #B9B1A0;
+}
+:root .library-page[data-view="spines"][data-shelf-finish="dark"] {
+ --shelf-wall-shade: rgba(0,0,0,.34); --shelf-shadow: rgba(0,0,0,.6);
+ --plank-back: #1E2430; --plank-top: #303949; --plank-lip: #4A566B; --plank-front: #212835; --plank-under: #161B24;
+ --book-paper: #D9D2C3; --book-paper-line: #A0988A;
+}
+:root .library-page[data-view="spines"][data-shelf-finish="plain"] {
+ --shelf-wall-shade: rgba(0,0,0,.22); --shelf-shadow: rgba(0,0,0,.4);
+ --plank-back: #2C333D; --plank-top: #353D48; --plank-lip: #46515E; --plank-front: #2A313C; --plank-under: #1E252D;
+}
+:root[data-theme="light"] .library-page[data-view="spines"][data-shelf-finish="plain"] {
+ --shelf-wall-shade: rgba(38,50,65,.06); --shelf-shadow: rgba(38,50,65,.25);
+ --plank-back: #CCD1D7; --plank-top: #E6E9EC; --plank-lip: #F5F6F8; --plank-front: #B7BFC7; --plank-under: #9CA5AF;
+}
 .library-page[data-view="spines"] .book-grid {
  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 58px 4px; padding: 14px 18px 50px;
  background-image: linear-gradient(to bottom,
@@ -763,7 +781,7 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
 .library-page .progress-done[hidden],
 .library-page[data-view="spines"] .spine-progress[hidden] { display: none; }
 /* Stepper and no-JS forms remain usable without client-side saving. */
-.display-size-row[hidden] { display: none; }
+.display-size-row[hidden], .display-finish-row[hidden] { display: none; }
 .display-size-stepper { display: flex; flex: none; align-items: center; gap: 10px; }
 .display-size-stepper button { width: 32px; height: 32px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg-2); color: var(--text); font-size: 19px; cursor: pointer; }
 .display-size-stepper button:disabled { opacity: .35; cursor: not-allowed; }

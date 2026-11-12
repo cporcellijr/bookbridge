@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync('static/js/next/display.js', 'utf8');
 assert.match(fs.readFileSync('static/js/next/cover-loader.js','utf8'), /getElementById\('library-page'\) \|\| document\.getElementById\('display-preview-stage'\)/, 'preview thumbnails must use the shared cover loader');
 
-function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'spines', 'faceout', 'list'], applyTheme = null, sizeRow = null} = {}) {
+function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'spines', 'faceout', 'list'], applyTheme = null, sizeRow = null, finishRow = null} = {}) {
     const values = {};
     const requests = [];
     const listeners = {};
@@ -32,12 +32,13 @@ function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'sp
         contains(button) { return buttons.includes(button); },
         closest(selector) { return selector === '[data-display-group]' ? group : null; }
     };
-    const stage = {dataset: {view: 'covers', libraryStyle: 'cards'}, querySelectorAll() { return []; }};
+    const stage = {dataset: {view: 'covers', libraryStyle: 'cards', shelfFinish: 'theme'}, querySelectorAll() { return []; }};
     const page = {classList: {add(name) { values.className = name; }}};
     const document = {
         querySelector(selector) {
             if (selector === '.display-page') return page;
             if (selector === '.display-size-row') return sizeRow;
+            if (selector === '.display-finish-row') return finishRow;
             return selector === '[data-display-setting="' + key + '"]' ? form : null;
         },
         querySelectorAll(selector) { return selector === '.display-page form[data-display-setting]' ? [form] : []; },
@@ -191,19 +192,43 @@ function mountCoverSetting(key, {initial = 'true', fails = false} = {}) {
     assert.equal(theme.buttons[2].attrs['aria-pressed'], 'true');
     assert.equal(JSON.parse(theme.requests[0].options.body).UI_THEME, 'night');
     const sizeRow = {hidden: false};
-    const styles = mount({sizeRow});
+    const finishRow = {hidden: true};
+    const styles = mount({sizeRow, finishRow});
+    assert.equal(finishRow.hidden, true, 'Cards initially hide Shelf finish');
     await styles.click('spines');
     assert.equal(sizeRow.hidden, true, 'spines hide the cover-size row immediately');
+    assert.equal(finishRow.hidden, false, 'spines show the finish row immediately');
     await styles.click('faceout');
     assert.equal(sizeRow.hidden, false);
+    assert.equal(finishRow.hidden, false, 'faceout shows Shelf finish');
     await styles.click('list');
     assert.equal(sizeRow.hidden, true);
+    assert.equal(finishRow.hidden, true, 'list hides Shelf finish');
     await styles.click('cards');
     assert.equal(sizeRow.hidden, false);
+    assert.equal(finishRow.hidden, true, 'cards hide Shelf finish');
     const failedStyle = mount({fails: true, sizeRow: {hidden: false}});
     await failedStyle.click('list');
     assert.equal(failedStyle.stage.dataset.libraryStyle, 'cards');
     assert.equal(failedStyle.stage.dataset.view, 'covers');
+    const failedFinishRow = {hidden: true};
+    const failedStyleFinish = mount({fails: true, finishRow: failedFinishRow});
+    await failedStyleFinish.click('spines');
+    assert.equal(failedFinishRow.hidden, true, 'failed style save restores finish visibility');
+    for (const finish of ['wood', 'dark', 'plain']) {
+        const control = mount({key: 'UI_SHELF_FINISH', choices: ['theme', 'wood', 'dark', 'plain']});
+        await control.click(finish);
+        assert.equal(control.requests.length, 1, 'finish change makes exactly one POST');
+        assert.equal(control.requests[0].url, '/account/display');
+        assert.equal(JSON.parse(control.requests[0].options.body).UI_SHELF_FINISH, finish);
+        assert.equal(control.stage.dataset.shelfFinish, finish, 'preview updates immediately');
+        assert.equal(control.buttons.find(button => button.dataset.displayValue === finish).attrs['aria-pressed'], 'true');
+        const failed = mount({key: 'UI_SHELF_FINISH', choices: ['theme', 'wood', 'dark', 'plain'], fails: true});
+        await failed.click(finish);
+        assert.equal(failed.stage.dataset.shelfFinish, 'theme', 'failed finish save rolls back preview');
+        assert.equal(failed.buttons[0].attrs['aria-pressed'], 'true');
+        assert.equal(failed.attrs['data-error'], true);
+    }
 
     for (const [key, dataset] of [
         ['UI_SHOW_PROGRESS', 'showProgress'], ['UI_SHOW_FINISHED', 'showFinished'],
