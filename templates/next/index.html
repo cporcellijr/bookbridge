@@ -5,7 +5,7 @@
 
 {% block content %}
 {% set display = display_settings() %}
-<div id="library-page" class="library-page" data-view="covers" data-select-mode="off" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}">
+<div id="library-page" class="library-page" data-view="{{ {'spines': 'spines', 'list': 'list'}.get(display.UI_LIBRARY_STYLE, 'covers') }}" data-select-mode="off" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}">
     {% set attention = namespace(items=[]) %}
     {% set processing = namespace(items=[]) %}
     {% for book in mappings %}
@@ -95,7 +95,6 @@
                 <label class="group-toggle"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
             </div>
             <div class="toolbar-right">
-                <div class="view-switch" role="group" aria-label="{{ _('View') }}"><button type="button" id="view-covers" data-view="covers" aria-pressed="true">{{ _('Covers') }}</button><button type="button" id="view-spines" data-view="spines" aria-pressed="false">{{ _('Spines') }}</button><button type="button" id="view-list" data-view="list" aria-pressed="false">{{ _('List') }}</button></div>
                 <button type="button" id="select-mode-button" class="btn" aria-pressed="false" aria-controls="selection-bar">{{ _('Select') }}</button>
                 <span id="filter-count" role="status" aria-live="polite"></span>
             </div>

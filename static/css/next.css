@@ -266,11 +266,7 @@ summary::-webkit-details-marker { display: none; }
 .toolbar-select .field { width: 100%; min-width: 0; min-height: 44px; padding: 7px 10px; font-size: 13px; }
 .toolbar-left .toolbar-select { display: flex; align-items: center; gap: 8px; }
 .toolbar-left .toolbar-select .field { min-width: 110px; }
-.view-switch { display: flex; flex-wrap: nowrap; gap: 3px; }
-.view-switch [aria-pressed="true"] { border-color: var(--text-2); background: var(--surface-2); color: var(--text); font-weight: 600; }
 .group-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; white-space: nowrap; }
-.view-switch { padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); }
-.view-switch button { min-height: 44px; padding: 4px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2); cursor: pointer; font-size: 12px; }
 #filter-count { color: var(--text-3); font: 12px var(--font-mono); white-space: nowrap; }
 .search-handoff { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 18px; padding: 12px 14px; border-radius: 12px; background: var(--info-bg); color: var(--text); }
 .search-handoff[hidden], .search-handoff.hidden { display: none; }
@@ -397,7 +393,6 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
  .library-toolbar .toolbar-left, .library-toolbar .toolbar-right { display: contents; }
  .library-toolbar .sort-controls { grid-column: 1 / -1; grid-row: 1; justify-self: start; }
  .library-toolbar .group-toggle { grid-column: 1; grid-row: 2; justify-self: start; }
- .library-toolbar .view-switch { grid-column: 2; grid-row: 2; margin: 0; }
  .library-toolbar #select-mode-button { grid-column: 3; grid-row: 2; }
  .library-toolbar #filter-count:not(:empty) { grid-column: 1 / -1; }
 }
@@ -408,7 +403,6 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
  .library-toolbar .toolbar-secondary { align-items: flex-start; flex-wrap: wrap; }
  .library-toolbar .toolbar-left, .library-toolbar .toolbar-right { flex-wrap: wrap; }
  .library-toolbar .toolbar-right { margin-left: auto; }
- .view-switch { margin-left: auto; }
  .book-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
  .cover-wrap { height: 220px; }
  .match-item { flex-wrap: wrap; }
@@ -432,8 +426,6 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
  .library-toolbar .sort-controls .toolbar-select { flex: 1; min-width: 0; font-size: 11px; }
  .library-toolbar .sort-controls .field { width: 100%; min-width: 0; }
  .library-toolbar .group-toggle { flex: 0 0 92px; max-width: 92px; gap: 3px; padding: 0 2px; font-size: 12px; line-height: 1.2; white-space: normal; }
- .library-toolbar .view-switch { flex: 1; min-width: 0; justify-content: space-around; margin: 0; }
- .library-toolbar .view-switch button { flex: 1; padding: 2px 4px; }
  .library-toolbar .toolbar-right { margin-left: 0; }
 }
 @media (max-width:390px) {
@@ -441,7 +433,6 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
  .cover-wrap { height: 190px; }
  .library-page .h1 { font-size: 27px; }
  .library-toolbar .group-toggle { font-size: 12px; }
- .library-toolbar .view-switch button { font-size: 11px; }
 }
 
 
