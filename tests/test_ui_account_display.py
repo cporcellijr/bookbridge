@@ -58,7 +58,7 @@ class TestAccountDisplayPage(unittest.TestCase):
         self.assertIn('role="switch"', markup)
         for value in ('cards', 'faceout', 'spines', 'list'):
             self.assertIn(f'name="UI_LIBRARY_STYLE" value="{value}"', markup)
-        for future in ('UI_COVER_SIZE', 'UI_SHOW_PROGRESS', 'UI_SHOW_FINISHED', 'UI_SHOW_FORMAT_STRIP', 'UI_SHOW_RATINGS', 'UI_SHOW_TITLES', 'UI_SHELF_FINISH'):
+        for future in ('UI_SHELF_FINISH',):
             self.assertNotIn(f'name="{future}"', markup)
         self.assertRegex(markup, r'id="bb-next-user-menu"[\s\S]*?href="/account/display"')
         self.assertRegex(markup, r'id="bb-next-mobile-user-menu"[\s\S]*?href="/account/display"')
@@ -281,6 +281,66 @@ class TestAccountDisplayPage(unittest.TestCase):
                     self.assertIn('data-series-on="true"', display)
         self.assertEqual(self.service.get_user_credential(self.reader.id, SERIES_KEY), 'true')
         self.assertIn('class="series-strip series-header"', self.client.get('/').get_data(as_text=True))
+
+
+    def test_cover_controls_render_saved_values_and_fallback_posts(self):
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        switches = ("UI_SHOW_PROGRESS", "UI_SHOW_FINISHED", "UI_SHOW_FORMAT_STRIP",
+                    "UI_SHOW_RATINGS", "UI_SHOW_TITLES")
+        for size in ("1", "2", "5"):
+            with self.subTest(size=size):
+                self.service.set_user_credential(self.reader.id, "UI_COVER_SIZE", size)
+                markup = self.client.get("/account/display").get_data(as_text=True)
+                size_form = re.search(r'<form class="account-cover-size-form.*?</form>', markup, re.S).group()
+                self.assertIn('action="/account/display?next=/account/display"', size_form)
+                self.assertIn(f'name="UI_COVER_SIZE" value="{size}"', size_form)
+                down = re.search(r'<button[^>]*data-display-step="-1"[^>]*>', size_form).group()
+                up = re.search(r'<button[^>]*data-display-step="1"[^>]*>', size_form).group()
+                self.assertEqual("disabled" in down, size == "1")
+                self.assertEqual("disabled" in up, size == "5")
+                self.assertEqual(len(re.findall(r'data-size-dot=', size_form)), 5)
+        for key in switches:
+            with self.subTest(key=key):
+                self.service.set_user_credential(self.reader.id, key, "false")
+                markup = self.client.get("/account/display").get_data(as_text=True)
+                form = re.search(r'<form class="account-cover-toggle-form[^"]*"[^>]*data-display-setting="'+key+r'".*?</form>', markup, re.S).group()
+                self.assertIn('action="/account/display?next=/account/display"', form)
+                self.assertRegex(form, rf'name="{key}" value="false"')
+                self.assertRegex(form, rf'name="{key}" value="true" role="switch" aria-checked="false"')
+                self.assertEqual(self.client.post("/account/display?next=/account/display",
+                    data=MultiDict([(key, "false"), (key, "true")])).status_code, 302)
+                self.assertEqual(self.service.get_user_credential(self.reader.id, key), "true")
+        self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_SHOW_TITLES"))
+        self.assertEqual(self.client.post("/account/display", data={"UI_COVER_SIZE": "3"}).status_code, 302)
+        self.assertEqual(self.service.get_user_credential(self.reader.id, "UI_COVER_SIZE"), "3")
+        self.service.set_user_credential(self.reader.id, "UI_LIBRARY_STYLE", "spines")
+        markup = self.client.get("/account/display").get_data(as_text=True)
+        self.assertRegex(markup, r'<form class="account-cover-size-form[^"]*"[^>]*hidden>')
+        self.service.set_user_credential(self.reader.id, "UI_LIBRARY_STYLE", "list")
+        self.assertRegex(self.client.get("/account/display").get_data(as_text=True),
+                         r'<form class="account-cover-size-form[^"]*"[^>]*hidden>')
+
+    def test_preview_selects_up_to_eight_reader_books_and_no_private_books(self):
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        for index in range(10):
+            book_id = f"preview-reader-{index:02d}"
+            self.service.save_book(Book(abs_id=book_id, abs_title=f"Preview reader {index:02d}",
+                                        status="active", ebook_filename=f"{book_id}.epub", duration=1000))
+            self.service.link_user_book(self.reader.id, book_id)
+        self.service.save_book(Book(abs_id="preview-private", abs_title="Preview private",
+                                    status="active", duration=1000))
+        self.service.link_user_book(self.admin.id, "preview-private")
+        self._login("ui-reader")
+        markup = self.client.get("/account/display").get_data(as_text=True)
+        for index in range(8):
+            self.assertIn(f"Preview reader {index:02d}", markup)
+        for index in (8, 9):
+            self.assertNotIn(f"Preview reader {index:02d}", markup)
+        self.assertNotIn("Preview private", markup)
+        self.assertEqual(len(set(re.findall(r'data-abs-id="(preview-reader-[0-9]+)"', markup))), 8)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync('static/js/next/display.js', 'utf8');
 assert.match(fs.readFileSync('static/js/next/cover-loader.js','utf8'), /getElementById\('library-page'\) \|\| document\.getElementById\('display-preview-stage'\)/, 'preview thumbnails must use the shared cover loader');
 
-function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'spines', 'faceout', 'list'], applyTheme = null} = {}) {
+function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'spines', 'faceout', 'list'], applyTheme = null, sizeRow = null} = {}) {
     const values = {};
     const requests = [];
     const listeners = {};
@@ -37,6 +37,7 @@ function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'sp
     const document = {
         querySelector(selector) {
             if (selector === '.display-page') return page;
+            if (selector === '.display-size-row') return sizeRow;
             return selector === '[data-display-setting="' + key + '"]' ? form : null;
         },
         querySelectorAll(selector) { return selector === '.display-page form[data-display-setting]' ? [form] : []; },
@@ -92,6 +93,68 @@ function verifyShellThemeBridge() {
     assert.deepEqual(messages, [['event', 'bb:theme-preference', 'night'], ['save', 'night', 'day']]);
 }
 
+function mountCoverSetting(key, {initial = 'true', fails = false} = {}) {
+    const requests = [], listeners = {};
+    const stage = {dataset: {libraryStyle: 'cards', view: 'covers'}, querySelectorAll() { return []; }};
+    const status = {textContent: '', toggleAttribute() {}, removeAttribute() {}};
+    const group = {querySelector() { return status; }};
+    const isSize = key === 'UI_COVER_SIZE';
+    const checkbox = {checked: initial === 'true', disabled: false, attrs: {},
+        addEventListener(name, fn) {listeners[name] = fn;},
+        setAttribute(name, value) {this.attrs[name] = value;}};
+    const input = {value: isSize ? initial : ''};
+    const down = {dataset: {displayStep: '-1'}, value: String(Math.max(1, Number(initial)-1)), disabled: initial === '1'};
+    const up = {dataset: {displayStep: '1'}, value: String(Math.min(5, Number(initial)+1)), disabled: initial === '5'};
+    const help = {textContent: ''};
+    const dots = Array.from({length: 5}, (_, i) => ({dataset: {sizeDot: String(i+1)}, active: false,
+        classList: {toggle(name, value) { dots[i].active = value; }}}));
+    const form = {
+        dataset: {displaySetting: key},
+        addEventListener(name, fn) {listeners[name] = fn;},
+        querySelector(selector) {
+            if (selector === '[role="switch"]') return isSize ? null : checkbox;
+            if (selector === 'input[name="UI_COVER_SIZE"]') return isSize ? input : null;
+            if (selector === '.display-size-help') return help;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector === '[data-display-value]') return [];
+            if (selector === '[data-display-step]') return isSize ? [down, up] : [];
+            if (selector === '[data-size-dot]') return isSize ? dots : [];
+            if (selector === 'button, input[type="checkbox"]') return isSize ? [down, up] : [checkbox];
+            return [];
+        },
+        closest() { return group; },
+        contains(control) { return control === down || control === up; }
+    };
+    const document = {
+        querySelector(selector) {
+            if (selector === '.display-page') return {classList: {add() {}}};
+            if (selector === '[data-display-setting="' + key + '"]') return form;
+            return null;
+        },
+        querySelectorAll(selector) { return selector === '.display-page form[data-display-setting]' ? [form] : []; },
+        getElementById(id) { return id === 'display-preview-stage' ? stage : null; },
+        addEventListener() {}
+    };
+    const window = {bbT: value => value, setTimeout: () => 1, clearTimeout() {},
+        fetch(url, options) { requests.push({url, options}); return Promise.resolve({ok: !fails}); }};
+    vm.runInNewContext(source, {document, window, WeakMap, console});
+    function changeToggle(checked) {
+        checkbox.checked = checked;
+        listeners.change();
+    }
+    function clickStep(direction) {
+        const control = direction < 0 ? down : up;
+        let prevented = false;
+        listeners.click({target: {closest(selector) {
+            return selector === '[data-display-step]' ? control : null;
+        }}, preventDefault() { prevented = true; }});
+        assert.equal(prevented, true);
+    }
+    return {changeToggle, clickStep, requests, checkbox, input, down, up, dots, stage, help, status};
+}
+
 (async () => {
     verifyShellThemeBridge();
     const good = mount();
@@ -127,5 +190,63 @@ function verifyShellThemeBridge() {
     assert.equal(applied, 1, 'a theme click applies the theme once');
     assert.equal(theme.buttons[2].attrs['aria-pressed'], 'true');
     assert.equal(JSON.parse(theme.requests[0].options.body).UI_THEME, 'night');
+    const sizeRow = {hidden: false};
+    const styles = mount({sizeRow});
+    await styles.click('spines');
+    assert.equal(sizeRow.hidden, true, 'spines hide the cover-size row immediately');
+    await styles.click('faceout');
+    assert.equal(sizeRow.hidden, false);
+    await styles.click('list');
+    assert.equal(sizeRow.hidden, true);
+    await styles.click('cards');
+    assert.equal(sizeRow.hidden, false);
+    const failedStyle = mount({fails: true, sizeRow: {hidden: false}});
+    await failedStyle.click('list');
+    assert.equal(failedStyle.stage.dataset.libraryStyle, 'cards');
+    assert.equal(failedStyle.stage.dataset.view, 'covers');
+
+    for (const [key, dataset] of [
+        ['UI_SHOW_PROGRESS', 'showProgress'], ['UI_SHOW_FINISHED', 'showFinished'],
+        ['UI_SHOW_FORMAT_STRIP', 'showFormatStrip'], ['UI_SHOW_RATINGS', 'showRatings'],
+        ['UI_SHOW_TITLES', 'showTitles']
+    ]) {
+        const control = mountCoverSetting(key);
+        control.changeToggle(false);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(control.requests.length, 1, key + ' must make one request');
+        assert.equal(JSON.parse(control.requests[0].options.body)[key], 'false');
+        assert.equal(control.stage.dataset[dataset], 'false', key + ' must update live preview');
+        assert.equal(control.checkbox.attrs['aria-checked'], 'false');
+        const failing = mountCoverSetting(key, {fails: true});
+        failing.changeToggle(false);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(failing.stage.dataset[dataset], 'true', key + ' rollback restores preview');
+        assert.equal(failing.checkbox.checked, true);
+    }
+    const stepper = mountCoverSetting('UI_COVER_SIZE', {initial: '2'});
+    stepper.clickStep(-1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(JSON.parse(stepper.requests[0].options.body).UI_COVER_SIZE, '1');
+    assert.equal(stepper.stage.dataset.coverSize, '1');
+    assert.equal(stepper.down.disabled, true, 'minus disabled at step 1');
+    assert.equal(stepper.up.disabled, false);
+    assert.equal(stepper.help.textContent, '4 per row on a phone');
+    stepper.clickStep(1);
+    await new Promise(resolve => setImmediate(resolve));
+    for (let size = 3; size <= 5; size++) {
+        stepper.clickStep(1);
+        await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(stepper.stage.dataset.coverSize, '5');
+    assert.equal(stepper.up.disabled, true, 'plus disabled at step 5');
+    assert.equal(stepper.dots.filter(dot => dot.active).length, 5);
+    const failedStep = mountCoverSetting('UI_COVER_SIZE', {initial: '2', fails: true});
+    failedStep.clickStep(1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(failedStep.input.value, '2');
+    assert.equal(failedStep.stage.dataset.coverSize, '2');
+    assert.equal(failedStep.dots.filter(dot => dot.active).length, 2);
+    assert.equal(failedStep.down.disabled, false);
+    assert.equal(failedStep.up.disabled, false);
     console.log('Display save, feedback, rollback, and preview behavior ok');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -5,13 +5,50 @@
     page.classList.add('js-display');
     var stage = document.getElementById('display-preview-stage');
     var statuses = new WeakMap();
+    var sizeRow = document.querySelector('.display-size-row');
+    var previewSwitches = {
+        UI_SHOW_PROGRESS: 'showProgress',
+        UI_SHOW_FINISHED: 'showFinished',
+        UI_SHOW_FORMAT_STRIP: 'showFormatStrip',
+        UI_SHOW_RATINGS: 'showRatings',
+        UI_SHOW_TITLES: 'showTitles'
+    };
+    var sizeHelp = ['4 per row on a phone', '3 per row on a phone',
+        '2 per row on a phone', '2 per row on a phone', '2 per row on a phone'];
 
     function selected(form) {
-        if (form.dataset.displaySetting === 'SERIES_SHOW_CURRENT_BOOK_DETAIL') {
+        if (form.dataset.displaySetting === 'UI_COVER_SIZE') {
+            return form.querySelector('input[name="UI_COVER_SIZE"]').value;
+        }
+        if (form.querySelector('[role="switch"]')) {
             return form.querySelector('[role="switch"]').checked ? 'true' : 'false';
         }
         var button = form.querySelector('[data-display-value][aria-pressed="true"]');
         return button ? button.dataset.displayValue : '';
+    }
+
+    function syncSizeRow() {
+        if (!sizeRow) return;
+        var styleForm = document.querySelector('[data-display-setting="UI_LIBRARY_STYLE"]');
+        var style = styleForm ? selected(styleForm) : (stage && stage.dataset.libraryStyle);
+        sizeRow.hidden = style === 'spines' || style === 'list';
+    }
+
+    function refreshSizeStepper(form, value) {
+        var input = form.querySelector('input[name="UI_COVER_SIZE"]');
+        if (!input) return;
+        var n = Math.min(5, Math.max(1, Number(value) || 2));
+        input.value = String(n);
+        form.querySelectorAll('[data-display-step]').forEach(function (button) {
+            var down = button.dataset.displayStep === '-1';
+            button.value = String(Math.min(5, Math.max(1, n + (down ? -1 : 1))));
+            button.disabled = down ? n === 1 : n === 5;
+        });
+        form.querySelectorAll('[data-size-dot]').forEach(function (dot) {
+            dot.classList.toggle('is-active', Number(dot.dataset.sizeDot) <= n);
+        });
+        var help = form.querySelector('.display-size-help');
+        if (help) help.textContent = window.bbT(sizeHelp[n - 1]);
     }
 
     function setSelected(form, value) {
@@ -24,6 +61,8 @@
             toggle.setAttribute('aria-checked', String(toggle.checked));
         }
         var key = form.dataset.displaySetting;
+        if (key === 'UI_COVER_SIZE') refreshSizeStepper(form, value);
+        if (key === 'UI_LIBRARY_STYLE') syncSizeRow();
         if (stage) {
             if (key === 'UI_LIBRARY_STYLE') {
                 stage.dataset.libraryStyle = value;
@@ -31,6 +70,8 @@
                 if (stage.dataset.view === 'spines') paintPreviewSpines();
             }
             if (key === 'SERIES_SHOW_CURRENT_BOOK_DETAIL') stage.dataset.seriesOn = value;
+            if (key === 'UI_COVER_SIZE') stage.dataset.coverSize = value;
+            if (previewSwitches[key]) stage.dataset[previewSwitches[key]] = value;
         }
         if (key === 'UI_THEME' && window.bbApplyThemePreference) window.bbApplyThemePreference(value);
     }
@@ -94,11 +135,18 @@
             showStatus(form, window.bbT("Couldn't save"), true);
         }).finally(function () {
             controls.forEach(function (control) { control.disabled = false; });
+            if (key === 'UI_COVER_SIZE') refreshSizeStepper(form, selected(form));
         });
     }
 
     document.querySelectorAll('.display-page form[data-display-setting]').forEach(function (form) {
         form.addEventListener('click', function (event) {
+            var step = event.target.closest('[data-display-step]');
+            if (step && form.contains(step)) {
+                event.preventDefault();
+                if (!step.disabled) save(form, step.value, selected(form));
+                return;
+            }
             var button = event.target.closest('[data-display-value]');
             if (!button || !form.contains(button)) return;
             event.preventDefault();
@@ -122,5 +170,6 @@
             button.setAttribute('aria-pressed', String(button.dataset.displayValue === event.detail.value));
         });
     });
+    syncSizeRow();
     if (stage && stage.dataset.view === 'spines') paintPreviewSpines();
 }());

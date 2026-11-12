@@ -7,6 +7,15 @@
     {% for value, name in values %}<button type="submit" name="{{ key }}" value="{{ value }}" data-display-value="{{ value }}" aria-pressed="{{ 'true' if current == value else 'false' }}">{{ name }}</button>{% endfor %}
 </div>
 {% endmacro %}
+{% macro cover_switch(key, name, current, help_text='') %}
+<form class="account-cover-toggle-form display-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="{{ key }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="{{ key }}" value="false">
+    <label class="display-label" for="display-switch-{{ key|lower }}"><strong>{{ name }}</strong>{% if help_text %}<small>{{ help_text }}</small>{% endif %}</label>
+    <input id="display-switch-{{ key|lower }}" class="display-switch" type="checkbox" name="{{ key }}" value="true" role="switch" aria-checked="{{ 'true' if current == 'true' else 'false' }}" {% if current == 'true' %}checked{% endif %}>
+    <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
+</form>
+{% endmacro %}
 {% block content %}
 {% set display = display_settings() %}
 <div class="display-page">
@@ -64,6 +73,22 @@
             </section>
             <section class="display-group" data-display-group="covers" aria-labelledby="display-covers-title">
                 <header><h2 id="display-covers-title">{{ _('Book covers') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
+                {% set size = display.UI_COVER_SIZE|int %}
+                <form class="account-cover-size-form display-row display-size-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_COVER_SIZE" {% if display.UI_LIBRARY_STYLE in ('spines', 'list') %}hidden{% endif %}>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_COVER_SIZE" value="{{ size }}">
+                    <div class="display-label"><strong>{{ _('Cover size') }}</strong><small class="display-size-help" aria-live="polite">{{ _('4 per row on a phone') if size == 1 else _('3 per row on a phone') if size == 2 else _('2 per row on a phone') }}</small></div>
+                    <div class="display-size-stepper" role="group" aria-label="{{ _('Cover size') }}">
+                        <button type="submit" data-display-step="-1" name="UI_COVER_SIZE" value="{{ [1, size-1]|max }}" aria-label="{{ _('Smaller covers') }}" {% if size == 1 %}disabled{% endif %}>−</button>
+                        <span class="display-size-dots" aria-hidden="true">{% for n in range(1, 6) %}<span data-size-dot="{{ n }}" {% if n <= size %}class="is-active"{% endif %}></span>{% endfor %}</span>
+                        <button type="submit" data-display-step="1" name="UI_COVER_SIZE" value="{{ [5, size+1]|min }}" aria-label="{{ _('Bigger covers') }}" {% if size == 5 %}disabled{% endif %}>+</button>
+                    </div>
+                </form>
+                {{ cover_switch('UI_SHOW_PROGRESS', _('Progress'), display.UI_SHOW_PROGRESS, _("Percent and bar under books you're reading.")) }}
+                {{ cover_switch('UI_SHOW_FINISHED', _('Finished tick'), display.UI_SHOW_FINISHED) }}
+                {{ cover_switch('UI_SHOW_FORMAT_STRIP', _('Format strip'), display.UI_SHOW_FORMAT_STRIP, _('Ebook, audio and read-along icons on the cover.')) }}
+                {{ cover_switch('UI_SHOW_RATINGS', _('Rating stars'), display.UI_SHOW_RATINGS) }}
+                {{ cover_switch('UI_SHOW_TITLES', _('Title and author'), display.UI_SHOW_TITLES, _('Off gives a clean wall of covers.')) }}
                 <form class="account-series-form display-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="SERIES_SHOW_CURRENT_BOOK_DETAIL">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="false">
@@ -76,4 +101,14 @@
     </div>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/js/next/display.js" defer></script><script src="/static/js/next/cover-loader.js" defer></script>{% endblock %}
+{% block scripts %}
+<script>
+window.BB_STRINGS = Object.assign(window.BB_STRINGS || {}, {
+    "4 per row on a phone": {{ _('4 per row on a phone')|tojson }},
+    "3 per row on a phone": {{ _('3 per row on a phone')|tojson }},
+    "2 per row on a phone": {{ _('2 per row on a phone')|tojson }}
+});
+</script>
+<script src="/static/js/next/display.js" defer></script>
+<script src="/static/js/next/cover-loader.js" defer></script>
+{% endblock %}
