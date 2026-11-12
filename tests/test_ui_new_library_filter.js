@@ -11,7 +11,8 @@ const mutations = {
   restore: ["if (candidate.series === 'standalone') candidate.series = 'none';", "if (candidate.series === 'standalone') candidate.series = 'all';"],
   storage: ["status: statusValue", "status: 'all'"],
   attention: ["attention: attentionOnlyFilter ? attentionOnlyFilter.checked : savedAttentionPreference,", "attention: !!attentionOnlyFilter?.checked,"],
-  focus: ["filterButton?.focus();", "void filterButton;"],
+  focus: ["if (restoreFocus) filterButton?.focus();", "void filterButton;"],
+  outsideFocus: ["closeFilterPanel(false);", "closeFilterPanel();"],
 };
 if (process.env.P16B_MUTATE) {
   const mutation = mutations[process.env.P16B_MUTATE];
@@ -137,7 +138,7 @@ assert.equal(closures.length, 3, 'An option closes the panel');
 
 
 const label = {textContent: ''};
-const labelCode = extract('function updateFilterButtonLabel()', 'function closeFilterPanel()')
+const labelCode = extract('function updateFilterButtonLabel()', 'function closeFilterPanel(')
   .replace(/\{\{\s*_\('Filter'\)\|tojson\s*\}\}/, JSON.stringify('Filter'));
 const labels = scope(labelCode, {
   filterButtonLabel: label, filterGroups: choices,
@@ -227,7 +228,7 @@ assert.equal(normalized({series:'none'}).series, 'none', 'No series restores');
 const panel = {hidden: true, querySelector: () => ({focus() {}})};
 const backdrop = {hidden: true};
 const trigger = {attrs: {}, focusCount: 0, setAttribute(k,v) {this.attrs[k]=v;}, focus() {this.focusCount++;}};
-const panelContext = scope(extract('function closeFilterPanel()', 'function chooseLibraryFilter('), {
+const panelContext = scope(extract('function closeFilterPanel(', 'function chooseLibraryFilter('), {
   filterPanel: panel, filterBackdrop: backdrop, filterButton: trigger,
 });
 panelContext.openFilterPanel();
@@ -239,6 +240,9 @@ assert.equal(panel.hidden, true);
 assert.equal(backdrop.hidden, true);
 assert.equal(trigger.attrs['aria-expanded'], 'false');
 assert.equal(trigger.focusCount, 1, 'Closing returns focus to the trigger');
+panelContext.openFilterPanel();
+panelContext.closeFilterPanel(false);
+assert.equal(trigger.focusCount, 1, 'A click outside leaves focus where the reader clicked');
 assert.match(source, /event.key === 'Escape'[\s\S]*?closeFilterPanel\(\)/);
-assert.match(source, /!filterHost.contains\(event.target\)[\s\S]*?closeFilterPanel\(\)/);
+assert.match(source, /!filterHost.contains\(event.target\)\) \{\s*closeFilterPanel\(false\);/, 'Outside clicks close without stealing focus');
 console.log('Library P16b status, grouping, selection, search, restore, label and popover regressions ok');

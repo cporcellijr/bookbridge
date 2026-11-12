@@ -225,6 +225,8 @@
 
             function applyFacetCounts(select, cards, matches) {
                 if (!select) return;
+                const selected = select.value;
+
                 Array.from(select.querySelectorAll('option')).forEach(option => {
                     const label = facetOptionBaseLabel(option);
                     if (option.value === 'all') {
@@ -240,7 +242,7 @@
                     option.textContent = label + ' (' + count + ')';
                     // Never hide the current selection: the reader has to be able to
                     // see what they picked and undo it, even once it matches nothing.
-                    const keep = count > 0;
+                    const keep = count > 0 || option.value === selected;
                     option.hidden = !keep;
                     option.disabled = !keep;
                 });
@@ -274,12 +276,13 @@
                 filterButtonLabel.textContent = label;
             }
 
-            function closeFilterPanel() {
+            // A click elsewhere keeps focus where the reader clicked (the search box, say).
+            function closeFilterPanel(restoreFocus = true) {
                 if (!filterPanel || filterPanel.hidden) return;
                 filterPanel.hidden = true;
                 if (filterBackdrop) filterBackdrop.hidden = true;
                 filterButton?.setAttribute('aria-expanded', 'false');
-                filterButton?.focus();
+                if (restoreFocus) filterButton?.focus();
             }
 
             function openFilterPanel() {
@@ -358,11 +361,11 @@
                     if (filterPanel?.hidden) openFilterPanel();
                     else closeFilterPanel();
                 });
-                filterPanel?.querySelector('[data-filter-close]')?.addEventListener('click', closeFilterPanel);
-                filterBackdrop?.addEventListener('click', closeFilterPanel);
+                filterPanel?.querySelector('[data-filter-close]')?.addEventListener('click', () => closeFilterPanel());
+                filterBackdrop?.addEventListener('click', () => closeFilterPanel());
                 document.addEventListener('click', event => {
                     if (filterPanel && !filterPanel.hidden && !filterHost.contains(event.target)) {
-                        closeFilterPanel();
+                        closeFilterPanel(false);
                     }
                 });
                 document.addEventListener('keydown', event => {

@@ -877,3 +877,5 @@ body.series-grouping-off .series-group { display: none !important; }
  .library-filter-panel-groups { grid-template-columns: minmax(0,1fr); }
  .library-filter-options { max-height: 115px; }
 }
+/* Status and Format are short fixed lists: only Author and Series scroll. */
+.library-filter-group:is([data-filter-group="status"], [data-filter-group="format"]) .library-filter-options { max-height: none; overflow: visible; }

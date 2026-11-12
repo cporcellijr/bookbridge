@@ -215,48 +215,64 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
                               'Classic changed this code: update templates/next/_book_scripts.html to match')
 
     def test_library_page_reuses_drawer_scripts_and_classic_filter_sort_polls(self):
-        """Copied helpers stay in parity; P16b's new filters have dedicated tests."""
+        """Every copied Library block stays Classic, except these deliberate edits."""
+        import re
         from pathlib import Path
-
         root = Path(__file__).resolve().parent.parent
         page = (root / 'templates/next/index.html').read_text(encoding='utf-8')
         library = (root / 'templates/next/_library_scripts.html').read_text(encoding='utf-8')
         classic = '\n'.join(self._lines('templates/base.html') + self._lines('templates/index.html'))
-        normalize = lambda text: '\n'.join(
-            ' '.join(line.split()) for line in text.splitlines() if line.strip()
-        )
+        # Goodreads build only: Classic's bulk-delete selection; New has its own selection bar and Remove.
+        bulk_start = classic.index('function filteredBookIds() {')
+        bulk_end = classic.index('return true;\n}', classic.index('function confirmBulkDelete(form) {')) + len('return true;\n}')
+        classic = classic[:bulk_start] + classic[bulk_end + 1:]
+        classic = classic.replace('updateBookSelection();\n', '')
         self.assertIn("{% include 'next/_book_scripts.html' %}", page)
         self.assertIn('openBookDrawer(this.href,this)', page)
+        # Views and bulk actions are new, and exercised by test_ui_new_library.js.
+        start = library.index('/* P3 additions:')
+        end = library.index('</script>', start)
+        library = library[:start] + library[end:]
+        # P16b's one-filter panel is New-only and exercised by test_ui_new_library_filter.js.
+        for first, last in P16B_LIBRARY_NEW_ONLY:
+            start = library.index(first)
+            end = library.index(last, start)
+            library = library[:start] + '</script><script>' + library[end:]
+        normalize = lambda text: '\n'.join(' '.join(line.split()) for line in text.splitlines() if line.strip())
         self.assertNotIn('function updateKoSyncHash(', library)
         self.assertNotIn('function linkBookFusion(', library)
-        self.assertIn('id="library-filter-button"', page)
-        self.assertIn('id="status-filter"', page)
-        self.assertIn('id="attention-only-filter"', page)
-        self.assertIn('id="filter-select"', classic)
-        self.assertIn('id="author-filter"', classic)
-        self.assertIn('id="series-filter"', classic)
-        self.assertNotIn('id="library-filter-button"', classic)
-        self.assertIn("localStorage.setItem('abs_kosync_filters'", classic)
-        self.assertIn("localStorage.setItem('abs_kosync_filters'", library)
+        library = normalize(library)
+        library = library.replace('// Initial Sort Defaults', '</script><script>// Initial Sort Defaults')
+        for updated, previous in reversed(P16A_LIBRARY_ALLOWED_CHANGES):
+            self.assertEqual(library.count(updated), 1, 'P16a allowed change drifted')
+            library = library.replace(updated, previous, 1)
+        library = normalize(library)
+        # Exact allowed changes: new paired/attention predicates; localized counts;
+        # storage denial handling; duplicate-card/spine updates and live sort values.
+        changes = LIBRARY_HEADER_ALLOWED_CHANGES + LIBRARY_ALLOWED_CHANGES
+        for new, original in changes:
+            new = normalize(new)
+            self.assertIn(new, library, 'Allowed change moved: review it explicitly')
+            library = library.replace(new, normalize(original), 1)
+        library = library.replace('{% if mappings %}', '').replace('{% endif %}', '')
+        # The shared book actions were intentionally omitted between these two blocks.
+        library = library.replace("const savedSort = localStorage.getItem('abs_kosync_sort') || 'title';", "</script><script>const savedSort = localStorage.getItem('abs_kosync_sort') || 'title';")
+        blocks = [normalize(block) for block in re.split(r'</?script>', library) if normalize(block)]
+        self.assertGreater(len(blocks), 6)
+        for block in blocks:
+            with self.subTest(block=block[:100]):
+                self.assertIn(block, classic, 'Classic changed: update the Library copy or document the exact deliberate change')
 
-        # These production helpers are copied from Classic and should continue
-        # to match byte-for-byte after whitespace normalization. The facet,
-        # status and grouping paths intentionally diverge in New and are
-        # exercised by test_ui_new_library_filter.js and its mutation checks.
-        for begin, end in (
-            ('function dismissSuggestion(e, id)', '</script>'),
-            ('function parseLastSync(syncText)', 'function getLastSyncAge('),
-            ('function getLastSyncAge(el)', 'function sortTitleOf('),
-            ('function sortTitleOf(el)', 'function readingSortDetails('),
-            ('function updateSortIndicator(direction)', '// --- Series Grouping Toggle ---'),
-        ):
-            with self.subTest(helper=begin):
-                start = library.find(begin)
-                self.assertGreaterEqual(start, 0)
-                stop = library.find(end, start)
-                self.assertGreater(stop, start)
-                self.assertIn(normalize(library[start:stop]), normalize(classic),
-                              'Copied helper drifted from Classic')
+
+# P16b: (first line, line that ends the New-only region) for the one-filter panel.
+P16B_LIBRARY_NEW_ONLY = (
+    ("const statusFilter = document.getElementById('status-filter');", "const seriesFilter = document.getElementById('series-filter');"),
+    ('filterGroups.author = authorFilter;', "const filterCount = document.getElementById('filter-count');"),
+    ('function updateFacetOptions() {', "// Offers a route into the Search tab's"),
+    ('function matchesStatusFilter(', 'function matchesFormatFilter('),
+    ('function filterBooks() {', 'window.toggleSeries = function'),
+    ('// One active facet at a time', 'if (dashboardSearch) {'),
+)
 
 
 # P16a's intentional New-only changes, reversed exactly for the copied-Classic check.
@@ -267,7 +283,6 @@ P16A_LIBRARY_ALLOWED_CHANGES = (
     ('// Count every book once, regardless of its series presentation.', "if (notStartedHeader) {\nnotStartedHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');\n}\n}\nfunction updateDashboardSectionVisibility() {\ndashboardSections.forEach(section => {\nconst grid = section.querySelector('.book-grid');\nif (!grid) return;\nconst visibleCards = grid.querySelectorAll('.book-card:not(.hidden)');\nconst visibleGroups = grid.querySelectorAll('.series-group:not(.hidden)');\nif (visibleCards.length > 0 || visibleGroups.length > 0) {\nsection.classList.remove('hidden');\n} else {\nsection.classList.add('hidden');\n}\n});\n}\n// Finished volumes can appear in their series and under Finished.\n// Count each book once, regardless of grouping or duplicate cards."),
     ('const noResults = !hasVisibleGridItems();', "const noResults = document.querySelectorAll('.dashboard-section:not(.hidden)').length === 0;"),
     ("searchHandoff.classList.remove('hidden');\n}", "searchHandoff.classList.remove('hidden');\n}\nwindow.toggleNotStarted = function () {\nif (!notStartedGrid || !notStartedSection || !notStartedHeader) return;\nconst isShowing = notStartedGrid.classList.toggle('show');\nnotStartedSection.classList.toggle('active');\nnotStartedHeader.classList.toggle('active');\nupdateNotStartedChevron(isShowing);\ntry {\nlocalStorage.setItem('not_started_expanded', isShowing);\n} catch (e) {\nconsole.debug('LocalStorage error:', e);\n}\n};\n// Format and series are orthogonal axes, so each is its own predicate over\n// one card rather than a branch in a single mutually-exclusive filter."),
-    ("group.style.display = 'none';\n}\n});", "group.style.display = 'none';\n}\n});\nupdateDashboardSectionVisibility();"),
     ("reading: 'asc', // In progress, Not started, Finished; newest sync first", "status: 'asc',"),
     ("let savedSort = 'reading';\ntry { savedSort = localStorage.getItem('abs_kosync_sort') || 'reading'; } catch (e) { /* storage unavailable */ }\nif (savedSort === 'status' || !Object.prototype.hasOwnProperty.call(sortState, savedSort)) savedSort = 'reading';", "let savedSort = 'title';\ntry { savedSort = localStorage.getItem('abs_kosync_sort') || 'title'; } catch (e) { /* storage unavailable */ }"),
     ('const storedDirections = JSON.parse(savedSortState);\nif (storedDirections.status && !storedDirections.reading) {\nstoredDirections.reading = storedDirections.status;\n}\ndelete storedDirections.status;\nsortState = { ...sortState, ...storedDirections };', 'sortState = { ...sortState, ...JSON.parse(savedSortState) };'),
@@ -287,7 +302,7 @@ P16A_LIBRARY_ALLOWED_CHANGES = (
 
 # (New lines, original Classic lines): deliberate P3 compatibility changes only.
 LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';", ''),
- ("                const active = (filterSelect?.value !== 'all')\n                    || (seriesFilter?.value !== 'all')\n                    || (authorFilter?.value !== 'all')\n                    || !!attentionOnlyFilter?.checked\n                    || !!dashboardSearch?.value.trim();\n                filterCount.textContent = active\n                    ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})\n                    : '';",
+ ("                const active = (statusFilter?.value !== 'all')\n                    || (filterSelect?.value !== 'all')\n                    || (seriesFilter?.value !== 'all')\n                    || (authorFilter?.value !== 'all')\n                    || !!attentionOnlyFilter?.checked\n                    || !!dashboardSearch?.value.trim();\n                filterCount.textContent = active\n                    ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})\n                    : '';",
   "const noun = total === 1 ? 'book' : 'books';\n"
   'filterCount.textContent = shown === total\n'
   "? total + ' ' + noun\n"
@@ -396,28 +411,7 @@ LIBRARY_HEADER_ALLOWED_CHANGES = (
      ""),
     ("            const attentionPopover = document.getElementById('needs-attention');\n            const attentionTrigger = attentionPopover?.querySelector('summary');\n            if (attentionPopover) {\n                function positionAttentionPopover() {\n                    if (!attentionPopover.open) return;\n                    const panel = attentionPopover.querySelector('.attention-list');\n                    if (!panel) return;\n                    panel.style.removeProperty('--attention-shift');\n                    const bounds = panel.getBoundingClientRect();\n                    const left = Math.max(14, Math.min(bounds.left, window.innerWidth - bounds.width - 14));\n                    panel.style.setProperty('--attention-shift', (left - bounds.left) + 'px');\n                }\n                attentionPopover.addEventListener('toggle', positionAttentionPopover);\n                window.addEventListener('resize', positionAttentionPopover);\n                document.addEventListener('click', event => {\n                    if (attentionPopover.open && !attentionPopover.contains(event.target)) {\n                        attentionPopover.open = false;\n                    }\n                });\n                document.addEventListener('keydown', event => {\n                    if (event.key === 'Escape' && attentionPopover.open) {\n                        event.preventDefault();\n                        attentionPopover.open = false;\n                        attentionTrigger?.focus();\n                    }\n                });\n            }",
      ""),
-    ("                        && matchesAuthorFilter(card, authorValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card))),",
-     "                        && matchesAuthorFilter(card, authorValue)),"),
-    ("                        && matchesSeriesFilter(card, seriesValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card))),",
-     "                        && matchesSeriesFilter(card, seriesValue)),"),
     ("            function needsAttention(card) {\n                return card.classList.contains('out-of-sync')\n                    || ['error', 'failed', 'failed_retry_later', 'failed_permanent'].includes(card.dataset.status);\n            }",
-     ""),
-    ("                        && matchesAuthorFilter(card, authorValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card));",
-     "                        && matchesAuthorFilter(card, authorValue);"),
-    ("                    const seriesName = (card.dataset.seriesName || '').toLowerCase();", ""),
-    ("                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString) && !seriesName.includes(searchString)) {",
-     "                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString)) {"),
-    ("                        author: authorValue,\n                        attention: !!attentionOnlyFilter?.checked",
-     "                        author: authorValue"),
-    ("                if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', filterBooks);",
-     ""),
-    ("                let savedAttention = false;",
-     ""),
-    ("                        savedAttention = !!parsed.attention;",
-     ""),
-    ("                // Older Library preferences stored attention as a format.\n                // It is now an independent filter, so keep the user's intent.\n                if (savedFormat === 'needs_attention') {\n                    savedFormat = 'all';\n                    savedAttention = true;\n                }",
-     ""),
-    ("                if (!filterSelect.value) filterSelect.value = 'all';\n                if (attentionOnlyFilter) attentionOnlyFilter.checked = savedAttention;",
      ""),
 )
 
