@@ -27,10 +27,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- **New Library style preference:** New-interface readers choose Cards, Spine shelves, or List under Account → Display. The Library opens in the saved per-reader style without a toolbar view switch.
+- **Face-out shelves and Classic series stacks:** The New Library now offers Cards, Face-out shelves, Spine shelves, or List under Account → Display. Face-out stands every cover on wooden planks with its title and author below (three per shelf on phones). Classic readers can again show the current book in series stacks from Account → Display. Library style remains per reader, with no toolbar view switch.
 
 - **Theme now follows your device by default in the New interface.** Choose Day, Night, or Follow device under Account → Display; the choice follows your reader account across devices. The existing Day/Night quick switch now saves the same preference.
-- **Your display choices now live under Account → Display.** Switch between Classic and New from your Account page instead of the navigation bar, including on phones. In New, you can also show the current book in each series stack. This preference has moved out of My Integrations without losing anyone's saved choice; Classic shows only the interface choice.
+- **Your display choices now live under Account → Display.** Switch between Classic and New from your Account page instead of the navigation bar, including on phones. In New, you can also show the current book in each series stack. This preference has moved out of My Integrations without losing anyone's saved choice; Classic retains its series-stack preference.
 - **Goodreads as a progress tracker, off by default.** Like Hardcover and StoryGraph,
   BookBridge can now post your reading progress, page count and finished books to Goodreads.
   Goodreads has no public API, so it works through your own signed-in Goodreads session,

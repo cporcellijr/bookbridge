@@ -42,7 +42,7 @@ class TestNewLibrary(unittest.TestCase):
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
         self._login("ui-reader")
         for preference, view in (("cards", "covers"), ("spines", "spines"),
-                                 ("list", "list"), ("faceout", "covers")):
+                                 ("list", "list"), ("faceout", "spines")):
             with self.subTest(preference=preference):
                 self.service.set_user_credential(self.reader.id, "UI_LIBRARY_STYLE", preference)
                 response = self.client.get("/")
@@ -52,6 +52,32 @@ class TestNewLibrary(unittest.TestCase):
                 self.assertIn(f'data-library-style="{preference}"', markup)
                 self.assertNotIn('class="view-switch"', markup)
         self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_LIBRARY_STYLE"))
+
+    def test_faceout_uses_real_covers_on_wood_planks_with_three_phone_columns(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        scoped = '.library-page[data-library-style="faceout"][data-view="spines"]'
+        self.assertIn(scoped + " .book-grid {", css)
+        self.assertIn(scoped + " .book-card .cover-image {", css)
+        self.assertIn("object-fit: cover; filter: none;", css)
+        self.assertIn(scoped + " .book-card .book-copy h3 {", css)
+        self.assertIn("writing-mode: horizontal-tb; transform: none;", css)
+        self.assertIn(scoped + " .book-card .book-author {", css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", css)
+        self.assertIn("--shelf-pitch: 250px;", css)
+        self.assertIn(':not([data-library-style="faceout"]) .book-card:not([data-reading]) .cover-wrap > :not(.cover-image)', css)
+
+    def test_faceout_load_initializer_reuses_spine_behavior(self):
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required to execute the library style initialization")
+        result = subprocess.run(
+            [node, str(_ROOT / "tests/test_ui_new_library_style.js")],
+            capture_output=True, text=True, timeout=15, cwd=_ROOT,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_rendered_new_library_uses_thumbnails_with_original_proxy_fallback(self):
         from src import web_server

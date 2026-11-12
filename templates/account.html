@@ -94,6 +94,17 @@
                 <button type="submit" name="ui_mode" value="new" class="btn {{ 'btn-primary' if get_user_val('UI_MODE', 'classic') == 'new' else 'btn-secondary' }}" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') == 'new' else 'false' }}">{{ _('New') }}</button>
             </div>
         </form>
+        <form class="account-series-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="section-title">{{ _('Series stacks') }}</div>
+            <input type="hidden" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="false">
+            <label for="series-show-current">
+                <input type="checkbox" id="series-show-current" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true" {% if display_settings()['SERIES_SHOW_CURRENT_BOOK_DETAIL'] == 'true' %}checked{% endif %}>
+                {{ _('Show the current book in series stacks') }}
+            </label>
+            <p class="help">{{ _('Show the book you are reading, or the next unread book, on each series stack in your Library.') }}</p>
+            <button type="submit" class="btn btn-primary">{{ _('Save display') }}</button>
+        </form>
     </div>
     <div class="card plugin-card">
         <h2>{{ _('My Integrations') }}</h2>
