@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync('static/js/next/display.js', 'utf8');
 assert.match(fs.readFileSync('static/js/next/cover-loader.js','utf8'), /getElementById\('library-page'\) \|\| document\.getElementById\('display-preview-stage'\)/, 'preview thumbnails must use the shared cover loader');
 
-function mount({fails = false} = {}) {
+function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'spines', 'faceout', 'list'], applyTheme = null} = {}) {
     const values = {};
     const requests = [];
     const listeners = {};
@@ -14,15 +14,15 @@ function mount({fails = false} = {}) {
         toggleAttribute(name, enabled) { attrs[name] = enabled; },
         removeAttribute(name) { delete attrs[name]; }
     };
-    const buttons = ['cards', 'spines', 'faceout', 'list'].map(value => ({
+    const buttons = choices.map(value => ({
         dataset: {displayValue: value},
-        attrs: {'aria-pressed': value === 'cards' ? 'true' : 'false'},
+        attrs: {'aria-pressed': value === choices[0] ? 'true' : 'false'},
         disabled: false,
         setAttribute(name, value) { this.attrs[name] = value; }
     }));
     const group = {querySelector(selector) { return selector === '.display-save-status' ? status : null; }};
     const form = {
-        dataset: {displaySetting: 'UI_LIBRARY_STYLE'},
+        dataset: {displaySetting: key},
         addEventListener(name, fn) { listeners[name] = fn; },
         querySelectorAll(selector) { return selector === '[data-display-value]' || selector === 'button, input[type="checkbox"]' ? buttons : []; },
         querySelector(selector) {
@@ -36,7 +36,8 @@ function mount({fails = false} = {}) {
     const page = {classList: {add(name) { values.className = name; }}};
     const document = {
         querySelector(selector) {
-            return selector === '.display-page' ? page : null;
+            if (selector === '.display-page') return page;
+            return selector === '[data-display-setting="' + key + '"]' ? form : null;
         },
         querySelectorAll(selector) { return selector === '.display-page form[data-display-setting]' ? [form] : []; },
         getElementById(id) { return id === 'display-preview-stage' ? stage : null; },
@@ -50,6 +51,7 @@ function mount({fails = false} = {}) {
         },
         setTimeout() { return 1; }, clearTimeout() {}
     };
+    if (applyTheme) window.bbApplyThemePreference = value => applyTheme(value, values);
     vm.runInNewContext(source, {document, window, WeakMap, console});
     async function click(value) {
         const button = buttons.find(button => button.dataset.displayValue === value);
@@ -115,5 +117,15 @@ function verifyShellThemeBridge() {
     assert.equal(bad.buttons[0].attrs['aria-pressed'], 'true', 'failed save restores pressed control');
     assert.equal(bad.attrs['data-error'], true);
     assert.equal(bad.status.textContent, "Couldn't save");
+    let applied = 0;
+    const theme = mount({key: 'UI_THEME', choices: ['auto', 'day', 'night'], applyTheme(value, values) {
+        applied += 1;
+        if (applied > 5) throw new Error('theme change re-applied itself');
+        values['bb:theme-preference']({detail: {value}});
+    }});
+    await theme.click('night');
+    assert.equal(applied, 1, 'a theme click applies the theme once');
+    assert.equal(theme.buttons[2].attrs['aria-pressed'], 'true');
+    assert.equal(JSON.parse(theme.requests[0].options.body).UI_THEME, 'night');
     console.log('Display save, feedback, rollback, and preview behavior ok');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -115,8 +115,12 @@
         if (form) save(form, value, previous);
     };
     var initialThemeForm = document.querySelector('[data-display-setting="UI_THEME"]');
+    // Only mirror the buttons: setSelected would re-apply the theme and re-fire this event.
     document.addEventListener('bb:theme-preference', function (event) {
-        if (initialThemeForm) setSelected(initialThemeForm, event.detail.value);
+        if (!initialThemeForm) return;
+        initialThemeForm.querySelectorAll('[data-display-value]').forEach(function (button) {
+            button.setAttribute('aria-pressed', String(button.dataset.displayValue === event.detail.value));
+        });
     });
     if (stage && stage.dataset.view === 'spines') paintPreviewSpines();
 }());

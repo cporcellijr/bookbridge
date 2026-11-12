@@ -1532,8 +1532,6 @@ def account_display_page():
             reading_stats_by_book=database_service.get_all_reading_stats(user_id=user.id),
             cached_booklore_by_filename=_index_cached_booklore_books(database_service.get_all_booklore_books()),
             claim_times_by_book=database_service.get_book_claim_times(user_id=user.id),
-            bookfusion_by_book={},
-            bookorbit_authors={},
         )
     return render_template(
         'next/display.html',

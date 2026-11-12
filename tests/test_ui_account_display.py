@@ -84,6 +84,17 @@ class TestAccountDisplayPage(unittest.TestCase):
         self.assertIn('Private admin book', markup)
         # Admin's shared catalog links may include both books; the reader must never see admin-only titles.
 
+    def test_display_preview_resolves_authors_like_the_library(self):
+        from unittest.mock import patch
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._series_books()
+        self._login('ui-reader')
+        with patch('src.web_server._prefetch_bookorbit_authors', return_value={}) as authors,                 patch('src.web_server._prefetch_bookfusion_links', return_value={}) as links:
+            self.assertEqual(self.client.get('/account/display').status_code, 200)
+        authors.assert_called_once()
+        links.assert_called_once()
+
     def test_display_get_signed_out_redirects_and_empty_reader_shows_note(self):
         self._real_templates()
         response = self.client.get('/account/display')
