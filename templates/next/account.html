@@ -37,6 +37,8 @@
     .account-wrap code { color: #d7dcff; background: rgba(255, 255, 255, .06); padding: 1px 4px; border-radius: 4px; }
     .account-wrap .nav { max-width: 520px; margin: 0 auto 16px; }
     .account-wrap .nav a { color: var(--accent); text-decoration: none; font-size: 13px; }
+    .account-wrap .display-checkbox { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; cursor: pointer; }
+    .view .account-wrap .display-checkbox input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; padding: 0; margin: 0; flex: none; }
 </style>
 <link rel="stylesheet" href="/static/css/next-p6.css">
 {% endblock %}
@@ -84,6 +86,30 @@
 
             <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save changes') }}</button>
         </form>
+    </div>
+    <div class="card plugin-card" id="account-display">
+        <h2>{{ _('Display') }}</h2>
+        <form class="account-interface-form" method="POST" action="{{ url_for('account_interface', next=url_for('account')) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="section-title">{{ _('Interface') }}</div>
+            <div class="plugin-actions" role="group" aria-label="{{ _('Interface') }}">
+                <button type="submit" name="ui_mode" value="classic" class="btn {{ 'btn-primary' if get_user_val('UI_MODE', 'classic') != 'new' else 'btn-secondary' }}" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') != 'new' else 'false' }}">{{ _('Classic') }}</button>
+                <button type="submit" name="ui_mode" value="new" class="btn {{ 'btn-primary' if get_user_val('UI_MODE', 'classic') == 'new' else 'btn-secondary' }}" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') == 'new' else 'false' }}">{{ _('New') }}</button>
+            </div>
+        </form>
+        {% if get_user_val('UI_MODE', 'classic') == 'new' %}
+        <form class="account-series-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="section-title">{{ _('Series stacks') }}</div>
+            <input type="hidden" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="false">
+            <label class="display-checkbox" for="series-show-current">
+                <input type="checkbox" id="series-show-current" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true" {% if display_settings()['SERIES_SHOW_CURRENT_BOOK_DETAIL'] == 'true' %}checked{% endif %}>
+                {{ _('Show the current book in series stacks') }}
+            </label>
+            <p class="help">{{ _('Show the book you are reading, or the next unread book, on each series stack in your Library.') }}</p>
+            <button type="submit" class="btn btn-primary">{{ _('Save display') }}</button>
+        </form>
+        {% endif %}
     </div>
     <div class="card plugin-card">
         <h2>{{ _('My Integrations') }}</h2>

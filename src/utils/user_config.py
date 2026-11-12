@@ -83,10 +83,10 @@ ENGINE_MIRROR_KEYS = (
 
 
 # Reading preferences: how each reader wants their own books handled. The admin's
-# Settings value is the server default; a reader's own On/Off on My Integrations
-# overrides it, and a blank choice keeps following the default. Deliberately NOT
-# in PER_USER_CREDENTIAL_KEYS, so every reader, regular users included, falls back
-# to the global value.
+# Settings value is the server default; a reader's saved choice overrides it,
+# and an unset choice follows the default. Most controls live on My Integrations;
+# the series Library option is now on Account -> Display. Deliberately NOT in
+# PER_USER_CREDENTIAL_KEYS, so regular readers also fall back to the global value.
 PER_USER_PREFERENCE_KEYS = frozenset({
     "KOREADER_ANNOTATION_SYNC",
     "KOREADER_STATUS_SYNC_ENABLED",
@@ -130,7 +130,6 @@ PER_USER_FIELD_GROUPS = [
         ("SYNC_COMPLETION_PROPAGATION", N_("When I finish a book in one app, mark it finished in all of them"), "pref"),
         ("ABS_READING_CHECKPOINTS", N_("Save my ebook reading as entries in my Audiobookshelf listening history"), "pref"),
         ("STORYTELLER_LISTENING_SESSIONS", N_("Count reading along in Storyteller as Audiobookshelf listening time"), "pref"),
-        ("SERIES_SHOW_CURRENT_BOOK_DETAIL", N_("Show each series on my Library as the book I'm on"), "pref"),
     ]),
     (N_("Audiobookshelf"), [
         ("ABS_ENABLED", N_("Enabled"), "bool"),
