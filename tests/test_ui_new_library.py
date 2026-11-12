@@ -93,6 +93,13 @@ class TestNewLibrary(unittest.TestCase):
         self.assertNotIn('data-thumb-url="/covers/thumb/coverlibrarybook.jpg"', html)
         self.assertIn('data-thumb-url="/covers/thumb/coverlibraryfinished.jpg" alt="" hidden', html)
 
+    def test_book_drawer_eases_in_instead_of_flashing_dark(self):
+        # The drawer opens before its frame loads; an instant dim + empty panel flashed black.
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.book-drawer-host\[open\] \{ animation: drawer-in ")
+        self.assertRegex(css, r"\.book-drawer-host\[open\]::backdrop \{ animation: drawer-dim-in ")
+        self.assertIn("@keyframes drawer-dim-in { from { background: transparent; } }", css)
+
     def test_card_heading_does_not_reserve_empty_space(self):
         # A one-line title left a blank band above the progress bar; the heading hugs its content.
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")

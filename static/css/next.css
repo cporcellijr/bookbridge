@@ -217,6 +217,11 @@ summary::-webkit-details-marker { display: none; }
 }
 .book-drawer-host { inset: 0 0 0 auto; margin: 0; padding: 0; width: min(900px, 85vw); max-width: 100vw; height: 100dvh; max-height: 100dvh; border: 0; background: var(--bg); color: var(--text); }
 .book-drawer-host::backdrop { background: #0009; }
+/* Ease in so the frame's load hides behind the motion instead of flashing an empty dark panel. */
+.book-drawer-host[open] { animation: drawer-in .2s ease-out; }
+.book-drawer-host[open]::backdrop { animation: drawer-dim-in .2s ease-out; }
+@keyframes drawer-in { from { opacity: 0; transform: translateX(32px); } }
+@keyframes drawer-dim-in { from { background: transparent; } }
 .book-drawer-host iframe { width: 100%; height: 100%; border: 0; background: var(--bg); color-scheme: dark light; }
 @media (max-width: 640px) { .book-drawer-host { width: 100vw; } }
 .book-app-main small { grid-column: 1 / -1; }
