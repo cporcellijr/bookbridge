@@ -66,6 +66,12 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn("--shelf-pitch: 250px;", css)
         self.assertIn(':not([data-library-style="faceout"]) .book-card:not([data-reading]) .cover-wrap > :not(.cover-image)', css)
 
+    def test_faceout_books_show_page_edges(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        rule = '.library-page[data-library-style="faceout"][data-view="spines"] .book-card .cover-wrap::before {'
+        self.assertIn(rule, css)
+        self.assertIn("var(--book-paper) 0 1px", css[css.index(rule):css.index("}", css.index(rule))])
+
     def test_faceout_planks_follow_the_theme(self):
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         scoped = '.library-page[data-library-style="faceout"][data-view="spines"]'

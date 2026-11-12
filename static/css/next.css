@@ -541,6 +541,12 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
  box-shadow: 0 0 0 1px rgba(0,0,0,.55), inset 7px 0 7px -5px rgba(255,255,255,.25), 12px 0 16px -5px var(--shelf-shadow);
 }
 .library-page[data-library-style="faceout"][data-view="spines"] .book-card::before { display: none; content: none; }
+/* Every face-out book shows the paper page block along its top edge, like reading books on Spine shelves. */
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .cover-wrap::before {
+ content: ""; position: absolute; z-index: 4; top: -1px; left: 10px; right: -1px; height: 8px;
+ border-radius: 0 2px 0 0; background: repeating-linear-gradient(0deg, var(--book-paper) 0 1px, var(--book-paper-line) 1px 2px);
+ box-shadow: inset 1px -1px 0 rgba(0,0,0,.4); pointer-events: none;
+}
 .library-page[data-library-style="faceout"][data-view="spines"] .book-card .book-open {
  display: block; position: relative; flex: 1; height: 100%; min-height: 0; overflow: visible;
  padding: 0; color: var(--text); text-shadow: none;
