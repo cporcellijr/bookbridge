@@ -81,10 +81,6 @@
     </div>
 
     {% if current_user %}
-    <form class="nav-interface-form" method="POST" action="{{ url_for('account_interface', next=request.path) }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" name="ui_mode" value="new" class="nav-interface-button">{{ _('New interface') }}</button>
-    </form>
     <div class="user-menu" id="bbnav-user-menu">
         <button type="button" class="user-menu-trigger" id="bbnav-user-menu-toggle"
             aria-haspopup="true" aria-expanded="false" title="{{ _('Account') }}: {{ current_user.username }}">

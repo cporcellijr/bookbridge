@@ -27,6 +27,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Your display choices now live under Account → Display.** Switch between Classic and New from your Account page instead of the navigation bar, including on phones. In New, you can also show the current book in each series stack. This preference has moved out of My Integrations without losing anyone's saved choice; Classic shows only the interface choice.
 - **Goodreads as a progress tracker, off by default.** Like Hardcover and StoryGraph,
   BookBridge can now post your reading progress, page count and finished books to Goodreads.
   Goodreads has no public API, so it works through your own signed-in Goodreads session,

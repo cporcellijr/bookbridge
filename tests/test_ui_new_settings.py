@@ -15,14 +15,6 @@ ROOT = Path(__file__).resolve().parent.parent
 PAGES = ("settings", "account", "account_integrations", "admin_users", "admin_user_integrations")
 
 
-def page_fields_only(markup):
-    """Exclude the independent chrome switch, not any account or settings form."""
-    return re.sub(
-        r'<form class="(?:nav-interface-form|interface-switch [^"]+)"[^>]*>.*?</form>',
-        '', markup, flags=re.S,
-    )
-
-
 class Fields(HTMLParser):
     """Collect every submitted form name and its control type, including hidden fields,
     plus what a save would send: input values, checkbox/radio state and selected options."""
@@ -197,9 +189,18 @@ class TestP6RenderedRoutes(unittest.TestCase):
             for url in classic:
                 with self.subTest(role=user.role, url=url):
                     old_fields, new_fields = Fields(), Fields()
-                    old_fields.feed(page_fields_only(classic[url]))
-                    new_fields.feed(page_fields_only(modern[url]))
-                    self.assertEqual(old_fields.fields, new_fields.fields)
+                    old_fields.feed(classic[url])
+                    new_fields.feed(modern[url])
+                    if url == "/account":
+                        new_only = Counter({
+                            ("csrf_token", "hidden"): 1,
+                            ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "hidden"): 1,
+                            ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "checkbox"): 1,
+                        })
+                        self.assertEqual(new_fields.fields - old_fields.fields, new_only)
+                        self.assertEqual(new_fields.fields - new_only, old_fields.fields)
+                    else:
+                        self.assertEqual(old_fields.fields, new_fields.fields)
 
     def test_classic_and_new_forms_would_save_the_same_values(self):
         """A save from New must send exactly what Classic sends, so seed every setting with a
@@ -216,9 +217,20 @@ class TestP6RenderedRoutes(unittest.TestCase):
                 for url in classic:
                     with self.subTest(role=user.role, url=url):
                         old_fields, new_fields = Fields(), Fields()
-                        old_fields.feed(page_fields_only(classic[url]))
-                        new_fields.feed(page_fields_only(modern[url]))
-                        self.assertEqual(old_fields.values, new_fields.values)
+                        old_fields.feed(classic[url])
+                        new_fields.feed(modern[url])
+                        if url == "/account":
+                            shared_values = Counter({
+                                key: n for key, n in new_fields.values.items()
+                                if key[0] not in ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "csrf_token")
+                            })
+                            old_values = Counter({
+                                key: n for key, n in old_fields.values.items()
+                                if key[0] != "csrf_token"
+                            })
+                            self.assertEqual(old_values, shared_values)
+                        else:
+                            self.assertEqual(old_fields.values, new_fields.values)
                         if url == "/settings":
                             self.assertGreater(sum(n for k, n in old_fields.values.items() if k[3].startswith("v-")), 50)
 
@@ -298,7 +310,7 @@ class TestP6RenderedRoutes(unittest.TestCase):
         self.assertLess(markup.index('class="settings-legends"'), markup.index('class="settings-layout"'))
         self.assertIn('Press Ctrl K to jump to any setting', markup)
         self.assertIn('class="rail-foot"', markup)
-        self.assertIn('interface-switch-rail', markup)
+        self.assertNotIn('interface-switch-rail', markup)
 
     def test_new_service_headers_do_not_offer_manual_collapse(self):
         markup = self._new_html('/settings')

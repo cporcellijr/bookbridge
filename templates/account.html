@@ -84,6 +84,17 @@
             <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save changes') }}</button>
         </form>
     </div>
+    <div class="card plugin-card" id="account-display">
+        <h2>{{ _('Display') }}</h2>
+        <form class="account-interface-form" method="POST" action="{{ url_for('account_interface', next=url_for('account')) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="section-title">{{ _('Interface') }}</div>
+            <div class="plugin-actions" role="group" aria-label="{{ _('Interface') }}">
+                <button type="submit" name="ui_mode" value="classic" class="btn {{ 'btn-primary' if get_user_val('UI_MODE', 'classic') != 'new' else 'btn-secondary' }}" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') != 'new' else 'false' }}">{{ _('Classic') }}</button>
+                <button type="submit" name="ui_mode" value="new" class="btn {{ 'btn-primary' if get_user_val('UI_MODE', 'classic') == 'new' else 'btn-secondary' }}" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') == 'new' else 'false' }}">{{ _('New') }}</button>
+            </div>
+        </form>
+    </div>
     <div class="card plugin-card">
         <h2>{{ _('My Integrations') }}</h2>
         <p>

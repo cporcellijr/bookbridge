@@ -4,9 +4,9 @@ BookBridge has two interfaces: **Classic** (the default) and **New** (optional b
 
 ## Turn New on or off
 
-Sign in with the Classic interface, then click **New interface** beside the account menu in the top bar. To switch back, use the **Classic | New** control above the account menu at the bottom of New's left rail. On phones, find the same control inside the account menu at the top.
+Open **Account → Display** (from the account menu) and choose **Classic** or **New**. This works the same way on desktop and phones. The switch no longer appears in the navigation bars.
 
-The choice saves as soon as you click, without a separate Save step or JavaScript, and the same page reloads in the chosen interface. Each reader has their own choice; Classic stays the default.
+The choice saves as soon as you click, without a separate Save step or JavaScript, and Account reloads in the chosen interface. Each reader has their own choice; Classic stays the default. In New, **Account → Display** also has **Show the current book in series stacks**. Classic shows only the Interface choice.
 
 ## Find your way around
 

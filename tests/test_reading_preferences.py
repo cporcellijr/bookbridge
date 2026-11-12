@@ -90,10 +90,13 @@ class TestUserPreference(_EnvCase):
 
 
 class TestPreferenceRegistry(unittest.TestCase):
-    def test_every_preference_is_on_the_reading_preferences_card(self):
+    def test_sync_preferences_stay_on_integrations_and_series_moves_to_display(self):
         groups = dict(PER_USER_FIELD_GROUPS)
         fields = {key: ftype for key, _label, ftype in groups['Reading preferences']}
-        self.assertEqual(set(fields), set(PER_USER_PREFERENCE_KEYS))
+        series_key = 'SERIES_SHOW_CURRENT_BOOK_DETAIL'
+        self.assertIn(series_key, PER_USER_PREFERENCE_KEYS)
+        self.assertNotIn(series_key, fields)
+        self.assertEqual(set(fields), set(PER_USER_PREFERENCE_KEYS) - {series_key})
         self.assertEqual(set(fields.values()), {'pref'})
 
     def test_the_admin_api_accepts_only_on_off_or_server_default(self):
