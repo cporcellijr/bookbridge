@@ -13293,6 +13293,22 @@ _cover_fresh_until: dict = {}
 # adds no staleness the server does not already accept.
 _COVER_BROWSER_MAX_AGE_SECONDS = _COVER_FRESH_TTL_SECONDS
 
+# Thumbnails the New Library may render directly as `?v=<version>` URLs, which the
+# browser keeps for a year: a regenerated thumbnail gets a new version, so a new URL.
+# shortcut: an entry is trusted for a day without the route's ebook freshness check,
+# so an edited ebook's cover can take up to a day to appear; shorten if that matters.
+_THUMB_VERSION_TTL_SECONDS = 86400
+_THUMB_IMMUTABLE_CACHE = 'private, max-age=31536000, immutable'
+_thumb_versions: dict = {}
+
+
+def thumb_cover_src(doc_hash: str | None) -> str | None:
+    """Versioned thumbnail URL for a cover this process recently served, else None."""
+    entry = _thumb_versions.get(doc_hash) if doc_hash else None
+    if not entry or entry[1] <= time.time():
+        return None
+    return f"/covers/thumb/{doc_hash}.jpg?v={entry[0]}"
+
 
 def _send_cover_cached(filename: str):
     """Serve an extracted cover with a browser cache window (see the constant)."""
@@ -13380,16 +13396,23 @@ def serve_thumbnail_cover(filename: str):
 
     source = COVERS_DIR / filename
     target = COVERS_DIR / "thumbs" / filename
+    doc_hash = filename[:-len(".jpg")]
     if cover_thumbnail_cache.is_current(source, target):
         original_response.close()
+        stat = target.stat()
+        version = f"{stat.st_size:x}-{stat.st_mtime_ns:x}"
+        # serve_cover above just re-checked the ebook, so the version is fresh again.
+        _thumb_versions[doc_hash] = (version, time.time() + _THUMB_VERSION_TTL_SECONDS)
         response = send_from_directory(
             target.parent, filename, max_age=_COVER_BROWSER_MAX_AGE_SECONDS
         )
         response.headers['Cache-Control'] = (
-            f'private, max-age={_COVER_BROWSER_MAX_AGE_SECONDS}'
+            _THUMB_IMMUTABLE_CACHE if request.args.get('v') == version
+            else f'private, max-age={_COVER_BROWSER_MAX_AGE_SECONDS}'
         )
         return response
 
+    _thumb_versions.pop(doc_hash, None)
     if source.is_file():
         if cover_thumbnail_cache.failed_recently(source, target):
             original_response.close()
@@ -16799,6 +16822,7 @@ def create_app(test_container=None):
     app.jinja_env.globals['csrf_token'] = _ensure_csrf_token
     app.jinja_env.globals['safe_folder_name'] = safe_folder_name
     app.jinja_env.globals['suggestion_source_badge'] = suggestion_source_badge
+    app.jinja_env.globals['thumb_cover_src'] = thumb_cover_src
     app.jinja_env.globals['suggestion_bulk_block'] = _suggestion_bulk_block
 
     # i18n: gettext for the Jinja layer. The selector is passed as an argument
