@@ -4769,13 +4769,7 @@ def _register_hash_for_book(doc_id: str, book, *, user_id=None, exact: bool = Fa
 
 def _is_valid_hex_hash(value: str) -> bool:
     """Return True if value is a 32-character lowercase or uppercase hex string."""
-    if len(value) != 32:
-        return False
-    try:
-        int(value, 16)
-        return True
-    except ValueError:
-        return False
+    return re.fullmatch(r"[0-9a-fA-F]{32}", value) is not None
 
 
 def _schedule_auto_discovery(doc_id: str, user_id=None, *, source: str = "get") -> None:
