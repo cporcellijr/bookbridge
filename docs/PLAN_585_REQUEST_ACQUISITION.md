@@ -1,6 +1,6 @@
 # Plan: get the missing half from the search page (#585)
 
-Status: **Follow-up workflow redesign approved 2026-11-12. Phase A endpoint investigation is complete; Phase B starts on a new branch from local dev.** The current plan and findings below override older design notes. The original #585 implementation is already live; its delivery history follows the current plan. Nothing pushed or posted by this follow-up.
+Status: **Follow-up workflow redesign approved 2026-11-12. Phases A and B are complete; Phase C is the next implementation handoff.** The current plan and findings below override older design notes. The original #585 implementation is already live; its delivery history follows the current plan. Nothing pushed, posted, or deployed by this follow-up.
 
 ## Current follow-up plan (2026-11-12)
 
@@ -154,7 +154,7 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
 | Phase | State | Deliverable |
 |---|---|---|
 | A | COMPLETE; upstream flag gap recorded | Endpoint/capability investigation above |
-| B | NEXT; user authorized 2026-11-12 | Durable jobs, linked halves, and explicit existing-edition identities; persistence/regressions first |
+| B | COMPLETE; verified 2026-11-12 | Durable jobs, linked halves, and explicit existing-edition identities; additive migration and regressions |
 | C | Planned; auto-picker depends on A gap | BookOrbit decision handling; Shelfmark Both and source-policy support |
 | D | Planned | Supported-library arrival detection, integration picker, completion-triggered scans |
 | E | Planned | Processing job UI/actions, clear-search handoff, existing-job search behavior |
@@ -167,6 +167,19 @@ The main checkout remains on dev for the concurrent Library UI task.
 Phase B must be a small complete foundation, using existing acquisition records/grouping where
 possible. Any new schema is additive; preserve legacy requests and dismissed rows. Provider side
 effects and UI stay in the later phases unless strictly required to make the foundation usable.
+
+Phase B delivered in `1ea41d24`: reader-owned `AcquisitionJob` records persist intent before any
+provider receipt, retain explicit existing-half identities, and attach independent provider receipts
+through existing `group_key` values. Receipt claims serialize across SQLite connections and preserve
+legacy/dismissed history. Migration `f6b585a12c34` adds only the new table, after `e3b7c1a9d2f4`.
+Provider routes, library detection, settings, and UI are not wired to these methods yet.
+
+Verification: **24 new tests**; acquisition-focused suite **204 passed / 23 subtests**. Full suite on
+the feature branch after incorporating local dev `47b47e3a`: **7630 passed / 15 skipped / 1274 subtests**
+(464.25s). The concurrent-receipt regression fails at its expected assertion when receipt serialization
+is removed; fixed source was restored before the full passing run. Fresh, existing, repeated-upgrade,
+and downgrade migrations use disposable databases. No live migration or provider write was performed.
+Deployment requirement when released: **migration + restart**.
 
 Acceptance covers all three starting states through both providers and mixed-provider halves;
 auto on/off/rule handback/unknown; duplicate filenames and edited titles; owned/partial/failed
@@ -183,6 +196,9 @@ must not launch tests independently. Work on an isolated branch/worktree from cu
 After each phase is complete and verified, merge it into local dev. Before starting the next phase,
 update `codex/585-acquisition-jobs` from the current local dev, including concurrent Library UI work.
 Review the combined changes and rerun applicable checks without overlapping another test run.
+The user runs implementation in another agent on this same feature branch/worktree. This chat supplies
+one phase prompt at a time and reviews only after the user reports that agent is done; the reviewer
+handles the authorized local phase merge. The implementation agent must not merge or deploy on its own.
 
 Update CHANGELOG and BRANCH_STATUS with final counts and deployment requirements after implementation.
 Local phase merges into dev are authorized. No push/deploy or new real acquisition/scan test is
