@@ -87,6 +87,13 @@ class _LinkedFakeDatabase(_FakeDatabase):
 
 
 class TestKoSyncCrossDeviceRewinds:
+    @pytest.fixture(autouse=True)
+    def _no_sent_positions(self):
+        # Another file's GET for the same hash leaves a "sent" position that changes the hold path.
+        kosync_server._book_positions_sent.clear()
+        yield
+        kosync_server._book_positions_sent.clear()
+
     @staticmethod
     def _put(db, *, percentage, device_id, furthest_wins):
         app = Flask(__name__)

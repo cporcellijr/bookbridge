@@ -67,6 +67,10 @@ class TestKosyncNotFoundStatus(unittest.TestCase):
         from src.api import kosync_server
 
         db = web_server.database_service
+        # Other files change these after this module set them at import.
+        credentials = patch.dict(os.environ, {'KOSYNC_USER': 'testuser', 'KOSYNC_KEY': 'testpass'})
+        credentials.start()
+        self.addCleanup(credentials.stop)
         database_binding = patch.object(kosync_server, '_database_service', db)
         database_binding.start()
         self.addCleanup(database_binding.stop)
