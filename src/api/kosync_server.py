@@ -29,7 +29,7 @@ from src.api.hardcover_client import HardcoverClient
 from src.utils.cache_paths import safe_cache_path
 from src.utils.config_loader import env_truthy
 from src.utils.kosync_canonical import load_persisted_pair
-from src.utils.kosync_headers import hash_kosync_key
+from src.utils.kosync_headers import BRIDGE_INTERNAL_HEADER, hash_kosync_key
 from src.utils.logging_utils import get_persistent_condition_logger
 from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp, state_metadata_kwargs
 from src.utils.fixed_page_progress import is_cbz_book, page_from_persisted_state
@@ -2046,26 +2046,23 @@ def _reader_position(doc_hash: str, kosync_doc, user_id) -> Optional[float]:
     return None
 
 
-# Holds the (user_id, document hash) of each copy that matched a book and hasn't had
-# the book's position from a GET since. It lives in memory only, so after a restart
-# furthest-wins judges a held copy against its own position, as before.
-_awaiting_book_position: set = set()
-_awaiting_book_position_lock = threading.Lock()
+# The book position a GET last sent to each (user_id, document hash). A push behind
+# the book counts toward a rewind only from a copy that a GET sent to where the book
+# is now. The record lives in memory only, so after a restart a copy behind the book
+# needs one pull before it can take the book back.
+_book_positions_sent: dict = {}
+_book_positions_sent_lock = threading.Lock()
 
 
-def _awaits_book_position(user_id, doc_hash: str) -> bool:
-    with _awaiting_book_position_lock:
-        return (user_id, doc_hash) in _awaiting_book_position
+def _last_book_position_sent(user_id, doc_hash: str):
+    """The percentage a GET last sent this reader's copy, or None if none has since startup."""
+    with _book_positions_sent_lock:
+        return _book_positions_sent.get((user_id, doc_hash))
 
 
-def _hold_for_book_position(user_id, doc_hash: str) -> None:
-    with _awaiting_book_position_lock:
-        _awaiting_book_position.add((user_id, doc_hash))
-
-
-def _book_position_sent(user_id, doc_hash: str) -> None:
-    with _awaiting_book_position_lock:
-        _awaiting_book_position.discard((user_id, doc_hash))
+def _record_book_position_sent(user_id, doc_hash: str, percentage: float) -> None:
+    with _book_positions_sent_lock:
+        _book_positions_sent[(user_id, doc_hash)] = percentage
 
 
 def _book_for_put_baseline(doc_hash: str, kosync_doc, user_id):
@@ -2176,18 +2173,27 @@ def kosync_put_progress():
         doc_user_id = getattr(kosync_doc, "user_id", None)
         if request_user_id is None or doc_user_id in (None, request_user_id):
             baseline = kosync_doc
-    # A hash with no saved position of its own (newly linked through a sibling or
-    # filename match) still has a book, and the reader's KoSync State for it is what
-    # a GET would hand out - so that is what a stale device must not regress.
+    # A copy's own last report shows where its device has been, unless BookBridge wrote it.
+    device_reported_pct = 0.0
+    if baseline is not None and baseline.percentage and not _is_internal_kosync_device(
+        getattr(baseline, "device", None), getattr(baseline, "device_id", None)
+    ):
+        device_reported_pct = float(baseline.percentage)
+    # A GET answers with the reader's KoSync State for the book, so a stale device
+    # must not regress that State. That holds when the hash has no saved position of
+    # its own (newly linked through a sibling or filename match), and when the book has
+    # moved past the saved one (by the audiobook or another device). A push that takes
+    # the book back from there needs the rewind proof that follows (#215).
     state_baseline = False
     observation_doc = kosync_doc
     newly_matched = bool(put_book) and not getattr(kosync_doc, "linked_abs_id", None)
     if newly_matched:
         observation_doc = SimpleNamespace(linked_abs_id=put_book.abs_id)
-    if (baseline is None or not baseline.percentage) and furthest_wins and not is_internal and not force_update:
+    if put_book and furthest_wins and not is_internal and not force_update:
         state_book = put_book
         state = _database_service.get_state(state_book.abs_id, "kosync", user_id=request_user_id) if state_book else None
-        if state is not None and state.percentage:
+        own_pct = float(baseline.percentage) if baseline is not None and baseline.percentage else 0.0
+        if state is not None and state.percentage and float(state.percentage) > own_pct + 0.0001:
             baseline = SimpleNamespace(percentage=state.percentage, device=None, device_id=None, timestamp=None)
             state_baseline = True
     baseline_pct = float(baseline.percentage) if baseline and baseline.percentage else 0
@@ -2211,22 +2217,23 @@ def kosync_put_progress():
         not baseline_device_id or _is_internal_kosync_device(baseline_device, baseline_device_id)
     )
 
-    # A copy that matched a book in this request has only ever seen its own position,
-    # so until a GET sends it the book's, a push behind the book says where that copy
-    # was, not where the reader is. The push saves to the copy, but it doesn't move
-    # the book or count toward a deliberate rewind (#215).
-    if put_book is not None and furthest_wins and not force_update and not is_internal and (
-        newly_matched or _awaits_book_position(request_user_id, doc_hash)
-    ):
+    # A copy that has never been where the book is now, because no GET sent it there and
+    # its device never reported it, can only say where that copy was, not where the
+    # reader meant to be: one that just matched, or one behind the book after a restart.
+    # A push from it behind the book saves to the copy, but it doesn't move the book
+    # or count toward a deliberate rewind (#215).
+    book_state = None
+    if put_book is not None and furthest_wins and not force_update and not is_internal:
         book_state = _database_service.get_state(put_book.abs_id, "kosync", user_id=request_user_id)
-        if book_state is not None and book_state.percentage \
-                and float(percentage) < float(book_state.percentage) - 0.0001:
+    if book_state is not None and book_state.percentage \
+            and float(percentage) < float(book_state.percentage) - 0.0001:
+        known_pct = max(float(_last_book_position_sent(request_user_id, doc_hash) or 0.0), device_reported_pct)
+        if known_pct < float(book_state.percentage) - 0.0001:
             if newly_matched:
                 _register_hash_for_book(
                     doc_hash, put_book, user_id=request_user_id,
                     exact=getattr(put_book, "kosync_doc_id", None) == doc_hash,
                 )
-            _hold_for_book_position(request_user_id, doc_hash)
             _database_service.upsert_user_kosync_progress(
                 doc_hash, percentage, progress=progress, device=device,
                 device_id=device_id, timestamp=now, user_id=request_user_id,
@@ -4011,9 +4018,11 @@ def _adopt_cwa_identity(doc_id: str, book) -> None:
 def _respond_from_book_states(doc_id, book):
     """Build a GET response from a book's state data. Returns (response, status_code)."""
     response, status = _book_states_response(doc_id, book)
-    # A 404 sends the copy nothing, so a held copy stays held.
-    if status == 200:
-        _book_position_sent(getattr(g, "kosync_user_id", None), doc_id)
+    # A 404 sends the copy nothing, and BookBridge's own read sends no device anything.
+    if status == 200 and not request.headers.get(BRIDGE_INTERNAL_HEADER):
+        sent = (response.get_json(silent=True) or {}).get("percentage")
+        if sent is not None:
+            _record_book_position_sent(getattr(g, "kosync_user_id", None), doc_id, float(sent))
     return response, status
 
 
