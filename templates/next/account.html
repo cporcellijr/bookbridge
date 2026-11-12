@@ -98,6 +98,17 @@
             </div>
         </form>
         {% if get_user_val('UI_MODE', 'classic') == 'new' %}
+        <form class="account-theme-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="section-title">{{ _('Theme') }}</div>
+            <label for="account-theme">{{ _('Theme') }}</label>
+            <select id="account-theme" name="UI_THEME" class="form-input">
+                <option value="auto" {% if display_settings()['UI_THEME'] == 'auto' %}selected{% endif %}>{{ _('Follow device') }}</option>
+                <option value="day" {% if display_settings()['UI_THEME'] == 'day' %}selected{% endif %}>{{ _('Day') }}</option>
+                <option value="night" {% if display_settings()['UI_THEME'] == 'night' %}selected{% endif %}>{{ _('Night') }}</option>
+            </select>
+            <button type="submit" class="btn btn-primary">{{ _('Save theme') }}</button>
+        </form>
         <form class="account-series-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="section-title">{{ _('Series stacks') }}</div>

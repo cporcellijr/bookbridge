@@ -1,17 +1,15 @@
 (function () {
     var root = document.documentElement;
     var toggle = document.querySelector('[data-theme-toggle]');
+    var preference = root.dataset.themePref || 'auto';
+    var media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
     var theme = 'dark';
-    try {
-        var saved = window.localStorage.getItem('bookbridge-theme');
-        if (saved === 'light' || saved === 'dark') theme = saved;
-    } catch (error) { /* Storage can be blocked; keep the dark default. */ }
 
-    function applyTheme(value) {
-        theme = value;
-        root.dataset.theme = value;
+    function applyTheme() {
+        theme = preference === 'day' || (preference === 'auto' && media && media.matches) ? 'light' : 'dark';
+        root.dataset.theme = theme;
         if (!toggle) return;
-        var light = value === 'light';
+        var light = theme === 'light';
         toggle.setAttribute('aria-pressed', light ? 'true' : 'false');
         var label = light ? 'Night theme' : 'Day theme';
         var action = light ? 'Switch to night theme' : 'Switch to day theme';
@@ -22,11 +20,27 @@
         if (text) text.textContent = strings[label] || label;
     }
 
-    applyTheme(theme);
+    applyTheme();
+    if (media) {
+        var onDeviceThemeChange = function () {
+            if (preference === 'auto') applyTheme();
+        };
+        if (media.addEventListener) media.addEventListener('change', onDeviceThemeChange);
+        else if (media.addListener) media.addListener(onDeviceThemeChange);
+    }
     if (toggle) toggle.addEventListener('click', function () {
-        var next = theme === 'dark' ? 'light' : 'dark';
-        applyTheme(next);
-        try { window.localStorage.setItem('bookbridge-theme', next); } catch (error) { /* Theme still works for this page. */ }
+        preference = theme === 'dark' ? 'day' : 'night';
+        root.dataset.themePref = preference;
+        applyTheme();
+        var themeSelect = document.querySelector('select[name="UI_THEME"]');
+        if (themeSelect) themeSelect.value = preference;
+        try {
+            window.fetch('/account/display', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+                body: JSON.stringify({UI_THEME: preference})
+            }).catch(function () { /* Keep the theme on this page if saving fails. */ });
+        } catch (error) { /* Keep the theme on this page if saving fails. */ }
     });
 
     // Collapsible rail: icons only, remembered per browser; collapsed links get their label as a tooltip.

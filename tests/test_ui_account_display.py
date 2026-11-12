@@ -62,15 +62,56 @@ class TestAccountDisplayPage(unittest.TestCase):
                         r'type="checkbox"[^>]+name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true"',
                     )
                     self.assertIn('action="/account/display?next=/account"', series_form.group())
+                    theme_form = re.search(
+                        r'<form class="account-theme-form"[^>]*>.*?</form>',
+                        markup, re.S,
+                    )
+                    self.assertIsNotNone(theme_form)
+                    self.assertIn('name="UI_THEME"', theme_form.group())
+                    for value in ("auto", "day", "night"):
+                        self.assertIn(f'value="{value}"', theme_form.group())
                 else:
+                    self.assertNotIn('account-theme-form', markup)
+                    self.assertNotIn('name="UI_THEME"', markup)
                     self.assertNotIn('account-series-form', markup)
                     self.assertNotIn('name="SERIES_SHOW_CURRENT_BOOK_DETAIL"', markup)
                 for future_setting in (
-                    "UI_THEME", "UI_LIBRARY_STYLE", "UI_COVER_SIZE", "UI_SHOW_PROGRESS",
+                    "UI_LIBRARY_STYLE", "UI_COVER_SIZE", "UI_SHOW_PROGRESS",
                     "UI_SHOW_FINISHED", "UI_SHOW_FORMAT_STRIP", "UI_SHOW_RATINGS",
                     "UI_SHOW_TITLES", "UI_SHELF_FINISH",
                 ):
                     self.assertNotIn(f'name="{future_setting}"', markup)
+
+    def test_theme_form_saves_for_one_reader_and_reflects_the_choice(self):
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        for preference in ("auto", "day", "night"):
+            with self.subTest(preference=preference):
+                response = self.client.post(
+                    "/account/display?next=/account",
+                    data={"UI_THEME": preference},
+                    follow_redirects=True,
+                )
+                self.assertEqual(response.status_code, 200)
+                markup = response.get_data(as_text=True)
+                form = re.search(
+                    r'<form class="account-theme-form"[^>]*>.*?</form>',
+                    markup, re.S,
+                )
+                self.assertIsNotNone(form)
+                self.assertRegex(form.group(), rf'value="{preference}"\s+selected')
+                self.assertIn(f'data-theme-pref="{preference}"', markup)
+                self.assertEqual(self.service.get_user_credential(self.reader.id, "UI_THEME"), preference)
+                self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_THEME"))
+                self.assertIsNone(self.service.get_user_credential(self.reader.id, SERIES_KEY))
+
+        self.client.get("/logout")
+        self._login("ui-admin")
+        self.service.set_user_credential(self.admin.id, "UI_MODE", "new")
+        other = self.client.get("/account").get_data(as_text=True)
+        self.assertIn('data-theme-pref="auto"', other)
+        self.assertRegex(other, r'value="auto"\s+selected')
 
     def test_series_form_saves_only_reader_and_changes_real_library_markup(self):
         self._real_templates()
