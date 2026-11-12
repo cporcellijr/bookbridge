@@ -17,6 +17,32 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Get the missing ebook or audiobook from Discover, and have it paired with the book you already have** (#585).
+  When a search on Discover's Search tab finds only one half of a book, or neither, a "Get it"
+  action files a request with BookOrbit or finds a release in Shelfmark, using your own login on
+  each service. BookBridge remembers which book you asked for and, when the file arrives, pairs
+  it with exactly that book. If the arrival can't be identified with certainty, it goes to
+  Discover's review instead of being guessed. A "My requests" strip follows each request until it
+  arrives and is paired, declined or cancelled.
+  - Admins can always use it; other readers need **Let readers get missing books** switched on
+    (off by default). Each reader adds their own Shelfmark login on their account's integrations
+    page.
+  - When BookOrbit is set not to grab releases automatically, you can pick the release for your
+    request in BookBridge. This needs the BookOrbit permission "Download books directly"
+    (`book_request_self_fulfill`) on the login or API key BookBridge uses.
+  - Shelfmark results only list releases of the format you asked for (an audiobook search no
+    longer offers an EPUB) and always name the source they came from.
+  - A download that has made no progress for 30 minutes says so, and suggests checking your
+    download client or indexer sign-in. Nothing is cancelled automatically.
+  - Optional, per reader: **Follow audiobook requests I make in BookOrbit** picks up the
+    audiobooks you requested inside BookOrbit itself in the last 30 days, and pairs each with your
+    one BookOrbit ebook of the same title, authors and series number. Anything less certain goes
+    to Discover's review.
+  - The Shelfmark tab is gone from the navigation in both interfaces. `/shelfmark` still opens
+    your Shelfmark site, and Settings has an "Open Shelfmark" link.
+  - Known limits: arrivals are found in your BookOrbit library only. A Shelfmark download waits
+    as "Downloaded, waiting for the library" until BookOrbit has scanned it in. Classic interface
+    readers get no "Get it" dialog.
 - **BookOrbit audiobook tracks can be processed directly from a verified shared mount.**
   When BookOrbit supplies an absolute track path, matching filename, file ID
   and file size, BookBridge validates containment under `AUDIOBOOKS_DIR` and
