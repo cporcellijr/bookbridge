@@ -8,6 +8,16 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **A book downloaded in KOReader from CWA's or Storyteller's catalog now finds its progress in
+  filename mode** (#590). KOReader names a catalog download "Author - Title", but books matched
+  from a CWA or Storyteller search are stored under a generated name, so the copy found no
+  progress. BookBridge now also matches the title and authors inside the EPUB.
+  Contributed by [@chemicalsno](https://github.com/chemicalsno) in #590.
+- **A KOReader copy that is behind the book can no longer pull it back** (#592). When the
+  audiobook or another device had moved the book on, one page turn on an older copy could take
+  the book back to where that copy was. A device now has to have been sent the book's current
+  position before its pushes can move the book back, and a deliberate rewind still works.
+  Contributed by [@chemicalsno](https://github.com/chemicalsno) in #592.
 - **Cache Cleanup now provides a safe preview instead of deleting uncertain files.**
   The old action could mistake BookOrbit `bookorbit_123` cache folders for
   inactive entries whose mapping IDs were `bookorbit:123`. Both Settings
