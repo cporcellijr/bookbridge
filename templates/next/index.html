@@ -74,30 +74,31 @@
 
     <section class="library-toolbar" aria-label="{{ _('Library controls') }}">
         <div class="toolbar-primary">
-            <label class="toolbar-select">{{ _('Format') }}
-                <select id="filter-select" class="field" aria-label="{{ _('Format') }}">
-                    <option value="all">{{ _('All formats') }}</option>
-                    <option value="paired">{{ _('Listening and reading') }}</option>
-                    <option value="has_audio">{{ _('Has Audio') }}</option>
-                    <option value="audiobook_only">{{ _('Audio only') }}</option>
-                    <option value="ebook_only">{{ _('Ebook only') }}</option>
-                </select>
-            </label>
-            <label class="toolbar-select">{{ _('Author') }}<select id="author-filter" class="field" aria-label="{{ _('Author') }}"><option value="all">{{ _('All authors') }}</option><option value="none">{{ _('No author') }}</option>{% for name in author_options %}<option value="author:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
-            <label class="toolbar-select">{{ _('Series') }}<select id="series-filter" class="field" aria-label="{{ _('Series') }}"><option value="all">{{ _('All series') }}</option><option value="none">{{ _('No series') }}</option>{% for name in series_options %}<option value="series:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
             <div class="toolbar-search"><input id="dashboard-search" type="search" class="field" aria-label="{{ _('Filter books') }}" placeholder="{{ _('Filter books…') }}" autocomplete="off"></div>
+            <div class="library-filter-host" id="library-filter-host">
+                <button type="button" id="library-filter-button" class="btn library-filter-trigger" aria-expanded="false" aria-controls="library-filter-panel"><span id="library-filter-button-label">{{ _('Filter') }}</span><span aria-hidden="true">⌄</span></button>
+                <div id="library-filter-backdrop" class="library-filter-backdrop" hidden></div>
+                <div id="library-filter-panel" class="library-filter-panel" role="dialog" aria-label="{{ _('Filters') }}" hidden>
+                    <div class="library-filter-panel-head"><strong>{{ _('Filters') }}</strong><button type="button" class="library-filter-close" aria-label="{{ _('Close filters') }}" data-filter-close>×</button></div>
+                    <div class="library-filter-panel-groups">
+                        <section class="library-filter-group" data-filter-group="status"><h3>{{ _('Status') }}</h3><div class="library-filter-options" id="filter-status-options"></div></section>
+                        <section class="library-filter-group" data-filter-group="format"><h3>{{ _('Format') }}</h3><div class="library-filter-options" id="filter-format-options"></div></section>
+                        <section class="library-filter-group" data-filter-group="author"><h3>{{ _('Author') }}</h3><input id="filter-author-search" class="field library-filter-search" type="search" aria-label="{{ _('Search authors') }}" placeholder="{{ _('Search authors…') }}" autocomplete="off"><div class="library-filter-options" id="filter-author-options"></div></section>
+                        <section class="library-filter-group" data-filter-group="series"><h3>{{ _('Series') }}</h3><input id="filter-series-search" class="field library-filter-search" type="search" aria-label="{{ _('Search series') }}" placeholder="{{ _('Search series…') }}" autocomplete="off"><div class="library-filter-options" id="filter-series-options"></div></section>
+                    </div>
+                    <label class="group-toggle library-filter-grouping"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
+                </div>
+            </div>
+            <div class="library-filter-state" hidden>
+                <select id="status-filter" aria-label="{{ _('Status') }}"><option value="all">{{ _('All statuses') }}</option><option value="in_progress">{{ _('In progress') }}</option><option value="not_started">{{ _('Not started') }}</option><option value="finished">{{ _('Finished') }}</option></select>
+                <select id="filter-select" aria-label="{{ _('Format') }}"><option value="all">{{ _('All formats') }}</option><option value="paired">{{ _('Listening and reading') }}</option><option value="has_audio">{{ _('Has Audio') }}</option><option value="audiobook_only">{{ _('Audio only') }}</option><option value="ebook_only">{{ _('Ebook only') }}</option></select>
+                <select id="author-filter" aria-label="{{ _('Author') }}"><option value="all">{{ _('All authors') }}</option><option value="none">{{ _('No author') }}</option>{% for name in author_options %}<option value="author:{{ name }}">{{ name }}</option>{% endfor %}</select>
+                <select id="series-filter" aria-label="{{ _('Series') }}"><option value="all">{{ _('All series') }}</option><option value="none">{{ _('No series') }}</option>{% for name in series_options %}<option value="series:{{ name }}">{{ name }}</option>{% endfor %}</select>
+            </div>
         </div>
         <div class="toolbar-secondary">
-            <div class="toolbar-left">
-                <div class="sort-controls"><label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field" aria-label="{{ _('Sort') }}">
-                    <option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="reading">{{ _('Reading status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option>
-                </select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button></div>
-                <label class="group-toggle"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
-            </div>
-            <div class="toolbar-right">
-                <button type="button" id="select-mode-button" class="btn" aria-pressed="false" aria-controls="selection-bar">{{ _('Select') }}</button>
-                <span id="filter-count" role="status" aria-live="polite"></span>
-            </div>
+            <div class="toolbar-left"><div class="sort-controls"><label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field" aria-label="{{ _('Sort') }}"><option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="reading">{{ _('Reading status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option></select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button></div></div>
+            <div class="toolbar-right"><button type="button" id="select-mode-button" class="btn" aria-pressed="false" aria-controls="selection-bar">{{ _('Select') }}</button><span id="filter-count" role="status" aria-live="polite"></span></div>
         </div>
     </section>
     <div id="search-handoff" class="search-handoff hidden"><span id="search-handoff-msg"></span><a id="search-handoff-link" class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Search Discover') }}</a></div>

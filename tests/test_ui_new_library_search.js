@@ -31,11 +31,12 @@ assert.ok(globalSearch.includes('catalog.pages'), 'Global search indexes pages')
 assert.ok(globalSearch.includes('event.ctrlKey || event.metaKey'), 'Ctrl/Command K remains supported');
 
 const format = library.match(/<select id="filter-select"[^>]*>([\s\S]*?)<\/select>/);
-assert.ok(format, 'Format is a visible select');
-assert.ok(!format[0].includes('class="hidden"'), 'Format cannot be hidden');
+assert.ok(format, 'Format select remains as hidden state for Classic-compatible storage');
+assert.match(library, /class="library-filter-state" hidden/, 'Original selects are no longer in the toolbar');
+assert.match(library, /id="library-filter-button"/, 'One visible Filter button replaces the select');
 assert.ok(!format[1].includes('needs_attention'), 'Attention is not a format');
 assert.ok(library.includes('id="attention-only-filter"'), 'Attention filter stays available');
-assert.ok(scripts.includes("savedFormat === 'needs_attention'"), 'Old saved attention filter migrates');
+assert.ok(scripts.includes("candidate.format === 'needs_attention'"), 'Old saved attention filter migrates');
 
 // Execute the production attention predicate against independent card states.
 const start = scripts.indexOf('function needsAttention(card)');
@@ -78,6 +79,7 @@ const countScope = {
     filterCount: {textContent: 'stale'},
     distinctBookCards: () => countCards,
     filterSelect: {value: 'all'},
+    statusFilter: {value: 'all'},
     seriesFilter: {value: 'all'},
     authorFilter: {value: 'all'},
     attentionOnlyFilter: {checked: false},

@@ -836,3 +836,44 @@ body.series-grouping-off .series-group { display: none !important; }
 /* Face-out captions also retain warnings; the shared Spine rule ordinarily hides them. */
 .library-page[data-library-style="faceout"][data-view="spines"] .out-of-sync-line,
 .library-page[data-library-style="faceout"][data-view="spines"] .state-label { display: inline-block; }
+
+
+/* One Library filter: anchored popover, or a short bottom sheet on phones. */
+.library-toolbar .toolbar-primary { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.library-toolbar .toolbar-search { min-width: 0; flex: 1; }
+.library-filter-state[hidden], .library-filter-panel[hidden], .library-filter-backdrop[hidden] { display: none !important; }
+.library-filter-host { position: relative; flex: none; }
+.library-filter-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 44px; max-width: min(320px, 44vw); padding: 8px 12px; white-space: nowrap; }
+.library-filter-trigger span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.library-filter-trigger[aria-expanded="true"] { border-color: var(--info); background: var(--surface-2); }
+.library-filter-panel { position: absolute; z-index: 35; top: calc(100% + 8px); right: 0; width: min(545px, calc(100vw - 64px)); max-height: min(74vh, 660px); overflow-y: auto; overscroll-behavior: contain; padding: 16px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 18px 42px #0005; }
+.library-filter-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.library-filter-panel-head strong { font-size: 15px; }
+.library-filter-close { min-width: 40px; min-height: 40px; border: 0; border-radius: 9px; background: var(--surface-2); color: var(--text); font-size: 23px; cursor: pointer; }
+.library-filter-panel-groups { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; padding: 14px 0; }
+.library-filter-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.library-filter-group h3 { margin: 0 0 3px; color: var(--text-2); font-size: 12px; font-weight: 650; }
+.library-filter-options { display: flex; flex-direction: column; gap: 3px; max-height: 192px; overflow-y: auto; }
+.library-filter-option { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; min-height: 36px; padding: 6px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); text-align: left; font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
+.library-filter-option:hover { background: var(--surface-2); }
+.library-filter-option[aria-pressed="true"] { border-color: var(--info); background: var(--info-bg); font-weight: 650; }
+.library-filter-option:focus-visible, .library-filter-close:focus-visible, .library-filter-trigger:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+.library-filter-search { min-width: 0; width: 100%; min-height: 40px; padding: 6px 9px; font-size: 13px; }
+.library-filter-grouping { min-height: 44px; width: 100%; padding: 8px 4px; border-top: 1px solid var(--line); }
+.library-filter-grouping input { width: 18px; height: 18px; accent-color: var(--info); }
+.library-filter-backdrop { display: none; }
+@media (max-width: 760px) {
+ .library-toolbar .toolbar-primary { display: flex; gap: 8px; }
+ .library-filter-host { position: static; }
+ .library-filter-trigger { max-width: min(180px, 40vw); }
+ .library-filter-backdrop:not([hidden]) { display: block; position: fixed; z-index: 69; inset: 0; background: #0009; }
+ .library-filter-panel:not([hidden]) { position: fixed; z-index: 70; top: auto; right: 0; bottom: 0; left: 0; width: 100%; max-width: 100vw; max-height: min(76dvh, 580px); padding: 14px 16px max(16px, env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; animation: library-filter-sheet-in .2s ease-out; }
+ .library-filter-panel-groups { gap: 12px; }
+ .library-filter-options { max-height: 135px; }
+ .library-filter-option { min-height: 40px; }
+}
+@keyframes library-filter-sheet-in { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@media (max-width: 390px) {
+ .library-filter-panel-groups { grid-template-columns: minmax(0,1fr); }
+ .library-filter-options { max-height: 115px; }
+}
