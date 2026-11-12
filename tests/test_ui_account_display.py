@@ -387,3 +387,21 @@ class TestAccountDisplayPage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDisplayPageScript(unittest.TestCase):
+    """Runs the Display page's node checks (save, rollback, preview, theme bridge) in the suite."""
+
+    def test_display_node_regressions(self):
+        import shutil
+        import subprocess
+        from pathlib import Path
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js not available")
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [node, str(root / "tests/test_ui_new_display.js")],
+            cwd=root, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -90,7 +90,7 @@
         <div class="toolbar-secondary">
             <div class="toolbar-left">
                 <div class="sort-controls"><label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field" aria-label="{{ _('Sort') }}">
-                    <option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="status">{{ _('Status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option>
+                    <option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="reading">{{ _('Reading status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option>
                 </select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button></div>
                 <label class="group-toggle"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
             </div>
@@ -109,11 +109,10 @@
 
     {% from 'next/_library_cards.html' import render_card, render_series with context %}
 
-    <div class="library-sections" id="library-sections">
-        {% for bucket, dom_bucket, label in [('in_progress', 'in-progress', _('In progress')), ('not_started', 'not-started', _('Not started')), ('finished', 'finished', _('Finished'))] %}
-        <section class="dashboard-section" id="{{ dom_bucket }}-section"><header class="section-header"><h2>{{ label }}</h2>{% if bucket == 'not_started' %}<button type="button" id="not-started-header" class="section-collapse" aria-controls="{{ dom_bucket }}-grid" aria-expanded="false">{{ _('Show') }} <span id="not-started-chevron" aria-hidden="true">▸</span></button>{% endif %}</header>
-            <div class="book-grid{% if bucket == 'not_started' %} collapsible-book-grid{% endif %}" id="{{ dom_bucket }}-grid">{% for entry in grouped_mappings %}{% if entry.is_series_group %}{% if entry.section_bucket == bucket %}{{ render_series(entry) }}{% elif bucket == 'finished' %}{% for child in entry.children %}{% if child.unified_progress >= 100 %}{{ render_card(child) }}{% endif %}{% endfor %}{% endif %}{% else %}{% if (bucket == 'in_progress' and entry.unified_progress > 0 and entry.unified_progress < 100) or (bucket == 'not_started' and entry.unified_progress == 0) or (bucket == 'finished' and entry.unified_progress >= 100) %}{{ render_card(entry) }}{% endif %}{% endif %}{% endfor %}</div>
-        </section>{% endfor %}
+    <div class="book-grid" id="library-grid">
+        {% for entry in grouped_mappings %}
+            {% if entry.is_series_group %}{{ render_series(entry) }}{% else %}{{ render_card(entry) }}{% endif %}
+        {% endfor %}
     </div>
     {% else %}<section class="empty-state"><div class="empty-state-icon">◇</div><h2>{{ _('No books syncing yet') }}</h2><p>{{ _('Start by adding your first audiobook mapping') }}</p><a class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Discover books') }}</a></section>{% endif %}
     <footer class="library-footer"><span>{{ _('Build %(version)s', version=app_version) }}</span>{% if update_available %}<a href="https://github.com/cporcellijr/bookbridge/releases/latest" target="_blank" rel="noopener noreferrer">{{ _('v%(version)s Available', version=latest_version) }}</a>{% endif %}</footer>

@@ -279,12 +279,6 @@ summary::-webkit-details-marker { display: none; }
 /* Room below the last cards so the floating selection bar never covers them. */
 .library-page[data-select-mode="on"] { padding-bottom: 150px; }
 #select-mode-button[aria-pressed="true"] { border-color: var(--info); background: var(--info-bg); color: var(--text); }
-.dashboard-section { margin-top: 26px; }
-.dashboard-section[hidden] { display: none; }
-.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.section-header h2 { margin: 0; font: 500 20px var(--font-book); }
-.section-collapse { border: 0; background: transparent; color: var(--text-2); cursor: pointer; }
-#not-started-grid:not(.show) { display: none; }
 .book-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(190px,1fr)); gap: 14px; align-items: start; }
 .library-book-card { position: relative; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); transition: border-color .15s, transform .15s; }
 .library-book-card:hover { transform: translateY(-2px); border-color: var(--line-2); }
@@ -343,9 +337,7 @@ summary::-webkit-details-marker { display: none; }
 .spine-progress { display: none; }
 .library-page[data-view="spines"] .cover-wrap, .library-page[data-view="spines"] .book-author,.library-page[data-view="spines"] .out-of-sync-line, .library-page[data-view="spines"] .state-label { display: none; }
 .library-page[data-view="spines"] .book-select { display: none; }
-body.series-grouping-off .series-group, body.series-grouping-off .book-card.flatten-duplicate { display: none !important; }
-.collapsible-book-grid { display: none; }
-.collapsible-book-grid.show { display: grid; }
+body.series-grouping-off .series-group { display: none !important; }
 .suggestions-content { display: none; }
 .suggestions-content.show { display: block; }
 .library-page .series-strip { width: 100%; display: flex; justify-content: space-between; gap: 10px; padding: 10px 14px; border: 0; border-top: 1px solid var(--line); background: var(--surface-2); color: var(--text-2); text-align: left; cursor: pointer; }

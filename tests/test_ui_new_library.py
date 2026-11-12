@@ -728,6 +728,48 @@ class TestNewLibrary(unittest.TestCase):
         self.assertNotIn("Finished Example", warning)
         self.assertIn("Alignment failed", warning)
 
+    def test_one_library_grid_contains_every_series_book_once(self):
+        self.service.save_state(State(
+            abs_id="library-book", client_name="abs", percentage=0.55,
+            timestamp=1980, last_updated=1793800300, user_id=self.reader.id,
+        ))
+        self.service.save_book(Book(
+            abs_id="standalone-book", abs_title="Standalone Example", status="active",
+            ebook_filename="standalone.epub",
+        ))
+        self.service.link_user_book(self.reader.id, "standalone-book")
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        html = self.client.get("/").get_data(as_text=True)
+
+        self.assertEqual(html.count('id="library-grid"'), 1)
+        self.assertIn('class="book-grid" id="library-grid"', html)
+        self.assertNotIn('class="dashboard-section"', html)
+        self.assertNotIn('id="not-started-header"', html)
+        self.assertNotIn('not_started_expanded', html)
+        for book_id in ("library-book", "library-finished", "standalone-book"):
+            with self.subTest(book_id=book_id):
+                self.assertEqual(html.count(f'data-abs-id="{book_id}"'), 1)
+        self.assertEqual(html.count('class="series-group"'), 1)
+        self.assertIn('value="reading">Reading status</option>', html)
+        self.assertNotIn('value="status">', html)
+        classic = (_ROOT / "templates/index.html").read_text(encoding="utf-8")
+        for section in ("in-progress-section", "not-started-section", "finished-section"):
+            self.assertIn(section, classic)
+        self.assertIn("section_bucket", (_ROOT / "src/web_server.py").read_text(encoding="utf-8"))
+
+    def test_reading_status_node_regressions(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js not available")
+        result = subprocess.run(
+            [node, str(_ROOT / "tests/test_ui_new_library_reading.js")],
+            cwd=_ROOT, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_reader_gets_new_library_with_classic_default_unchanged(self):
         observed = []
 
@@ -949,13 +991,13 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('id="search-handoff-link"', page)
         self.assertIn('id="attention-only-filter"', page)
         self.assertNotIn('<option value="needs_attention"', page)
-        for value in ("all", "paired", "has_audio", "audiobook_only", "ebook_only", "title", "author", "series", "progress", "status", "last_sync", "added", "rating"):
+        for value in ("all", "paired", "has_audio", "audiobook_only", "ebook_only", "title", "author", "series", "progress", "reading", "last_sync", "added", "rating"):
             self.assertIn(f'<option value="{value}"', page)
         self.assertIn("savedFormat === 'needs_attention'", scripts)
         self.assertIn('needsAttention(card)', scripts)
         for label in (
-            "Title", "Author", "Series", "Progress", "Status",
-            "Last Synced", "Date Added", "Rating",
+            "Title", "Author", "Series", "Progress",
+            "Reading status", "Last Synced", "Date Added", "Rating",
         ):
             self.assertIn(label, page)
         self.assertIn('id="sort-direction"', page)
@@ -979,7 +1021,7 @@ class TestNewLibrary(unittest.TestCase):
                 self.assertIn(endpoint, classic)
         for key in (
             "abs_kosync_sort", "abs_kosync_sort_state", "abs_kosync_filters",
-            "abs_kosync_series_grouping", "not_started_expanded", "series_expanded_",
+            "abs_kosync_series_grouping", "series_expanded_",
         ):
             with self.subTest(storage_key=key):
                 self.assertIn(key, scripts)
