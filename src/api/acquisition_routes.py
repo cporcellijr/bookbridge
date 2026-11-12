@@ -8,7 +8,8 @@ from typing import Any, Optional
 
 from flask import current_app, jsonify, request
 
-from src.services.acquisition_service import OPEN_STATUSES, STATUS_MAP
+from src.api.shelfmark_client import release_media_kind
+from src.services.acquisition_service import OPEN_STATUSES, STATUS_MAP, AcquisitionService, is_stalled
 from src.utils.config_loader import env_truthy
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ def init_acquisition_routes(app: Any, web_module: Any = None) -> None:
         ("/api/acquisition/shelfmark/releases", "acquisition_shelfmark_releases", acquisition_shelfmark_releases, ["GET"]),
         ("/api/acquisition/shelfmark", "acquisition_shelfmark", acquisition_shelfmark, ["POST"]),
         ("/api/acquisition/mine", "acquisition_mine", acquisition_mine, ["GET"]),
+        ("/api/acquisition/<int:request_id>/releases", "acquisition_releases", acquisition_releases, ["GET"]),
+        ("/api/acquisition/<int:request_id>/grab", "acquisition_grab", acquisition_grab, ["POST"]),
         ("/api/acquisition/<int:request_id>/cancel", "acquisition_cancel", acquisition_cancel, ["POST"]),
         ("/api/acquisition/<int:request_id>/dismiss", "acquisition_dismiss", acquisition_dismiss, ["POST"]),
     )
@@ -79,7 +82,7 @@ def _shelfmark_client(web) -> Optional[Any]:
 
 
 def _public(row: dict) -> dict:
-    return {key: row[key] for key in _PUBLIC_FIELDS}
+    return {**{key: row[key] for key in _PUBLIC_FIELDS}, "stalled": is_stalled(row)}
 
 
 def _text(value: Any, limit: int = 500) -> str:
@@ -113,7 +116,7 @@ def acquisition_options():
             elif not (isinstance(sources, dict) and (sources.get("enabled") or 0) > 0):
                 service["reason"] = "no_sources"
             else:
-                service.update(usable=True, formats=list(_MEDIA_KINDS))
+                service.update(usable=True, formats=list(_MEDIA_KINDS), can_pick=bool(client.can_pick_releases()))
     return jsonify({"services": {"bookorbit": service, "shelfmark": _shelfmark_service(web)}})
 
 
@@ -326,6 +329,9 @@ def acquisition_shelfmark():
         release = client.release_for(str(payload["release_key"]))
         if release is None:
             return _api_error("release_expired", 409)
+        if client.found_for(str(payload["release_key"])) != kind or release_media_kind(release) not in (None, kind):
+            logger.info("📥 Acquisition: user %s Shelfmark release refused: it is not a %s", user_id, kind)
+            return _api_error("release_wrong_format", 409)
     result, failure = client.submit({"title": fields["title"], "authors": fields["authors"]}, release, kind)
     if failure:
         logger.info("📥 Acquisition: user %s Shelfmark did not accept the %s (%s)", user_id, kind, failure)
@@ -395,6 +401,120 @@ def acquisition_cancel(request_id: int):
         user_id, request_id, status="cancelled", remote_status="cancelled",
     )
     logger.info("📥 Acquisition: user %s cancelled %s request %s", user_id, row["service"], row["remote_id"])
+    return jsonify({"request": _public(updated)})
+
+
+_GRABBED = ("grabbed", "downloading", "importing", "available")
+_PICK_FAILURES = {"no_pick_permission": 403, "unreachable": 502}
+
+
+def _pickable(web, request_id: int):
+    """(user_id, row, client, None) for the caller's own open BookOrbit request, else (…, error response)."""
+    fail = lambda message, status: (None, None, None, _api_error(message, status))
+    user_id = web.get_current_user_id()
+    if user_id is None:
+        return fail("authentication_required", 401)
+    if not _is_allowed(web):
+        return fail("not_allowed", 403)
+    row = web.database_service.get_acquisition_request(user_id, request_id)
+    if row is None or row["service"] != "BookOrbit" or row["remote_kind"] != "request":
+        return fail("not_found", 404)
+    if row["status"] not in (*OPEN_STATUSES, "failed"):  # BookOrbit lets a failed request be re-picked
+        return fail("request_state_changed", 409)
+    client = _bookorbit_client(web)
+    if client is None:
+        return fail("bookorbit_not_configured", 409)
+    return user_id, row, client, None
+
+
+def _size_text(size: Any) -> str:
+    """Bytes as a short human string; empty when unknown."""
+    if not isinstance(size, (int, float)) or isinstance(size, bool) or size <= 0:
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+
+
+def _release_view(item: dict) -> dict:
+    """One BookOrbit release candidate in the service-neutral picker shape."""
+    formats = [f for f in item.get("formats") or [] if isinstance(f, str) and f]
+    seeders, leechers = item.get("seeders"), item.get("leechers")
+    flags = [word for word, on in (("freeleech", item.get("freeleech")), ("VIP", item.get("vipOnly")), ("grabbed before", item.get("alreadyGrabbed"))) if on]
+    return {
+        "key": f"{item['indexerId']}:{item['guid']}", "title": str(item.get("title") or ""),
+        "format": item.get("format") or (formats[0] if formats else ""), "formats_more": max(len(formats) - 1, 0),
+        "size": _size_text(item.get("sizeBytes")), "source": item.get("indexerName") or "",
+        "language": item.get("language") or "", "detail": "", "author": "", "kind": "",
+        "group": str(item["indexerId"]), "group_label": item.get("indexerName") or str(item["indexerId"]),
+        "peers": f"{seeders}/{leechers}" if seeders is not None and leechers is not None else "", "flags": flags,
+    }
+
+
+def acquisition_releases(request_id: int):
+    """List what BookOrbit's indexers offer for one of the caller's open requests (the picker's list)."""
+    web = _web_server()
+    user_id, row, client, error = _pickable(web, request_id)
+    if error:
+        return error
+    result, failure = client.list_request_releases(row["remote_id"])
+    if failure:
+        logger.info("📥 Acquisition: user %s BookOrbit release list for request %s failed (%s)", user_id, row["remote_id"], failure)
+        return _api_error(failure, _PICK_FAILURES.get(failure, 409))
+    criteria = result.get("criteria") if isinstance(result.get("criteria"), dict) else {}
+    if criteria.get("mediaKind") not in (None, row["media_kind"]):
+        return _api_error("request_media_mismatch", 409)
+    indexers = [i for i in result.get("indexers") or [] if isinstance(i, dict)]
+    candidates = [
+        r for r in result.get("releases") or []
+        if isinstance(r, dict) and isinstance(r.get("indexerId"), int) and isinstance(r.get("guid"), str)
+        and release_media_kind({"format": r.get("format"), "extra": {"formats": r.get("formats")}}) in (None, row["media_kind"])
+    ]
+    releases = [_release_view(r) for r in candidates]
+    if indexers and all(str(i.get("delivery")).lower() == "torrent" for i in indexers):
+        for release in releases:
+            release["kind"] = "torrent"
+    problems = [
+        {"name": str(i.get("indexerName") or i.get("indexerId")), "failure": str(i.get("failure") or "error")}
+        for i in indexers if i.get("ok") is False
+    ]
+    logger.info(
+        "📥 Acquisition: user %s BookOrbit request %s has %d release(s) to pick from (%d indexer problem(s))",
+        user_id, row["remote_id"], len(releases), len(problems),
+    )
+    return jsonify({"releases": releases, "indexer_problems": problems})
+
+
+def _parse_release_key(key: Any) -> Optional[tuple[int, str]]:
+    """(indexer id, guid) from a picker key, or None when malformed."""
+    indexer, _, guid = key.partition(":") if isinstance(key, str) else ("", "", "")
+    if not indexer.isdigit() or int(indexer) < 1 or not guid or len(guid) > 2048:
+        return None
+    return int(indexer), guid
+
+
+def acquisition_grab(request_id: int):
+    """Send the picked release to BookOrbit's download client and update the caller's existing row."""
+    web = _web_server()
+    user_id, row, client, error = _pickable(web, request_id)
+    if error:
+        return error
+    payload = request.get_json(silent=True)
+    picked = _parse_release_key(payload.get("key")) if isinstance(payload, dict) else None
+    if picked is None:
+        return _api_error("invalid_release", 400)
+    if row["remote_status"] in _GRABBED:
+        return _api_error("already_picked", 409)
+    item, failure = client.grab_request_release(row["remote_id"], *picked)
+    if failure:
+        logger.info("📥 Acquisition: user %s BookOrbit refused the release for request %s (%s)", user_id, row["remote_id"], failure)
+        if failure == "request_state_changed":
+            web.database_service.update_acquisition_request(user_id, request_id, last_checked_at=None)
+        return _api_error(failure, _PICK_FAILURES.get(failure, 409))
+    changes = AcquisitionService.remote_changes(row, {**item, "status": item.get("status") or "grabbed"})
+    updated = web.database_service.update_acquisition_request(user_id, request_id, last_checked_at=None, **changes)
+    logger.info("📥 Acquisition: user %s picked a release for BookOrbit request %s", user_id, row["remote_id"])
     return jsonify({"request": _public(updated)})
 
 

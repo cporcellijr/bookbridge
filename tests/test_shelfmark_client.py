@@ -139,7 +139,7 @@ class TestSignIn(ClientCase):
         self.assertEqual(len(self.server.paths("/api/auth/login")), 2)
         self.assertEqual(self.server.paths("/api/activity/snapshot")[-1][2]["headers"], {"Cookie": "shelfmark_session=two"})
 
-    def test_enable_rule_matches_the_nav_item(self):
+    def test_enable_rule_matches_the_settings_toggle(self):
         client = ShelfmarkClient(credentials=_CREDS)
         for value, expected in (("true", True), ("on", True), ("false", False), ("", True)):
             with patch.dict(os.environ, {"SHELFMARK_ENABLED": value}):
@@ -164,10 +164,10 @@ class TestPolicy(ClientCase):
 
 
 class TestReleases(ClientCase):
-    def search(self, response, sources=None):
+    def search(self, response, sources=None, kind="ebook"):
         client = self.client({("POST", "/api/auth/login"): _login(), ("GET", "/api/releases"): response,
                               ("GET", "/api/release-sources"): sources or _response(200, [{"name": "src-a", "display_name": "Source A"}])})
-        return client, client.find_releases("Example Book", "A. Writer", "audiobook")
+        return client, client.find_releases("Example Book", "A. Writer", kind)
 
     def test_release_list_is_normalized(self):
         client, (releases, error) = self.search(_response(200, {"releases": [_RELEASE, {"title": "no id"}], "errors": ["x: y"]}))
@@ -182,7 +182,7 @@ class TestReleases(ClientCase):
         _, _, kwargs = self.server.paths("/api/releases")[0]
         self.assertEqual(kwargs["timeout"], 120)
         self.assertEqual((kwargs["params"]["provider"], kwargs["params"]["content_type"], kwargs["params"]["title"]),
-                         ("manual", "audiobook", "Example Book"))
+                         ("manual", "ebook", "Example Book"))
 
     def test_author_and_kind_are_derived(self):
         def one(**fields):
@@ -214,6 +214,34 @@ class TestReleases(ClientCase):
         client, (releases, _) = self.search(_response(200, {"releases": [_RELEASE]}))
         with patch("src.api.shelfmark_client.time.time", return_value=10 ** 10):
             self.assertIsNone(client.release_for(releases[0]["key"]))
+
+    def test_search_drops_releases_of_the_other_format(self):
+        def rel(n, **f):
+            return {"source": "src-a", "source_id": n, "title": n, **f}
+        items = [
+            rel("m4b", format="m4b", content_type="audiobook"),
+            rel("epub", format="epub", content_type="book"),
+            rel("liar", format="epub", content_type="audiobook"),
+            rel("nofmt", content_type="audiobook"),
+            rel("zip", format="zip", content_type="other"),
+            rel("mixed", extra={"formats": ["epub", "mp3"]}),
+            rel("bare"),
+        ]
+        client, (releases, _) = self.search(_response(200, {"releases": items}), kind="audiobook")
+        self.assertEqual([r["title"] for r in releases], ["m4b", "nofmt", "zip", "mixed", "bare"])
+        for r in releases:
+            self.assertIsNotNone(client.release_for(r["key"]))
+            self.assertEqual(client.found_for(r["key"]), "audiobook")
+        with self.assertLogs("src.api.shelfmark_client", "INFO") as logs:
+            client.find_releases("Example Book", "A. Writer", "audiobook")
+        self.assertIn("dropped 2 release(s) of the other format", " ".join(logs.output))
+
+    def test_ebook_search_drops_an_audiobook(self):
+        items = [{"source": "s", "source_id": "a", "format": "m4b"}, {"source": "s", "source_id": "b", "format": "epub"}]
+        client = self.client({("POST", "/api/auth/login"): _login(), ("GET", "/api/releases"): _response(200, {"releases": items}),
+                              ("GET", "/api/release-sources"): _response(200, [])})
+        releases, _ = client.find_releases("Example Book", "A. Writer", "ebook")
+        self.assertEqual([r["format"] for r in releases], ["epub"])
 
 
 class TestSubmit(ClientCase):

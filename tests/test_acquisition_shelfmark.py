@@ -20,6 +20,7 @@ def _shelfmark(**overrides):
         get_policy=MagicMock(return_value=({"ebook": "download", "audiobook": "request_book"}, None)),
         find_releases=MagicMock(return_value=([_RELEASE], None)),
         release_for=MagicMock(return_value={"source": "s", "source_id": "rel1"}),
+        found_for=MagicMock(return_value="ebook"),
         submit=MagicMock(return_value=({"kind": "download", "remote_id": "rel1", "status": "queued"}, None)),
         get_activity=MagicMock(return_value=({"status": {}, "requests": []}, None)),
         cancel=MagicMock(return_value=True),
@@ -148,6 +149,26 @@ class TestReleasesAndSubmit(ShelfmarkBase):
         self.assertEqual(self.submit().status_code, 502)
         self.assertEqual(self.submit(format="comic").get_json(), {"error": "invalid_formats"})
         self.assertEqual(self.svc.get_acquisition_requests(self.reg.id), [])
+
+    def test_release_of_the_other_format_is_refused(self):
+        self.sm.release_for.return_value = {"source": "s", "source_id": "rel1", "format": "epub"}
+        self.sm.found_for.return_value = "audiobook"
+        resp = self.submit(release_key="k1", format="audiobook")
+        self.assertEqual((resp.status_code, resp.get_json()), (409, {"error": "release_wrong_format"}))
+        self.sm.submit.assert_not_called()
+        self.assertEqual(self.svc.get_acquisition_requests(self.reg.id), [])
+
+    def test_format_changed_after_search_is_refused(self):
+        self.sm.release_for.return_value = {"source": "s", "source_id": "rel1", "format": "zip"}
+        resp = self.submit(release_key="k1", format="audiobook")
+        self.assertEqual((resp.status_code, resp.get_json()), (409, {"error": "release_wrong_format"}))
+        self.sm.submit.assert_not_called()
+
+    def test_unknown_and_multi_format_releases_submit_for_their_search_format(self):
+        for fields in ({"format": "zip"}, {}, {"extra": {"formats": ["epub", "mp3"]}}):
+            self.sm.release_for.return_value = {"source": "s", "source_id": "rel1", **fields}
+            self.assertEqual(self.submit(release_key="k1").status_code, 200)
+        self.assertEqual(self.sm.submit.call_count, 3)
 
     def test_cancel_support(self):
         download = self.svc.add_acquisition_requests(self.reg.id, [dict(

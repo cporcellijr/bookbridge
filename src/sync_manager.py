@@ -5340,7 +5340,8 @@ class SyncManager:
     def _refresh_acquisition_requests(self, user_id: int) -> None:
         """Check one user's BookOrbit and Shelfmark book requests with their own clients; never raises.
 
-        Makes no HTTP call unless the database shows a request that needs checking.
+        Makes no HTTP call unless the database shows a request that needs checking or
+        the reader has opted in to adopting their BookOrbit requests and a scan is due.
         """
         acquisition = getattr(self, 'acquisition_service', None)
         registry = getattr(self, 'user_client_registry', None)

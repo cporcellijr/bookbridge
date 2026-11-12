@@ -126,17 +126,6 @@ def _external_targets(markup):
     return sorted(link["attrs"].get("href", "") for link in parser.links if link["attrs"].get("target") == "_blank")
 
 
-def _in_app_links(markup):
-    parser = Links()
-    parser.feed(markup)
-    return sorted(link["attrs"].get("href", "") for link in parser.links if link["attrs"].get("target") != "_blank")
-
-
-def _classic_external_except_shelfmark(markup):
-    """Classic's external links; New opens Shelfmark inside the app instead."""
-    return [href for href in _external_targets(markup) if href != "/shelfmark"]
-
-
 def test_provider_link_targets_match_classic_nav_for_every_provider_combination():
     env = _env()
     for bits in product((False, True), repeat=5):
@@ -146,7 +135,7 @@ def test_provider_link_targets_match_classic_nav_for_every_provider_combination(
             classic = env.get_template("_nav.html").render(**context)
             new_shell = env.get_template("next/base.html").render(**context)
             new_rail = new_shell.split("<aside class=\"rail\"", 1)[1].split("</aside>", 1)[0]
-            assert _external_targets(new_rail) == _classic_external_except_shelfmark(classic), (providers, overrides)
+            assert _external_targets(new_rail) == _external_targets(classic), (providers, overrides)
 
 
 def test_abs_disabled_sentinel_and_disabled_provider_gates_match_classic_nav():
@@ -156,7 +145,7 @@ def test_abs_disabled_sentinel_and_disabled_provider_gates_match_classic_nav():
         classic = env.get_template("_nav.html").render(**context)
         new = env.get_template("next/base.html").render(**context)
         rail = new.split("<aside class=\"rail\"", 1)[1].split("</aside>", 1)[0]
-        assert _external_targets(rail) == _classic_external_except_shelfmark(classic)
+        assert _external_targets(rail) == _external_targets(classic)
         assert "https://grimmory.example/server" in _external_targets(rail)
         assert "https://disabled.example/server" not in _external_targets(rail)
     for provider in ("grimmory", "bookorbit", "kavita", "cwa"):
@@ -164,7 +153,7 @@ def test_abs_disabled_sentinel_and_disabled_provider_gates_match_classic_nav():
         classic = env.get_template("_nav.html").render(**context)
         new = env.get_template("next/base.html").render(**context)
         rail = new.split("<aside class=\"rail\"", 1)[1].split("</aside>", 1)[0]
-        assert _external_targets(rail) == _classic_external_except_shelfmark(classic)
+        assert _external_targets(rail) == _external_targets(classic)
 
 
 def test_role_navigation_queue_badge_and_logout_are_rendered():
@@ -194,19 +183,6 @@ def test_mobile_app_menu_and_hidden_chrome_fallback():
     hidden = _render("next/base.html", admin=False, hide_chrome=True)
     assert 'class="app-shell"' not in hidden
     assert 'id="main-content"' in hidden
-
-
-def test_shelfmark_current_legacy_and_disabled_gates():
-    env = _env()
-    for kwargs, expected in (({"shelfmark": True}, True), ({"shelfmark": True, "shelfmark_legacy": True}, True),
-                             ({"shelfmark": True, "shelfmark_off": True}, False), ({}, False)):
-        classic = env.get_template("_nav.html").render(**_context(**kwargs))
-        new = env.get_template("next/base.html").render(**_context(**kwargs))
-        rail = new.split("<aside class=\"rail\"", 1)[1].split("</aside>", 1)[0]
-        assert ("/shelfmark" in _external_targets(classic)) is expected
-        assert ("/shelfmark" in _in_app_links(rail)) is expected
-        assert "/shelfmark" not in _external_targets(rail)
-        assert _external_targets(rail) == _classic_external_except_shelfmark(classic)
 
 
 def test_shell_sprite_font_and_static_script_references_exist():

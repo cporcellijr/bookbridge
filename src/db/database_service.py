@@ -2763,15 +2763,18 @@ class DatabaseService:
             ).first()
             return self._acquisition_dict(row) if row else None
 
-    def find_acquisition_request(self, user_id: int, service: str, remote_id: str) -> Optional[dict]:
-        """Return the user's non-dismissed request for a service's remote id, if any."""
+    def find_acquisition_request(self, user_id: int, service: str, remote_id: str,
+                                 include_dismissed: bool = False) -> Optional[dict]:
+        """Return the user's request for a service's remote id, if any (dismissed ones only on request)."""
         with self.get_session() as session:
-            row = session.query(AcquisitionRequest).filter(
+            query = session.query(AcquisitionRequest).filter(
                 AcquisitionRequest.user_id == user_id,
                 AcquisitionRequest.service == service,
                 AcquisitionRequest.remote_id == remote_id,
-                AcquisitionRequest.dismissed.is_(False),
-            ).first()
+            )
+            if not include_dismissed:
+                query = query.filter(AcquisitionRequest.dismissed.is_(False))
+            row = query.first()
             return self._acquisition_dict(row) if row else None
 
     def get_refreshable_acquisition_requests(self, user_id: int, arrived_since) -> list[dict]:
