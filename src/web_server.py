@@ -39,6 +39,7 @@ from src.utils.user_context import (
     set_current_user_credentials, reset_current_user_credentials,
     get_current_user_credentials, get_current_user_id,
 )
+from src.utils.display_settings import normalize_display_value, resolve_display_settings
 from src.utils.user_config import PER_USER_PREFERENCE_KEYS, resolve_setting, user_preference_enabled, user_setting
 from src.utils.user_config import global_fallback_allowed as _global_fallback_allowed
 from src.utils.user_config import SERVICE_ENABLE_KEYS
@@ -1490,6 +1491,49 @@ def account_interface():
     return redirect(_safe_next_url())
 
 
+def account_display():
+    """Save some or all of the signed-in reader's display settings.
+
+    Takes a JSON object or a form. Only the keys sent are written, and nothing is
+    written unless every key and value is allowed. For a form, the last value of a
+    repeated field wins, so a hidden "false" before a checkbox records unchecked.
+    """
+    user = current_user()
+    if user is None:
+        if _request_wants_json():
+            return jsonify({"ok": False, "error": "Authentication required"}), 401
+        return redirect(url_for('login'))
+
+    payload = request.get_json(silent=True)
+    if isinstance(payload, dict):
+        submitted = dict(payload)
+    else:
+        submitted = {key: request.form.getlist(key)[-1] for key in request.form}
+    submitted.pop(_CSRF_FORM_FIELD, None)
+
+    values = {}
+    for key, raw in submitted.items():
+        value = normalize_display_value(key, raw)
+        if value is None:
+            return jsonify({"ok": False, "error": "Unsupported display setting"}), 400
+        values[key] = value
+    if not values:
+        return jsonify({"ok": False, "error": "Nothing to save"}), 400
+    database_service.set_user_credentials(user.id, values)
+    if _request_wants_json():
+        return jsonify({"ok": True, "settings": _display_settings_for(user)})
+    return redirect(_safe_next_url())
+
+
+def _display_settings_for(user) -> dict:
+    """Resolved display settings for ``user`` (server defaults when None), cached for the request."""
+    cached = g.get('display_settings')
+    if cached is None:
+        stored = database_service.get_user_credentials(user.id) if user is not None else {}
+        cached = g.display_settings = resolve_display_settings(stored or {})
+    return cached
+
+
 def account_integrations():
     """Self-service integration settings for the signed-in user."""
     user = current_user()
@@ -2085,6 +2129,7 @@ def inject_global_vars():
         get_bool=get_bool,
         get_user_val=get_user_val,
         get_user_bool=get_user_bool,
+        display_settings=lambda: _display_settings_for(current_user()),
         match_queue_count=match_queue_count,
         current_user=current_user(),
     )
@@ -16877,6 +16922,7 @@ def create_app(test_container=None):
     app.add_url_rule('/account', 'account', account, methods=['GET', 'POST'])
     app.add_url_rule('/account/language', 'account_language', account_language, methods=['POST'])
     app.add_url_rule('/account/interface', 'account_interface', account_interface, methods=['POST'])
+    app.add_url_rule('/account/display', 'account_display', account_display, methods=['POST'])
     app.add_url_rule('/account/integrations', 'account_integrations', account_integrations, methods=['GET', 'POST'])
     app.add_url_rule('/api/account/test-connection/<service>', 'account_test_connection', account_test_connection, methods=['POST'])
     app.add_url_rule('/api/account/abs-libraries', 'account_abs_libraries', account_abs_libraries, methods=['POST'])
