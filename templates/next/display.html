@@ -70,6 +70,13 @@
                     </div>
                     <button class="display-fallback-save" type="submit">{{ _('Save library style') }}</button>
                 </form>
+                <form class="account-shelf-finish-form display-row display-finish-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_SHELF_FINISH" {% if display.UI_LIBRARY_STYLE not in ('faceout', 'spines') %}hidden{% endif %}>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_SHELF_FINISH" value="{{ display.UI_SHELF_FINISH }}">
+                    <div class="display-label"><strong>{{ _('Shelf finish') }}</strong><small>{{ _('Shown only for the shelf styles.') }}</small></div>
+                    {{ segmented('UI_SHELF_FINISH', [('theme', _('Match theme')), ('wood', _('Wood')), ('dark', _('Dark')), ('plain', _('Plain'))], display.UI_SHELF_FINISH, _('Shelf finish')) }}
+                    <button class="display-fallback-save" type="submit">{{ _('Save shelf finish') }}</button>
+                </form>
             </section>
             <section class="display-group" data-display-group="covers" aria-labelledby="display-covers-title">
                 <header><h2 id="display-covers-title">{{ _('Book covers') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>

@@ -40,7 +40,7 @@ class TestAccountDisplayPage(unittest.TestCase):
         classic = self.client.get('/account').get_data(as_text=True)
         self.assertIn('id="account-display"', classic)
         self.assertIn('class="account-series-form"', classic)
-        self.assertNotIn('href="/account/display"', classic)
+        self.assertIn('href="/account/display"', classic)
         redirect = self.client.get('/account/display')
         self.assertEqual((redirect.status_code, redirect.location), (302, '/account#account-display'))
         self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
@@ -58,10 +58,52 @@ class TestAccountDisplayPage(unittest.TestCase):
         self.assertIn('role="switch"', markup)
         for value in ('cards', 'faceout', 'spines', 'list'):
             self.assertIn(f'name="UI_LIBRARY_STYLE" value="{value}"', markup)
-        for future in ('UI_SHELF_FINISH',):
-            self.assertNotIn(f'name="{future}"', markup)
+        self.assertIn('name="UI_SHELF_FINISH"', markup)
         self.assertRegex(markup, r'id="bb-next-user-menu"[\s\S]*?href="/account/display"')
         self.assertRegex(markup, r'id="bb-next-mobile-user-menu"[\s\S]*?href="/account/display"')
+
+    def test_shelf_finish_rendering_visibility_and_fallback(self):
+        self._real_templates()
+        self._series_books()
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        for style in ('faceout', 'spines', 'cards', 'list'):
+            self.service.set_user_credential(self.reader.id, 'UI_LIBRARY_STYLE', style)
+            for finish in ('theme', 'wood', 'dark', 'plain'):
+                with self.subTest(style=style, finish=finish):
+                    self.service.set_user_credential(self.reader.id, 'UI_SHELF_FINISH', finish)
+                    html = self.client.get('/account/display').get_data(as_text=True)
+                    match = re.search(r'<form class="account-shelf-finish-form.*?</form>', html, re.S)
+                    self.assertIsNotNone(match)
+                    form = match.group()
+                    self.assertIn('action="/account/display?next=/account/display"', form)
+                    self.assertIn('data-display-setting="UI_SHELF_FINISH"', form)
+                    self.assertIn(f'<input type="hidden" name="UI_SHELF_FINISH" value="{finish}"', form)
+                    self.assertRegex(form, rf'name="UI_SHELF_FINISH" value="{finish}"[^>]*aria-pressed="true"')
+                    self.assertEqual(' hidden>' in form.split('>')[0] + '>', style in ('cards', 'list'))
+                    self.assertIn(f'data-shelf-finish="{finish}"', html)
+        self.service.set_user_credential(self.reader.id, 'UI_LIBRARY_STYLE', 'spines')
+        response = self.client.post('/account/display?next=/account/display',
+            data=MultiDict([('UI_SHELF_FINISH', 'theme'), ('UI_SHELF_FINISH', 'plain')]))
+        self.assertEqual((response.status_code, response.location), (302, '/account/display'))
+        self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_FINISH'), 'plain')
+        self.assertIsNone(self.service.get_user_credential(self.admin.id, 'UI_SHELF_FINISH'))
+
+    def test_classic_menu_display_link_opens_existing_card(self):
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'classic')
+        self._login('ui-reader')
+        html = self.client.get('/account').get_data(as_text=True)
+        menu = re.search(r'<div class="user-menu-dropdown" role="menu">(.*?)</div>', html, re.S).group(1)
+        self.assertRegex(menu, r'href="/account"[^>]*role="menuitem"')
+        self.assertRegex(menu, r'href="/account/display"[^>]*role="menuitem"')
+        self.assertLess(menu.index('href="/account"'), menu.index('href="/account/display"'))
+        self.assertLess(menu.index('href="/account/display"'), menu.index('Docs'))
+        self.assertIn('id="account-display"', html)
+        self.assertIn('name="ui_mode" value="new"', html)
+        self.assertIn('class="account-series-form"', html)
+        redirect = self.client.get('/account/display')
+        self.assertEqual((redirect.status_code, redirect.location), (302, '/account#account-display'))
 
     def test_display_preview_is_only_the_signed_in_readers_library(self):
         self._real_templates()

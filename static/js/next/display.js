@@ -6,6 +6,7 @@
     var stage = document.getElementById('display-preview-stage');
     var statuses = new WeakMap();
     var sizeRow = document.querySelector('.display-size-row');
+    var finishRow = document.querySelector('.display-finish-row');
     var previewSwitches = {
         UI_SHOW_PROGRESS: 'showProgress',
         UI_SHOW_FINISHED: 'showFinished',
@@ -32,6 +33,13 @@
         var styleForm = document.querySelector('[data-display-setting="UI_LIBRARY_STYLE"]');
         var style = styleForm ? selected(styleForm) : (stage && stage.dataset.libraryStyle);
         sizeRow.hidden = style === 'spines' || style === 'list';
+    }
+
+    function syncFinishRow() {
+        if (!finishRow) return;
+        var styleForm = document.querySelector('[data-display-setting="UI_LIBRARY_STYLE"]');
+        var style = styleForm ? selected(styleForm) : (stage && stage.dataset.libraryStyle);
+        finishRow.hidden = style !== 'spines' && style !== 'faceout';
     }
 
     function refreshSizeStepper(form, value) {
@@ -62,7 +70,10 @@
         }
         var key = form.dataset.displaySetting;
         if (key === 'UI_COVER_SIZE') refreshSizeStepper(form, value);
-        if (key === 'UI_LIBRARY_STYLE') syncSizeRow();
+        if (key === 'UI_LIBRARY_STYLE') {
+            syncSizeRow();
+            syncFinishRow();
+        }
         if (stage) {
             if (key === 'UI_LIBRARY_STYLE') {
                 stage.dataset.libraryStyle = value;
@@ -71,6 +82,7 @@
             }
             if (key === 'SERIES_SHOW_CURRENT_BOOK_DETAIL') stage.dataset.seriesOn = value;
             if (key === 'UI_COVER_SIZE') stage.dataset.coverSize = value;
+            if (key === 'UI_SHELF_FINISH') stage.dataset.shelfFinish = value;
             if (previewSwitches[key]) stage.dataset[previewSwitches[key]] = value;
         }
         if (key === 'UI_THEME' && window.bbApplyThemePreference) window.bbApplyThemePreference(value);
@@ -171,5 +183,6 @@
         });
     });
     syncSizeRow();
+    syncFinishRow();
     if (stage && stage.dataset.view === 'spines') paintPreviewSpines();
 }());

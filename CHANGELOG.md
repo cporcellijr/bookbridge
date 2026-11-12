@@ -27,6 +27,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Choose a shelf finish in the New interface, and find Display from Classic's account menu.** Face-out and Spine shelves can match the Day/Night theme or use Wood, Dark, or a quiet neutral Plain finish. The selection saves per reader and updates the live preview immediately. Classic readers can open their existing Account → Display card directly from the user menu to switch interfaces without losing their series setting.
+
 - **Book covers can now be sized and customized per reader in the New interface.** Account → Display has five cover sizes, with three books per phone row by default, and independent controls for progress, finished ticks, format icons, ratings, and titles/authors. Changes save immediately and appear in a live two-row preview of up to eight books from your own library. The size control works for Cards and Face-out shelves; warnings and processing messages remain visible when decoration is hidden. Classic is unchanged.
 
 - **Display is now its own page in the New interface.** Open it from the account menu on desktop or phone. Theme, Library style, and series-stack cover options save immediately with inline feedback and a live preview using your own Library cards. Classic's Account display controls remain unchanged.
