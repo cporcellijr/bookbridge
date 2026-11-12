@@ -1,12 +1,15 @@
 """Get the missing half (#585) Phase 5: adopt the reader's own BookOrbit audiobook requests and pair them with their ebook."""
 
 import importlib.util
+import json
 import os
 import shutil
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
+from threading import Barrier, Event
 from unittest.mock import MagicMock, patch
 
 import sqlalchemy as sa
@@ -15,6 +18,7 @@ from alembic.operations import Operations
 
 from src.api.bookorbit_client import BookOrbitClient
 from src.db.database_service import DatabaseService
+from src.db.models import PendingSuggestion
 from src.sync_manager import SyncManager
 from src.utils.config_loader import ALL_SETTINGS, DEFAULT_CONFIG
 from src.utils.time_utils import utcnow
@@ -209,6 +213,103 @@ class TestScan(AdoptionBase):
         self.refresh()
         self.assertEqual([r["remote_id"] for r in self.rows()], ["32"])
 
+    def test_simultaneous_refreshes_claim_one_adoption_scan_and_insert_one_row(self):
+        self.serve(_item(31))
+        self.bo.get_request.return_value = {"status": "approved"}
+        barrier = Barrier(2)
+
+        def rendezvous(_user_id):
+            barrier.wait(timeout=10)
+            return True
+
+        with patch.object(self.service, "_adoption_enabled", side_effect=rendezvous):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(self.service.refresh_user, self.user.id, self.bo)
+                second = executor.submit(self.service.refresh_user, self.user.id, self.bo)
+                first.result(timeout=15)
+                second.result(timeout=15)
+        self.assertEqual(self.bo.list_requests.call_count, 1)
+        self.assertEqual([row["remote_id"] for row in self.rows()], ["31"])
+
+    def test_one_users_network_scan_does_not_block_another_users_claim(self):
+        self.opt_in(self.admin, "true")
+        self.serve(_item(31))
+        entered = Event()
+        release = Event()
+
+        def stalled_listing(**_kwargs):
+            entered.set()
+            if not release.wait(timeout=10):
+                raise TimeoutError("first user's network mock stayed blocked")
+            return self._list(page=1)
+
+        self.bo.list_requests.side_effect = stalled_listing
+        other_client = MagicMock()
+        other_client.current_user_id.return_value = 1
+        other_client.list_requests.return_value = {"items": [_item(44, user_id=1)], "total": 1}
+        other_client.get_request.return_value = {"status": "approved"}
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(self.service.refresh_user, self.user.id, self.bo)
+                self.assertTrue(entered.wait(timeout=10))
+                second = executor.submit(self.service.refresh_user, self.admin.id, other_client)
+                second.result(timeout=10)
+                self.assertEqual([row["remote_id"] for row in self.rows(self.admin)], ["44"])
+                release.set()
+                first.result(timeout=10)
+        finally:
+            release.set()
+        self.assertEqual([row["remote_id"] for row in self.rows()], ["31"])
+
+    def test_blocked_same_user_scan_is_still_rejected_after_the_interval(self):
+        self.serve(_item(31))
+        entered = Event()
+        release = Event()
+        clock = {"now": utcnow()}
+
+        def stalled_listing(**_kwargs):
+            entered.set()
+            if not release.wait(timeout=10):
+                raise TimeoutError("first user's network mock stayed blocked")
+            return self._list(page=1)
+
+        self.bo.list_requests.side_effect = stalled_listing
+        try:
+            with patch("src.services.acquisition_service.utcnow", side_effect=lambda: clock["now"]):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    first = executor.submit(self.service.refresh_user, self.user.id, self.bo)
+                    self.assertTrue(entered.wait(timeout=10))
+                    # Elapsed time alone would now re-claim the interval; the active scan must still block.
+                    clock["now"] = utcnow() + timedelta(minutes=11)
+                    second = executor.submit(self.service.refresh_user, self.user.id, self.bo)
+                    second.result(timeout=10)
+                    self.assertEqual(self.bo.list_requests.call_count, 1)
+                    self.assertEqual(self.rows(), [])
+                    release.set()
+                    first.result(timeout=10)
+        finally:
+            release.set()
+        self.assertEqual([row["remote_id"] for row in self.rows()], ["31"])
+        self.assertFalse(self.service._adoption_active)
+
+    def test_failed_scan_releases_the_active_marker(self):
+        self.serve(_item(31))
+        self.bo.get_request.return_value = {"status": "approved"}
+        listing_calls = {"count": 0}
+
+        def flaky_listing(**_kwargs):
+            listing_calls["count"] += 1
+            if listing_calls["count"] == 1:
+                raise RuntimeError("BookOrbit unreachable")
+            return self._list(page=1)
+
+        self.bo.list_requests.side_effect = flaky_listing
+        self.refresh()
+        self.assertFalse(self.service._adoption_active)
+        self.service._adoption_scanned[self.user.id] = utcnow() - timedelta(minutes=11)
+        self.refresh()
+        self.assertEqual([row["remote_id"] for row in self.rows()], ["31"])
+
     def test_scan_runs_at_most_every_ten_minutes(self):
         self.serve(_item(31))
         self.bo.get_request.return_value = {"status": "approved"}
@@ -237,8 +338,54 @@ class TestPairing(AdoptionBase):
         self.assertIn(f"user {self.user.id} adopted 1 BookOrbit request(s) made in BookOrbit", lines)
         self.assertIn(f"user {self.user.id} adopted request {row['id']} matched ebook 2167 (title, authors, series agree)", lines)
 
-    def test_series_index_missing_on_one_side_still_pairs(self):
-        self.serve(_item(31, seriesName="Saga", seriesIndex=2))
+    def assert_series_not_auto_paired(self, ebook_extra, request_extra):
+        self.bo.get_all_ebooks.return_value = [_ebook(**ebook_extra)]
+        self.review_scanner(_ebook(**ebook_extra))
+        self.serve(_item(31, **request_extra))
+        self.refresh()
+        self.assert_no_pairing()
+
+    def test_same_index_different_series_name_is_not_paired(self):
+        self.assert_series_not_auto_paired(
+            {"seriesName": "Other Saga", "seriesIndex": 2}, {"seriesName": "Saga", "seriesIndex": 2})
+
+    def test_different_index_same_series_is_not_paired(self):
+        self.assert_series_not_auto_paired(
+            {"seriesName": "Saga", "seriesIndex": 1}, {"seriesName": "Saga", "seriesIndex": 2})
+
+    def test_series_index_missing_on_ebook_is_not_paired(self):
+        self.assert_series_not_auto_paired({"seriesName": "Saga"}, {"seriesName": "Saga", "seriesIndex": 2})
+
+    def test_series_index_missing_on_request_is_not_paired(self):
+        self.assert_series_not_auto_paired({"seriesName": "Saga", "seriesIndex": 2}, {"seriesName": "Saga"})
+
+    def test_series_missing_on_ebook_is_not_paired(self):
+        self.assert_series_not_auto_paired({}, {"seriesName": "Saga", "seriesIndex": 2})
+
+    def test_series_missing_on_request_is_not_paired(self):
+        self.assert_series_not_auto_paired({"seriesName": "Saga", "seriesIndex": 2}, {})
+
+    def test_matching_series_name_without_numbers_is_not_paired(self):
+        self.assert_series_not_auto_paired({"seriesName": "Saga"}, {"seriesName": "Saga"})
+
+    def test_matching_series_numbers_without_names_is_not_paired(self):
+        self.assert_series_not_auto_paired({"seriesIndex": 2}, {"seriesIndex": 2})
+
+    def test_unreadable_series_index_is_not_paired(self):
+        self.assert_series_not_auto_paired(
+            {"seriesName": "Saga", "seriesIndex": "two"}, {"seriesName": "Saga", "seriesIndex": 2})
+
+    def test_fractional_request_series_index_is_not_coerced_into_auto_pairing(self):
+        self.assert_series_not_auto_paired(
+            {"seriesName": "Saga", "seriesIndex": 2}, {"seriesName": "Saga", "seriesIndex": 2.5})
+
+    def test_unreadable_request_series_index_is_not_paired(self):
+        self.assert_series_not_auto_paired(
+            {"seriesName": "Saga", "seriesIndex": 2}, {"seriesName": "Saga", "seriesIndex": "two"})
+
+    def test_matching_series_pairs_despite_name_case_and_punctuation(self):
+        self.bo.get_all_ebooks.return_value = [_ebook(seriesName="The Saga", seriesIndex="2.0")]
+        self.serve(_item(31, seriesName="the saga!", seriesIndex=2))
         self.refresh()
         self.assertEqual(self.rows()[0]["status"], "paired")
 
@@ -299,6 +446,187 @@ class TestPairing(AdoptionBase):
         self.assertEqual((row["status"], row["status_detail"], row["dismissed"]), ("arrived", _PAIRED, True))
         self.assertEqual([(b.abs_id, b.ebook_source_id) for b in self.db.get_all_books()], [("bookorbit:6099", "9")])
         self.assertEqual(sum(_PAIRED in line for line in logs.output), 1)
+
+    def test_review_filters_same_numeric_audio_id_from_another_service(self):
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": 42}
+        self.details[42] = _M4B
+        self.bo.get_all_ebooks.return_value = [_ebook(seriesName="Other Saga", seriesIndex=2)]
+        self.bo.search_ebooks.return_value = [
+            {"id": 2167, "title": "Example Book", "authors": "A. Writer", "fileName": "Example Book.epub"}
+        ]
+        scanner = MagicMock()
+        scanner._build_audiobook_candidate_pool.return_value = [{"bridge_key": "booklore:42"}, {"bridge_key": "bookorbit:42"}]
+        scanner._scan_single_ebook.return_value = {"matches": [
+            {"audio_source": "BookLore", "audio_source_id": "42", "bridge_key": "booklore:42", "score": 99,
+             "audio_title": "Example Book", "audio_author": "A. Writer"},
+            {"audio_source": "BookOrbit", "audio_source_id": "42", "bridge_key": "bookorbit:42", "score": 82,
+             "audio_title": "Example Book", "audio_author": "A. Writer"},
+        ]}
+        self.shelf.set_suggestions_service_factory(lambda: scanner)
+        self.serve(_item(31, seriesName="Saga", seriesIndex=2))
+        self.refresh()
+        [row] = self.rows()
+        self.assertEqual(row["status"], "needs_look")
+        self.assertIsNone(row["linked_abs_id"])
+        self.assertIsNone(self.db.get_pending_suggestion("booklore:42", user_id=self.user.id))
+        suggestion = self.db.get_pending_suggestion("bookorbit:42", user_id=self.user.id)
+        self.assertIsNotNone(suggestion)
+        self.assertEqual([(m["audio_source"], m["audio_source_id"]) for m in json.loads(suggestion.matches_json)],
+                         [("BookOrbit", "42")])
+
+    def _ambiguous_audio(self, matched_book_id=None, ebook=None):
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": matched_book_id}
+        self.bo.search_audiobooks.return_value = [
+            {"id": 7001, "title": "Example Book", "authors": "A. Writer"},
+            {"id": 7002, "title": "Example Book", "authors": "A. Writer"},
+        ]
+        self.review_scanner(ebook or _ebook())
+        scanner = self.shelf._get_suggestions_service()
+        scanner._build_audiobook_candidate_pool.return_value = [
+            {"bridge_key": "bookorbit:7001"}, {"bridge_key": "bookorbit:7002"}
+        ]
+        scanner._scan_single_ebook.return_value = {"matches": [
+            {"audio_source": "BookOrbit", "audio_source_id": str(book_id),
+             "bridge_key": f"bookorbit:{book_id}", "audio_title": "Example Book",
+             "audio_author": "A. Writer", "score": 97}
+            for book_id in (7001, 7002)
+        ]}
+        self.serve(_item(31, matchedBookId=matched_book_id))
+        self.refresh()
+        return self.rows()[0]
+
+    def test_ambiguous_audio_arrivals_offer_each_bookorbit_candidate_for_review(self):
+        row = self._ambiguous_audio()
+        self.assertEqual(row["status"], "needs_look")
+        self.assertIsNone(row["linked_abs_id"])
+        self.assertIsNone(row["arrived_source_id"])
+        for book_id in (7001, 7002):
+            suggestion = self.db.get_pending_suggestion(f"bookorbit:{book_id}", user_id=self.user.id)
+            self.assertIsNotNone(suggestion)
+            self.assertEqual(json.loads(suggestion.matches_json)[0]["audio_source_id"], str(book_id))
+        self.assertEqual(self.db.get_all_books(), [])
+
+    def test_unusable_matched_book_id_still_offers_ambiguous_candidates(self):
+        self.details[42] = _EPUB
+        row = self._ambiguous_audio(42)
+        self.assertEqual(row["status"], "needs_look")
+        self.assertIsNone(row["arrived_source_id"])
+        self.assertIsNotNone(self.db.get_pending_suggestion("bookorbit:7001", user_id=self.user.id))
+        self.assertIsNotNone(self.db.get_pending_suggestion("bookorbit:7002", user_id=self.user.id))
+        self.assertIsNone(self.db.get_pending_suggestion("bookorbit:42", user_id=self.user.id))
+
+    def test_ambiguous_adopted_review_approval_reconciles_selected_audio(self):
+        row = self._ambiguous_audio()
+        self.assertEqual(row["status"], "needs_look")
+        self.save_mapping(
+            "bookorbit:7002", sync_mode="audiobook", audio_source="BookOrbit", audio_source_id="7002",
+            ebook_filename="Example Book.epub", ebook_source="BookOrbit", ebook_source_id="2167")
+        self.age(row["id"])
+        self.refresh()
+        self.assertEqual(self.rows()[0]["status"], "needs_look")
+        self.db.dismiss_suggestion("bookorbit:7002", user_id=self.user.id)
+        self.age(row["id"])
+        self.refresh()
+        [updated] = self.rows()
+        self.assertEqual((updated["status"], updated["linked_abs_id"], updated["arrived_source_id"]),
+                         ("paired", "bookorbit:7002", "7002"))
+        self.assertIsNone(self.db.get_book("bookorbit:7001"))
+
+    def test_approved_variant_ebook_reconciles_without_fresh_search_results(self):
+        row = self._ambiguous_audio(ebook=_ebook(title="Example Book: A Novel"))
+        self.save_mapping(
+            "bookorbit:7002", audio_source="BookOrbit", audio_source_id="7002",
+            ebook_filename="2167.epub", ebook_source="BookOrbit", ebook_source_id="2167")
+        self.db.dismiss_suggestion("bookorbit:7002", user_id=self.user.id)
+        self.bo.search_ebooks.return_value = []
+        self.bo.search_audiobooks.return_value = []
+        self.bo.search_ebooks.reset_mock()
+        self.bo.search_audiobooks.reset_mock()
+        self.age(row["id"])
+        self.refresh()
+        updated = self.db.get_acquisition_request(self.user.id, row["id"])
+        self.assertEqual((updated["status"], updated["linked_abs_id"], updated["arrived_source_id"]),
+                         ("paired", "bookorbit:7002", "7002"))
+        self.bo.search_ebooks.assert_not_called()
+        self.bo.search_audiobooks.assert_not_called()
+
+    def test_another_requests_review_cannot_complete_an_ambiguous_arrival(self):
+        row = self._ambiguous_audio()
+        other = self.add_row(remote_id="other", status="paired", linked_abs_id="bookorbit:7002")
+        suggestion = self.db.get_pending_suggestion("bookorbit:7002", user_id=self.user.id)
+        metadata = suggestion.origin_metadata
+        metadata["acquisition_request_id"] = other["id"]
+        suggestion.origin_metadata_json = json.dumps(metadata)
+        self.db.save_pending_suggestion(suggestion, user_id=self.user.id)
+        self.db.dismiss_suggestion("bookorbit:7002", user_id=self.user.id)
+        self.save_mapping(
+            "bookorbit:7002", audio_source="BookOrbit", audio_source_id="7002",
+            ebook_filename="2167.epub", ebook_source="BookOrbit", ebook_source_id="2167")
+        self.age(row["id"])
+        self.refresh()
+        self.assertEqual(self.db.get_acquisition_request(self.user.id, row["id"])["status"], "needs_look")
+
+    def test_another_users_approval_cannot_complete_an_ambiguous_arrival(self):
+        row = self._ambiguous_audio()
+        original = self.db.get_pending_suggestion("bookorbit:7002", user_id=self.user.id)
+        self.db.save_pending_suggestion(PendingSuggestion(
+            source_id="bookorbit:7002", title=original.title, source="bookorbit", status="dismissed", origin="reading_watch",
+            matches_json=original.matches_json, origin_metadata_json=original.origin_metadata_json,
+        ), user_id=self.admin.id)
+        self.save_mapping(
+            "bookorbit:7002", audio_source="BookOrbit", audio_source_id="7002",
+            ebook_filename="2167.epub", ebook_source="BookOrbit", ebook_source_id="2167")
+        self.age(row["id"])
+        self.refresh()
+        self.assertEqual(self.db.get_acquisition_request(self.user.id, row["id"])["status"], "needs_look")
+
+    def test_approval_does_not_accept_a_mapping_to_a_different_ebook(self):
+        row = self._ambiguous_audio()
+        self.save_mapping(
+            "bookorbit:7002", audio_source="BookOrbit", audio_source_id="7002",
+            ebook_filename="Other.epub", ebook_source="BookOrbit", ebook_source_id="999")
+        self.db.dismiss_suggestion("bookorbit:7002", user_id=self.user.id)
+        self.age(row["id"])
+        self.refresh()
+        self.assertEqual(self.db.get_acquisition_request(self.user.id, row["id"])["status"], "needs_look")
+
+    def test_ignored_ambiguous_candidate_does_not_complete_adopted_request(self):
+        row = self._ambiguous_audio()
+        self.save_mapping(
+            "bookorbit:7002", sync_mode="audiobook", audio_source="BookOrbit", audio_source_id="7002",
+            ebook_filename="Example Book.epub", ebook_source="BookOrbit", ebook_source_id="2167")
+        self.db.ignore_suggestion("bookorbit:7002", user_id=self.user.id)
+        self.age(row["id"])
+        self.refresh()
+        self.assertEqual(self.rows()[0]["status"], "needs_look")
+
+    def test_ambiguous_adopted_arrival_without_library_candidates_waits(self):
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": None}
+        self.bo.search_audiobooks.return_value = []
+        self.bo.search_ebooks.return_value = []
+        self.serve(_item(31, matchedBookId=None))
+        self.refresh()
+        [row] = self.rows()
+        self.assertEqual(row["status"], "arrived")
+        self.assertIsNone(row["linked_abs_id"])
+        self.assertEqual(self.db.get_all_pending_suggestions(user_id=self.user.id), [])
+        self.assertTrue(self.service.has_work(self.user.id))
+        self.bo.search_audiobooks.return_value = [
+            {"id": 7001, "title": "Example Book", "authors": "A. Writer"},
+            {"id": 7002, "title": "Example Book", "authors": "A. Writer"},
+        ]
+        self.review_scanner(_ebook())
+        scanner = self.shelf._get_suggestions_service()
+        scanner._scan_single_ebook.return_value = {"matches": [
+            {"audio_source": "BookOrbit", "audio_source_id": str(book_id),
+             "bridge_key": f"bookorbit:{book_id}", "audio_title": "Example Book",
+             "audio_author": "A. Writer", "score": 97}
+            for book_id in (7001, 7002)
+        ]}
+        self.age(row["id"])
+        self.refresh()
+        self.assertEqual(self.rows()[0]["status"], "needs_look")
+        self.assertIsNotNone(self.db.get_pending_suggestion("bookorbit:7002", user_id=self.user.id))
 
     def test_review_approval_completes_an_adopted_row(self):
         twins = [_ebook(2167), _ebook(2168)]

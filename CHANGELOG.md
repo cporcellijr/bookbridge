@@ -35,9 +35,15 @@ All notable changes to BookBridge will be documented in this file.
   - A download that has made no progress for 30 minutes says so, and suggests checking your
     download client or indexer sign-in. Nothing is cancelled automatically.
   - Optional, per reader: **Follow audiobook requests I make in BookOrbit** picks up the
-    audiobooks you requested inside BookOrbit itself in the last 30 days, and pairs each with your
-    one BookOrbit ebook of the same title, authors and series number. Anything less certain goes
-    to Discover's review.
+    audiobooks you requested inside BookOrbit itself in the last 30 days. Automatic pairing now
+    requires one BookOrbit ebook with matching title and authors and verifiably matching series
+    name and number (or no series on either side). Conflicting or incomplete series details
+    cannot automatically pair; candidates are offered for Discover review instead.
+    When several audiobook editions arrive without a reliable BookOrbit book ID, Discover offers
+    the individual BookOrbit candidates rather than guessing. Approving the chosen pair updates
+    My requests even when the ebook's metadata differs from the request, while unrelated
+    audiobooks with the same numeric ID in another service are excluded. Page and background
+    refreshes share one adoption scan per reader until it finishes, including slow scans.
   - The Shelfmark tab is gone from the navigation in both interfaces. `/shelfmark` still opens
     your Shelfmark site, and Settings has an "Open Shelfmark" link.
   - Known limits: arrivals are found in your BookOrbit library only. A Shelfmark download waits

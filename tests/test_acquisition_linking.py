@@ -133,6 +133,30 @@ class TestResolution(LinkingBase):
         self.refresh()
         self.assertIsNone(self.row(row["id"])["linked_abs_id"])
 
+    def test_uncertain_audio_review_rejects_colliding_id_from_other_service(self):
+        row = self.add_row()
+        self.bo.search_audiobooks.return_value = [
+            {"id": 42, "title": "Example Book", "authors": "A. Writer"},
+            {"id": 43, "title": "Example Book", "authors": "A. Writer"},
+        ]
+        scanner = MagicMock()
+        scanner._build_audiobook_candidate_pool.return_value = [
+            {"bridge_key": "booklore:42"}, {"bridge_key": "bookorbit:42"}
+        ]
+        scanner._scan_single_ebook.return_value = {"matches": [
+            {"audio_source": "BookLore", "audio_source_id": "42", "bridge_key": "booklore:42",
+             "audio_title": "Example Book", "audio_author": "A. Writer", "score": 99},
+            {"audio_source": "BookOrbit", "audio_source_id": "42", "bridge_key": "bookorbit:42",
+             "audio_title": "Example Book", "audio_author": "A. Writer", "score": 85},
+        ]}
+        self.shelf.set_suggestions_service_factory(lambda: scanner)
+        self.refresh()
+        self.assertEqual(self.row(row["id"])["status"], "needs_look")
+        self.assertIsNone(self.db.get_pending_suggestion("booklore:42", user_id=self.user.id))
+        suggestion = self.db.get_pending_suggestion("bookorbit:42", user_id=self.user.id)
+        self.assertIsNotNone(suggestion)
+        self.assertEqual(suggestion.source, "bookorbit")
+
     def test_two_series_volumes_with_similar_titles_go_to_review(self):
         row = self.add_row()
         volumes = [
