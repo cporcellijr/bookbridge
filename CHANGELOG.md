@@ -43,6 +43,9 @@ All notable changes to BookBridge will be documented in this file.
 - **Remove several books at once from the Classic library.** Select books and delete them
   together, with the same ownership checks as removing one.
 - **Get the missing ebook or audiobook from Discover, and have it paired with the book you already have** (#585).
+  - Foundation for the acquisition workflow redesign: a reader-owned job can retain both requested
+    formats, exact existing-edition identities, and partial provider receipts across restarts.
+    Existing request history is preserved; the new provider and Processing UI handoff follows later.
   When a search on Discover's Search tab finds only one half of a book, or neither, a "Get it"
   action files a request with BookOrbit or finds a release in Shelfmark, using your own login on
   each service. BookBridge remembers which book you asked for and, when the file arrives, pairs

@@ -565,6 +565,29 @@ class AcquisitionRequest(Base):
     progress_changed_at = Column(DateTime, nullable=True)
 
 
+class AcquisitionJob(Base):
+    """A reader's acquisition intent, saved before provider requests."""
+    __tablename__ = 'acquisition_jobs'
+
+    id = Column(String(32), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    title = Column(String(500), nullable=False)
+    authors = Column(String(500), nullable=True)
+    isbn13 = Column(String(20), nullable=True)
+    series_name = Column(String(500), nullable=True)
+    series_index = Column(Integer, nullable=True)
+    requested_ebook = Column(Boolean, nullable=False, default=False, server_default='0')
+    requested_audiobook = Column(Boolean, nullable=False, default=False, server_default='0')
+    ebook_source = Column(String(50), nullable=True)
+    ebook_source_id = Column(String(255), nullable=True)
+    ebook_filename = Column(String(500), nullable=True)
+    audio_source = Column(String(50), nullable=True)
+    audio_source_id = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    dismissed = Column(Boolean, nullable=False, default=False, server_default='0')
+
+
 class PendingSuggestion(Base):
     """
     Model for progress-triggered ebook suggestions.
