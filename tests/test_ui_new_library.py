@@ -66,6 +66,13 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn("--shelf-pitch: 250px;", css)
         self.assertIn(':not([data-library-style="faceout"]) .book-card:not([data-reading]) .cover-wrap > :not(.cover-image)', css)
 
+    def test_faceout_planks_follow_the_theme(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        scoped = '.library-page[data-library-style="faceout"][data-view="spines"]'
+        for start in [i for i in range(len(css)) if css.startswith(scoped, i)]:
+            block = css[start:css.index("}", start)]
+            self.assertNotRegex(block, r"--plank-[a-z]+\s*:")
+
     def test_faceout_load_initializer_reuses_spine_behavior(self):
         import shutil
         import subprocess

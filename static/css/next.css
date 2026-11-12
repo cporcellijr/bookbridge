@@ -524,8 +524,6 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
 /* Face-out shelves reuse the Spines plank and load-time painter without spine artwork. */
 .library-page[data-library-style="faceout"][data-view="spines"] {
  --shelf-pitch: 308px;
- --plank-back: #B9955F; --plank-top: #D8BA8A; --plank-lip: #EBD4AC;
- --plank-front: #B48E5A; --plank-under: #8F6E42;
 }
 .library-page[data-library-style="faceout"][data-view="spines"] .book-grid {
  justify-content: space-around; align-items: flex-start;
