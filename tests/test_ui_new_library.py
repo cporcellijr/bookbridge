@@ -53,6 +53,66 @@ class TestNewLibrary(unittest.TestCase):
                 self.assertNotIn('class="view-switch"', markup)
         self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_LIBRARY_STYLE"))
 
+    def test_cover_size_steps_and_visibility_rules_affect_only_new_library(self):
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        for size, desktop, phone, face_width, face_cols in (
+            (1, 130, 4, 104, 4), (2, 160, 3, 136, 3),
+            (3, 190, 2, 160, 2), (4, 230, 2, 188, 2), (5, 280, 2, 220, 2),
+        ):
+            with self.subTest(step=size):
+                self.assertIn(f'[data-view="covers"][data-cover-size="{size}"] .book-grid', css)
+                self.assertIn(f'min(100%, {desktop}px)', css)
+                self.assertIn(f'repeat({phone}, minmax(0, 1fr))', css)
+                self.assertIn(f'[data-library-style="faceout"][data-cover-size="{size}"] {{ --face-book-width: {face_width}px;', css)
+                self.assertIn(f'--face-cols: {face_cols};', css)
+                self.assertIn(f'[data-cover-size="{size}"] > .display-preview-flat > :nth-child(n+', css)
+                self.assertIn(f'[data-cover-size="{size}"] > .book-grid.display-preview-grouped > :nth-child(n+', css)
+        self.assertIn('.library-page[data-view="covers"] .cover-wrap { height: auto; aspect-ratio: 2 / 3; }', css)
+        for key, selector in (
+            ("progress", ".progress-percent"), ("progress", ".progress-track"),
+            ("finished", ".progress-done"), ("finished", ".spine-progress"),
+            ("format-strip", ".format-strip"), ("ratings", ".book-ratings"),
+            ("titles", ".book-heading"),
+        ):
+            with self.subTest(setting=key, element=selector):
+                self.assertRegex(css, rf'\[data-show-{key}="false"\][^{{]*?{re.escape(selector)}')
+        hide_section = css[css.index('/* Cover switches hide decoration'):css.index('/* Stepper and no-JS')]
+        for warning in (".out-of-sync-line", ".state-label", ".book-select-hit"):
+            self.assertNotIn(warning, hide_section)
+        self.assertNotIn("height: 370px; overflow: auto", css)
+        self.assertNotIn(".display-preview .library-page { height: 265px; }", css)
+        self.assertIn('.library-page[data-library-style="faceout"][data-view="spines"] .out-of-sync-line,', css)
+        self.assertIn('.library-page[data-library-style="faceout"][data-view="spines"] .state-label { display: inline-block; }', css)
+        self.assertIn("--face-book-height: calc(var(--face-book-width) * 1.5)", css)
+        self.assertIn("--face-shelf-top: calc(var(--face-book-height) + 10px)", css)
+        self.assertIn("var(--plank-back) var(--face-shelf-top)", css)
+        scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
+        for element in ("progressPercent", "progressTrack", "progressDone"):
+            self.assertRegex(scripts, rf'{element}\.hidden\s*=')
+        self.assertIn('.library-page[data-show-progress="false"] .progress-percent', css)
+
+    def test_reader_saved_cover_preferences_reach_library_without_changing_classic(self):
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        values = {
+            "UI_COVER_SIZE": "5", "UI_SHOW_PROGRESS": "false",
+            "UI_SHOW_FINISHED": "false", "UI_SHOW_FORMAT_STRIP": "false",
+            "UI_SHOW_RATINGS": "false", "UI_SHOW_TITLES": "false",
+        }
+        for key, value in values.items():
+            self.service.set_user_credential(self.reader.id, key, value)
+        html = self.client.get("/").get_data(as_text=True)
+        for attr, value in (
+            ("cover-size", "5"), ("show-progress", "false"),
+            ("show-finished", "false"), ("show-format-strip", "false"),
+            ("show-ratings", "false"), ("show-titles", "false"),
+        ):
+            self.assertRegex(html, rf'id="library-page"[^>]*data-{attr}="{value}"')
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "classic")
+        classic = self.client.get("/").get_data(as_text=True)
+        self.assertNotIn('id="library-page" class="library-page"', classic)
+        self.assertNotIn('data-cover-size="5"', classic)
+
     def test_faceout_uses_real_covers_on_wood_planks_with_three_phone_columns(self):
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         scoped = '.library-page[data-library-style="faceout"][data-view="spines"]'

@@ -1510,14 +1510,14 @@ def account_display_page():
         (getattr(book, 'abs_title', None) or '').casefold(),
         book.abs_id,
     ))
-    selected = books[:6]
+    selected = books[:8]
     # If possible, show a series pair so the series-stack switch has a visible example.
     if selected:
         first_series = next((getattr(book, 'series_name', None) for book in selected
                              if getattr(book, 'series_name', None)), None)
         if first_series and not any(getattr(book, 'series_name', None) == first_series
                                     for book in selected[1:]):
-            companion = next((book for book in books[6:]
+            companion = next((book for book in books[8:]
                               if getattr(book, 'series_name', None) == first_series), None)
             if companion:
                 selected[-1] = companion
