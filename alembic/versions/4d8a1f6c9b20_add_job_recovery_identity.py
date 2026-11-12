@@ -1,7 +1,7 @@
 """add durable ebook recovery identity to jobs
 
 Revision ID: 4d8a1f6c9b20
-Revises: 7c1e4f9a2b6d
+Revises: a3d9c5e7b142
 Create Date: 2026-10-13
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "4d8a1f6c9b20"
-down_revision = "7c1e4f9a2b6d"
+down_revision = "a3d9c5e7b142"
 branch_labels = None
 depends_on = None
 

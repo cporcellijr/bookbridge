@@ -1,21 +1,26 @@
 """Add Goodreads book matches and metadata.
 
-Revision ID: a4f7c8d2e901
-Revises: ccf04b7f7b3e
-Create Date: 2026-09-29
+Installs that ran the Goodreads preview branch already have this table, so it is
+created only when missing.
+
+Revision ID: e3b7c1a9d2f4
+Revises: b5d2f8a4c7e1
+Create Date: 2026-11-12
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = "a4f7c8d2e901"
-down_revision = "ccf04b7f7b3e"
+revision = "e3b7c1a9d2f4"
+down_revision = "b5d2f8a4c7e1"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
+    if sa.inspect(op.get_bind()).has_table("goodreads_details"):
+        return
     op.create_table(
         "goodreads_details",
         sa.Column("abs_id", sa.String(255), sa.ForeignKey("books.abs_id", ondelete="CASCADE"), primary_key=True),

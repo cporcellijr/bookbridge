@@ -40,5 +40,34 @@ class TestGoodreadsMigration(unittest.TestCase):
         self.assertIsNone(self.db.get_goodreads_details("a1"))
 
 
+    def test_migration_creates_the_table_only_when_missing(self) -> None:
+        """Preview-branch installs already have the table; every other install gets it."""
+        import importlib.util
+
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+
+        path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "e3b7c1a9d2f4_add_goodreads_details.py"
+        spec = importlib.util.spec_from_file_location("goodreads_details_migration", path)
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        engine = self.db.db_manager.engine
+        self.db.save_book(Book(abs_id="a1", abs_title="Example", status="active"))
+        self.db.save_goodreads_details(GoodreadsDetails("a1", "123"))
+
+        def upgrade() -> None:
+            with engine.begin() as conn:
+                with Operations.context(MigrationContext.configure(conn)):
+                    migration.upgrade()
+
+        upgrade()  # Table already present: kept, rows untouched.
+        self.assertEqual(self.db.get_goodreads_details("a1").goodreads_book_id, "123")
+
+        with engine.begin() as conn:
+            conn.execute(sa.text("DROP TABLE goodreads_details"))
+        upgrade()  # Table missing: created.
+        self.assertIn("goodreads_details", sa.inspect(engine).get_table_names())
+
+
 if __name__ == "__main__":
     unittest.main()

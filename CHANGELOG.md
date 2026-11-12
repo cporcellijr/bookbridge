@@ -27,6 +27,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Goodreads as a progress tracker, off by default.** Like Hardcover and StoryGraph,
+  BookBridge can now post your reading progress, page count and finished books to Goodreads.
+  Goodreads has no public API, so it works through your own signed-in Goodreads session,
+  ideally a Chrome container you sign in to once. See
+  [Configuration -> Goodreads](docs/configuration.md#goodreads).
+- **Remove several books at once from the Classic library.** Select books and delete them
+  together, with the same ownership checks as removing one.
 - **Get the missing ebook or audiobook from Discover, and have it paired with the book you already have** (#585).
   When a search on Discover's Search tab finds only one half of a book, or neither, a "Get it"
   action files a request with BookOrbit or finds a release in Shelfmark, using your own login on
