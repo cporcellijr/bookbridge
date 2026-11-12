@@ -2817,6 +2817,10 @@ class DatabaseService:
                             AcquisitionRequest.partner_source_id.isnot(None),
                             AcquisitionRequest.group_key.isnot(None),
                             and_(
+                                AcquisitionRequest.service == "BookOrbit",
+                                AcquisitionRequest.adopted.is_(True),
+                            ),
+                            and_(
                                 AcquisitionRequest.service == "Shelfmark",
                                 AcquisitionRequest.arrived_source_id.is_(None),
                             ),
@@ -4000,6 +4004,23 @@ class DatabaseService:
             if suggestion:
                 session.expunge(suggestion)
             return suggestion
+
+    def get_acquisition_review_suggestions(self, user_id: int, request_id: int) -> List[PendingSuggestion]:
+        """Return a user's completed BookOrbit review records for one acquisition request."""
+        uid = self._resolve_uid(user_id)
+        with self.get_session() as session:
+            rows = session.query(PendingSuggestion).filter(
+                PendingSuggestion.status == 'dismissed',
+                PendingSuggestion.source == 'bookorbit',
+                self._suggestion_owner_clause(uid),
+            ).all()
+            reviewed = []
+            for row in rows:
+                metadata = row.origin_metadata
+                if isinstance(metadata, dict) and metadata.get('acquisition_request_id') == request_id:
+                    session.expunge(row)
+                    reviewed.append(row)
+            return reviewed
 
     def suggestion_exists(self, source_id: str, user_id: Optional[int] = None) -> bool:
         """Check if any suggestion exists for source_id and user (pending or dismissed)."""
