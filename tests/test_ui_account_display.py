@@ -70,17 +70,50 @@ class TestAccountDisplayPage(unittest.TestCase):
                     self.assertIn('name="UI_THEME"', theme_form.group())
                     for value in ("auto", "day", "night"):
                         self.assertIn(f'value="{value}"', theme_form.group())
+                    library_form = re.search(
+                        r'<form class="account-library-style-form"[^>]*>.*?</form>', markup, re.S,
+                    )
+                    self.assertIsNotNone(library_form)
+                    for style in ("cards", "spines", "list"):
+                        self.assertIn(f'value="{style}"', library_form.group())
+                    self.assertNotIn('value="faceout"', library_form.group())
                 else:
+                    self.assertNotIn('account-library-style-form', markup)
+                    self.assertNotIn('name="UI_LIBRARY_STYLE"', markup)
                     self.assertNotIn('account-theme-form', markup)
                     self.assertNotIn('name="UI_THEME"', markup)
                     self.assertNotIn('account-series-form', markup)
                     self.assertNotIn('name="SERIES_SHOW_CURRENT_BOOK_DETAIL"', markup)
                 for future_setting in (
-                    "UI_LIBRARY_STYLE", "UI_COVER_SIZE", "UI_SHOW_PROGRESS",
+                    "UI_COVER_SIZE", "UI_SHOW_PROGRESS",
                     "UI_SHOW_FINISHED", "UI_SHOW_FORMAT_STRIP", "UI_SHOW_RATINGS",
                     "UI_SHOW_TITLES", "UI_SHELF_FINISH",
                 ):
                     self.assertNotIn(f'name="{future_setting}"', markup)
+
+    def test_library_style_form_saves_only_the_reader_and_reflects_the_choice(self):
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        for preference in ("cards", "spines", "list"):
+            with self.subTest(preference=preference):
+                response = self.client.post("/account/display?next=/account",
+                                            data={"UI_LIBRARY_STYLE": preference},
+                                            follow_redirects=True)
+                self.assertEqual(response.status_code, 200)
+                markup = response.get_data(as_text=True)
+                form = re.search(r'<form class="account-library-style-form"[^>]*>.*?</form>',
+                                 markup, re.S)
+                self.assertIsNotNone(form)
+                self.assertRegex(form.group(), rf'value="{preference}"\s+selected')
+                self.assertEqual(self.service.get_user_credential(self.reader.id, "UI_LIBRARY_STYLE"), preference)
+                self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_LIBRARY_STYLE"))
+        self.client.get("/logout")
+        self._login("ui-admin")
+        self.service.set_user_credential(self.admin.id, "UI_MODE", "new")
+        markup = self.client.get("/account").get_data(as_text=True)
+        form = re.search(r'<form class="account-library-style-form"[^>]*>.*?</form>', markup, re.S)
+        self.assertRegex(form.group(), r'value="cards"\s+selected')
 
     def test_theme_form_saves_for_one_reader_and_reflects_the_choice(self):
         self._real_templates()

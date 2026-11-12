@@ -1104,22 +1104,15 @@
             if (eager) img.loading = 'eager';
         });
     }
-    document.querySelectorAll('.view-switch [data-view]').forEach(button => button.addEventListener('click', () => {
-        const view = button.dataset.view;
-        libraryPage.dataset.view = view;
-        if (view === 'spines') setBookSelectMode(false);
-        if (view === 'spines') paintSpines(true);
-        if (selectModeButton) selectModeButton.hidden = view === 'spines';
-        applySeriesGrouping(view === 'covers' && seriesGroupingToggle.checked);
-        seriesGroupingToggle.disabled = view !== 'covers';
-        document.querySelectorAll('.view-switch [data-view]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-        try { localStorage.setItem('abs_kosync_view', view); } catch (e) { console.debug('LocalStorage error:', e); }
-    }));
-    try {
-        const savedView = localStorage.getItem('abs_kosync_view');
-        if (savedView && document.querySelector('.view-switch [data-view="' + savedView + '"]')) document.querySelector('.view-switch [data-view="' + savedView + '"]').click();
-    } catch (e) { console.debug('LocalStorage error:', e); }
-    paintSpines(false);
+    // The server chooses the view before paint; initialize its dependent controls once.
+    if (libraryPage) {
+        const initialLibraryView = libraryPage.dataset.view;
+        if (initialLibraryView === 'spines') setBookSelectMode(false);
+        if (selectModeButton) selectModeButton.hidden = initialLibraryView === 'spines';
+        applySeriesGrouping(initialLibraryView === 'covers' && seriesGroupingToggle.checked);
+        seriesGroupingToggle.disabled = initialLibraryView !== 'covers';
+        paintSpines(initialLibraryView === 'spines');
+    }
     function selectedBookIds() {
         return Array.from(new Set(Array.from(document.querySelectorAll('[data-select-book]:checked'), input => input.value)));
     }

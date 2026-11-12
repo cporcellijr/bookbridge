@@ -29,7 +29,6 @@ function button(view) {
     click() { this.handler?.(); },
   };
 }
-const views = ['covers','spines','list'].map(button);
 const select = button('select');
 select.focus = () => { select.focused = true; };
 const page = {dataset: {view: 'covers', selectMode: 'off'}};
@@ -73,7 +72,6 @@ const document = {
     return ({'library-page': page, 'select-mode-button': select, 'selection-bar': bar, 'selection-count': count, 'bb-search-overlay': searchOverlay})[id] ?? null;
   },
   querySelectorAll(selector) {
-    if (selector === '.view-switch [data-view]') return views;
     if (selector === '[data-select-book]') return inputs;
     if (selector === '[data-select-book]:checked') return inputs.filter(input => input.checked);
     if (selector === '.book-card') return cards;
@@ -163,16 +161,8 @@ function selectedCount() {return inputs.filter(input => input.checked).length;}
   assert(select.focused);
 
   select.click();
-  cardClick(first.link);
-  views[1].click(); // Spines
-  assert.equal(page.dataset.view, 'spines');
-  assert.equal(page.dataset.selectMode, 'off');
-  assert.equal(select.hidden, true);
-  assert.equal(selectedCount(), 0);
-
-  views[0].click();
+  assert.equal(page.dataset.view, 'covers');
   assert.equal(select.hidden, false);
-  select.click();
   cardClick(first.link);
   cardClick(second.link);
   const running = context.window.bulkSyncNow();

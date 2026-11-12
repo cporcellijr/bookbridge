@@ -38,6 +38,21 @@ class TestNewLibrary(unittest.TestCase):
         self.service.link_user_book(self.reader.id, "library-book")
         self.service.link_user_book(self.reader.id, "library-finished")
 
+    def test_reader_style_renders_before_paint_without_toolbar_switch(self):
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        for preference, view in (("cards", "covers"), ("spines", "spines"),
+                                 ("list", "list"), ("faceout", "covers")):
+            with self.subTest(preference=preference):
+                self.service.set_user_credential(self.reader.id, "UI_LIBRARY_STYLE", preference)
+                response = self.client.get("/")
+                self.assertEqual(response.status_code, 200)
+                markup = response.get_data(as_text=True)
+                self.assertRegex(markup, rf'id="library-page"[^>]*data-view="{view}"')
+                self.assertIn(f'data-library-style="{preference}"', markup)
+                self.assertNotIn('class="view-switch"', markup)
+        self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_LIBRARY_STYLE"))
+
     def test_rendered_new_library_uses_thumbnails_with_original_proxy_fallback(self):
         from src import web_server
 
@@ -363,8 +378,7 @@ class TestNewLibrary(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
-        self.assertIn("if (view === 'spines') paintSpines(true);", scripts)
-        self.assertIn("    paintSpines(false);\n", scripts)
+        self.assertIn("paintSpines(initialLibraryView === 'spines');", scripts)
 
     def test_library_batch_actions_execute_sequentially_and_prompt_once(self):
         import shutil
@@ -391,7 +405,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('data-select-mode="off"', page)
         self.assertRegex(toolbar, r'id="select-mode-button"[^>]*aria-pressed="false"')
         self.assertNotIn("selectAllFilteredBooks()", toolbar)
-        self.assertIn('id="view-spines"', toolbar)
+        self.assertNotIn('class="view-switch"', toolbar)
         self.assertIn('class="book-select-hit"', page)
         self.assertIn('type="checkbox" data-select-book', page)
         self.assertIn('data-select-mode="off"] .book-select-hit', styles)
@@ -407,7 +421,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('bar.hidden = !librarySelectMode', scripts)
         self.assertIn('event.stopImmediatePropagation()', scripts)
         self.assertIn("event.key !== 'Escape'", scripts)
-        self.assertIn("if (view === 'spines') setBookSelectMode(false)", scripts)
+        self.assertIn("if (initialLibraryView === 'spines') setBookSelectMode(false)", scripts)
         self.assertIn("reloadAfterSelectionAction()", scripts)
 
         # Select mode is never introduced to the Classic Library template.
@@ -509,8 +523,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertLess(toolbar.index('id="filter-select"'), toolbar.index('id="author-filter"'))
         self.assertLess(toolbar.index('id="author-filter"'), toolbar.index('id="series-filter"'))
         self.assertLess(toolbar.index('class="toolbar-primary"'), toolbar.index('class="toolbar-secondary"'))
-        self.assertLess(toolbar.index('id="sort-select"'), toolbar.index('id="view-covers"'))
-        self.assertLess(toolbar.index('id="view-covers"'), toolbar.index('id="select-mode-button"'))
+        self.assertLess(toolbar.index('id="sort-select"'), toolbar.index('id="select-mode-button"'))
         self.assertIn('id="dashboard-search"', text)
         self.assertIn('aria-label="Filter books"', text)
         self.assertIn('aria-label="Author"', text)
@@ -520,14 +533,14 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(230px, 1.7fr)", css)
         self.assertIn(".library-toolbar .toolbar-search { grid-column: 1 / -1; grid-row: 1; }", css)
         self.assertIn(".library-toolbar .sort-controls .field { min-width: 112px; }", css)
-        self.assertIn(".view-switch button { min-height: 44px;", css)
+        self.assertNotIn(".view-switch", css)
 
     def test_tablet_grouping_control_shares_row_and_phone_label_wraps_at_12px(self):
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         self.assertIn("@media (min-width:761px) and (max-width:980px)", css)
         self.assertIn(".library-toolbar .toolbar-left, .library-toolbar .toolbar-right { display: contents; }", css)
         self.assertIn(".library-toolbar .group-toggle { grid-column: 1; grid-row: 2; justify-self: start; }", css)
-        self.assertIn(".library-toolbar .view-switch { grid-column: 2; grid-row: 2; margin: 0; }", css)
+        self.assertIn(".library-toolbar #select-mode-button { grid-column: 3; grid-row: 2; }", css)
         self.assertIn(".library-toolbar #select-mode-button { grid-column: 3; grid-row: 2; }", css)
         self.assertIn("font-size: 12px; line-height: 1.2; white-space: normal;", css)
         self.assertNotIn(".library-toolbar .group-toggle { font-size: 10px; }", css)
@@ -613,8 +626,7 @@ class TestNewLibrary(unittest.TestCase):
                 'id="library-page"', 'id="bb-search-open"',
                 'id="filter-select"', 'id="series-filter"', 'id="author-filter"',
                 'id="sort-select"', 'id="sort-direction"',
-                'id="series-grouping-toggle"', 'id="view-covers"',
-                'id="view-spines"', 'id="view-list"',
+                'id="series-grouping-toggle"', 'id="select-mode-button"',
             ):
                 with self.subTest(control=control):
                     self.assertIn(control, text)
@@ -810,7 +822,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('needsAttention(card)', scripts)
         for label in (
             "Title", "Author", "Series", "Progress", "Status",
-            "Last Synced", "Date Added", "Rating", "Covers", "Spines", "List",
+            "Last Synced", "Date Added", "Rating",
         ):
             self.assertIn(label, page)
         self.assertIn('id="sort-direction"', page)

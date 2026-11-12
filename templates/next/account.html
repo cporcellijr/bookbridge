@@ -109,6 +109,17 @@
             </select>
             <button type="submit" class="btn btn-primary">{{ _('Save theme') }}</button>
         </form>
+        <form class="account-library-style-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="section-title">{{ _('Library style') }}</div>
+            <label for="account-library-style">{{ _('Library style') }}</label>
+            <select id="account-library-style" name="UI_LIBRARY_STYLE" class="form-input">
+                <option value="cards" {% if display_settings()['UI_LIBRARY_STYLE'] in ('cards', 'faceout') %}selected{% endif %}>{{ _('Cards') }}</option>
+                <option value="spines" {% if display_settings()['UI_LIBRARY_STYLE'] == 'spines' %}selected{% endif %}>{{ _('Spine shelves') }}</option>
+                <option value="list" {% if display_settings()['UI_LIBRARY_STYLE'] == 'list' %}selected{% endif %}>{{ _('List') }}</option>
+            </select>
+            <button type="submit" class="btn btn-primary">{{ _('Save library style') }}</button>
+        </form>
         <form class="account-series-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="section-title">{{ _('Series stacks') }}</div>

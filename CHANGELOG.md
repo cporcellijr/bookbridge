@@ -27,6 +27,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **New Library style preference:** New-interface readers choose Cards, Spine shelves, or List under Account → Display. The Library opens in the saved per-reader style without a toolbar view switch.
+
 - **Theme now follows your device by default in the New interface.** Choose Day, Night, or Follow device under Account → Display; the choice follows your reader account across devices. The existing Day/Night quick switch now saves the same preference.
 - **Your display choices now live under Account → Display.** Switch between Classic and New from your Account page instead of the navigation bar, including on phones. In New, you can also show the current book in each series stack. This preference has moved out of My Integrations without losing anyone's saved choice; Classic shows only the interface choice.
 - **Goodreads as a progress tracker, off by default.** Like Hardcover and StoryGraph,
