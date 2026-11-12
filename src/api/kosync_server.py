@@ -760,10 +760,10 @@ def init_kosync_server(database_service, container, manager, ebook_dir=None):
     _manager = manager
     _ebook_dir = ebook_dir
     _kosync_device_session_registry = None
-    _invalidate_filename_variant_index()
+    _catalog_changed()
     register_callback = getattr(database_service, "register_catalog_change_callback", None)
     if callable(register_callback):
-        register_callback(_invalidate_filename_variant_index)
+        register_callback(_catalog_changed)
     # First-time device sync starts the prebuilder on request. After that,
     # catalog-change signals can start it again following a restart.
 
@@ -1553,8 +1553,12 @@ def kosync_get_progress(doc_id):
                     )
                 return _respond_from_book_states(doc_id, book)
 
+        # The variant match runs before this step serves the reader's own position, so
+        # a copy that matches one of their books gets the book's position. Step 2
+        # handles a book that names this hash exactly.
         resolved_book = _resolve_book_by_sibling_hash(
             doc_id, existing_doc=kosync_doc, user_id=getattr(g, "kosync_user_id", None),
+            filename_variants=_database_service.get_book_by_kosync_id(doc_id) is None,
         )
         if resolved_book:
             if not _kosync_user_may_access_book(resolved_book):
@@ -2042,6 +2046,28 @@ def _reader_position(doc_hash: str, kosync_doc, user_id) -> Optional[float]:
     return None
 
 
+# Holds the (user_id, document hash) of each copy that matched a book and hasn't had
+# the book's position from a GET since. It lives in memory only, so after a restart
+# furthest-wins judges a held copy against its own position, as before.
+_awaiting_book_position: set = set()
+_awaiting_book_position_lock = threading.Lock()
+
+
+def _awaits_book_position(user_id, doc_hash: str) -> bool:
+    with _awaiting_book_position_lock:
+        return (user_id, doc_hash) in _awaiting_book_position
+
+
+def _hold_for_book_position(user_id, doc_hash: str) -> None:
+    with _awaiting_book_position_lock:
+        _awaiting_book_position.add((user_id, doc_hash))
+
+
+def _book_position_sent(user_id, doc_hash: str) -> None:
+    with _awaiting_book_position_lock:
+        _awaiting_book_position.discard((user_id, doc_hash))
+
+
 def _book_for_put_baseline(doc_hash: str, kosync_doc, user_id):
     """The book a PUT's hash resolves to without writing anything, or None."""
     if kosync_doc is not None and kosync_doc.linked_abs_id:
@@ -2155,7 +2181,8 @@ def kosync_put_progress():
     # a GET would hand out - so that is what a stale device must not regress.
     state_baseline = False
     observation_doc = kosync_doc
-    if put_book and not getattr(kosync_doc, "linked_abs_id", None):
+    newly_matched = bool(put_book) and not getattr(kosync_doc, "linked_abs_id", None)
+    if newly_matched:
         observation_doc = SimpleNamespace(linked_abs_id=put_book.abs_id)
     if (baseline is None or not baseline.percentage) and furthest_wins and not is_internal and not force_update:
         state_book = put_book
@@ -2183,6 +2210,34 @@ def kosync_put_progress():
     baseline_unclaimed = not state_baseline and (
         not baseline_device_id or _is_internal_kosync_device(baseline_device, baseline_device_id)
     )
+
+    # A copy that matched a book in this request has only ever seen its own position,
+    # so until a GET sends it the book's, a push behind the book says where that copy
+    # was, not where the reader is. The push saves to the copy, but it doesn't move
+    # the book or count toward a deliberate rewind (#215).
+    if put_book is not None and furthest_wins and not force_update and not is_internal and (
+        newly_matched or _awaits_book_position(request_user_id, doc_hash)
+    ):
+        book_state = _database_service.get_state(put_book.abs_id, "kosync", user_id=request_user_id)
+        if book_state is not None and book_state.percentage \
+                and float(percentage) < float(book_state.percentage) - 0.0001:
+            if newly_matched:
+                _register_hash_for_book(
+                    doc_hash, put_book, user_id=request_user_id,
+                    exact=getattr(put_book, "kosync_doc_id", None) == doc_hash,
+                )
+            _hold_for_book_position(request_user_id, doc_hash)
+            _database_service.upsert_user_kosync_progress(
+                doc_hash, percentage, progress=progress, device=device,
+                device_id=device_id, timestamp=now, user_id=request_user_id,
+            )
+            logger.info(
+                "KOSync: Held progress from '%s' for doc %s (%.2f%%): '%s' is at %.2f%% and "
+                "this copy hasn't been sent that position yet",
+                device, doc_hash, float(percentage) * 100, put_book.abs_title,
+                float(book_state.percentage) * 100,
+            )
+            return jsonify({"document": doc_hash, "timestamp": int(datetime_to_epoch(now))}), 200
 
     # Record what the device said BEFORE furthest-wins can reject it. A rejected
     # report is still a true observation of where that reader is, and recording it
@@ -2300,14 +2355,19 @@ def kosync_put_progress():
     else:
         linked_book = _database_service.get_book_by_kosync_id(doc_hash)
         exact_hit = linked_book is not None
-        if not linked_book:
+        if not linked_book and not is_internal:
+            # A device push links the book the furthest-wins gate judged it against.
+            # A second lookup can match where the gate's did not (the filename
+            # index fills in the background) and link a stale position without that check.
+            linked_book = put_book
+        elif not linked_book:
             # Mirror the GET path: an unlinked device hash may belong to an
             # already-mapped book (e.g. a different EPUB build of the same title),
             # resolvable via a filename sibling. Try that before falling through to
             # auto-discovery so we link instead of creating a duplicate mapping.
             linked_book = _resolve_book_by_sibling_hash(
                 doc_hash, existing_doc=kosync_doc,
-                user_id=request_user_id, filename_variants=not is_internal,
+                user_id=request_user_id, filename_variants=False,
             )
         if linked_book and (exact_hit or not other_owned):
             _register_hash_for_book(doc_hash, linked_book, user_id=request_user_id, exact=exact_hit)
@@ -3950,6 +4010,15 @@ def _adopt_cwa_identity(doc_id: str, book) -> None:
 
 def _respond_from_book_states(doc_id, book):
     """Build a GET response from a book's state data. Returns (response, status_code)."""
+    response, status = _book_states_response(doc_id, book)
+    # A 404 sends the copy nothing, so a held copy stays held.
+    if status == 200:
+        _book_position_sent(getattr(g, "kosync_user_id", None), doc_id)
+    return response, status
+
+
+def _book_states_response(doc_id, book):
+    """The GET response for a book's state data, as (response, status_code)."""
     # get_states_for_book resolves the authenticated user from the ambient context
     # (set by kosync_auth_required), so states are already user-scoped.
     states = _database_service.get_states_for_book(book.abs_id)
@@ -4360,6 +4429,41 @@ def _filename_variant_hashes(filename, authors: tuple = ()) -> tuple[set, set]:
     return _hashes({stem}), _hashes(reordered)
 
 
+# KOReader's util.replaceAllInvalidChars, which names its OPDS downloads.
+_KOREADER_INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+_KOREADER_TRAILING_DOTS_AND_SPACES = re.compile(r"[.\s]+$")
+
+
+def _catalog_title_hashes(filename, title: str, authors: tuple = ()) -> set:
+    """Return KOReader filename-mode hashes of an OPDS download of this book.
+
+    KOReader names a catalog download "<author> - <title>" from the feed entry,
+    not after the served file, so a book stored under a name without " - ", such
+    as the bridge-generated "cwa_398.epub", matches only through the title and
+    authors embedded in its EPUB, which CWA and Storyteller also publish in their
+    feeds. KOReader
+    joins several authors with ", ". Without an author the device name is
+    "Unknown Author - <title>", which is too loose to match on.
+    """
+    if not isinstance(filename, str) or not title or not authors:
+        return set()
+    lowered = Path(filename.strip()).name.lower()
+    ext = next((ext for ext in _FILENAME_VARIANT_EXTENSIONS if lowered.endswith(ext)), None)
+    if not ext:
+        return set()
+    stems = {f"{author} - {title}" for author in authors}
+    stems.add(f"{', '.join(authors)} - {title}")
+    names = {
+        _KOREADER_TRAILING_DOTS_AND_SPACES.sub("", _KOREADER_INVALID_FILENAME_CHARS.sub("_", stem)) + ext
+        for stem in stems
+    }
+    return {
+        hashlib.md5(unicodedata.normalize(form, name).encode("utf-8"), usedforsecurity=False).hexdigest()
+        for name in names
+        for form in ("NFC", "NFD")
+    }
+
+
 _variant_index_lock = threading.Lock()
 _variant_index: dict = {}
 _variant_index_generation = 0
@@ -4373,8 +4477,35 @@ def _invalidate_filename_variant_index() -> None:
         _variant_index_generation += 1
 
 
-def _filename_variant_index(user_id) -> tuple[dict, dict]:
-    """Per-user ``(exact, reordered)`` maps of variant hash -> ``{abs_id: filename}``.
+def _reads_catalog_title(filename: str) -> bool:
+    """Whether the index matches ``filename``'s book by catalog title: an EPUB stored under
+    a name without " - ", such as a bridge-generated "cwa_398.epub" or a bare "Dune.epub"."""
+    name = Path(filename).name
+    return " - " not in name and name.lower().endswith(".epub")
+
+
+def _needs_metadata_read(filename: str) -> bool:
+    """Whether the variant index is still missing EPUB metadata it can use for ``filename``.
+
+    A "Title - Author" library name needs only its authors; a name matched by
+    catalog title needs the embedded title as well. A file that wasn't found is
+    left alone until the catalog changes, because looking for it again walks the
+    whole library.
+    """
+    if filename in _epub_missing:
+        return False
+    now = time.monotonic()
+    needs_authors = filename not in _epub_author_cache and now >= _epub_author_retry_at.get(filename, 0)
+    if " - " in Path(filename).name:
+        return needs_authors
+    if not _reads_catalog_title(filename):
+        return False
+    needs_title = filename not in _epub_title_cache and now >= _epub_title_retry_at.get(filename, 0)
+    return needs_authors or needs_title
+
+
+def _filename_variant_index(user_id) -> tuple[dict, dict, dict]:
+    """Per-user ``(exact, reordered, catalog title)`` maps of variant hash -> ``{abs_id: filename}``.
 
     Built lazily from the user's active books and kept until the catalog or a
     user<->book link changes, so a request costs a dict lookup, not an MD5 sweep.
@@ -4386,21 +4517,25 @@ def _filename_variant_index(user_id) -> tuple[dict, dict]:
         return cached
     exact_map: dict = {}
     reordered_map: dict = {}
+    catalog_map: dict = {}
     unread: list = []
     for book in _database_service.get_books_by_status("active", user_id=user_id) or []:
         for filename in (getattr(book, "original_ebook_filename", None), getattr(book, "ebook_filename", None)):
-            # Authors come only from the cache: reading every library EPUB here
-            # would hold up the device request that triggered the build.
+            # Metadata comes only from the cache: reading every library EPUB here
+            # delays the device request that triggered the build.
             authors = _epub_author_cache.get(filename, ()) if filename else ()
-            if filename and filename not in _epub_author_cache and " - " in Path(filename).name \
-                    and time.monotonic() >= _epub_author_retry_at.get(filename, 0):
+            if filename and _needs_metadata_read(filename):
                 unread.append(filename)
             exact, reordered = _filename_variant_hashes(filename, authors)
             for variant in exact:
                 exact_map.setdefault(variant, {}).setdefault(book.abs_id, filename)
             for variant in reordered - exact:
                 reordered_map.setdefault(variant, {}).setdefault(book.abs_id, filename)
-    built = (exact_map, reordered_map)
+            if filename and _reads_catalog_title(filename):
+                title = _epub_title_cache.get(filename, "")
+                for variant in _catalog_title_hashes(filename, title, authors):
+                    catalog_map.setdefault(variant, {}).setdefault(book.abs_id, filename)
+    built = (exact_map, reordered_map, catalog_map)
     with _variant_index_lock:
         if generation == _variant_index_generation:
             _variant_index[user_id] = built
@@ -4414,7 +4549,8 @@ def _resolve_book_by_filename_variants(doc_id: str, user_id=None):
 
     An exact library filename (allowing a Unicode-form difference) takes precedence
     over a reordered one, so "Foo - Bar.epub" and "Bar - Foo.epub" in the same
-    library don't block each other. More than one book in the deciding tier is
+    library don't block each other. The catalog title of a book stored under a
+    name without " - " comes last. More than one book in the deciding tier is
     ambiguous and resolves nothing.
     """
     if not doc_id or not _is_valid_hex_hash(doc_id):
@@ -4422,10 +4558,11 @@ def _resolve_book_by_filename_variants(doc_id: str, user_id=None):
     target = doc_id.lower()
     conflict_key = f"kosync_filename_variant_conflict:{target}"
 
-    exact_map, reordered_map = _filename_variant_index(user_id)
+    exact_map, reordered_map, catalog_map = _filename_variant_index(user_id)
     for tier, matches in (
         ("library filename", exact_map.get(target, {})),
         ("reordered filename", reordered_map.get(target, {})),
+        ("catalog title", catalog_map.get(target, {})),
     ):
         if len(matches) > 1:
             get_persistent_condition_logger().warn(
@@ -4490,12 +4627,41 @@ def _epub_authors_for(filename: str) -> tuple:
     return authors
 
 
+_epub_title_cache: dict = {}
+_epub_title_retry_at: dict = {}
+# Library filenames that resolve_book_path couldn't find, kept until the catalog changes.
+_epub_missing: set = set()
+
+
+def _catalog_changed() -> None:
+    """Forget which files were missing, then drop every variant index."""
+    _epub_missing.clear()
+    _invalidate_filename_variant_index()
+
+
+def _epub_title_for(filename: str) -> str:
+    """Cached read of an ebook's dc:title (keyed by filename); "" if unreadable."""
+    if filename in _epub_title_cache:
+        return _epub_title_cache[filename]
+    try:
+        title = (_container.ebook_parser().get_book_title(filename) or "").strip()
+    except Exception as e:
+        logger.debug(f"KOSync: title read failed for '{filename}': {e}")
+        title = ""
+    if title:
+        _epub_title_cache[filename] = title
+        _epub_title_retry_at.pop(filename, None)
+    else:
+        _epub_title_retry_at[filename] = time.monotonic() + _AUTHOR_RETRY_SECONDS
+    return title
+
+
 _author_warm_lock = threading.Lock()
 _author_warm_running = False
 
 
 def _start_author_warm(filenames) -> None:
-    """Read these files' authors in the background; one warm runs at a time."""
+    """Read these files' metadata in the background; one warm runs at a time."""
     global _author_warm_running
     with _author_warm_lock:
         if _author_warm_running:
@@ -4507,11 +4673,18 @@ def _start_author_warm(filenames) -> None:
 
 
 def _warm_epub_authors(filenames) -> None:
-    """Cache each file's authors, then rebuild the variant index so it uses them."""
+    """Cache each file's authors (and its title, when the index matches it by catalog title), then rebuild the variant index."""
     global _author_warm_running
     try:
         for filename in filenames:
+            try:
+                _container.ebook_parser().resolve_book_path(filename)
+            except FileNotFoundError:
+                _epub_missing.add(filename)
+                continue
             _epub_authors_for(filename)
+            if _reads_catalog_title(filename):
+                _epub_title_for(filename)
     finally:
         with _author_warm_lock:
             _author_warm_running = False
