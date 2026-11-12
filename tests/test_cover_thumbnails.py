@@ -143,11 +143,13 @@ class TestThumbnailCoverRoute(unittest.TestCase):
         self.web.COVERS_DIR = self.covers
         self.web.database_service = DB()
         self.web._cover_fresh_until.clear()
+        self.web._thumb_versions.clear()
 
         def cleanup():
             self.web.COVERS_DIR = old_dir
             self.web.database_service = old_db
             self.web._cover_fresh_until.clear()
+            self.web._thumb_versions.clear()
         self.addCleanup(cleanup)
 
     def test_cold_thumb_returns_small_pending_response_without_source_bytes(self):
@@ -213,6 +215,51 @@ class TestThumbnailCoverRoute(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.headers["Cache-Control"], "private, max-age=300")
                 response.close()
+
+    def _hot_get(self, url):
+        from flask import Flask
+        app = Flask(__name__)
+        with patch.object(self.web.cover_thumbnail_cache, "is_current", return_value=True):
+            with app.test_request_context(url, method="HEAD"):
+                response = self.web.serve_thumbnail_cover("abc.jpg")
+                response.close()
+                return response
+
+    def test_served_thumb_gets_versioned_url_cached_for_a_year(self):
+        (self.covers / "thumbs").mkdir()
+        (self.covers / "thumbs" / "abc.jpg").write_bytes(b"small image")
+        self.assertIsNone(self.web.thumb_cover_src("abc"))
+        self._hot_get("/covers/thumb/abc.jpg")
+        src = self.web.thumb_cover_src("abc")
+        self.assertRegex(src, r"^/covers/thumb/abc\.jpg\?v=[0-9a-f]+-[0-9a-f]+$")
+        response = self._hot_get(src)
+        self.assertEqual(response.headers["Cache-Control"], "private, max-age=31536000, immutable")
+        # A stale version must not be pinned in the browser for a year.
+        response = self._hot_get("/covers/thumb/abc.jpg?v=0-0")
+        self.assertEqual(response.headers["Cache-Control"], "private, max-age=300")
+
+    def test_regenerated_thumb_changes_version(self):
+        (self.covers / "thumbs").mkdir()
+        thumb = self.covers / "thumbs" / "abc.jpg"
+        thumb.write_bytes(b"small image")
+        self._hot_get("/covers/thumb/abc.jpg")
+        before = self.web.thumb_cover_src("abc")
+        thumb.write_bytes(b"a different, larger image")
+        self._hot_get("/covers/thumb/abc.jpg")
+        self.assertNotEqual(self.web.thumb_cover_src("abc"), before)
+
+    def test_cold_or_expired_thumb_is_not_rendered_directly(self):
+        from flask import Flask
+        app = Flask(__name__)
+        self.web._thumb_versions["abc"] = ("1-2", 0)
+        self.assertIsNone(self.web.thumb_cover_src("abc"))
+        self.web._thumb_versions["abc"] = ("1-2", float("inf"))
+        with patch.object(self.web.cover_thumbnail_cache, "is_current", return_value=False), \
+                patch.object(self.web.cover_thumbnail_cache, "enqueue", return_value=True):
+            with app.test_request_context("/covers/thumb/abc.jpg", method="HEAD"):
+                self.assertEqual(self.web.serve_thumbnail_cover("abc.jpg").status_code, 202)
+        self.assertIsNone(self.web.thumb_cover_src("abc"))
+        self.assertIsNone(self.web.thumb_cover_src(None))
 
     def test_reject_nested_and_non_cover_paths(self):
         from flask import Flask

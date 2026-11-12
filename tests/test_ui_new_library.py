@@ -69,6 +69,30 @@ class TestNewLibrary(unittest.TestCase):
             self.assertIn('src="/covers/coverlibrarybook.jpg"', classic)
             self.assertNotIn('data-thumb-url="/covers/thumb/coverlibrarybook.jpg"', classic)
 
+    def test_ready_thumbnails_render_directly_with_versioned_urls(self):
+        from src import web_server
+
+        original = web_server._build_dashboard_mappings
+
+        def covers(*args, **kwargs):
+            mappings, progress = original(*args, **kwargs)
+            for mapping in mappings:
+                mapping["kosync_doc_id"] = "cover" + mapping["abs_id"].replace("-", "")
+            return mappings, progress
+
+        self._login("ui-reader")
+        web_server._thumb_versions["coverlibrarybook"] = ("a-b", float("inf"))
+        try:
+            with patch.object(web_server, "_build_dashboard_mappings", side_effect=covers):
+                self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+                html = self.client.get("/").get_data(as_text=True)
+        finally:
+            web_server._thumb_versions.clear()
+        # Card and series preview both skip the hidden probe for the ready cover.
+        self.assertGreaterEqual(html.count('src="/covers/thumb/coverlibrarybook.jpg?v=a-b" alt=""'), 2)
+        self.assertNotIn('data-thumb-url="/covers/thumb/coverlibrarybook.jpg"', html)
+        self.assertIn('data-thumb-url="/covers/thumb/coverlibraryfinished.jpg" alt="" hidden', html)
+
     def test_card_heading_does_not_reserve_empty_space(self):
         # A one-line title left a blank band above the progress bar; the heading hugs its content.
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
