@@ -135,6 +135,7 @@ class BookOrbitClient:
         self._token_timestamp: float = 0
         self._token_lock = threading.Lock()
         self._login_retry_after: float = 0
+        self._me_cache: Optional[tuple] = None  # (login identity, BookOrbit user id)
 
         self._book_cache: dict = {}        # id -> light book info
         self._filename_index: dict = {}    # filename.lower() -> id (lazily filled)
@@ -934,6 +935,18 @@ class BookOrbitClient:
         data = self._request_json("GET", f"/api/v1/book-requests?{urlencode(params)}", ok=(200,))
         return data if isinstance(data, dict) else None
 
+    def current_user_id(self) -> Optional[int]:
+        """BookOrbit's own id for the account in use (cached per login), or None when it cannot be read."""
+        identity = (self._get_base_url(), self._get_api_key(), self._get_username(), self._get_password())
+        if self._me_cache and self._me_cache[0] == identity:
+            return self._me_cache[1]
+        data = self._request_json("GET", "/api/v1/auth/me", ok=(200,))
+        found = data.get("id") if isinstance(data, dict) else None
+        if isinstance(found, bool) or not isinstance(found, int):
+            return None
+        self._me_cache = (identity, found)
+        return found
+
     def get_request(self, request_id) -> Optional[dict]:
         """One request, or None when missing or unreachable."""
         data = self._request_json("GET", f"/api/v1/book-requests/{request_id}", ok=(200,))
@@ -944,6 +957,50 @@ class BookOrbitClient:
         return self._request_json(
             "POST", f"/api/v1/book-requests/{request_id}/cancel", ok=(200, 201, 204),
         ) is not None
+
+    # ---- Release picking (book-request-fulfilment) ----------------------
+
+    def _fulfilment_call(self, method: str, endpoint: str, body=None) -> tuple[Optional[object], Optional[str]]:
+        """Call a fulfilment route; (parsed JSON, None) on success, else (None, error code).
+
+        Codes: no_pick_permission (403), request_state_changed (404, or 400 for the request's state),
+        no_destination_library (400 naming the destination library), already_picked (409), unreachable.
+        """
+        resp = self._make_request(method, endpoint, body)
+        if resp is None:
+            return None, "unreachable"
+        status = resp.status_code
+        if status in (200, 201):
+            data = self._parse_json(resp)
+            return (data if data is not None else {}), None
+        message = ""
+        if status == 400:
+            parsed = self._parse_json(resp)
+            message = str(parsed.get("message") if isinstance(parsed, dict) else "").lower()
+        code = {403: "no_pick_permission", 404: "request_state_changed", 409: "already_picked"}.get(status)
+        if status == 400:
+            code = "no_destination_library" if "destination library" in message else "request_state_changed"
+        logger.info("BookOrbit: %s %s refused (%s): %s", method, endpoint, status, code or "unexpected status")
+        return None, code or "unreachable"
+
+    def can_pick_releases(self) -> bool:
+        """Whether the account may pick releases (the download-client list answers 200)."""
+        resp = self._make_request("GET", "/api/v1/book-request-fulfilment/download-clients")
+        return resp is not None and resp.status_code == 200
+
+    def list_request_releases(self, request_id) -> tuple[Optional[dict], Optional[str]]:
+        """The releases BookOrbit's indexers offer for one request: (result, None) or (None, error code)."""
+        data, error = self._fulfilment_call(
+            "GET", f"/api/v1/book-request-fulfilment/{request_id}/releases?refresh=false")
+        return (data if isinstance(data, dict) else None), (error or (None if isinstance(data, dict) else "unreachable"))
+
+    def grab_request_release(self, request_id, indexer_id: int, guid: str) -> tuple[Optional[dict], Optional[str]]:
+        """Send one release to BookOrbit's download client: (updated request, None) or (None, error code)."""
+        data, error = self._fulfilment_call(
+            "POST", f"/api/v1/book-request-fulfilment/{request_id}/grab",
+            {"indexerId": indexer_id, "releaseGuid": guid},
+        )
+        return (data if isinstance(data, dict) else None), (error or (None if isinstance(data, dict) else "unreachable"))
 
     def scan_library(self, library_id: Optional[int]) -> bool:
         """Trigger a BookOrbit library scan so newly-written files get indexed.

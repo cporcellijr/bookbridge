@@ -7925,7 +7925,7 @@ def job_queue_preflight_ack():
 
 
 def shelfmark() -> object:
-    """Shelfmark: a page framing SHELFMARK_URL in the New interface, a redirect to it in Classic."""
+    """Redirect to SHELFMARK_URL (library when unset)."""
     url = os.environ.get("SHELFMARK_URL")
     if not url:
         return redirect(url_for('index'))
@@ -7933,10 +7933,6 @@ def shelfmark() -> object:
     # Case-insensitive sanitization for the external destination.
     if not url.lower().startswith(('http://', 'https://')):
         url = f"http://{url}"
-
-    template = ui_template('shelfmark.html')
-    if template.startswith('next/'):
-        return render_template(template, frame_url=url)
     return redirect(url)
 
 

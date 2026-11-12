@@ -560,6 +560,9 @@ class AcquisitionRequest(Base):
     arrived_filename = Column(String(500), nullable=True)
     linked_abs_id = Column(String(255), nullable=True)
     dismissed = Column(Boolean, nullable=False, default=False, server_default='0')
+    adopted = Column(Boolean, nullable=False, default=False, server_default='0')
+    progress_mark = Column(String(64), nullable=True)
+    progress_changed_at = Column(DateTime, nullable=True)
 
 
 class PendingSuggestion(Base):

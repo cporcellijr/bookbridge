@@ -32,6 +32,14 @@
         by: {{ _('by {author}')|tojson }},
         get: {{ _('Get')|tojson }},
         requestedShelfmark: {{ _('Requested from Shelfmark.')|tojson }},
+        pickAction: {{ _('Pick a release')|tojson }},
+        pickNow: {{ _('Pick a release now')|tojson }},
+        loadingReleases: {{ _('Loading releases…')|tojson }},
+        noBookorbitReleases: {{ _('BookOrbit found no releases for this book yet.')|tojson }},
+        picked: {{ _('Release sent to BookOrbit.')|tojson }},
+        needsSignIn: {{ _('{name} needs you to sign in again.')|tojson }},
+        indexerFailed: {{ _('{name} could not be searched.')|tojson }},
+        stalled: {{ _('No progress for over 30 minutes. Check your download client or indexer sign-in.')|tojson }},
     };
     const ACQ_STATUS = {
         waiting: {{ _('Waiting for approval')|tojson }},
@@ -61,12 +69,21 @@
         policy_refused: {{ _('Shelfmark does not show results to you. File a request instead.')|tojson }},
         sources_failed: {{ _('Shelfmark could not search right now. Try again later.')|tojson }},
         release_expired: {{ _('That result has expired. Search again.')|tojson }},
+        release_wrong_format: {{ _('That result is not this format. Search again.')|tojson }},
         duplicate_pending_request: {{ _('You already have a pending request for this book in Shelfmark.')|tojson }},
         policy_blocked: {{ _('Shelfmark does not allow this for your account.')|tojson }},
+        no_pick_permission: {{ _("Your BookOrbit login can't pick releases. Ask for the \"Download books directly\" permission.")|tojson }},
+        request_state_changed: {{ _('That request changed in BookOrbit. Check its status and try again.')|tojson }},
+        already_picked: {{ _('A release was already picked for this request.')|tojson }},
+        no_destination_library: {{ _('BookOrbit has no destination library for this request yet.')|tojson }},
+        request_media_mismatch: {{ _('BookOrbit searched for a different format than this request.')|tojson }},
+        invalid_release: {{ _('That result is not valid. Choose another.')|tojson }},
     };
     const acqError = (code) => ACQ_ERRORS[code] || bbFormat(API_ERRORS.fallback, { code });
     let acqUsable = false;
     let acqBookorbit = false;
+    let acqCanPick = false;
+    let acqPickRow = null;
     let acqShelfmark = null;
     let acqAbort = null;
     let acqRows = [];
@@ -130,7 +147,12 @@
         });
     }
 
+    // BookOrbit lets a request be given a release by hand while it waits at one of these.
+    const ACQ_GRABBABLE = ['approved', 'searching', 'failed'];
+    const acqCanPickRow = (row) => acqCanPick && row.service === 'BookOrbit' && row.remote_kind === 'request' && ACQ_GRABBABLE.includes(row.remote_status);
+
     function openAcqDialog(kind, prefillOverride) {
+        acqPickRow = null;
         const prefill = prefillOverride || acqPrefill(kind);
         acqPartner = prefill.partner;
         $('acqTitle').value = prefill.title;
@@ -141,6 +163,8 @@
         $('acqShelfmarkLink').hidden = !acqShelfmark;
         document.querySelector(`input[name="acqFormat"][value="${prefill.format}"]`).checked = true;
         resetAcqReleases();
+        $('acqTitle').readOnly = false;
+        $('acqAuthor').readOnly = false;
         $('acqResult').textContent = '';
         $('acqModal').classList.add('open');
         $('acqModal').setAttribute('aria-hidden', 'false');
@@ -155,6 +179,7 @@
 
     async function submitAcq(event) {
         event.preventDefault();
+        if (acqPickRow) return;
         if (!acqBookorbit) { findInShelfmark(); return; }
         if (acqSubmitting) return;
         const choice = document.querySelector('input[name="acqFormat"]:checked').value;
@@ -184,6 +209,15 @@
             if (data.already_owned.length) messages.push(ACQ.alreadyOwned);
             if (data.partial) messages.push(ACQ.partial);
             $('acqResult').textContent = messages.join(' ');
+            const pickable = data.requests.find(acqCanPickRow);
+            if (pickable) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-small btn-primary';
+                button.textContent = ACQ.pickNow;
+                button.addEventListener('click', () => openAcqPicker(pickable));
+                $('acqResult').append(' ', button);
+            }
             loadAcqMine();
         } catch (err) {
             console.error('Request to BookOrbit failed.', err);
@@ -223,7 +257,8 @@
         list.innerHTML = shown.map((release) => {
             const kind = ACQ.kinds[release.kind] || '';
             const groupLabel = (groups.find((g) => g.code === release.group) || {}).label;
-            const indexer = release.source && release.source !== groupLabel && release.source !== kind ? release.source : '';
+            const indexer = release.source && release.source !== groupLabel && release.source !== release.group && release.source !== kind ? release.source : '';
+            const sourceName = groups.length === 1 ? groupLabel : '';
             const peers = release.peers || release.detail;
             const flags = (release.flags || []).map((flag) => `<span class="source-badge manual">${esc(flag)}</span>`).join('');
             const more = release.formats_more ? ` +${Number(release.formats_more)}` : '';
@@ -233,6 +268,7 @@
                 ${release.author ? `<span class="acq-note">${esc(bbFormat(ACQ.by, { author: release.author }))}</span>` : ''}
             </span>
             <span class="acq-release-meta">
+                ${sourceName ? `<span class="acq-note">${esc(sourceName)}</span>` : ''}
                 ${indexer ? `<span class="acq-note">${esc(indexer)}</span>` : ''}
                 ${peers ? `<span class="acq-note">${esc(peers)}</span>` : ''}
                 ${flags}
@@ -325,6 +361,64 @@
         }
     }
 
+    // Lists what BookOrbit's indexers offer for one of the reader's requests; nothing is picked until they click Get.
+    async function openAcqPicker(row) {
+        openAcqDialog(row.media_kind, { title: row.title, authors: '', partner: null, format: row.media_kind });
+        acqPickRow = row;
+        ['acqTitle', 'acqAuthor'].forEach((id) => { $(id).readOnly = true; });
+        ['acqSubmitBtn', 'acqShelfmarkBtn', 'acqShelfmarkLink'].forEach((id) => { $(id).hidden = true; });
+        const controller = new AbortController();
+        acqAbort = controller;
+        $('acqResult').textContent = ACQ.loadingReleases;
+        try {
+            const response = await fetch(`/api/acquisition/${encodeURIComponent(row.id)}/releases`, { headers: { Accept: 'application/json' }, signal: controller.signal });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data) {
+                $('acqResult').textContent = acqError((data && data.error) || `http_${response.status}`);
+                return;
+            }
+            const problems = (data.indexer_problems || []).map((p) => bbFormat(p.failure === 'unauthorized' ? ACQ.needsSignIn : ACQ.indexerFailed, { name: p.name }));
+            $('acqResult').textContent = [data.releases.length ? ACQ.pickRelease : ACQ.noBookorbitReleases, ...problems].join(' ');
+            renderReleaseList(data.releases, (key) => grabAcqRelease(row, key));
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.error('BookOrbit release list failed.', err);
+            $('acqResult').textContent = bbFormat(API_ERRORS.fallback, { code: 'network' });
+        } finally {
+            if (acqAbort === controller) acqAbort = null;
+        }
+    }
+
+    async function grabAcqRelease(row, key) {
+        if (acqSubmitting) return;
+        acqSubmitting = true;
+        $('acqReleases').querySelectorAll('button').forEach((button) => { button.disabled = true; });
+        $('acqResult').textContent = ACQ.requesting;
+        let sent = false;
+        try {
+            const response = await fetch(`/api/acquisition/${encodeURIComponent(row.id)}/grab`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ key }),
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data) {
+                $('acqResult').textContent = acqError((data && data.error) || `http_${response.status}`);
+                return;
+            }
+            sent = true;
+            resetAcqReleases();
+            $('acqResult').textContent = ACQ.picked;
+            loadAcqMine();
+        } catch (err) {
+            console.error('Picking a release failed.', err);
+            $('acqResult').textContent = bbFormat(API_ERRORS.fallback, { code: 'network' });
+        } finally {
+            acqSubmitting = false;
+            if (!sent) $('acqReleases').querySelectorAll('button').forEach((button) => { button.disabled = false; });
+        }
+    }
+
     function renderAcqStrip() {
         $('acqStrip').hidden = !acqRows.length;
         $('acqList').innerHTML = acqRows.map((row) => {
@@ -343,7 +437,9 @@
                 </div>
                 <span class="source-badge ${ACQ_CHIP_CLASS[row.status] || 'reason'}">${esc(ACQ_STATUS[row.status] || row.status)}</span>
                 ${row.status_detail ? `<span class="acq-note">${esc(row.status_detail)}</span>` : ''}
+                ${row.stalled ? `<span class="acq-note">${esc(ACQ.stalled)}</span>` : ''}
                 ${link}
+                ${acqCanPickRow(row) ? `<button type="button" class="btn btn-small btn-primary" data-acq-act="pick" data-id="${esc(row.id)}">${esc(ACQ.pickAction)}</button>` : ''}
                 ${open && !cancellable ? '' : `<button type="button" class="btn btn-small btn-muted" data-acq-act="${action}" data-id="${esc(row.id)}">${esc(open ? ACQ.cancel : ACQ.dismiss)}</button>`}
             </div>`;
         }).join('');
@@ -387,6 +483,7 @@
             const data = await response.json();
             const services = data.services || {};
             acqBookorbit = !!(services.bookorbit && services.bookorbit.usable);
+            acqCanPick = acqBookorbit && !!services.bookorbit.can_pick;
             acqShelfmark = services.shelfmark && services.shelfmark.usable ? services.shelfmark : null;
             acqUsable = acqBookorbit || !!acqShelfmark;
         } catch (err) {
@@ -410,7 +507,10 @@
         });
         $('acqList').addEventListener('click', (event) => {
             const button = event.target.closest('[data-acq-act]');
-            if (button) actOnAcq(button.dataset.acqAct, button.dataset.id);
+            if (!button) return;
+            if (button.dataset.acqAct !== 'pick') { actOnAcq(button.dataset.acqAct, button.dataset.id); return; }
+            const row = acqRows.find((item) => String(item.id) === button.dataset.id);
+            if (row) openAcqPicker(row);
         });
         $('acqForm').addEventListener('submit', submitAcq);
         $('acqShelfmarkBtn').addEventListener('click', findInShelfmark);

@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 import requests
 
+from src.api.bookorbit_client import _AUDIO_FORMATS, _EBOOK_FORMATS
 from src.utils.config_loader import env_truthy
 from src.utils.user_config import resolve_setting
 
@@ -54,6 +55,25 @@ def _release_kind(item: dict) -> str:
     return "direct" if item.get("source") == "direct" else ""
 
 
+def release_media_kind(item: dict) -> Optional[str]:
+    """Classify a raw Shelfmark release as ``"ebook"``, ``"audiobook"`` or None when it cannot be told.
+
+    Known formats decide when they all agree; otherwise (none, archives, a mix) the content type does.
+    """
+    extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+    raw = extra.get("formats") if isinstance(extra.get("formats"), list) and extra.get("formats") else [item.get("format")]
+    formats = [str(f).strip().lower() for f in raw if f]
+    kinds = {"ebook" if f in _EBOOK_FORMATS else "audiobook" if f in _AUDIO_FORMATS else None for f in formats}
+    if formats and len(kinds) == 1 and None not in kinds:
+        return kinds.pop()
+    content_type = str(item.get("content_type") or "").strip().lower()
+    if "audio" in content_type:
+        return "audiobook"
+    if content_type in ("book", "ebook") or content_type.startswith("book ("):
+        return "ebook"
+    return None
+
+
 def _digest(*parts: Any) -> str:
     """A short stable id for a set of values (release keys, manual-search book ids)."""
     return hashlib.sha1("|".join(str(part) for part in parts).encode("utf-8")).hexdigest()[:16]
@@ -69,7 +89,7 @@ class ShelfmarkClient:
         self._cookie_fingerprint: Optional[str] = None
         self._refused: Optional[tuple[str, str]] = None  # (credentials fingerprint, reason)
         self._open_access: Optional[tuple[float, bool]] = None  # (checked at, no sign-in needed)
-        self._releases: dict[str, tuple[float, dict]] = {}
+        self._releases: dict[str, tuple[float, dict, str]] = {}
         self._policy: Optional[tuple[float, tuple[Optional[dict], Optional[str]]]] = None
 
     # ---- configuration (read per call) ---------------------------------------
@@ -87,7 +107,7 @@ class ShelfmarkClient:
         )
 
     def is_enabled(self) -> bool:
-        """Whether Shelfmark is switched on: a URL is set and the nav rule for the Shelfmark page holds."""
+        """Whether Shelfmark is switched on: a URL is set and the Shelfmark settings toggle is on (or was never set)."""
         if not self._base_url():
             return False
         return env_truthy("SHELFMARK_ENABLED") or os.environ.get("SHELFMARK_ENABLED", "") == ""
@@ -242,14 +262,17 @@ class ShelfmarkClient:
             return None, "sources_failed"
         if response.status_code != 200 or not isinstance(body, dict):
             return None, "unreachable"
-        raw = [item for item in body.get("releases") or [] if isinstance(item, dict) and item.get("source_id")]
+        found = [item for item in body.get("releases") or [] if isinstance(item, dict) and item.get("source_id")]
+        raw = [item for item in found if release_media_kind(item) in (None, content_type)]
+        if len(raw) < len(found):
+            logger.info("📥 Acquisition: Shelfmark search for a %s dropped %d release(s) of the other format", content_type, len(found) - len(raw))
         now = time.time()
         self._releases = {k: v for k, v in self._releases.items() if now - v[0] < _RELEASE_TTL}
         labels = self._source_labels()
         releases = []
         for item in raw:
             key = _digest(item.get("source"), item.get("source_id"))
-            self._releases[key] = (now, item)
+            self._releases[key] = (now, item, content_type)
             seeders = item.get("seeders")
             author = (item.get("extra") or {}).get("author") if isinstance(item.get("extra"), dict) else None
             if isinstance(author, list):
@@ -280,6 +303,11 @@ class ShelfmarkClient:
         """The raw release behind a key from the latest searches, or None once it has expired."""
         entry = self._releases.get(key)
         return entry[1] if entry and time.time() - entry[0] < _RELEASE_TTL else None
+
+    def found_for(self, key: str) -> Optional[str]:
+        """The format (``content_type``) the cached release was found for, or None once it has expired."""
+        entry = self._releases.get(key)
+        return entry[2] if entry and time.time() - entry[0] < _RELEASE_TTL else None
 
     def submit(self, book: dict, release: Optional[dict], content_type: str) -> tuple[Optional[dict], Optional[str]]:
         """Download a release or file a request, whichever the reader's policy says.

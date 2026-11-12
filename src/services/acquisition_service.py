@@ -3,18 +3,30 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import PurePath
 from typing import Any, Optional
 
 from src.api.bookorbit_client import BookOrbitClient
+from src.utils.config_loader import env_truthy
 from src.utils.time_utils import utcnow
+from src.utils.user_config import (
+    _ALLOW_GLOBAL_FALLBACK_KEY,
+    _TRUTHY_SETTING_VALUES,
+    global_fallback_allowed,
+    resolve_setting,
+)
 
 logger = logging.getLogger(__name__)
 
 REFRESH_INTERVAL = timedelta(seconds=30)
 ARRIVED_REFRESH_INTERVAL = timedelta(minutes=10)
 GIVE_UP_AFTER = timedelta(days=30)
+ADOPTION_SCAN_INTERVAL = timedelta(minutes=10)
+ADOPTION_PAGE_SIZE = 100
+ADOPTION_MAX_PAGES = 20
+ADOPT_SETTING = "BOOKORBIT_ADOPT_REQUESTS"
+STALLED_AFTER = timedelta(minutes=30)
 OPEN_STATUSES = ("waiting", "in_progress", "needs_look")
 STATUS_MAP = {
     "pending": "waiting",
@@ -46,11 +58,39 @@ _SHELFMARK_TASK_PRECEDENCE = {"queued": 3, "resolving": 3, "locating": 3, "downl
 _DOWNLOADED = "Downloaded, waiting for the library"
 _AUDIO_SOURCES = {"abs": "ABS", "bookorbit": "BookOrbit", "booklore": "BookLore"}
 _UNIDENTIFIED = "The arrived book could not be identified yet."
+_AUDIO_PAIRED = "That audiobook is already paired with another ebook."
+_NO_EBOOK = "No single matching ebook was found in your library."
+
+
+def is_stalled(row: dict) -> bool:
+    """Whether an in-progress download has shown no progress for STALLED_AFTER."""
+    changed = row.get("progress_changed_at")
+    return bool(
+        row.get("status") == "in_progress" and row.get("progress_mark") and changed
+        and utcnow() - changed >= STALLED_AFTER
+    )
 
 
 def _audio_source(name: Optional[str]) -> Optional[str]:
     """Canonical audio source key for a search-result source label, or None when unsupported."""
     return _AUDIO_SOURCES.get(str(name or "").strip().lower())
+
+
+def _parse_time(value: Any) -> Optional[datetime]:
+    """A BookOrbit ISO timestamp as naive UTC, or None when missing or unreadable."""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
+
+
+def _same_index(left: Any, right: Any) -> bool:
+    """Series indexes agree; a missing or unreadable index on either side never conflicts."""
+    try:
+        return left is None or right is None or float(left) == float(right)
+    except (TypeError, ValueError):
+        return True
 
 
 def _author_set(value: Any) -> frozenset:
@@ -68,10 +108,11 @@ class AcquisitionService:
         self.database_service = database_service
         self.book_mapping_service = book_mapping_service
         self.shelf_watch_service = shelf_watch_service
+        self._adoption_scanned: dict[int, datetime] = {}
 
     def has_work(self, user_id: int) -> bool:
-        """Whether the user has any request that needs a check (one cheap query, no HTTP)."""
-        return bool(self._refreshable(user_id))
+        """Whether the user has any request to check or an adoption scan due (database reads only, no HTTP)."""
+        return bool(self._refreshable(user_id)) or self._adoption_due(user_id)
 
     def _refreshable(self, user_id: int) -> list[dict]:
         return self.database_service.get_refreshable_acquisition_requests(user_id, utcnow() - GIVE_UP_AFTER)
@@ -83,6 +124,11 @@ class AcquisitionService:
         library); ``shelfmark`` is their Shelfmark client.
         """
         now = utcnow()
+        if client is not None and self._adoption_due(user_id):
+            try:
+                self._adopt_requests(user_id, client)
+            except Exception:
+                logger.warning("📥 Acquisition: user %s BookOrbit requests could not be adopted", user_id, exc_info=True)
         due = [
             row for row in self._refreshable(user_id)
             if row["last_checked_at"] is None or now - row["last_checked_at"] >= (
@@ -106,6 +152,123 @@ class AcquisitionService:
                 logger.warning("📥 Acquisition: user %s could not pair a Both request", user_id, exc_info=True)
         return self.database_service.get_acquisition_requests(user_id)
 
+    # ---- adoption ------------------------------------------------------------
+
+    def _adoption_enabled(self, user_id: int) -> bool:
+        """The reader's own opt-in (never the admin's) and the readers-may-request gate, read from the database."""
+        user = self.database_service.get_user(user_id)
+        if user is None or not (user.is_admin or env_truthy("ACQUISITION_ALLOW_READERS")):
+            return False
+        credentials = {
+            ADOPT_SETTING: self.database_service.get_user_credential(user_id, ADOPT_SETTING),
+            _ALLOW_GLOBAL_FALLBACK_KEY: global_fallback_allowed(self.database_service, user),
+        }
+        return str(resolve_setting(credentials, ADOPT_SETTING, "false")).strip().lower() in _TRUTHY_SETTING_VALUES
+
+    def _adoption_due(self, user_id: int) -> bool:
+        last = self._adoption_scanned.get(user_id)
+        return (last is None or utcnow() - last >= ADOPTION_SCAN_INTERVAL) and self._adoption_enabled(user_id)
+
+    def _adopt_requests(self, user_id: int, client: Any) -> None:
+        """Add rows for the reader's own recently fulfilled BookOrbit audiobook requests not yet followed."""
+        self._adoption_scanned[user_id] = utcnow()
+        me = client.current_user_id()
+        if me is None:
+            logger.debug("📥 Acquisition: user %s BookOrbit account could not be identified; adoption skipped", user_id)
+            return
+        cutoff = utcnow() - GIVE_UP_AFTER
+        adopted = 0
+        for page in range(1, ADOPTION_MAX_PAGES + 1):
+            data = client.list_requests(status="available", media_kind="audiobook", page=page, limit=ADOPTION_PAGE_SIZE)
+            items = (data or {}).get("items") or []
+            if not items:
+                break
+            for item in items:
+                adopted += self._adopt_item(user_id, item, me, cutoff)
+            if page * ADOPTION_PAGE_SIZE >= int((data or {}).get("total") or 0):
+                break
+        if adopted:
+            logger.info("📥 Acquisition: user %s adopted %d BookOrbit request(s) made in BookOrbit", user_id, adopted)
+
+    def _adopt_item(self, user_id: int, item: dict, me: int, cutoff: datetime) -> int:
+        """Save one of the reader's own fulfilled audiobook requests as a row; 1 when added."""
+        updated = _parse_time(item.get("updatedAt"))
+        title = str(item.get("title") or "").strip()
+        if (item.get("userId") != me or item.get("mediaKind") != "audiobook" or item.get("id") is None
+                or not title or updated is None or updated < cutoff):
+            return 0
+        remote_id = str(item["id"])
+        if self.database_service.find_acquisition_request(user_id, "BookOrbit", remote_id, include_dismissed=True):
+            return 0
+        names = [a.get("name") if isinstance(a, dict) else a for a in item.get("authors") or []]
+        index = item.get("seriesIndex")
+        self.database_service.add_acquisition_requests(user_id, [{
+            "service": "BookOrbit", "media_kind": "audiobook", "remote_kind": "request", "remote_id": remote_id,
+            "title": title, "authors": ", ".join(str(n).strip() for n in names if n and str(n).strip()) or None,
+            "series_name": item.get("seriesName") or None,
+            "series_index": int(index) if isinstance(index, (int, float)) and not isinstance(index, bool) else None,
+            "status": "in_progress", "adopted": True,
+        }])
+        return 1
+
+    def _unique_ebook(self, row: dict, client: Any) -> tuple[Optional[dict], str]:
+        """The reader's one eligible BookOrbit ebook for an adopted request, else (None, why not)."""
+        title, authors = BookOrbitClient._normalize_string(row["title"]), _author_set(row["authors"])
+        if not title or not authors:
+            return None, "the request has no title or no authors"
+        same = [
+            info for info in client.get_all_ebooks()
+            if BookOrbitClient._normalize_string(info.get("title")) == title and _author_set(info.get("authors")) == authors
+        ]
+        eligible = []
+        for info in same:
+            held = self.database_service.get_book_by_ebook_source("BookOrbit", str(info.get("id")))
+            if _same_index(row["series_index"], info.get("seriesIndex")) and not (held and held.audio_source_id):
+                eligible.append(info)
+        if len(eligible) != 1:
+            return None, f"{len(eligible)} eligible of {len(same)} ebooks with the same title and authors"
+        found = eligible[0]
+        detail = client.get_book_detail(found["id"])
+        book_file = BookOrbitClient._primary_file(detail, kind="ebook") if detail else None
+        if not (book_file and book_file.get("filename")):
+            return None, "the matching ebook has no file"
+        return {"id": str(found["id"]), "filename": book_file["filename"]}, ""
+
+    def _adopt_arrival(self, user_id: int, row: dict, remote: dict, client: Any) -> dict:
+        """Identify an adopted request's arrival, then pair it with the reader's one matching ebook or send it to review."""
+        arrival, how, candidates = self._resolve_arrival(client, row, remote)
+        if arrival is None:
+            return self._unresolved(user_id, row, client, candidates)
+        changes: dict[str, Any] = {"arrived_source": "BookOrbit", "arrived_source_id": arrival["id"]}
+        audio_book = self._audio_book("BookOrbit", arrival["id"])
+        if audio_book and audio_book.ebook_filename:
+            return {**changes, **self._refuse(user_id, row, _AUDIO_PAIRED), "dismissed": True}
+        ebook, why = self._unique_ebook(row, client)
+        if ebook is None:
+            logger.info(
+                "📥 Acquisition: user %s adopted request %s has no unique ebook match (%s); left for review",
+                user_id, row["id"], why,
+            )
+            return {**changes, **self._review_adopted(user_id, row, arrival, client)}
+        logger.info(
+            "📥 Acquisition: user %s adopted request %s matched ebook %s (title, authors, series agree)",
+            user_id, row["id"], ebook["id"],
+        )
+        partner = {"partner_source": "BookOrbit", "partner_source_id": ebook["id"], "partner_filename": ebook["filename"]}
+        return {**changes, **partner, **self._pair_with_partner(user_id, {**row, **partner}, arrival, how, client)}
+
+    def _review_adopted(self, user_id: int, row: dict, arrival: dict, client: Any) -> dict:
+        """Offer the arrived audiobook to Discover's review against the title's ebooks; never pairs by itself."""
+        hits = [hit for hit in client.search_ebooks(row["title"]) or [] if hit.get("id") is not None]
+        view = {**row, "media_kind": "ebook", "partner_source": "BookOrbit", "partner_source_id": arrival["id"]}
+        if hits and self._hand_off(user_id, view, client, hits, auto_pair=False) == "review":
+            logger.info(
+                "📥 Acquisition: user %s request %s sent to Discover review (%d candidate BookOrbit ebooks)",
+                user_id, row["id"], len(hits),
+            )
+            return {"status": "needs_look"}
+        return self._refuse(user_id, row, _NO_EBOOK)
+
     def _update(self, user_id: int, row: dict, **changes: Any) -> None:
         self.database_service.update_acquisition_request(user_id, row["id"], **changes)
 
@@ -124,8 +287,7 @@ class AcquisitionService:
         remote = client.get_request(row["remote_id"]) or {}
         status = remote.get("status")
         if status:
-            mapped = STATUS_MAP.get(status, "in_progress")
-            changes.update(status=mapped, remote_status=status, status_detail=self._detail(remote, mapped))
+            changes.update(self.remote_changes(row, remote))
             if status == "available":
                 changes.update(self._on_available(user_id, row, remote, client, resolved))
             if changes["status"] != row["status"]:
@@ -134,6 +296,33 @@ class AcquisitionService:
                     user_id, row["id"], row["status"], changes["status"], status,
                 )
         self._update(user_id, row, **changes)
+
+    @classmethod
+    def remote_changes(cls, row: dict, remote: dict) -> dict:
+        """Row changes for a BookOrbit request object: status, detail and the download-progress mark."""
+        status = remote.get("status")
+        mapped = STATUS_MAP.get(status, "in_progress")
+        download = remote.get("download") if isinstance(remote.get("download"), dict) else {}
+        value = download.get("downloadedBytes")
+        value = download.get("progressPercent") if value is None else value
+        mark = f"{download.get('id')}|{download.get('grabbedAt')}|{value}" if status in ("grabbed", "downloading") and download else None
+        return {
+            "status": mapped, "remote_status": status, "status_detail": cls._detail(remote, mapped),
+            **cls._progress_changes(row, mark),
+        }
+
+    @staticmethod
+    def _progress_changes(row: dict, mark: Optional[str]) -> dict:
+        """Stamp when a download's progress mark last changed; clear both once it is not downloading.
+
+        A polling timestamp is no evidence of progress, so only a different mark moves the stamp.
+        """
+        if mark is None:
+            return {"progress_mark": None, "progress_changed_at": None}
+        mark = mark[:64]
+        if row.get("progress_mark") == mark and row.get("progress_changed_at") is not None:
+            return {}
+        return {"progress_mark": mark, "progress_changed_at": utcnow()}
 
     @staticmethod
     def _detail(remote: dict, mapped: str) -> Optional[str]:
@@ -201,7 +390,8 @@ class AcquisitionService:
                 "rejected": request.get("admin_note"),
                 "downloading": f"{round(progress)}%" if isinstance(progress, (int, float)) and not isinstance(progress, bool) else None,
             }.get(status)
-            changes.update(status=mapped, remote_status=status, status_detail=detail)
+            mark = str(progress) if status == "downloading" and isinstance(progress, (int, float)) and not isinstance(progress, bool) else None
+            changes.update(status=mapped, remote_status=status, status_detail=detail, **self._progress_changes(row, mark))
             if status == "complete":
                 changes.update(self._on_downloaded(user_id, row, task, bookorbit))
             if changes["status"] != row["status"]:
@@ -243,6 +433,8 @@ class AcquisitionService:
         """Changes for a request BookOrbit says is available: identify the arrival, then pair it."""
         if row["status"] == "needs_look" and row["remote_status"] == "available":
             return self._after_review(user_id, row)
+        if row["adopted"] and not (row["partner_source_id"] or row["group_key"]):
+            return self._adopt_arrival(user_id, row, remote, client)
         if not (row["partner_source_id"] or row["group_key"]):
             matched = remote.get("matchedBookId")
             return {} if matched is None else {"arrived_source": "BookOrbit", "arrived_source_id": str(matched)}
@@ -303,8 +495,10 @@ class AcquisitionService:
             logger.info("📥 Acquisition: user %s request %s not paired: %s", user_id, row["id"], reason)
         return {"status": "arrived", "status_detail": reason}
 
-    def _hand_off(self, user_id: int, row: dict, client: Any, candidates: list):
+    def _hand_off(self, user_id: int, row: dict, client: Any, candidates: list, auto_pair: bool = True):
         """Auto-pair a unique top match at the watcher's threshold, else save a review suggestion.
+
+        ``auto_pair=False`` only ever saves a suggestion.
 
         Returns the row changes when it paired or was refused, "review" when a suggestion was saved,
         and None when there was nothing to scan or suggest.
@@ -337,7 +531,7 @@ class AcquisitionService:
             if not matches:
                 continue
             score = float(scanned[0].get("score") or 0.0)
-            if top_fits and score >= shelf._threshold() and shelf._unique_top(scanned, filename, "Acquisition"):
+            if auto_pair and top_fits and score >= shelf._threshold() and shelf._unique_top(scanned, filename, "Acquisition"):
                 return self._auto_pair(user_id, row, client, scanned[0], filename, source_id, score)
             if shelf._create_pending_suggestion(
                 {"title": title, "authors": authors}, filename, source_id, matches,
@@ -373,6 +567,8 @@ class AcquisitionService:
     def _after_review(self, user_id: int, row: dict) -> dict:
         """A request handed to review stays 'needs_look' until the reader's approval has mapped the pair."""
         held = self._partner_book(row)
+        if held is None and row["adopted"] and row["arrived_source_id"]:
+            held = self._audio_book("BookOrbit", row["arrived_source_id"])
         done = held is not None and (held.ebook_filename and held.audio_source_id)
         if not done:
             return {"status": "needs_look"}
@@ -455,7 +651,7 @@ class AcquisitionService:
         if audio_book and ebook_book and audio_book.abs_id == ebook_book.abs_id:
             return audio_book.abs_id, ""
         if audio_book and audio_book.ebook_filename:
-            return None, "That audiobook is already paired with another ebook."
+            return None, _AUDIO_PAIRED
         if ebook_book and ebook_book.audio_source_id:
             return None, "That ebook is already paired with another audiobook."
         info = client.get_audiobook_info(audio_id) if audio_source == "BookOrbit" else None
