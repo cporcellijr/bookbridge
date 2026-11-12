@@ -1491,6 +1491,57 @@ def account_interface():
     return redirect(_safe_next_url())
 
 
+def account_display_page():
+    """New-interface display controls and a small, reader-scoped library preview."""
+    user = current_user()
+    if user is None:
+        return redirect(url_for('login'))
+    if user_setting('UI_MODE', 'classic') != 'new':
+        return redirect(url_for('account') + '#account-display')
+
+    books = _dashboard_visible_books_for_user(database_service.get_all_books(user_id=user.id), user)
+    states = database_service.get_all_states(user_id=user.id)
+    percent_by_book = {}
+    for state in states:
+        if state.percentage is not None:
+            percent_by_book[state.abs_id] = max(percent_by_book.get(state.abs_id, 0), state.percentage)
+    books.sort(key=lambda book: (
+        not (0 < percent_by_book.get(book.abs_id, 0) < 1),
+        (getattr(book, 'abs_title', None) or '').casefold(),
+        book.abs_id,
+    ))
+    selected = books[:6]
+    # If possible, show a series pair so the series-stack switch has a visible example.
+    if selected:
+        first_series = next((getattr(book, 'series_name', None) for book in selected
+                             if getattr(book, 'series_name', None)), None)
+        if first_series and not any(getattr(book, 'series_name', None) == first_series
+                                    for book in selected[1:]):
+            companion = next((book for book in books[6:]
+                              if getattr(book, 'series_name', None) == first_series), None)
+            if companion:
+                selected[-1] = companion
+    preview = []
+    if selected:
+        integrations = _build_dashboard_integrations()
+        preview, _ = _build_dashboard_mappings(
+            selected, states, integrations,
+            all_hardcover=database_service.get_all_hardcover_details(),
+            all_storygraph=database_service.get_all_storygraph_details(),
+            all_goodreads=database_service.get_all_goodreads_details(),
+            reading_stats_by_book=database_service.get_all_reading_stats(user_id=user.id),
+            cached_booklore_by_filename=_index_cached_booklore_books(database_service.get_all_booklore_books()),
+            claim_times_by_book=database_service.get_book_claim_times(user_id=user.id),
+            bookfusion_by_book={},
+            bookorbit_authors={},
+        )
+    return render_template(
+        'next/display.html',
+        preview_mappings=preview,
+        preview_groups=_group_dashboard_mappings_by_series(preview),
+    )
+
+
 def account_display():
     """Save some or all of the signed-in reader's display settings.
 
@@ -16923,6 +16974,7 @@ def create_app(test_container=None):
     app.add_url_rule('/account/language', 'account_language', account_language, methods=['POST'])
     app.add_url_rule('/account/interface', 'account_interface', account_interface, methods=['POST'])
     app.add_url_rule('/account/display', 'account_display', account_display, methods=['POST'])
+    app.add_url_rule('/account/display', 'account_display_page', account_display_page, methods=['GET'])
     app.add_url_rule('/account/integrations', 'account_integrations', account_integrations, methods=['GET', 'POST'])
     app.add_url_rule('/api/account/test-connection/<service>', 'account_test_connection', account_test_connection, methods=['POST'])
     app.add_url_rule('/api/account/abs-libraries', 'account_abs_libraries', account_abs_libraries, methods=['POST'])

@@ -27,6 +27,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Display is now its own page in the New interface.** Open it from the account menu on desktop or phone. Theme, Library style, and series-stack cover options save immediately with inline feedback and a live six-book preview using your own Library cards. Classic's Account display controls remain unchanged.
+
 - **Face-out shelves and Classic series stacks:** The New Library now offers Cards, Face-out shelves, Spine shelves, or List under Account → Display. Face-out stands every cover on wooden planks with its title and author below (three per shelf on phones). Classic readers can again show the current book in series stacks from Account → Display. Library style remains per reader, with no toolbar view switch.
 
 - **Theme now follows your device by default in the New interface.** Choose Day, Night, or Follow device under Account → Display; the choice follows your reader account across devices. The existing Day/Night quick switch now saves the same preference.

@@ -88,7 +88,7 @@ class TestP8Finish(unittest.TestCase):
         self.assertIn('src="/static/js/next/masonry.js"', library)
         self.assertIn('data-view="{{', library)
         self.assertIn("bbPoller({ name: 'library-progress', fastMs: 30000, slowMs: 30000, immediate: false, run: refreshDashboard })", source("templates/next/_library_scripts.html"))
-        self.assertIn('<label class="book-select-hit">', library)
+        self.assertIn('<label class="book-select-hit">', source('templates/next/_library_cards.html'))
 
     def test_view_switch_is_removed_without_changing_the_server_view(self):
         scripts = source("templates/next/_library_scripts.html")

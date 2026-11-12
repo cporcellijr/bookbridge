@@ -4,7 +4,7 @@
  */
 (function () {
     'use strict';
-    const library = document.getElementById('library-page');
+    const library = document.getElementById('library-page') || document.getElementById('display-preview-stage');
     if (!library || !window.fetch) return;
 
     const readiness = new Map();

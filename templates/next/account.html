@@ -87,53 +87,7 @@
             <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save changes') }}</button>
         </form>
     </div>
-    <div class="card plugin-card" id="account-display">
-        <h2>{{ _('Display') }}</h2>
-        <form class="account-interface-form" method="POST" action="{{ url_for('account_interface', next=url_for('account')) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="section-title">{{ _('Interface') }}</div>
-            <div class="plugin-actions" role="group" aria-label="{{ _('Interface') }}">
-                <button type="submit" name="ui_mode" value="classic" class="btn {{ 'btn-primary' if get_user_val('UI_MODE', 'classic') != 'new' else 'btn-secondary' }}" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') != 'new' else 'false' }}">{{ _('Classic') }}</button>
-                <button type="submit" name="ui_mode" value="new" class="btn {{ 'btn-primary' if get_user_val('UI_MODE', 'classic') == 'new' else 'btn-secondary' }}" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') == 'new' else 'false' }}">{{ _('New') }}</button>
-            </div>
-        </form>
-        {% if get_user_val('UI_MODE', 'classic') == 'new' %}
-        <form class="account-theme-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="section-title">{{ _('Theme') }}</div>
-            <label for="account-theme">{{ _('Theme') }}</label>
-            <select id="account-theme" name="UI_THEME" class="form-input">
-                <option value="auto" {% if display_settings()['UI_THEME'] == 'auto' %}selected{% endif %}>{{ _('Follow device') }}</option>
-                <option value="day" {% if display_settings()['UI_THEME'] == 'day' %}selected{% endif %}>{{ _('Day') }}</option>
-                <option value="night" {% if display_settings()['UI_THEME'] == 'night' %}selected{% endif %}>{{ _('Night') }}</option>
-            </select>
-            <button type="submit" class="btn btn-primary">{{ _('Save theme') }}</button>
-        </form>
-        <form class="account-library-style-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="section-title">{{ _('Library style') }}</div>
-            <label for="account-library-style">{{ _('Library style') }}</label>
-            <select id="account-library-style" name="UI_LIBRARY_STYLE" class="form-input">
-                <option value="cards" {% if display_settings()['UI_LIBRARY_STYLE'] == 'cards' %}selected{% endif %}>{{ _('Cards') }}</option>
-                <option value="faceout" {% if display_settings()['UI_LIBRARY_STYLE'] == 'faceout' %}selected{% endif %}>{{ _('Face-out shelves') }}</option>
-                <option value="spines" {% if display_settings()['UI_LIBRARY_STYLE'] == 'spines' %}selected{% endif %}>{{ _('Spine shelves') }}</option>
-                <option value="list" {% if display_settings()['UI_LIBRARY_STYLE'] == 'list' %}selected{% endif %}>{{ _('List') }}</option>
-            </select>
-            <button type="submit" class="btn btn-primary">{{ _('Save library style') }}</button>
-        </form>
-        <form class="account-series-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="section-title">{{ _('Series stacks') }}</div>
-            <input type="hidden" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="false">
-            <label class="display-checkbox" for="series-show-current">
-                <input type="checkbox" id="series-show-current" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true" {% if display_settings()['SERIES_SHOW_CURRENT_BOOK_DETAIL'] == 'true' %}checked{% endif %}>
-                {{ _('Show the current book in series stacks') }}
-            </label>
-            <p class="help">{{ _('Show the book you are reading, or the next unread book, on each series stack in your Library.') }}</p>
-            <button type="submit" class="btn btn-primary">{{ _('Save display') }}</button>
-        </form>
-        {% endif %}
-    </div>
+    <p class="account-display-link"><a href="{{ url_for('account_display_page') }}">{{ _('Display settings') }}</a></p>
     <div class="card plugin-card">
         <h2>{{ _('My Integrations') }}</h2>
         <p>
