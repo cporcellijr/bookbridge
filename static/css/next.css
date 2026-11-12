@@ -482,7 +482,7 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
 .library-page[data-view="spines"] .spine-progress svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
 /* The cover's outer left edge, stretched across the spine like a wrap, is its artwork, darkened so the title reads; the sampled colour shows while it loads or when there is none. */
 .library-page[data-view="spines"] .book-card:not([data-reading]) .cover-wrap { display: block; position: absolute; inset: 0; z-index: 0; height: auto; border-radius: inherit; background: none; }
-.library-page[data-view="spines"] .book-card:not([data-reading]) .cover-wrap > :not(.cover-image) { display: none; }
+.library-page[data-view="spines"]:not([data-library-style="faceout"]) .book-card:not([data-reading]) .cover-wrap > :not(.cover-image) { display: none; }
 .library-page[data-view="spines"] .book-card:not([data-reading]) .cover-image { right: auto; width: calc(var(--spine-w, 42px) * 8); object-fit: fill; filter: brightness(.8) saturate(1.2); }
 /* The real cover edge stays at z=0. Curvature overlays the artwork, not the title. */
 .library-page[data-view="spines"] .book-card:not([data-reading]) .book-open { position: relative; }
@@ -520,3 +520,91 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
 .library-page[data-view="spines"] .book-card[data-reading] .cover-image { object-fit: cover; }
 /* Phones: a smaller 2:3 face-out cover still standing on the plank, so two share a shelf. */
 @media (max-width:760px) { .library-page[data-view="spines"] .book-card[data-reading] { width: 112px; height: 168px; margin-top: 56px; margin-inline: 8px 12px; } }
+
+/* Face-out shelves reuse the Spines plank and load-time painter without spine artwork. */
+.library-page[data-library-style="faceout"][data-view="spines"] {
+ --shelf-pitch: 308px;
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-grid {
+ justify-content: space-around; align-items: flex-start;
+ gap: 94px 16px; padding: 10px 10px 70px;
+ background-image: linear-gradient(to bottom,
+  transparent 0, transparent 124px, var(--shelf-wall-shade) 214px,
+  var(--plank-back) 214px, var(--plank-top) 228px,
+  var(--plank-lip) 228px, var(--plank-lip) 230px,
+  var(--plank-front) 230px, var(--plank-under) 250px,
+  var(--shelf-shadow) 250px, transparent 278px);
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card {
+ flex: none; width: 136px; height: 204px; margin: 10px 0 0;
+ border-radius: 2px 3px 2px 2px; background: var(--surface-2);
+ box-shadow: 0 0 0 1px rgba(0,0,0,.55), inset 7px 0 7px -5px rgba(255,255,255,.25), 12px 0 16px -5px var(--shelf-shadow);
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card::before { display: none; content: none; }
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .book-open {
+ display: block; position: relative; flex: 1; height: 100%; min-height: 0; overflow: visible;
+ padding: 0; color: var(--text); text-shadow: none;
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card[data-page-top]:not([data-reading]) .book-open {
+ padding: 0;
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card:not([data-reading]) .cover-wrap::after {
+ content: ""; position: absolute; z-index: 2; inset: 0 auto 0 0; width: 10px;
+ background: linear-gradient(90deg, rgba(0,0,0,.5), rgba(255,255,255,.15) 60%, transparent);
+ pointer-events: none;
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card[data-page-top] .book-open::before,
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card:not([data-reading]) .book-open::after {
+ display: none; content: none;
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card:not([data-reading]) .cover-wrap,
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card[data-reading] .cover-wrap {
+ display: grid; position: relative; inset: auto; width: 100%; height: 100%;
+ border-radius: inherit; background: var(--surface-2);
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .cover-image {
+ inset: 0; right: 0; width: 100%; height: 100%; object-fit: cover; filter: none;
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .book-copy {
+ display: block; position: absolute; z-index: 4; top: calc(100% + 32px);
+ left: 50%; width: calc(100% + 16px); max-height: none; padding: 0;
+ color: var(--text); text-shadow: none; text-align: center;
+ transform: translateX(-50%);
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .book-heading {
+ display: flex; flex-direction: column; align-items: stretch; width: 100%; max-height: none;
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .book-copy h3 {
+ display: block; width: 100%; max-height: none; min-height: 0;
+ overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+ writing-mode: horizontal-tb; transform: none; font: 500 13px/1.2 var(--font-book);
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .book-byline {
+ display: block; width: 100%; max-width: 100%; margin-top: 3px;
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .book-author {
+ display: block; color: var(--text-2); font: 11px/1.2 var(--font-ui); text-align: center;
+}
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .book-ratings,
+.library-page[data-library-style="faceout"][data-view="spines"] .book-card .spine-progress { display: none; }
+@media (max-width:640px) {
+ .library-page[data-library-style="faceout"][data-view="spines"] { --shelf-pitch: 250px; }
+ .library-page[data-library-style="faceout"][data-view="spines"] .book-grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: 160px; justify-items: center; align-items: end;
+  gap: 90px 0; padding: 10px 4px 70px;
+  background-image: linear-gradient(to bottom,
+   transparent 0, transparent 85px, var(--shelf-wall-shade) 160px,
+   var(--plank-back) 160px, var(--plank-top) 173px,
+   var(--plank-lip) 173px, var(--plank-lip) 175px,
+   var(--plank-front) 175px, var(--plank-under) 190px,
+   var(--shelf-shadow) 190px, transparent 215px);
+ }
+ .library-page[data-library-style="faceout"][data-view="spines"] .book-card {
+  width: min(100px, calc(100% - 8px)); height: auto; aspect-ratio: 2 / 3;
+  margin: 0;
+ }
+ .library-page[data-library-style="faceout"][data-view="spines"] .book-card .book-copy {
+  top: calc(100% + 30px); width: calc(100% + 8px);
+ }
+}

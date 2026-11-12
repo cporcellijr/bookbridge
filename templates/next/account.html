@@ -114,7 +114,8 @@
             <div class="section-title">{{ _('Library style') }}</div>
             <label for="account-library-style">{{ _('Library style') }}</label>
             <select id="account-library-style" name="UI_LIBRARY_STYLE" class="form-input">
-                <option value="cards" {% if display_settings()['UI_LIBRARY_STYLE'] in ('cards', 'faceout') %}selected{% endif %}>{{ _('Cards') }}</option>
+                <option value="cards" {% if display_settings()['UI_LIBRARY_STYLE'] == 'cards' %}selected{% endif %}>{{ _('Cards') }}</option>
+                <option value="faceout" {% if display_settings()['UI_LIBRARY_STYLE'] == 'faceout' %}selected{% endif %}>{{ _('Face-out shelves') }}</option>
                 <option value="spines" {% if display_settings()['UI_LIBRARY_STYLE'] == 'spines' %}selected{% endif %}>{{ _('Spine shelves') }}</option>
                 <option value="list" {% if display_settings()['UI_LIBRARY_STYLE'] == 'list' %}selected{% endif %}>{{ _('List') }}</option>
             </select>
