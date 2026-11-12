@@ -532,7 +532,8 @@ class TestNewLibrary(unittest.TestCase):
         styles = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
         cards = (_ROOT / "templates/next/_library_cards.html").read_text(encoding="utf-8")
-        toolbar = re.search(r'<section class="library-toolbar".*?</section>', page, re.S).group()
+        toolbar = page.split('<section class="library-toolbar"', 1)[1].split(
+            '<div id="search-handoff"', 1)[0]
         bar = re.search(r'<div id="selection-bar".*?</div>', page, re.S).group()
 
         self.assertIn('data-select-mode="off"', page)
@@ -612,7 +613,9 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('id="search-handoff"', text)
         self.assertIn('id="search-handoff-link"', text)
         self.assertNotIn('data-library-search-slot', text)
-        self.assertEqual(text.count('type="search"'), 2)
+        self.assertEqual(text.count('type="search"'), 4)
+        self.assertIn('id="filter-author-search"', text)
+        self.assertIn('id="filter-series-search"', text)
         stats = self.client.get("/stats").get_data(as_text=True)
         self.assertIn('id="bb-search-open"', stats)
         self.assertIn('id="bb-search-input"', stats)
@@ -639,7 +642,8 @@ class TestNewLibrary(unittest.TestCase):
             text = self.client.get("/").get_data(as_text=True)
 
         header = text.split('<header class="page-head">', 1)[1].split("</header>", 1)[0]
-        toolbar = text.split('<section class="library-toolbar"', 1)[1].split("</section>", 1)[0]
+        toolbar = text.split('<section class="library-toolbar"', 1)[1].split(
+            '<div id="search-handoff"', 1)[0]
         self.assertIn("2 books", header)
         self.assertNotIn("YOUR LIBRARY", header)
         self.assertRegex(header, r'<button[^>]*id="suggestions-banner"[^>]*aria-expanded="false"')
@@ -653,8 +657,12 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('id="suggestion-test-suggestion"', text)
         self.assertIn("dismissSuggestion(event", text)
         self.assertIn("review=test-suggestion", text)
-        self.assertLess(toolbar.index('id="filter-select"'), toolbar.index('id="author-filter"'))
-        self.assertLess(toolbar.index('id="author-filter"'), toolbar.index('id="series-filter"'))
+        self.assertLess(toolbar.index('id="dashboard-search"'), toolbar.index('id="library-filter-button"'))
+        self.assertLess(toolbar.index('id="library-filter-button"'), toolbar.index('class="toolbar-secondary"'))
+        self.assertIn('class="library-filter-state" hidden', toolbar)
+        self.assertIn('id="status-filter"', toolbar)
+        self.assertIn('id="author-filter"', toolbar)
+        self.assertIn('id="series-filter"', toolbar)
         self.assertLess(toolbar.index('class="toolbar-primary"'), toolbar.index('class="toolbar-secondary"'))
         self.assertLess(toolbar.index('id="sort-select"'), toolbar.index('id="select-mode-button"'))
         self.assertIn('id="dashboard-search"', text)
@@ -663,8 +671,8 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('aria-label="Series"', text)
         self.assertIn('aria-label="Sort"', text)
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
-        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(230px, 1.7fr)", css)
-        self.assertIn(".library-toolbar .toolbar-search { grid-column: 1 / -1; grid-row: 1; }", css)
+        self.assertIn(".library-toolbar .toolbar-primary { display: flex; align-items: center;", css)
+        self.assertIn(".library-filter-panel:not([hidden]) { position: fixed;", css)
         self.assertIn(".library-toolbar .sort-controls .field { min-width: 112px; }", css)
         self.assertNotIn(".view-switch", css)
 
@@ -757,6 +765,49 @@ class TestNewLibrary(unittest.TestCase):
         for section in ("in-progress-section", "not-started-section", "finished-section"):
             self.assertIn(section, classic)
         self.assertIn("section_bucket", (_ROOT / "src/web_server.py").read_text(encoding="utf-8"))
+
+    def test_library_filter_panel_template_contract(self):
+        page = (_ROOT / "templates/next/index.html").read_text(encoding="utf-8")
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        classic = (_ROOT / "templates/index.html").read_text(encoding="utf-8")
+        toolbar = page.split('<section class="library-toolbar"', 1)[1].split(
+            '<div id="search-handoff"', 1)[0]
+        self.assertIn('id="dashboard-search"', toolbar)
+        self.assertIn('id="library-filter-button"', toolbar)
+        self.assertIn('aria-controls="library-filter-panel"', toolbar)
+        self.assertIn('aria-expanded="false"', toolbar)
+        self.assertIn('id="sort-select"', page)
+        self.assertIn('id="sort-direction"', page)
+        self.assertIn('id="select-mode-button"', page)
+        self.assertIn('id="filter-count"', page)
+        self.assertIn('class="library-filter-state" hidden', page)
+        for key in ("status", "format", "author", "series"):
+            self.assertIn(f'data-filter-group="{key}"', page)
+        for key in ("status-filter", "filter-select", "author-filter", "series-filter",
+                    "filter-author-search", "filter-series-search", "series-grouping-toggle"):
+            self.assertIn(f'id="{key}"', page)
+        self.assertEqual(page.count('id="series-grouping-toggle"'), 1)
+        self.assertIn('class="group-toggle library-filter-grouping"', page)
+        self.assertIn('@media (max-width: 760px)', css)
+        self.assertIn('.library-filter-panel:not([hidden]) { position: fixed', css)
+        self.assertIn('bottom: 0', css)
+        self.assertIn('max-height: min(76dvh, 580px)', css)
+        self.assertIn('id="filter-select"', classic)
+        self.assertIn('id="author-filter"', classic)
+        self.assertIn('id="series-filter"', classic)
+        self.assertNotIn('id="library-filter-button"', classic)
+
+    def test_library_filter_node_regressions(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js not available")
+        result = subprocess.run(
+            [node, str(_ROOT / "tests/test_ui_new_library_filter.js")],
+            cwd=_ROOT, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_reading_status_node_regressions(self):
         import shutil
@@ -993,7 +1044,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertNotIn('<option value="needs_attention"', page)
         for value in ("all", "paired", "has_audio", "audiobook_only", "ebook_only", "title", "author", "series", "progress", "reading", "last_sync", "added", "rating"):
             self.assertIn(f'<option value="{value}"', page)
-        self.assertIn("savedFormat === 'needs_attention'", scripts)
+        self.assertIn("candidate.format === 'needs_attention'", scripts)
         self.assertIn('needsAttention(card)', scripts)
         for label in (
             "Title", "Author", "Series", "Progress",

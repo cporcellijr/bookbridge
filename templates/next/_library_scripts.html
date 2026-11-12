@@ -117,8 +117,19 @@
             const libraryGrid = document.getElementById('library-grid');
             const sortSelect = document.getElementById('sort-select');
             const filterSelect = document.getElementById('filter-select');
+            const statusFilter = document.getElementById('status-filter');
+            const filterButton = document.getElementById('library-filter-button');
+            const filterButtonLabel = document.getElementById('library-filter-button-label');
+            const filterPanel = document.getElementById('library-filter-panel');
+            const filterBackdrop = document.getElementById('library-filter-backdrop');
+            const filterHost = document.getElementById('library-filter-host');
+            const filterGroups = {status: statusFilter, format: filterSelect};
+            let filterInitialized = false;
+            let savedAttentionPreference = false;
             const seriesFilter = document.getElementById('series-filter');
             const authorFilter = document.getElementById('author-filter');
+            filterGroups.author = authorFilter;
+            filterGroups.series = seriesFilter;
             const filterCount = document.getElementById('filter-count');
             const attentionOnlyFilter = document.getElementById('attention-only-filter');
             const attentionPopover = document.getElementById('needs-attention');
@@ -183,7 +194,8 @@
                 const total = cards.length;
                 const shown = cards.reduce(
                     (n, card) => n + (card.classList.contains('hidden') ? 0 : 1), 0);
-                const active = (filterSelect?.value !== 'all')
+                const active = (statusFilter?.value !== 'all')
+                    || (filterSelect?.value !== 'all')
                     || (seriesFilter?.value !== 'all')
                     || (authorFilter?.value !== 'all')
                     || !!attentionOnlyFilter?.checked
@@ -246,24 +258,126 @@
             function updateFacetOptions() {
                 if (!seriesFilter && !authorFilter) return;
                 const cards = distinctBookCards();
-                const formatValue = filterSelect ? filterSelect.value : 'all';
-                const seriesValue = seriesFilter ? seriesFilter.value : 'all';
-                const authorValue = authorFilter ? authorFilter.value : 'all';
+                const reachable = cards.filter(card =>
+                    !attentionOnlyFilter?.checked || needsAttention(card));
+                applyFacetCounts(seriesFilter, reachable, matchesSeriesFilter);
+                applyFacetCounts(authorFilter, reachable, matchesAuthorFilter);
+            }
 
-                applyFacetCounts(
-                    seriesFilter,
-                    cards.filter(card => matchesFormatFilter(card, formatValue)
-                        && matchesAuthorFilter(card, authorValue)
-                        && (!attentionOnlyFilter?.checked || needsAttention(card))),
-                    matchesSeriesFilter,
-                );
-                applyFacetCounts(
-                    authorFilter,
-                    cards.filter(card => matchesFormatFilter(card, formatValue)
-                        && matchesSeriesFilter(card, seriesValue)
-                        && (!attentionOnlyFilter?.checked || needsAttention(card))),
-                    matchesAuthorFilter,
-                );
+            function updateFilterButtonLabel() {
+                if (!filterButtonLabel) return;
+                let label = {{ _('Filter')|tojson }};
+                for (const [group, select] of Object.entries(filterGroups)) {
+                    if (!select || select.value === 'all') continue;
+                    const choice = Array.from(select.options).find(option => option.value === select.value);
+                    if (choice) label += ' · ' + facetOptionBaseLabel(choice);
+                    break;
+                }
+                filterButtonLabel.textContent = label;
+            }
+
+            // A click elsewhere keeps focus where the reader clicked (the search box, say).
+            function closeFilterPanel(restoreFocus = true) {
+                if (!filterPanel || filterPanel.hidden) return;
+                filterPanel.hidden = true;
+                if (filterBackdrop) filterBackdrop.hidden = true;
+                filterButton?.setAttribute('aria-expanded', 'false');
+                if (restoreFocus) filterButton?.focus();
+            }
+
+            function openFilterPanel() {
+                if (!filterPanel) return;
+                filterPanel.hidden = false;
+                if (filterBackdrop) filterBackdrop.hidden = false;
+                filterButton?.setAttribute('aria-expanded', 'true');
+                filterPanel.querySelector('[data-filter-close]')?.focus();
+            }
+
+            function chooseLibraryFilter(group, value) {
+                const select = filterGroups[group];
+                if (!select) return;
+                for (const [key, control] of Object.entries(filterGroups)) {
+                    if (control) control.value = key === group ? value : 'all';
+                }
+                filterBooks();
+                closeFilterPanel();
+            }
+
+            function renderFilterOptions() {
+                if (!filterPanel) return;
+                for (const [group, select] of Object.entries(filterGroups)) {
+                    if (!select) continue;
+                    const holder = document.getElementById('filter-' + group + '-options');
+                    if (!holder) continue;
+                    const search = document.getElementById('filter-' + group + '-search');
+                    const query = (search?.value || '').trim().toLocaleLowerCase();
+                    holder.replaceChildren();
+                    Array.from(select.options).forEach(option => {
+                        if (option.hidden || option.disabled) return;
+                        const label = facetOptionBaseLabel(option);
+                        if (query && option.value !== 'all' && !label.toLocaleLowerCase().includes(query)) return;
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'library-filter-option';
+                        button.textContent = option.textContent;
+                        button.setAttribute('aria-pressed', option.value === select.value ? 'true' : 'false');
+                        button.addEventListener('click', () => chooseLibraryFilter(group, option.value));
+                        holder.appendChild(button);
+                    });
+                }
+            }
+
+            function isValidLibraryFilter(group, value) {
+                const select = filterGroups[group];
+                return !!select && Array.from(select.options).some(option => option.value === value);
+            }
+
+            function normalizeSavedLibraryFilters(saved, legacyFormat) {
+                const candidate = {
+                    status: saved?.status || 'all',
+                    format: saved?.format || (legacyFormat === 'audiobook' ? 'has_audio' : legacyFormat) || 'all',
+                    author: saved?.author || 'all',
+                    series: saved?.series || 'all'
+                };
+                let attention = !!saved?.attention;
+                if (candidate.format === 'needs_attention') {
+                    candidate.format = 'all';
+                    attention = true;
+                }
+                if (candidate.series === 'standalone') candidate.series = 'none';
+                else if (candidate.series === 'in_series') candidate.series = 'all';
+                for (const group of Object.keys(candidate)) {
+                    if (!isValidLibraryFilter(group, candidate[group])) candidate[group] = 'all';
+                }
+                const active = Object.keys(candidate).find(group => candidate[group] !== 'all');
+                for (const group of Object.keys(candidate)) {
+                    if (group !== active) candidate[group] = 'all';
+                }
+                return {...candidate, attention};
+            }
+
+            if (filterButton) {
+                filterButton.addEventListener('click', () => {
+                    if (filterPanel?.hidden) openFilterPanel();
+                    else closeFilterPanel();
+                });
+                filterPanel?.querySelector('[data-filter-close]')?.addEventListener('click', () => closeFilterPanel());
+                filterBackdrop?.addEventListener('click', () => closeFilterPanel());
+                document.addEventListener('click', event => {
+                    if (filterPanel && !filterPanel.hidden && !filterHost.contains(event.target)) {
+                        closeFilterPanel(false);
+                    }
+                });
+                document.addEventListener('keydown', event => {
+                    if (event.key === 'Escape' && filterPanel && !filterPanel.hidden) {
+                        event.preventDefault();
+                        closeFilterPanel();
+                    }
+                });
+                ['author', 'series'].forEach(group => {
+                    document.getElementById('filter-' + group + '-search')
+                        ?.addEventListener('input', renderFilterOptions);
+                });
             }
 
             // Offers a route into the Search tab's library search for a title the dashboard
@@ -289,6 +403,12 @@
             function needsAttention(card) {
                 return card.classList.contains('out-of-sync')
                     || ['error', 'failed', 'failed_retry_later', 'failed_permanent'].includes(card.dataset.status);
+            }
+
+            function matchesStatusFilter(entry, statusValue) {
+                if (!statusValue || statusValue === 'all') return true;
+                const rank = readingSortDetails(entry).rank;
+                return rank === ({in_progress: 0, not_started: 1, finished: 2})[statusValue];
             }
 
             function matchesFormatFilter(card, formatValue) {
@@ -336,6 +456,15 @@
 
             function filterBooks() {
                 const filterValue = filterSelect.value;
+                const statusValue = statusFilter ? statusFilter.value : 'all';
+                const groupedStatus = new Map();
+                if (!document.body.classList.contains('series-grouping-off')) {
+                    document.querySelectorAll('.series-group').forEach(group => {
+                        const matches = matchesStatusFilter(group, statusValue);
+                        group.querySelectorAll('.book-card').forEach(card =>
+                            groupedStatus.set(card, matches));
+                    });
+                }
                 const seriesValue = seriesFilter ? seriesFilter.value : 'all';
                 const authorValue = authorFilter ? authorFilter.value : 'all';
                 const searchString = dashboardSearch ? dashboardSearch.value.toLowerCase() : '';
@@ -352,7 +481,9 @@
                     const filename = (card.dataset.filename || '').toLowerCase();
                     const seriesName = (card.dataset.seriesName || '').toLowerCase();
 
-                    let isVisible = matchesFormatFilter(card, filterValue)
+                    let isVisible = (groupedStatus.has(card)
+                            ? groupedStatus.get(card) : matchesStatusFilter(card, statusValue))
+                        && matchesFormatFilter(card, filterValue)
                         && matchesSeriesFilter(card, seriesValue)
                         && matchesAuthorFilter(card, authorValue)
                         && (!attentionOnlyFilter?.checked || needsAttention(card));
@@ -401,19 +532,24 @@
                 });
 
                 updateFacetOptions();
+                renderFilterOptions();
+                updateFilterButtonLabel();
                 updateFilteredCount();
                 updateSearchHandoff(dashboardSearch ? dashboardSearch.value.trim() : '');
 
-                // Persist choice
-                try {
-                    localStorage.setItem('abs_kosync_filters', JSON.stringify({
-                        format: filterValue,
-                        series: seriesValue,
-                        author: authorValue,
-                        attention: !!attentionOnlyFilter?.checked
-                    }));
-                } catch (e) {
-                    console.debug('LocalStorage error:', e);
+                // The first grouping pass must not overwrite saved filters before restore.
+                if (filterInitialized) {
+                    try {
+                        localStorage.setItem('abs_kosync_filters', JSON.stringify({
+                            format: filterValue,
+                            series: seriesValue,
+                            author: authorValue,
+                            attention: attentionOnlyFilter ? attentionOnlyFilter.checked : savedAttentionPreference,
+                            status: statusValue
+                        }));
+                    } catch (e) {
+                        console.debug('LocalStorage error:', e);
+                    }
                 }
             }
 
@@ -786,63 +922,33 @@
                 if (!enabled) applySeriesGrouping(false);
             }
 
-            // Filter Logic initialization
+            // One active facet at a time; keep the hidden selects as canonical state.
             if (filterSelect) {
-                filterSelect.addEventListener('change', filterBooks);
-                if (seriesFilter) seriesFilter.addEventListener('change', filterBooks);
-                if (authorFilter) authorFilter.addEventListener('change', filterBooks);
-                if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', filterBooks);
+                for (const [group, select] of Object.entries(filterGroups)) {
+                    if (select) select.addEventListener('change', () =>
+                        chooseLibraryFilter(group, select.value));
+                }
+                if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', () => {
+                    savedAttentionPreference = attentionOnlyFilter.checked;
+                    filterBooks();
+                });
 
-                let savedFormat = 'all';
-                let savedSeries = 'all';
-                let savedAuthor = 'all';
-                let savedAttention = false;
+                let savedFilters = null;
+                let legacyFormat = null;
                 try {
-                    const savedFilters = localStorage.getItem('abs_kosync_filters');
-                    if (savedFilters) {
-                        const parsed = JSON.parse(savedFilters);
-                        savedFormat = parsed.format || 'all';
-                        savedSeries = parsed.series || 'all';
-                        // An earlier iteration of this control was a yes/no pair, and
-                        // those values can still be sitting in a reader's localStorage.
-                        // 'standalone' has a direct equivalent; 'in a series' no longer
-                        // does, so widen to all rather than silently hiding books.
-                        if (savedSeries === 'standalone') savedSeries = 'none';
-                        else if (savedSeries === 'in_series') savedSeries = 'all';
-                        savedAuthor = parsed.author || 'all';
-                        savedAttention = !!parsed.attention;
-                    } else {
-                        // Migrate the pre-multi-filter scalar key. Its "audiobook" meant
-                        // sync_mode 'audiobook' alone, which silently hid audiobook-only
-                        // books; "Has Audio" is the option that now covers both.
-                        const legacy = localStorage.getItem('abs_kosync_filter');
-                        if (legacy) savedFormat = legacy === 'audiobook' ? 'has_audio' : legacy;
-                    }
+                    const raw = localStorage.getItem('abs_kosync_filters');
+                    if (raw) savedFilters = JSON.parse(raw);
+                    else legacyFormat = localStorage.getItem('abs_kosync_filter');
                 } catch (e) {
                     console.debug('LocalStorage error:', e);
                 }
-
-                // Older Library preferences stored attention as a format.
-                // It is now an independent filter, so keep the user's intent.
-                if (savedFormat === 'needs_attention') {
-                    savedFormat = 'all';
-                    savedAttention = true;
+                const restored = normalizeSavedLibraryFilters(savedFilters, legacyFormat);
+                for (const [group, select] of Object.entries(filterGroups)) {
+                    if (select) select.value = restored[group];
                 }
-                filterSelect.value = savedFormat;
-                if (!filterSelect.value) filterSelect.value = 'all';
-                if (attentionOnlyFilter) attentionOnlyFilter.checked = savedAttention;
-                if (seriesFilter) {
-                    seriesFilter.value = savedSeries;
-                    // A remembered series that is no longer in the library matches no
-                    // option, which leaves the select with no selection at all. Show
-                    // everything rather than stranding the reader on a blank filter.
-                    if (!seriesFilter.value) seriesFilter.value = 'all';
-                }
-                if (authorFilter) {
-                    authorFilter.value = savedAuthor;
-                    if (!authorFilter.value) authorFilter.value = 'all';
-                }
-                // Apply filter initially
+                savedAttentionPreference = restored.attention;
+                if (attentionOnlyFilter) attentionOnlyFilter.checked = restored.attention;
+                filterInitialized = true;
                 filterBooks();
             }
 
