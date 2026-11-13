@@ -115,7 +115,7 @@ class TestHeroRoute(unittest.TestCase):
                 self.assertEqual(self.client.get("/api/library/hero/hero-owned").json[
                     "pieces"]["synopsis"]["text"], "Cached plain text")
         lookup.assert_called_once()
-        checked_at, text = self.service.get_book_synopsis_cache("hero-owned")
+        checked_at, text = self.service.get_user_book_synopsis_cache(self.reader.id, "hero-owned")
         self.assertEqual(text, "Cached plain text")
         self.assertIsNotNone(checked_at)
 
@@ -125,7 +125,7 @@ class TestHeroRoute(unittest.TestCase):
             for _ in range(2):
                 self.assertEqual(self.client.get("/api/library/hero/hero-none").json["pieces"], {})
         lookup.assert_called_once()
-        checked_at, text = self.service.get_book_synopsis_cache("hero-none")
+        checked_at, text = self.service.get_user_book_synopsis_cache(self.reader.id, "hero-none")
         self.assertIsNone(text)
         self.assertIsNotNone(checked_at)
 
@@ -136,11 +136,11 @@ class TestHeroRoute(unittest.TestCase):
         from src import web_server as ws
         self.service.set_user_credential(self.reader.id, "UI_HERO_CONTENT", "synopsis")
         week = ws._HERO_SYNOPSIS_RECHECK_SECONDS
-        self.service.set_book_synopsis_cache("hero-owned", None, ws.time.time() - week + 3600)
+        self.service.set_user_book_synopsis_cache(self.reader.id, "hero-owned", None, ws.time.time() - week + 3600)
         with patch.object(ws, "_hero_synopsis_source", return_value="Found later") as lookup:
             self.assertEqual(self.client.get("/api/library/hero/hero-owned").json["pieces"], {})
             lookup.assert_not_called()
-            self.service.set_book_synopsis_cache("hero-owned", None, ws.time.time() - week - 3600)
+            self.service.set_user_book_synopsis_cache(self.reader.id, "hero-owned", None, ws.time.time() - week - 3600)
             self.assertEqual(self.client.get("/api/library/hero/hero-owned").json[
                 "pieces"]["synopsis"]["text"], "Found later")
         lookup.assert_called_once()
@@ -166,6 +166,27 @@ class TestHeroRoute(unittest.TestCase):
             admin = self.client.get("/api/library/hero/hero-owned")
         self.assertEqual(admin.status_code, 200)
         self.assertEqual(admin.json["pieces"]["listened"]["seconds"], 4200)
+
+    def test_two_readers_never_share_a_synopsis(self):
+        self._ready()
+        self.service.link_user_book(self.admin.id, "hero-owned")
+        for user in (self.reader, self.admin):
+            self.service.set_user_credential(user.id, "UI_MODE", "new")
+            self.service.set_user_credential(user.id, "UI_HERO_CONTENT", "synopsis")
+        from src import web_server as ws
+        with patch.object(ws, "_hero_synopsis_source",
+                          side_effect=lambda book, user: f"note-for-{user.id}") as lookup:
+            reader = self.client.get("/api/library/hero/hero-owned")
+            self.assertEqual(reader.json["pieces"]["synopsis"]["text"],
+                             f"note-for-{self.reader.id}")
+            self.client.get("/logout")
+            self._login("ui-admin")
+            admin = self.client.get("/api/library/hero/hero-owned")
+            self.assertEqual(admin.json["pieces"]["synopsis"]["text"],
+                             f"note-for-{self.admin.id}")
+            synopsis = self.client.get("/api/book/hero-owned/synopsis")
+            self.assertEqual(synopsis.json["text"], f"note-for-{self.admin.id}")
+        self.assertEqual(lookup.call_count, 2)
 
     def test_source_order_and_html_stripping(self):
         self._ready()

@@ -1280,6 +1280,8 @@ class UserBook(Base):
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
     abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), nullable=False, index=True)
     created_at = Column(DateTime, nullable=True)
+    synopsis_text = Column(Text, nullable=True)
+    synopsis_checked_at = Column(Float, nullable=True)
 
     __table_args__ = (
         Index('ix_user_books_user_abs', 'user_id', 'abs_id', unique=True),

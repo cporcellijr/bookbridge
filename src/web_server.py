@@ -8012,14 +8012,14 @@ def _hero_synopsis_source(book, user) -> str | None:
 
 
 def _hero_cached_synopsis(book, user) -> str | None:
-    """Share a found synopsis per book for good; retry an empty lookup after a week."""
+    """Keep a found synopsis per reader for good; retry an empty lookup after a week."""
     lock = _HERO_SYNOPSIS_LOCKS[hash(book.abs_id) % len(_HERO_SYNOPSIS_LOCKS)]
     with lock:
-        checked_at, description = database_service.get_book_synopsis_cache(book.abs_id)
+        checked_at, description = database_service.get_user_book_synopsis_cache(user.id, book.abs_id)
         if description or (checked_at and time.time() - checked_at < _HERO_SYNOPSIS_RECHECK_SECONDS):
             return description
         description = _hero_synopsis_source(book, user)
-        database_service.set_book_synopsis_cache(book.abs_id, description, time.time())
+        database_service.set_user_book_synopsis_cache(user.id, book.abs_id, description, time.time())
         return description
 
 
@@ -8274,7 +8274,7 @@ def book_page(abs_id: str) -> object:
     return render_template(
         'next/_book_drawer.html' if request.args.get('fragment') == '1' else 'next/book.html',
         mapping=mappings[0], integrations=integrations,
-        synopsis=database_service.get_book_synopsis_cache(abs_id)[1],
+        synopsis=database_service.get_user_book_synopsis_cache(user_id, abs_id)[1],
         book_states={state.client_name: state for state in states},
         kosync_devices=database_service.get_user_kosync_progress_for_book(abs_id, user_id=user_id),
         recent_syncs=sorted(states, key=lambda state: state.last_updated or 0, reverse=True),

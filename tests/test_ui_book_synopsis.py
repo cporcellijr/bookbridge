@@ -63,7 +63,7 @@ class TestBookSynopsis(unittest.TestCase):
     def test_book_page_renders_cached_text_and_never_looks_up(self):
         self._ready()
         from src import web_server as ws
-        self.service.set_book_synopsis_cache("syn-owned", "Cached <i>story</i>", ws.time.time())
+        self.service.set_user_book_synopsis_cache(self.reader.id, "syn-owned", "Cached <i>story</i>", ws.time.time())
         with patch.object(ws, "_hero_synopsis_source", side_effect=AssertionError("lookup")):
             for url in ("/book/syn-owned", "/book/syn-owned?fragment=1"):
                 with self.subTest(url=url):
@@ -73,6 +73,18 @@ class TestBookSynopsis(unittest.TestCase):
                     self.assertNotIn("data-synopsis-url", html)
                     self.assertLess(html.index("data-book-about"), html.index("book-thread"))
                     self.assertIn('aria-expanded="false"', html)
+
+    def test_book_page_never_shows_another_readers_text(self):
+        self._ready()
+        from src import web_server as ws
+        self.service.link_user_book(self.admin.id, "syn-owned")
+        self.service.set_user_credential(self.admin.id, "UI_MODE", "new")
+        self.service.set_user_book_synopsis_cache(
+            self.reader.id, "syn-owned", "Reader only", ws.time.time())
+        self.client.get("/logout")
+        self._login("ui-admin")
+        html = self.client.get("/book/syn-owned").get_data(as_text=True)
+        self.assertNotIn("Reader only", html)
 
     def test_book_page_without_cache_hides_section_and_names_endpoint(self):
         self._ready()
