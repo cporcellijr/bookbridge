@@ -7835,33 +7835,9 @@ def _build_whats_new_context(user) -> Optional[dict]:
         return None
 
 
-def whats_new_page():
-    """GET /whats-new: renders RELEASE_NOTES.md and marks the running
-    version seen for the logged-in user."""
-    user = current_user()
-    if user is not None:
-        try:
-            database_service.set_user_credential(user.id, WHATS_NEW_SEEN_KEY, APP_VERSION)
-        except Exception as e:
-            logger.debug(f"Could not record whats-new seen version for user {user.id}: {e}", exc_info=True)
-    return render_template(
-        ui_template('whats_new.html'),
-        app_version=APP_VERSION,
-        notes_html=whats_new.get_release_notes_html(),
-        action_items=whats_new.get_action_required_items(),
-    )
+from src.web.routes.whats_new import whats_new_page, whats_new_dismiss
 
 
-def whats_new_dismiss():
-    """POST /whats-new/dismiss: marks the running version seen for the
-    logged-in user (banner "x" dismiss)."""
-    user = current_user()
-    if user is not None:
-        try:
-            database_service.set_user_credential(user.id, WHATS_NEW_SEEN_KEY, APP_VERSION)
-        except Exception as e:
-            logger.debug(f"Could not record whats-new dismiss for user {user.id}: {e}", exc_info=True)
-    return jsonify({"ok": True})
 
 
 # ---------------- ROUTES ----------------
@@ -17057,8 +17033,8 @@ def create_app(test_container=None):
     app.add_url_rule('/job-queue', 'job_queue_page', job_queue_page, methods=['GET'])
     app.add_url_rule('/job-queue/reorder', 'job_queue_reorder', job_queue_reorder, methods=['POST'])
     app.add_url_rule('/job-queue/preflight/ack', 'job_queue_preflight_ack', job_queue_preflight_ack, methods=['POST'])
-    app.add_url_rule('/whats-new', 'whats_new_page', whats_new_page, methods=['GET'])
-    app.add_url_rule('/whats-new/dismiss', 'whats_new_dismiss', whats_new_dismiss, methods=['POST'])
+    from src.web.routes import whats_new as whats_new_routes
+    whats_new_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/shelfmark', 'shelfmark', shelfmark)
     app.add_url_rule('/forge', 'forge', forge)
     app.add_url_rule('/book-linker', 'book_linker_legacy', _legacy_book_linker_redirect)
