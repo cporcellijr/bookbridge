@@ -8,6 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Changed
 
+- **Processing refreshes book requests with less database work.** Normal acquisition-panel
+  refreshes load only the linked books claimed by the reader, preserving the same status
+  labels in Classic and New. Error states retain the full queue calculation; polling
+  frequency and provider requests are unchanged.
+
 - **Developer test runs use four workers through `tests/run_all_tests.py`.** A shared
   OS lock prevents overlapping pytest commands across local worktrees before collection,
   and mocked transcription tests avoid unnecessary model loading and memory collection.

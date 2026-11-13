@@ -1308,6 +1308,25 @@ class DatabaseService:
                 session.expunge(book)
             return books
 
+    def get_linked_book_statuses(
+        self, user_id: int | None, abs_ids: set[str],
+    ) -> dict[str, str | None]:
+        """Return statuses only for the requested books claimed by this reader."""
+        if user_id is None or not abs_ids:
+            return {}
+        requested = list(abs_ids)
+        statuses: dict[str, str | None] = {}
+        with self.get_session() as session:
+            for offset in range(0, len(requested), _SQL_IN_CHUNK):
+                rows = session.query(Book.abs_id, Book.status).join(
+                    UserBook, UserBook.abs_id == Book.abs_id,
+                ).filter(
+                    UserBook.user_id == user_id,
+                    Book.abs_id.in_(requested[offset:offset + _SQL_IN_CHUNK]),
+                ).all()
+                statuses.update(rows)
+        return statuses
+
     def create_book(self, book: Book) -> Book:
         """Create a new book from a Book model."""
         with self.get_session() as session:

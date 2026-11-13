@@ -288,6 +288,180 @@ class JobQueueRouteTests(unittest.TestCase):
         self.assertIn('id="acquisition-jobs"', fragment.get_data(as_text=True))
         self.assertNotIn("job-queue-page", fragment.get_data(as_text=True))
 
+    def test_acquisition_fragment_uses_narrow_reader_statuses_and_skips_full_queue(self):
+        """Normal fragment refresh must not rebuild the main Processing queue."""
+        self.db.save_book(Book(abs_id="owned-ready", abs_title="Owned Ready",
+                               status="active", user_id=self.alice.id))
+        self.db.link_user_book(self.alice.id, "owned-ready")
+        self.db.save_book(Book(abs_id="foreign-processing", abs_title="Foreign",
+                               status="processing", user_id=self.bob.id))
+        self.db.link_user_book(self.bob.id, "foreign-processing")
+        own = self.db.create_acquisition_job(
+            self.alice.id, "Owned Acquisition", ["ebook", "audiobook"],
+            ebook={"source": "BookOrbit", "source_id": "owned-ebook", "filename": "owned.epub"},
+            audiobook={"source": "ABS", "source_id": "owned-ready"},
+        )
+        self.assertTrue(self.db.set_acquisition_pairing_result(
+            self.alice.id, own["id"], abs_id="owned-ready",
+        ))
+        foreign = self.db.create_acquisition_job(
+            self.bob.id, "Foreign Acquisition", ["ebook", "audiobook"],
+            ebook={"source": "BookOrbit", "source_id": "foreign-ebook", "filename": "foreign.epub"},
+            audiobook={"source": "ABS", "source_id": "foreign-processing"},
+        )
+        self.assertTrue(self.db.set_acquisition_pairing_result(
+            self.bob.id, foreign["id"], abs_id="foreign-processing",
+        ))
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        import src.web_server as web
+
+        with (
+            patch.object(self.db, "get_all_books", side_effect=AssertionError("full catalog read")),
+            patch.object(self.db, "get_linked_abs_ids", side_effect=AssertionError("all links read")),
+            patch.object(self.db, "get_latest_jobs", side_effect=AssertionError("job history read")),
+            patch.object(self.db, "get_transcription_preflights", side_effect=AssertionError("preflight read")),
+            patch.object(self.db, "get_pending_alignment_queue", side_effect=AssertionError("alignment queue read")),
+            patch.object(web, "_load_match_queue", side_effect=AssertionError("match queue read")),
+            patch.object(web, "build_job_queue_view", side_effect=AssertionError("snapshot rebuild")),
+        ):
+            response = self.client.get("/job-queue?acquisition_fragment=1")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Owned Acquisition", body)
+        self.assertIn("Ready for normal Bridge syncing", body)
+        self.assertNotIn("Foreign Acquisition", body)
+        self.assertNotIn("Foreign", body)
+
+    def test_acquisition_fragment_html_matches_original_queue_build(self):
+        """The optimized route must render precisely the same translated markup."""
+        self.db.save_book(Book(abs_id="exact-html-book", abs_title="Exact HTML",
+                               status="active", user_id=self.alice.id))
+        self.db.link_user_book(self.alice.id, "exact-html-book")
+        job = self.db.create_acquisition_job(
+            self.alice.id, "Exact HTML Acquisition", ["ebook", "audiobook"],
+            ebook={"source": "BookOrbit", "source_id": "exact-ebook", "filename": "exact.epub"},
+            audiobook={"source": "ABS", "source_id": "exact-html-book"},
+        )
+        self.assertTrue(self.db.set_acquisition_pairing_result(
+            self.alice.id, job["id"], abs_id="exact-html-book",
+        ))
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        for mode in ("classic", "new"):
+            self.db.set_user_credential(self.alice.id, "UI_MODE", mode)
+            path = f"/job-queue?acquisition_fragment=1&acquisition_job={job['id']}"
+            optimized = self.client.get(path)
+            with patch.object(
+                self.db, "get_linked_book_statuses",
+                return_value={"force-original": "error"},
+            ):
+                original = self.client.get(path)
+            self.assertEqual(optimized.status_code, 200)
+            self.assertEqual(original.status_code, 200)
+            self.assertEqual(optimized.get_data(), original.get_data(), mode)
+
+    def test_acquisition_fragment_bridge_labels_match_full_page(self):
+        """Status precedence remains identical in Classic and New fragments."""
+        status_cases = [
+            ("active", "Ready for normal Bridge syncing"),
+            ("pending", "Waiting for normal Bridge processing"),
+            ("processing", "Normal Bridge processing is underway"),
+            ("forging", "Normal Bridge processing is underway"),
+            ("error", "Needs attention in normal Bridge processing"),
+            ("failed_retry_later", "Needs attention in normal Bridge processing"),
+            ("failed_permanent", "Needs attention in normal Bridge processing"),
+        ]
+        for i, (status, expected) in enumerate(status_cases):
+            abs_id = f"fragment-label-{i}"
+            self.db.save_book(Book(abs_id=abs_id, abs_title=f"Status {i}",
+                                   status=status, user_id=self.alice.id))
+            self.db.link_user_book(self.alice.id, abs_id)
+            job = self.db.create_acquisition_job(
+                self.alice.id, f"Status Acquisition {i}", ["ebook", "audiobook"],
+                ebook={"source": "BookOrbit", "source_id": f"ebook-{i}", "filename": f"book-{i}.epub"},
+                audiobook={"source": "ABS", "source_id": abs_id},
+            )
+            self.assertTrue(self.db.set_acquisition_pairing_result(self.alice.id, job["id"], abs_id=abs_id))
+        self.db.create_acquisition_job(self.bob.id, "PRIVATE BOB JOB", ["audiobook"])
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+
+        import re
+        for mode in ("classic", "new"):
+            self.db.set_user_credential(self.alice.id, "UI_MODE", mode)
+            full = self.client.get("/job-queue")
+            fragment = self.client.get("/job-queue?acquisition_fragment=1")
+            self.assertEqual(full.status_code, 200)
+            self.assertEqual(fragment.status_code, 200)
+            section = r'<p class="acquisition-job-bridge">.*?</p>'
+            full_labels = re.findall(section, full.get_data(as_text=True), re.S)
+            fragment_labels = re.findall(section, fragment.get_data(as_text=True), re.S)
+            self.assertEqual(fragment_labels, full_labels, mode)
+            self.assertEqual(len(fragment_labels), len(status_cases))
+            for status, expected in status_cases:
+                self.assertIn(expected, fragment.get_data(as_text=True), status)
+            self.assertNotIn("PRIVATE BOB JOB", fragment.get_data(as_text=True))
+
+    def test_narrow_linked_status_lookup_is_user_scoped(self):
+        """A caller must never retrieve the other reader's shared catalog states."""
+        self.db.save_book(Book(abs_id="alice-linked", status="active", user_id=self.alice.id))
+        self.db.link_user_book(self.alice.id, "alice-linked")
+        self.db.save_book(Book(abs_id="bob-linked", status="error", user_id=self.bob.id))
+        self.db.link_user_book(self.bob.id, "bob-linked")
+        requested = {"alice-linked", "bob-linked", "missing"}
+        self.assertEqual(
+            self.db.get_linked_book_statuses(self.alice.id, requested),
+            {"alice-linked": "active"},
+        )
+        self.assertEqual(
+            self.db.get_linked_book_statuses(self.bob.id, requested),
+            {"bob-linked": "error"},
+        )
+        self.assertEqual(self.db.get_linked_book_statuses(None, requested), {})
+
+    def test_failed_acquisition_bridge_status_keeps_recent_25_ranking(self):
+        """An older failed book must not gain a failure badge merely from shortcutting."""
+        old = Book(abs_id="older-error", abs_title="Older failure",
+                   status="error", user_id=self.alice.id)
+        self.db.save_book(old)
+        self.db.link_user_book(self.alice.id, old.abs_id)
+        job = self.db.create_acquisition_job(
+            self.alice.id, "Old failed acquisition", ["ebook", "audiobook"],
+            ebook={"source": "BookOrbit", "source_id": "old-ebook", "filename": "old.epub"},
+            audiobook={"source": "ABS", "source_id": old.abs_id},
+        )
+        self.assertTrue(self.db.set_acquisition_pairing_result(
+            self.alice.id, job["id"], abs_id=old.abs_id,
+        ))
+        self.db.save_job(Job(abs_id=old.abs_id, kind="alignment",
+                             last_attempt=time.time() - 10 * 86400, last_error="old error"))
+        for i in range(26):
+            book_id = f"recent-completed-{i}"
+            self.db.save_book(Book(abs_id=book_id, abs_title=f"Recent {i}",
+                                   status="active", user_id=self.alice.id))
+            self.db.link_user_book(self.alice.id, book_id)
+            self.db.save_job(Job(abs_id=book_id, kind="alignment",
+                                 last_attempt=time.time() - i,
+                                 progress=1.0))
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        for mode in ("classic", "new"):
+            self.db.set_user_credential(self.alice.id, "UI_MODE", mode)
+            full = self.client.get("/job-queue").get_data(as_text=True)
+            fragment = self.client.get("/job-queue?acquisition_fragment=1").get_data(as_text=True)
+            self.assertIn("Linked to your Bridge library", full)
+            self.assertIn("Linked to your Bridge library", fragment)
+            self.assertNotIn("Needs attention in normal Bridge processing", fragment)
+
+    def test_linked_status_lookup_batches_over_sqlite_parameter_limit(self):
+        self.db.save_book(Book(abs_id="linked-in-first-batch", status="active", user_id=self.alice.id))
+        self.db.link_user_book(self.alice.id, "linked-in-first-batch")
+        self.db.save_book(Book(abs_id="linked-in-last-batch", status="processing", user_id=self.alice.id))
+        self.db.link_user_book(self.alice.id, "linked-in-last-batch")
+        ids = {f"nonexistent-{i}" for i in range(1001)}
+        ids.update({"linked-in-first-batch", "linked-in-last-batch"})
+        self.assertEqual(self.db.get_linked_book_statuses(self.alice.id, ids), {
+            "linked-in-first-batch": "active",
+            "linked-in-last-batch": "processing",
+        })
+
     def test_delivered_receipt_awaiting_review_offers_no_cancel(self):
         import re
         job = self.db.create_acquisition_job(self.alice.id, "Delivered Acquisition", ["ebook", "audiobook"])
