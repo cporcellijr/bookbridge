@@ -177,6 +177,39 @@ class TestIntegrationPageRendering(unittest.TestCase):
         )
         self.assertIn('<input type="hidden" name="STORYTELLER_ENABLED" value="on">', html)
 
+    def test_off_server_wide_services_are_folded_but_still_posted(self):
+        from pathlib import Path
+        from jinja2 import Environment, FileSystemLoader
+
+        templates = Path(__file__).resolve().parents[1] / 'templates'
+        env = Environment(loader=FileSystemLoader(str(templates)))
+        env.add_extension('jinja2.ext.i18n')
+        env.install_null_translations(newstyle=True)
+        env.globals['url_for'] = lambda endpoint, **kw: f'/{endpoint}'
+        source = (templates / 'next' / self.TEMPLATE).read_text(encoding='utf-8')
+        start = source.index('{% block content %}')
+        end = source.index('{% endblock %}', start)
+        user = type('U', (), {'id': 2, 'username': 'reader', 'role': 'user'})()
+        html = env.from_string(source[start + len('{% block content %}'):end]).render(
+            groups=[('Storyteller', [
+                ('STORYTELLER_ENABLED', 'Enabled', 'bool'),
+                ('STORYTELLER_USER', 'Username', 'text'),
+            ])],
+            creds={'STORYTELLER_ENABLED': 'true'},
+            master={'STORYTELLER_ENABLED': 'false'},
+            service_enable_keys=SERVICE_ENABLE_KEYS,
+            allow_master_fallback=False,
+            message=None,
+            account_user=user,
+            target_user=user,
+            user_test_services={},
+        )
+        self.assertIn('class="group group--off"', html)
+        self.assertIn('<input type="hidden" name="STORYTELLER_ENABLED" value="on">', html)
+        self.assertIn('Not available on this server: Storyteller.', html)
+        css = (templates.parent / 'static/css/next-p6.css').read_text(encoding='utf-8')
+        self.assertIn('.integrations-wrap .group--off { display: none; }', css)
+
     def test_no_hidden_field_when_the_user_had_it_off(self):
         html = self._render(
             creds={'STORYTELLER_ENABLED': 'false'},

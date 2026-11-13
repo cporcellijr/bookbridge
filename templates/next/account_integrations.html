@@ -69,6 +69,7 @@
         {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
 
         <form method="POST" action="{{ url_for('account_integrations') }}">
+            {% set off_ns = namespace(names=[]) %}
             {% for group, fields in groups %}
             {% set gate_keys = {
                 'Audiobookshelf': 'ABS_ENABLED',
@@ -122,7 +123,8 @@
             {% endif %}
             {% set body_id = 'integration_body_' ~ loop.index %}
             {% set gate_id = 'integration_gate_' ~ loop.index %}
-            <div class="group">
+            {% if gate_globally_off %}{% set off_ns.names = off_ns.names + [_(group)] %}{% endif %}
+            <div class="group{% if gate_globally_off %} group--off{% endif %}">
                 <div class="group-head">
                     <h2>
                         {{ _(group) }}
@@ -256,6 +258,9 @@
                 </div>
             </div>
             {% endfor %}
+            {% if off_ns.names %}
+            <p class="integrations-off-summary">{{ _('Not available on this server: %(names)s.', names=off_ns.names|join(', ')) }}{% if account_user.role == 'admin' %} <a href="{{ url_for('settings') }}#integrations">{{ _('Turn on in Settings') }}</a>{% endif %}</p>
+            {% endif %}
             <div class="integrations-save-bar">
                 <span class="integrations-dirty" id="integrationsDirty" hidden>{{ _('Unsaved changes') }}</span>
                 <button type="submit" class="btn btn-primary">{{ _('Save integrations') }}</button>
