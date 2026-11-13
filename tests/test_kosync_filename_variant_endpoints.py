@@ -4,6 +4,7 @@ the first GET or device PUT, but never from the bridge's own sync writes."""
 import hashlib
 import os
 import shutil
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -228,6 +229,11 @@ class TestFilenameVariantEndpoints(unittest.TestCase):
         warm = patch.object(kosync_server, "_start_author_warm")
         warm.start()
         self.addCleanup(warm.stop)
+        # An earlier test's warm thread invalidates the index when it finishes; let it finish first.
+        for thread in threading.enumerate():
+            if thread.name == "epub-author-warm":
+                thread.join(timeout=10)
+        kosync_server._invalidate_filename_variant_index()
         with patch.object(self.db, "get_books_by_status", wraps=self.db.get_books_by_status) as spy:
             for _ in range(3):
                 kosync_server._resolve_book_by_filename_variants(DEVICE_HASH, user_id=self.user_id)
