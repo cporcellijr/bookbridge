@@ -27,7 +27,9 @@ class FakeServer:
     """Routes the client's HTTP calls by (method, path) and records them."""
 
     def __init__(self, routes):
-        self.routes = routes
+        self.routes = {("GET", "/api/request-policy"): _response(200, {
+            "requests_enabled": True, "defaults": {"ebook": "download", "audiobook": "download"},
+        }), **routes}
         self.calls = []
 
     def __call__(self, method, url, **kwargs):
@@ -163,6 +165,23 @@ class TestPolicy(ClientCase):
             self.assertEqual(client.get_policy(), ({"ebook": "download", "audiobook": "download"}, None))
 
 
+    def test_source_policy_overrides_defaults_for_actual_source_and_format(self):
+        policy = {
+            "requests_enabled": True,
+            "defaults": {"ebook": "request_book", "audiobook": "download"},
+            "rules": [{"source": "b", "content_type": "ebook", "mode": "blocked"}],
+            "source_modes": [
+                {"source": "a", "modes": {"ebook": "request_release", "audiobook": "request_book"}},
+            ],
+        }
+        client = self.client({("POST", "/api/auth/login"): _login(),
+                              ("GET", "/api/request-policy"): _response(200, policy)})
+        self.assertEqual(client.mode_for("ebook", "a"), ("request_release", None))
+        self.assertEqual(client.mode_for("audiobook", "a"), ("request_book", None))
+        self.assertEqual(client.mode_for("ebook", "b"), ("blocked", None))
+        self.assertEqual(client.mode_for("ebook", "other"), ("request_book", None))
+        self.assertEqual(len(self.server.paths("/api/request-policy")), 1)
+
 class TestReleases(ClientCase):
     def search(self, response, sources=None, kind="ebook"):
         client = self.client({("POST", "/api/auth/login"): _login(), ("GET", "/api/releases"): response,
@@ -178,11 +197,21 @@ class TestReleases(ClientCase):
             {"title": "Example Book", "format": "epub", "size": "2 MB", "source": "Indexer A", "language": "en", "detail": "4 seeders", "author": "", "kind": "",
              "group": "src-a", "group_label": "Source A", "peers": "", "flags": [], "formats_more": 0})
         self.assertEqual(client.release_for(releases[0]["key"]), _RELEASE)
+        self.assertEqual(client.release_context_for(releases[0]["key"]), ("Example Book", "A. Writer"))
         self.assertIsNone(client.release_for("unknown"))
         _, _, kwargs = self.server.paths("/api/releases")[0]
         self.assertEqual(kwargs["timeout"], 120)
         self.assertEqual((kwargs["params"]["provider"], kwargs["params"]["content_type"], kwargs["params"]["title"]),
                          ("manual", "ebook", "Example Book"))
+
+    def test_search_preserves_query_author_for_every_result_selection(self):
+        releases = [{**_RELEASE, "source_id": "first", "extra": {"author": "Display First"}},
+                    {**_RELEASE, "source_id": "second", "extra": {"author": "Display Second"}}]
+        client, (results, error) = self.search(_response(200, {"releases": releases}))
+        self.assertIsNone(error)
+        self.assertEqual([r["author"] for r in results], ["Display First", "Display Second"])
+        for item in results:
+            self.assertEqual(client.release_context_for(item["key"]), ("Example Book", "A. Writer"))
 
     def test_author_and_kind_are_derived(self):
         def one(**fields):
@@ -236,6 +265,48 @@ class TestReleases(ClientCase):
             client.find_releases("Example Book", "A. Writer", "audiobook")
         self.assertIn("dropped 2 release(s) of the other format", " ".join(logs.output))
 
+    def test_request_book_policy_never_searches_releases(self):
+        client = self.client({
+            ("POST", "/api/auth/login"): _login(),
+            ("GET", "/api/request-policy"): _response(200, {
+                "requests_enabled": True,
+                "defaults": {"ebook": "request_book", "audiobook": "blocked"},
+            }),
+        })
+        self.assertFalse(client.can_find_releases("ebook"))
+        self.assertEqual(client.find_releases("Example Book", "A. Writer", "ebook"),
+                         (None, "release_not_allowed"))
+        self.assertEqual(self.server.paths("/api/releases"), [])
+
+    def test_source_specific_capabilities_are_advertised_when_defaults_blocked(self):
+        client = self.client({
+            ("POST", "/api/auth/login"): _login(),
+            ("GET", "/api/request-policy"): _response(200, {
+                "requests_enabled": True,
+                "defaults": {"ebook": "blocked", "audiobook": "blocked"},
+                "source_modes": [{"source": "src-a", "modes": {"ebook": "download"}}],
+            }),
+        })
+        self.assertEqual(client.available_modes(), ({"ebook": "download"}, None))
+        self.assertTrue(client.can_find_releases("ebook"))
+        self.assertFalse(client.can_find_releases("audiobook"))
+
+    def test_source_specific_release_mode_can_override_request_book_default(self):
+        client = self.client({
+            ("POST", "/api/auth/login"): _login(),
+            ("GET", "/api/request-policy"): _response(200, {
+                "requests_enabled": True,
+                "defaults": {"ebook": "request_book", "audiobook": "blocked"},
+                "source_modes": [{"source": "src-a", "modes": {"ebook": "request_release"}}],
+            }),
+            ("GET", "/api/releases"): _response(200, {"releases": [_RELEASE]}),
+            ("GET", "/api/release-sources"): _response(200, []),
+        })
+        self.assertTrue(client.can_find_releases("ebook"))
+        releases, failure = client.find_releases("Example Book", "A. Writer", "ebook")
+        self.assertIsNone(failure)
+        self.assertEqual(len(releases), 1)
+
     def test_ebook_search_drops_an_audiobook(self):
         items = [{"source": "s", "source_id": "a", "format": "m4b"}, {"source": "s", "source_id": "b", "format": "epub"}]
         client = self.client({("POST", "/api/auth/login"): _login(), ("GET", "/api/releases"): _response(200, {"releases": items}),
@@ -269,15 +340,31 @@ class TestSubmit(ClientCase):
         self.assertEqual(result, ({"kind": "request", "remote_id": "7", "status": "pending"}, None))
 
     def test_book_level_request_has_no_release_and_no_source(self):
-        self.submit(_response(201, {"id": 8, "status": "pending"}), release=None)
+        self.submit(_response(201, {"id": 8, "status": "pending"}), release=None,
+                    extra={("GET", "/api/request-policy"): _response(200, {"requests_enabled": True,
+                           "defaults": {"ebook": "request_book", "audiobook": "blocked"}})})
         body = self.server.paths("/api/requests")[0][2]["json"]
         self.assertNotIn("release_data", body)
         self.assertEqual(body["context"], {"content_type": "ebook", "request_level": "book"})
 
     def test_missing_author_is_sent_as_unknown(self):
-        client = self.client({("POST", "/api/auth/login"): _login(), ("POST", "/api/requests"): _response(201, {"id": 1})})
+        client = self.client({("POST", "/api/auth/login"): _login(), ("POST", "/api/requests"): _response(201, {"id": 1}),
+                              ("GET", "/api/request-policy"): _response(200, {"requests_enabled": True,
+                                   "defaults": {"ebook": "request_book", "audiobook": "blocked"}})})
         client.submit({"title": "Example Book", "authors": []}, None, "ebook")
         self.assertEqual(self.server.paths("/api/requests")[0][2]["json"]["book_data"]["author"], "Unknown")
+
+    def test_policy_blocks_wrong_submission_mode_without_calling_provider(self):
+        routes = {
+            ("POST", "/api/auth/login"): _login(),
+            ("GET", "/api/request-policy"): _response(200, {
+                "requests_enabled": True, "defaults": {"ebook": "request_book", "audiobook": "blocked"},
+                "source_modes": [{"source": "src-a", "modes": {"ebook": "blocked"}}],
+            }),
+        }
+        client = self.client(routes)
+        self.assertEqual(client.submit(self.book, _RELEASE, "ebook"), (None, "policy_refused"))
+        self.assertEqual(self.server.paths("/api/requests"), [])
 
     def test_server_without_requests_queues_the_release_directly(self):
         result = self.submit(
@@ -285,6 +372,10 @@ class TestSubmit(ClientCase):
             extra={("POST", "/api/releases/download"): _response(200, {"status": "queued"})})
         self.assertEqual(result, ({"kind": "download", "remote_id": "rel1", "status": "queued"}, None))
         self.assertEqual(self.server.paths("/api/releases/download")[0][2]["json"]["content_type"], "ebook")
+
+    def test_5xx_code_does_not_prove_rejection_after_submission(self):
+        self.assertEqual(self.submit(_response(503, {"code": "policy_refused"})),
+                         (None, "submit_failed"))
 
     def test_refusals_pass_their_code_through(self):
         self.assertEqual(self.submit(_response(409, {"code": "duplicate_pending_request"})), (None, "duplicate_pending_request"))

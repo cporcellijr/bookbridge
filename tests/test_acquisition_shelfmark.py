@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock, patch
 
 from src.services.acquisition_service import AcquisitionService
+from src.api.shelfmark_client import ShelfmarkClient
 from tests.test_acquisition_bookorbit import AcquisitionBase, _bookorbit
 from tests.test_acquisition_linking import LinkingBase, _client
 
@@ -69,6 +70,15 @@ class TestOptions(ShelfmarkBase):
         self.sm.get_policy.return_value = ({"ebook": "blocked", "audiobook": "blocked"}, None)
         self.assertEqual((self.options()["usable"], self.options()["reason"]), (False, "policy_blocked"))
 
+    def test_options_include_allowed_source_when_defaults_blocked(self):
+        os.environ["ACQUISITION_ALLOW_READERS"] = "true"
+        self.sm.get_policy.return_value = ({"ebook": "blocked", "audiobook": "blocked"}, None)
+        self.sm.available_modes = MagicMock(return_value=({"ebook": "download"}, None))
+        self.login()
+        self.assertEqual(self.options(), {
+            "usable": True, "reason": None, "formats": {"ebook": "download"},
+        })
+
     def test_reasons_are_reported(self):
         os.environ["ACQUISITION_ALLOW_READERS"] = "true"
         self.login()
@@ -118,6 +128,174 @@ class TestReleasesAndSubmit(ShelfmarkBase):
         self.assertEqual(self.client.get("/api/acquisition/shelfmark/releases?title=&format=ebook").status_code, 400)
         self.assertEqual(self.client.get("/api/acquisition/shelfmark/releases?title=x&format=both").status_code, 400)
 
+    def test_second_release_preserves_search_author_through_endpoint_submission(self):
+        real = ShelfmarkClient(credentials={})
+        real.is_enabled = lambda: True
+        real.mode_for = MagicMock(return_value=("download", None))
+        real.can_find_releases = lambda kind: True
+        real._source_labels = lambda: {}
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"releases": [
+            {"source": "s", "source_id": "first", "format": "epub",
+             "extra": {"author": "Displayed One"}},
+            {"source": "s", "source_id": "second", "format": "epub",
+             "extra": {"author": "Displayed Two"}},
+        ]}
+        real._call = MagicMock(return_value=(response, None))
+        real.submit = MagicMock(return_value=(
+            {"kind": "download", "remote_id": "second", "status": "queued"}, None))
+        self.sm = real
+        found = self.client.get("/api/acquisition/shelfmark/releases?title=Example%20Book&author=A.%20Writer&format=ebook")
+        self.assertEqual(found.status_code, 200)
+        releases = found.get_json()["releases"]
+        self.assertEqual([r["author"] for r in releases], ["Displayed One", "Displayed Two"])
+        submission = self.submit(authors="A. Writer", release_key=releases[1]["key"])
+        self.assertEqual(submission.status_code, 200)
+        self.assertEqual(len(submission.get_json()["requests"]), 1)
+        real.submit.assert_called_once()
+
+    def test_save_failure_never_submits_to_shelfmark(self):
+        with patch.object(self.svc, "create_acquisition_job", side_effect=OSError("disk full")):
+            response = self.submit(release_key="k1")
+        self.assertEqual(response.status_code, 503)
+        self.sm.submit.assert_not_called()
+        self.assertEqual(self.svc.get_acquisition_jobs(self.reg.id), [])
+
+    def test_source_specific_block_overrides_format_default(self):
+        self.sm.mode_for = MagicMock(side_effect=lambda kind, source: (
+            ("blocked", None) if source == "s" else ("download", None)))
+        response = self.submit(release_key="k1")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["failures"], {"ebook": "policy_refused"})
+        self.sm.submit.assert_not_called()
+
+    def test_request_release_requires_a_choice_then_waits_for_approval(self):
+        self.sm.mode_for = MagicMock(return_value=("request_release", None))
+        self.sm.submit.return_value = ({"kind": "request", "remote_id": "9", "status": "pending"}, None)
+        first = self.submit()
+        self.assertEqual(first.get_json()["needs_release"], ["ebook"])
+        self.sm.submit.assert_not_called()
+        second = self.submit(job_id=first.get_json()["job_id"], release_key="k1").get_json()
+        self.assertEqual(second["kind"], "request")
+        self.assertEqual(second["request"]["decision_code"], "request_release")
+        self.assertEqual(second["request"]["remote_status"], "pending")
+
+    def test_request_book_refuses_release_choice(self):
+        self.sm.mode_for = MagicMock(return_value=("request_book", None))
+        response = self.submit(release_key="k1")
+        self.assertEqual(response.get_json()["failures"], {"ebook": "release_not_allowed"})
+        self.sm.submit.assert_not_called()
+
+    def test_both_submits_sequentially_and_attaches_each_receipt(self):
+        self.sm.submit.side_effect = lambda book, release, kind: (
+            {"kind": "download", "remote_id": "rel1", "status": "queued"} if kind == "ebook"
+            else {"kind": "request", "remote_id": "7", "status": "pending"}, None,
+        )
+        resp = self.submit(format="both", release_keys={"ebook": "k1"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(self.sm.submit.call_count, 2)
+        self.assertEqual([call.args[2] for call in self.sm.submit.call_args_list], ["ebook", "audiobook"])
+        rows = self.svc.get_acquisition_job(self.reg.id, data["job_id"])["requests"]
+        self.assertEqual({r["media_kind"] for r in rows}, {"ebook", "audiobook"})
+        self.assertEqual({r["group_key"] for r in rows}, {data["job_id"]})
+
+    def test_uncertain_submit_cannot_be_overwritten_by_missing_choice_or_policy(self):
+        self.sm.submit.side_effect = [
+            (None, "unreachable"),
+            ({"kind": "download", "remote_id": "rel1", "status": "queued"}, None),
+        ]
+        first = self.submit(release_key="k1")
+        self.assertEqual(first.status_code, 502)
+        job_id = first.get_json()["job_id"]
+        self.assertEqual(first.get_json()["job"]["ebook_submission_state"], "uncertain")
+        no_key = self.submit(job_id=job_id)
+        self.assertEqual(no_key.get_json()["job"]["ebook_submission_state"], "uncertain")
+        self.assertNotIn("ebook", no_key.get_json()["needs_release"])
+        self.sm.mode_for = MagicMock(return_value=("blocked", None))
+        blocked = self.submit(job_id=job_id, release_key="k1")
+        self.assertEqual(blocked.get_json()["job"]["ebook_submission_state"], "uncertain")
+        self.sm.mode_for = MagicMock(return_value=("download", None))
+        retried = self.submit(job_id=job_id, release_key="k1")
+        self.assertEqual(retried.get_json()["job"]["ebook_submission_state"], "uncertain")
+        self.assertEqual(self.sm.submit.call_count, 1, "a previous ambiguous POST must never be repeated")
+        self.assertEqual(self.svc.get_acquisition_requests(self.reg.id), [])
+
+    def test_race_reservation_during_preflight_does_not_offer_release_again(self):
+        job = self.svc.create_acquisition_job(self.reg.id, "Example Book", ["ebook"])
+
+        def concurrent_reservation(_kind, _source):
+            self.assertEqual(self.svc.reserve_acquisition_submission(self.reg.id, job["id"], "ebook"),
+                             "reserved")
+            return "download", None
+
+        self.sm.mode_for = MagicMock(side_effect=concurrent_reservation)
+        response = self.submit(job_id=job["id"])
+        self.assertEqual(response.get_json()["job"]["ebook_submission_state"], "uncertain")
+        self.assertEqual(response.get_json()["needs_release"], [])
+        self.assertEqual(response.get_json()["failures"], {"ebook": "submission_uncertain"})
+        self.sm.submit.assert_not_called()
+        self.assertEqual(self.svc.reserve_acquisition_submission(self.reg.id, job["id"], "ebook"),
+                         "submission_uncertain")
+
+    def test_submit_failed_is_ambiguous_and_cannot_be_resubmitted(self):
+        self.sm.submit.side_effect = [(None, "submit_failed"),
+                                      ({"kind": "download", "remote_id": "rel1"}, None)]
+        first = self.submit(release_key="k1")
+        self.assertEqual(first.status_code, 502)
+        job_id = first.get_json()["job_id"]
+        self.assertEqual(first.get_json()["job"]["ebook_submission_state"], "uncertain")
+        retry = self.submit(job_id=job_id, release_key="k1")
+        self.assertEqual(retry.get_json()["job"]["ebook_submission_state"], "uncertain")
+        self.sm.submit.assert_called_once()
+
+    def test_unhashable_formats_return_invalid_formats_without_provider_actions(self):
+        for body in ({"formats": [{}]}, {"formats": ["ebook", {}]},
+                     {"submit_formats": [{}]}, {"submit_formats": ["ebook", {}]}):
+            with self.subTest(body=body):
+                response = self.submit(**body)
+                self.assertEqual((response.status_code, response.get_json()),
+                                 (400, {"error": "invalid_formats"}))
+        self.sm.submit.assert_not_called()
+        self.sm.get_policy.assert_not_called()
+        self.assertEqual(self.svc.get_acquisition_jobs(self.reg.id), [])
+
+    def test_second_failure_does_not_erase_first_and_retry_only_second(self):
+        self.sm.submit.side_effect = [
+            ({"kind": "download", "remote_id": "rel1", "status": "queued"}, None),
+            (None, "policy_refused"),
+            ({"kind": "request", "remote_id": "7", "status": "pending"}, None),
+        ]
+        first = self.submit(format="both", release_keys={"ebook": "k1"}).get_json()
+        self.assertEqual(first["failures"], {"audiobook": "policy_refused"})
+        self.assertEqual(len(first["requests"]), 1)
+        job_id = first["job_id"]
+        self.assertEqual(first["job"]["audio_submission_state"], "failed")
+        second = self.submit(job_id=job_id, format="audiobook").get_json()
+        self.assertEqual(second["job_id"], job_id)
+        self.assertEqual(len(second["requests"]), 2)
+        self.assertEqual([c.args[2] for c in self.sm.submit.call_args_list],
+                         ["ebook", "audiobook", "audiobook"])
+
+    def test_mixed_providers_save_each_half_in_same_job(self):
+        first = self.client.post("/api/acquisition/bookorbit", json={
+            "title": "Example Book", "formats": ["ebook", "audiobook"], "submit_formats": ["ebook"],
+        }).get_json()
+        self.assertEqual(len(first["requests"]), 1)
+        self.sm.submit.return_value = ({"kind": "request", "remote_id": "sm-7", "status": "pending"}, None)
+        second = self.submit(job_id=first["job_id"], format="audiobook").get_json()
+        saved = self.svc.get_acquisition_job(self.reg.id, first["job_id"])
+        self.assertEqual(second["job_id"], first["job_id"])
+        self.assertEqual({r["service"] for r in saved["requests"]}, {"BookOrbit", "Shelfmark"})
+
+    def test_missing_release_is_saved_as_choice_without_a_provider_call(self):
+        data = self.submit(format="ebook").get_json()
+        self.assertEqual(data["needs_release"], ["ebook"])
+        self.assertEqual(data["job"]["ebook_submission_state"], "needs_release")
+        self.sm.submit.assert_not_called()
+        next_step = self.submit(job_id=data["job_id"], release_key="k1").get_json()
+        self.assertEqual(len(next_step["requests"]), 1)
+
     def test_download_answer_saves_task_id_row(self):
         data = self.submit(release_key="k1", authors="A. Writer",
                            partner={"source": "BookOrbit", "source_id": "42", "filename": "Example Book.epub"}).get_json()
@@ -135,18 +313,27 @@ class TestReleasesAndSubmit(ShelfmarkBase):
         self.assertEqual((row["remote_kind"], row["remote_id"], row["status"], row["media_kind"]), ("request", "7", "waiting", "audiobook"))
         self.assertIsNone(self.sm.submit.call_args.args[1], "no release for a book-level request")
 
-    def test_repeat_submission_reuses_the_row(self):
-        self.submit()
-        self.submit()
+    def test_repeat_submission_resumes_same_job_without_second_provider_call(self):
+        first = self.submit(release_key="k1").get_json()
+        second = self.submit(job_id=first["job_id"], release_key="k1").get_json()
+        self.assertEqual(first["job_id"], second["job_id"])
         self.assertEqual(len(self.svc.get_acquisition_requests(self.reg.id)), 1)
+        self.sm.submit.assert_called_once()
 
     def test_expired_release_and_refusals_save_nothing(self):
         self.sm.release_for.return_value = None
-        self.assertEqual(self.submit(release_key="k1").get_json(), {"error": "release_expired"})
+        first = self.submit(release_key="k1")
+        self.assertEqual((first.status_code, first.get_json()["failures"]), (409, {"ebook": "release_expired"}))
+        job_id = first.get_json()["job_id"]
+        self.sm.release_for.return_value = {"source": "s", "source_id": "rel1"}
         self.sm.submit.return_value = (None, "duplicate_pending_request")
-        self.assertEqual(self.submit().status_code, 409)
+        refused = self.submit(job_id=job_id, release_key="k1")
+        self.assertEqual((refused.status_code, refused.get_json()["failures"]),
+                         (409, {"ebook": "duplicate_pending_request"}))
         self.sm.submit.return_value = (None, "unreachable")
-        self.assertEqual(self.submit().status_code, 502)
+        uncertain = self.submit(job_id=job_id, release_key="k1")
+        self.assertEqual((uncertain.status_code, uncertain.get_json()["failures"]),
+                         (502, {"ebook": "submission_uncertain"}))
         self.assertEqual(self.submit(format="comic").get_json(), {"error": "invalid_formats"})
         self.assertEqual(self.svc.get_acquisition_requests(self.reg.id), [])
 
@@ -154,21 +341,23 @@ class TestReleasesAndSubmit(ShelfmarkBase):
         self.sm.release_for.return_value = {"source": "s", "source_id": "rel1", "format": "epub"}
         self.sm.found_for.return_value = "audiobook"
         resp = self.submit(release_key="k1", format="audiobook")
-        self.assertEqual((resp.status_code, resp.get_json()), (409, {"error": "release_wrong_format"}))
+        self.assertEqual((resp.status_code, resp.get_json()["failures"]),
+                         (409, {"audiobook": "release_wrong_format"}))
         self.sm.submit.assert_not_called()
         self.assertEqual(self.svc.get_acquisition_requests(self.reg.id), [])
 
     def test_format_changed_after_search_is_refused(self):
         self.sm.release_for.return_value = {"source": "s", "source_id": "rel1", "format": "zip"}
         resp = self.submit(release_key="k1", format="audiobook")
-        self.assertEqual((resp.status_code, resp.get_json()), (409, {"error": "release_wrong_format"}))
+        self.assertEqual((resp.status_code, resp.get_json()["failures"]),
+                         (409, {"audiobook": "release_wrong_format"}))
         self.sm.submit.assert_not_called()
 
-    def test_unknown_and_multi_format_releases_submit_for_their_search_format(self):
+    def test_unknown_and_multi_format_releases_are_scoped_to_the_search_format(self):
         for fields in ({"format": "zip"}, {}, {"extra": {"formats": ["epub", "mp3"]}}):
             self.sm.release_for.return_value = {"source": "s", "source_id": "rel1", **fields}
             self.assertEqual(self.submit(release_key="k1").status_code, 200)
-        self.assertEqual(self.sm.submit.call_count, 3)
+        self.assertEqual(self.sm.submit.call_count, 1, "repeated user POST must not repeat accepted download")
 
     def test_cancel_support(self):
         download = self.svc.add_acquisition_requests(self.reg.id, [dict(

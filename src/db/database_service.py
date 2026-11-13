@@ -2782,7 +2782,7 @@ class DatabaseService:
     def create_acquisition_job(
         self, user_id: int, title: str, formats: list[str], *, authors: Optional[str] = None,
         isbn13: Optional[str] = None, series_name: Optional[str] = None, series_index: Optional[int] = None,
-        ebook: Optional[dict] = None, audiobook: Optional[dict] = None,
+        ebook: Optional[dict] = None, audiobook: Optional[dict] = None, reuse: bool = False,
     ) -> dict:
         """Persist acquisition intent and explicit existing halves before calling providers."""
         if not isinstance(title, str) or not title.strip() or len(title.strip()) > 500:
@@ -2804,6 +2804,19 @@ class DatabaseService:
         if audiobook is not None:
             fields.update(self._acquisition_half_fields("audiobook", audiobook))
         with self.get_session() as session:
+            if reuse:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                candidates = session.query(AcquisitionJob).filter_by(
+                    user_id=user_id, title=title.strip(), dismissed=False,
+                    requested_ebook="ebook" in formats, requested_audiobook="audiobook" in formats,
+                    **metadata, series_index=series_index,
+                ).order_by(AcquisitionJob.created_at.desc()).all()
+                for candidate in candidates:
+                    if all(getattr(candidate, name) == value for name, value in fields.items()):
+                        requests = session.query(AcquisitionRequest).filter_by(
+                            user_id=user_id, group_key=candidate.id,
+                        ).order_by(AcquisitionRequest.id).all()
+                        return self._acquisition_job_dict(candidate, [self._acquisition_dict(r) for r in requests])
             row = AcquisitionJob(
                 id=uuid.uuid4().hex, user_id=user_id, title=title.strip(), **metadata,
                 series_index=series_index, requested_ebook="ebook" in formats,
@@ -2866,11 +2879,72 @@ class DatabaseService:
             session.flush()
         return self.get_acquisition_job(user_id, job_id)
 
+    def reserve_acquisition_submission(self, user_id: int, job_id: str, media_kind: str) -> str:
+        """Persist an uncertain attempt BEFORE provider I/O and serialize competing submissions.
+
+        The provider has no idempotency key. An interrupted call must remain uncertain
+        across a restart until its acceptance can be reconciled, not be retried blindly.
+        """
+        if media_kind not in ("ebook", "audiobook"):
+            raise ValueError("Invalid acquisition format")
+        prefix = "ebook" if media_kind == "ebook" else "audio"
+        with self.get_session() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            job = session.query(AcquisitionJob).filter_by(id=job_id, user_id=user_id).first()
+            if job is None:
+                return "not_found"
+            if job.dismissed or not getattr(job, f"requested_{media_kind}"):
+                return "not_allowed"
+            receipts = session.query(AcquisitionRequest).filter_by(
+                user_id=user_id, group_key=job_id, media_kind=media_kind,
+            ).all()
+            if any(row.status in ("waiting", "in_progress", "needs_look", "arrived", "paired") for row in receipts):
+                return "already_submitted"
+            if getattr(job, f"{prefix}_source_id") is not None:
+                return "already_owned"
+            if getattr(job, f"{prefix}_submission_state") == "uncertain":
+                return "submission_uncertain"
+            setattr(job, f"{prefix}_submission_state", "uncertain")
+            setattr(job, f"{prefix}_submission_reason", "submission_may_have_been_accepted")
+            job.updated_at = utcnow()
+            return "reserved"
+
+    def set_acquisition_submission_state(
+        self, user_id: int, job_id: str, media_kind: str, state: str, reason: Optional[str] = None,
+        *, confirmed_rejection: bool = False,
+    ) -> Optional[dict]:
+        """Store a choice/refusal without clearing an in-flight or accepted submission.
+
+        Only a definite response to a reserved provider POST may end uncertainty as
+        failed. Preflight checks must never unlock an ambiguous provider attempt.
+        """
+        if media_kind not in ("ebook", "audiobook") or state not in (
+            "needs_release", "failed", "uncertain", "accepted", "needs_identification",
+        ):
+            raise ValueError("Invalid acquisition state")
+        if reason is not None and (not isinstance(reason, str) or len(reason) > 100):
+            raise ValueError("Invalid acquisition reason")
+        prefix = "ebook" if media_kind == "ebook" else "audio"
+        with self.get_session() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            job = session.query(AcquisitionJob).filter_by(id=job_id, user_id=user_id, dismissed=False).first()
+            if job is None:
+                return None
+            previous = getattr(job, f"{prefix}_submission_state")
+            if previous != "accepted" and (
+                previous != "uncertain" or state in ("uncertain", "accepted")
+                or (confirmed_rejection and state == "failed")
+            ):
+                setattr(job, f"{prefix}_submission_state", state)
+                setattr(job, f"{prefix}_submission_reason", reason)
+                job.updated_at = utcnow()
+        return self.get_acquisition_job(user_id, job_id)
+
     def add_acquisition_request_to_job(self, user_id: int, job_id: str, fields: dict) -> Optional[dict]:
         """Atomically attach a provider receipt without stealing another job or reviving history."""
         if not isinstance(fields, dict):
             raise ValueError("Invalid acquisition receipt")
-        allowed = {"service", "media_kind", "remote_kind", "remote_id", "status", "remote_status", "status_detail"}
+        allowed = {"service", "media_kind", "remote_kind", "remote_id", "status", "remote_status", "status_detail", "decision_code", "decision_action"}
         if set(fields) - allowed:
             raise ValueError("Unexpected acquisition receipt fields")
         fields = dict(fields)
@@ -2894,6 +2968,12 @@ class DatabaseService:
             value = fields.get(key)
             if value is not None and (not isinstance(value, str) or (limit and len(value) > limit)):
                 raise ValueError(f"Invalid acquisition {key}")
+        code = fields.get("decision_code")
+        action = fields.get("decision_action")
+        if code is not None and (not isinstance(code, str) or len(code) > 100):
+            raise ValueError("Invalid acquisition decision code")
+        if action is not None and action not in ("wait", "pick_release", "repair_configuration", "none"):
+            raise ValueError("Invalid acquisition decision action")
         with self.get_session() as session:
             # Claim the remote handle before another connection can attach or insert the same receipt.
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
@@ -2904,6 +2984,13 @@ class DatabaseService:
                 raise ValueError("Acquisition receipt is not a requested format")
             if job.dismissed:
                 raise ValueError("Acquisition job is dismissed")
+            active = session.query(AcquisitionRequest).filter_by(
+                user_id=user_id, group_key=job_id, media_kind=kind,
+            ).all()
+            if any(r.remote_id != fields["remote_id"] and r.status in (
+                "waiting", "in_progress", "needs_look", "arrived", "paired",
+            ) for r in active):
+                raise ValueError("Acquisition format already has an active receipt")
             prefix = "audio" if kind == "ebook" else "ebook"
             partner = {
                 "partner_source": getattr(job, f"{prefix}_source"),
@@ -2917,7 +3004,8 @@ class DatabaseService:
                 raise ValueError("Acquisition remote receipt is ambiguous")
             if rows:
                 row = rows[0]
-                if row.dismissed or row.group_key not in (None, job_id) or row.media_kind != kind:
+                if (row.dismissed or (row.adopted and row.group_key is None)
+                        or row.group_key not in (None, job_id) or row.media_kind != kind):
                     raise ValueError("Acquisition receipt already belongs to another job or history")
                 if row.remote_kind != fields["remote_kind"]:
                     raise ValueError("Acquisition remote kind conflicts with the saved receipt")
@@ -2926,6 +3014,16 @@ class DatabaseService:
                 row.group_key = job_id
                 for key, value in partner.items():
                     setattr(row, key, value)
+                fresh_status = fields.get("status", "waiting")
+                preserve = (
+                    row.status == "paired"
+                    or (row.status == "arrived" and fresh_status not in ("arrived", "paired"))
+                    or (row.status in ("in_progress", "needs_look") and fresh_status == "waiting")
+                )
+                if not preserve:
+                    for key in ("status", "remote_status", "status_detail", "decision_code", "decision_action"):
+                        if key in fields:
+                            setattr(row, key, fields[key])
             else:
                 row = AcquisitionRequest(
                     user_id=user_id, group_key=job_id, title=job.title, authors=job.authors,
@@ -2934,6 +3032,9 @@ class DatabaseService:
                 )
                 session.add(row)
             job.updated_at = utcnow()
+            prefix = "ebook" if kind == "ebook" else "audio"
+            setattr(job, f"{prefix}_submission_state", "accepted")
+            setattr(job, f"{prefix}_submission_reason", None)
             session.flush()
             return self._acquisition_dict(row)
 

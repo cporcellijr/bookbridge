@@ -370,17 +370,43 @@ class AcquisitionService:
                 )
         self._update(user_id, row, **changes)
 
+    @staticmethod
+    def bookorbit_decision(remote: dict) -> tuple[str, str]:
+        """Return a structured reason and allowed action from verified request evidence.
+
+        A request being approved/searching, and absence of a failure code, cannot
+        prove that BookOrbit's automatic grabber is disabled. The integration key
+        cannot read admin automation settings.
+        """
+        status = str(remote.get("status") or "").lower()
+        code = str(remote.get("failureCode") or "").upper()[:100]
+        if status in ("grabbed", "downloading", "importing", "available"):
+            return "provider_processing", "wait"
+        if status in ("rejected", "cancelled"):
+            return code or "provider_closed", "none"
+        if code in {"NO_DESTINATION", "NO_DESTINATION_LIBRARY", "NO_DOWNLOAD_CLIENT",
+                    "SOURCE_UNCONFIGURED", "NO_SOURCES", "SOURCE_AUTH_FAILED"}:
+            return code, "repair_configuration"
+        if remote.get("selfServe") is True:
+            return "self_serve", "pick_release"
+        if code in {"AUTOMATION_DISABLED", "BELOW_SCORE_FLOOR", "PROFILE_EXCLUDED_ALL",
+                    "ALL_TRIED", "ATTEMPT_LIMIT", "SEARCH_FAILED"}:
+            return code, "pick_release"
+        return code or "automation_unknown", "wait"
+
     @classmethod
     def remote_changes(cls, row: dict, remote: dict) -> dict:
-        """Row changes for a BookOrbit request object: status, detail and the download-progress mark."""
+        """Persist status, structured decision, and progress without the full provider payload."""
         status = remote.get("status")
         mapped = STATUS_MAP.get(status, "in_progress")
         download = remote.get("download") if isinstance(remote.get("download"), dict) else {}
         value = download.get("downloadedBytes")
         value = download.get("progressPercent") if value is None else value
         mark = f"{download.get('id')}|{download.get('grabbedAt')}|{value}" if status in ("grabbed", "downloading") and download else None
+        reason, action = cls.bookorbit_decision(remote)
         return {
             "status": mapped, "remote_status": status, "status_detail": cls._detail(remote, mapped),
+            "decision_code": reason, "decision_action": action,
             **cls._progress_changes(row, mark),
         }
 

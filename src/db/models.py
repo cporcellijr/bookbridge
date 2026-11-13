@@ -563,6 +563,8 @@ class AcquisitionRequest(Base):
     adopted = Column(Boolean, nullable=False, default=False, server_default='0')
     progress_mark = Column(String(64), nullable=True)
     progress_changed_at = Column(DateTime, nullable=True)
+    decision_code = Column(String(100), nullable=True)
+    decision_action = Column(String(40), nullable=True)
 
 
 class AcquisitionJob(Base):
@@ -583,6 +585,10 @@ class AcquisitionJob(Base):
     ebook_filename = Column(String(500), nullable=True)
     audio_source = Column(String(50), nullable=True)
     audio_source_id = Column(String(255), nullable=True)
+    ebook_submission_state = Column(String(30), nullable=True)
+    audio_submission_state = Column(String(30), nullable=True)
+    ebook_submission_reason = Column(String(100), nullable=True)
+    audio_submission_reason = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
     dismissed = Column(Boolean, nullable=False, default=False, server_default='0')
