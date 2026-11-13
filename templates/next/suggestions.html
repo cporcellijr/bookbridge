@@ -18,7 +18,7 @@
         {% endif %}
     </div>
 
-    <p class="subtitle">
+    <p class="subtitle discover-note">
         {{ _('If an audiobook needs Whisper transcription, its uncalibrated EPUB/audio measurements are shown on') }}
         <a href="{{ url_for('job_queue_page') }}">{{ _('Processing') }}</a>.
         {{ _('Review the edition before a long run; no unsupported mismatch threshold blocks unattended work.') }}
@@ -72,6 +72,7 @@
             <label class="sort-label" for="searchInput">{{ _('Search') }}</label>
             <input type="search" id="searchInput" class="form-input" placeholder="{{ _('Title, author or series') }}" autocomplete="off">
         </div>
+        <button type="button" class="btn btn-muted discover-filters-toggle" id="discoverFiltersToggle" aria-expanded="false" aria-controls="filterBar">{{ _('Filters') }}</button>
         <div class="filter-field">
             <label class="sort-label" for="seriesFilter">{{ _('Series') }}</label>
             <select id="seriesFilter" class="form-select"><option value="">{{ _('All series') }}</option></select>
@@ -247,4 +248,15 @@
 
 
 {% endblock %}
-{% block scripts %}{% include 'next/_acquisition_scripts.html' %}{% include 'next/_discover_scripts.html' %}{% endblock %}
+{% block scripts %}{% include 'next/_acquisition_scripts.html' %}{% include 'next/_discover_scripts.html' %}
+<script>
+(function () {
+    const toggle = document.getElementById('discoverFiltersToggle');
+    const bar = document.getElementById('filterBar');
+    if (!toggle || !bar) return;
+    toggle.addEventListener('click', function () {
+        toggle.setAttribute('aria-expanded', String(bar.classList.toggle('open')));
+    });
+}());
+</script>
+{% endblock %}
