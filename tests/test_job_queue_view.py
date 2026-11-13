@@ -1,6 +1,8 @@
 """Phase 1 Job Queue: visibility, worker handoff, auth and EPUB3 intent."""
 import html
 import json
+import re
+from contextlib import ExitStack
 import os
 import shutil
 import tempfile
@@ -359,46 +361,78 @@ class JobQueueRouteTests(unittest.TestCase):
             self.assertEqual(original.status_code, 200)
             self.assertEqual(optimized.get_data(), original.get_data(), mode)
 
-    def test_acquisition_fragment_bridge_labels_match_full_page(self):
-        """Status precedence remains identical in Classic and New fragments."""
-        status_cases = [
-            ("active", "Ready for normal Bridge syncing"),
-            ("pending", "Waiting for normal Bridge processing"),
-            ("processing", "Normal Bridge processing is underway"),
-            ("forging", "Normal Bridge processing is underway"),
-            ("error", "Needs attention in normal Bridge processing"),
-            ("failed_retry_later", "Needs attention in normal Bridge processing"),
-            ("failed_permanent", "Needs attention in normal Bridge processing"),
-        ]
-        for i, (status, expected) in enumerate(status_cases):
-            abs_id = f"fragment-label-{i}"
-            self.db.save_book(Book(abs_id=abs_id, abs_title=f"Status {i}",
-                                   status=status, user_id=self.alice.id))
-            self.db.link_user_book(self.alice.id, abs_id)
-            job = self.db.create_acquisition_job(
-                self.alice.id, f"Status Acquisition {i}", ["ebook", "audiobook"],
-                ebook={"source": "BookOrbit", "source_id": f"ebook-{i}", "filename": f"book-{i}.epub"},
-                audiobook={"source": "ABS", "source_id": abs_id},
-            )
-            self.assertTrue(self.db.set_acquisition_pairing_result(self.alice.id, job["id"], abs_id=abs_id))
+    def _assert_acquisition_fragment_bridge_label(self, status, expected):
+        """Compare one isolated status with the full view and original fallback."""
+        abs_id = f"fragment-label-{status}"
+        self.db.save_book(Book(abs_id=abs_id, abs_title=f"Status {status}",
+                               status=status, user_id=self.alice.id))
+        self.db.link_user_book(self.alice.id, abs_id)
+        job = self.db.create_acquisition_job(
+            self.alice.id, f"Status Acquisition {status}", ["ebook", "audiobook"],
+            ebook={"source": "BookOrbit", "source_id": f"ebook-{status}",
+                   "filename": f"book-{status}.epub"},
+            audiobook={"source": "ABS", "source_id": abs_id},
+        )
+        self.assertTrue(self.db.set_acquisition_pairing_result(self.alice.id, job["id"], abs_id=abs_id))
         self.db.create_acquisition_job(self.bob.id, "PRIVATE BOB JOB", ["audiobook"])
         self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        import src.web_server as web
 
-        import re
+        section = r'<p class="acquisition-job-bridge">.*?</p>'
         for mode in ("classic", "new"):
-            self.db.set_user_credential(self.alice.id, "UI_MODE", mode)
-            full = self.client.get("/job-queue")
-            fragment = self.client.get("/job-queue?acquisition_fragment=1")
-            self.assertEqual(full.status_code, 200)
-            self.assertEqual(fragment.status_code, 200)
-            section = r'<p class="acquisition-job-bridge">.*?</p>'
-            full_labels = re.findall(section, full.get_data(as_text=True), re.S)
-            fragment_labels = re.findall(section, fragment.get_data(as_text=True), re.S)
-            self.assertEqual(fragment_labels, full_labels, mode)
-            self.assertEqual(len(fragment_labels), len(status_cases))
-            for status, expected in status_cases:
-                self.assertIn(expected, fragment.get_data(as_text=True), status)
-            self.assertNotIn("PRIVATE BOB JOB", fragment.get_data(as_text=True))
+            with self.subTest(mode=mode, status=status):
+                self.db.set_user_credential(self.alice.id, "UI_MODE", mode)
+                full = self.client.get("/job-queue")
+                path = "/job-queue?acquisition_fragment=1"
+                with patch.object(
+                    self.db, "get_linked_book_statuses",
+                    return_value={"force-original": "error"},
+                ):
+                    original = self.client.get(path)
+                if status in ("error", "failed_retry_later", "failed_permanent"):
+                    fragment = self.client.get(path)
+                else:
+                    with ExitStack() as guards:
+                        for name in (
+                            "get_all_books", "get_linked_abs_ids", "get_latest_jobs",
+                            "get_transcription_preflights", "get_pending_alignment_queue",
+                        ):
+                            guards.enter_context(patch.object(
+                                self.db, name, side_effect=AssertionError(f"broad {name}")))
+                        for name in ("_load_match_queue", "build_job_queue_view"):
+                            guards.enter_context(patch.object(
+                                web, name, side_effect=AssertionError(f"broad {name}")))
+                        fragment = self.client.get(path)
+                self.assertEqual(full.status_code, 200)
+                self.assertEqual(original.status_code, 200)
+                self.assertEqual(fragment.status_code, 200)
+                self.assertEqual(fragment.get_data(), original.get_data())
+                labels = re.findall(section, fragment.get_data(as_text=True), re.S)
+                self.assertEqual(labels, re.findall(section, full.get_data(as_text=True), re.S))
+                self.assertEqual(len(labels), 1)
+                self.assertIn(expected, labels[0])
+                self.assertNotIn("PRIVATE BOB JOB", fragment.get_data(as_text=True))
+
+    def test_acquisition_fragment_bridge_label_active(self):
+        self._assert_acquisition_fragment_bridge_label("active", "Ready for normal Bridge syncing")
+
+    def test_acquisition_fragment_bridge_label_pending(self):
+        self._assert_acquisition_fragment_bridge_label("pending", "Waiting for normal Bridge processing")
+
+    def test_acquisition_fragment_bridge_label_processing(self):
+        self._assert_acquisition_fragment_bridge_label("processing", "Normal Bridge processing is underway")
+
+    def test_acquisition_fragment_bridge_label_forging(self):
+        self._assert_acquisition_fragment_bridge_label("forging", "Normal Bridge processing is underway")
+
+    def test_acquisition_fragment_bridge_label_error(self):
+        self._assert_acquisition_fragment_bridge_label("error", "Needs attention in normal Bridge processing")
+
+    def test_acquisition_fragment_bridge_label_retry_later(self):
+        self._assert_acquisition_fragment_bridge_label("failed_retry_later", "Needs attention in normal Bridge processing")
+
+    def test_acquisition_fragment_bridge_label_failed_permanent(self):
+        self._assert_acquisition_fragment_bridge_label("failed_permanent", "Needs attention in normal Bridge processing")
 
     def test_narrow_linked_status_lookup_is_user_scoped(self):
         """A caller must never retrieve the other reader's shared catalog states."""

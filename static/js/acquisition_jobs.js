@@ -132,6 +132,7 @@
     }
 
     async function refreshProviderOptions() {
+        if (!panel()?.querySelector('[data-provider-controls]')) return;
         function showHelp(controls, message) {
             const help = controls.querySelector('[data-provider-help]');
             const link = controls.querySelector('[data-provider-settings]');

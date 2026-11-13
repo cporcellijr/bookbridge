@@ -8,6 +8,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Changed
 
+- **Book-request panels without provider submission controls no longer repeatedly check provider availability.** When controls appear in a refreshed panel, BookOrbit/Shelfmark availability is checked normally, including for hidden or disabled controls. The 20-second delivery/status refresh, reconciliation, editor safeguards, and Classic/New behavior are unchanged.
+
 - **Processing refreshes book requests with less database work.** Normal acquisition-panel
   refreshes load only the linked books claimed by the reader, preserving the same status
   labels in Classic and New. Error states retain the full queue calculation; polling
