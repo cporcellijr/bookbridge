@@ -1,6 +1,6 @@
 # Plan: get the missing half from the search page (#585)
 
-Status: **Phases A–E are complete. Phase F fake-provider browser acceptance and the final full suite passed. Post-merge live verification remains pending and will use only an already-owned pair; no new acquisition or download will be tested.** The primary will merge once into local dev, then deploy/live-verify dev. The original #585 implementation is already live; this follow-up remains unpushed.
+Status: **Phases A–F are complete and live-verified on dev.** The final full suite and fake-provider browser acceptance passed. Post-deploy verification reused only the already-owned pair; no new provider acquisition, download, or scan was started. The follow-up remains local and unpushed.
 
 ## Current follow-up plan (2026-11-12)
 
@@ -180,9 +180,9 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
 | A | COMPLETE; upstream flag gap recorded | Endpoint/capability investigation above |
 | B | COMPLETE; verified 2026-11-12 | Durable jobs, linked halves, and explicit existing-edition identities; additive migration and regressions |
 | C | COMPLETE; independent review and regression verification passed; upstream auto flag still absent | Durable provider receipts, BookOrbit conservative release decisions, Shelfmark Both and source policy |
-| D | COMPLETE locally; independently reviewed; full suite 7753 passed / 15 skipped / zero failures | Supported-library arrival detection, integration picker, completion-triggered scans |
+| D | COMPLETE; deployed at `d585c20261112` | Supported-library arrival detection, integration picker, completion-triggered scans |
 | E | COMPLETE; final tests passed | Classic/New Search→Get handoff, one saved Processing job, mixed providers, reopening, refresh and owned provider controls |
-| F | Fake-provider browser acceptance COMPLETE; live verification pending | Isolated real-Flask app and temporary SQLite passed; primary will verify only the already-owned pair after deployment |
+| F | COMPLETE; fake-provider browser acceptance and deployed live verification passed | Isolated real-Flask app, temporary SQLite, migration/restart and an already-owned-pair reuse check |
 
 ### Phase D implementation and review (2026-11-12; verified locally)
 
@@ -235,12 +235,11 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
   job ID/state/attempts. Existing requests/receipts and their history are preserved.
   The owned job API exposes all Phase D fields to the completed Phase E Processing and Search/Get workflow.
   Library UI is unchanged.
-- Verification is limited to temporary SQLite migrations/concurrency and synthetic
-  provider fixtures, plus installed source inspection. No live scan, arrival,
-  cancellation, acquire, deployment, server restart, schema migration or push
-  was performed during Phase D. The additive migration and an application restart
-  remain required for deployment; final integration and verification are handled
-  after Phase F.
+- Verification during Phase D was limited to temporary SQLite migrations/concurrency
+  and synthetic provider fixtures, plus installed source inspection. No live scan,
+  arrival, cancellation, acquire, deployment, server restart, schema migration or
+  push was performed during that phase. The additive migration and application
+  restart were completed during Phase F deployment and live verification.
 
 ### Phase E implementation and Phase F browser acceptance (2026-11-13; locally verified)
 
@@ -269,10 +268,36 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
   import; and second-provider network loss preserving the first saved half. It also
   verified stale focused BookOrbit picker closure after handback, Classic/New
   behavior, empty-search beforeunload, modal closure and 390px mobile layout.
-- This browser run used fake providers and is not live-service verification. No
-  provider write, deployment or merge occurred here. The user selected an already-
-  owned pair for post-deploy verification; do not test a new acquisition/download.
-  Deployment requires **migration + restart**.
+- This browser run used fake providers and was not live-service verification. The
+  later deployment and already-owned-pair live verification are recorded below.
+  No new acquisition or download was tested.
+
+### Phase F deployed live verification (2026-11-13)
+
+- Merged dev `01c0c876` (feature `a610e74e`); deployed tree is at migration head
+  `d585c20261112`. Restart completed at 11:46:02 UTC with migration success,
+  `SHELFMARK_AUDIOBOOK_LIBRARY_ID` added, 312 settings loaded, daemons running and
+  no startup traceback. A pre-deploy SQLite backup passed `quick_check`.
+- Live Search, saved-job response, `/api/acquisition/mine` and Processing page each
+  returned HTTP 200. BookOrbit scan-library picker returned HTTP 200 with two
+  accessible libraries; the separate non-admin reader received HTTP 403 and zero
+  libraries. The non-admin reader also received HTTP 403 for the admin-owned job.
+- The saved job identified BookOrbit audio `5114` and ebook `2348` as already owned;
+  both library states were `indexed`, pairing was `paired`, and the linked ID was
+  `bookorbit:5114`. Processing showed the book link and **Ready for normal Bridge
+  syncing**. The original Book row remained `active`, the reader retained exactly
+  one user-book link, and an independent post-cleanup database check showed zero
+  owned acquisition jobs. The response contained zero provider receipts. Cleanup
+  deleted the newly created owned job after confirming it had no receipts; absence
+  was verified.
+- An initial probe stopped before saving because it treated a legacy unparented
+  Shelfmark audiobook receipt as scan risk. It created no job and left that receipt
+  untouched. The helper was narrowed to saved-job-owned receipts and rerun; this
+  was a probe guard adjustment, not a product issue.
+- No provider acquisition, download, cancel or scan POST was performed. Picker
+  checks used reader-scoped read-only library/history calls. No new acquisition or
+  download was tested; the existing pair was reused. Full suite: **7813 passed,
+  1409 subtests, 15 skipped, 0 failures, 14 warnings** (485.45s).
 
 ### Phase C implementation handoff (2026-11-12; historical local implementation)
 
