@@ -265,9 +265,7 @@ class TestShareAllBooksSettingRegistration(unittest.TestCase):
         self.assertIn('SHARE_ALL_BOOKS_WITH_ALL_USERS', bool_block)
 
     def test_both_settings_are_exposed_in_the_settings_ui(self):
-        template = (
-            Path(web_server.__file__).parent.parent / 'templates' / 'settings.html'
-        ).read_text(encoding='utf-8')
+        template = "".join((Path(web_server.__file__).parent.parent / 'templates' / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         self.assertIn('SHARE_ALL_BOOKS_WITH_ALL_USERS', template)
         self.assertIn('TRANSCRIPT_MIN_COVERAGE', template)
 

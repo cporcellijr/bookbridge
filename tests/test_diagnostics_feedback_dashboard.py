@@ -238,7 +238,7 @@ class TestTemplates(unittest.TestCase):
         self.assertNotIn('My Reports', content)
 
     def test_settings_has_accessible_manual_report_controls(self):
-        content = (self.templates / 'settings.html').read_text(encoding='utf-8')
+        content = "".join((self.templates / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         self.assertIn('What went wrong? (optional)', content)
         self.assertIn('maxlength="2000"', content)
         self.assertIn('Send bug report', content)

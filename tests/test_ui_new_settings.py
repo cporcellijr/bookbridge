@@ -91,7 +91,7 @@ class TestP6Sources(unittest.TestCase):
                     self.assertEqual(old_tokens - new_tokens, Counter(), (page, pattern))
 
     def test_existing_features_and_safari_css_are_kept(self):
-        page = (ROOT / "templates" / "next/settings.html").read_text(encoding="utf-8")
+        page = "".join((ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("next/settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         partial = (ROOT / "templates" / "next/_settings_scripts.html").read_text(encoding="utf-8")
         extras = (ROOT / "static/js/next/settings-p6.js").read_text(encoding="utf-8")
         css = (ROOT / "static/css/next-p6.css").read_text(encoding="utf-8")
@@ -356,7 +356,8 @@ class TestP11SettingsNavigation(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.markup = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        cls.markup = "".join((ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("next/settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
+        cls.menu = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
         cls.js = (ROOT / 'static/js/next/settings-p6.js').read_text(encoding='utf-8')
         cls.css = (ROOT / 'static/css/next-p6.css').read_text(encoding='utf-8')
 
@@ -399,9 +400,9 @@ class TestP11SettingsNavigation(unittest.TestCase):
             self.assertIn("_('" + msgid + "')", self.markup)
 
     def test_all_hashes_survive_python_settings_save_redirect(self):
-        menu = re.findall(r'data-tab="([a-z_]+)"', self.markup)
+        menu = re.findall(r'data-tab="([a-z_]+)"', self.menu)
         self.assertEqual(len(menu), len(set(menu)))
-        services = re.findall(r'class="settings-tab settings-service-tab[^"]*" data-tab="([a-z_]+)"', self.markup)
+        services = re.findall(r'class="settings-tab settings-service-tab[^"]*" data-tab="([a-z_]+)"', self.menu)
         pages = {'sync', 'library', 'alignment', 'ai', 'system', 'maintenance', 'users', 'logs'}
         self.assertEqual(set(menu), set(services) | pages)
         self.assertTrue(all(name.isidentifier() for name in menu))
@@ -432,13 +433,13 @@ class TestSettingsLogsLink(unittest.TestCase):
     """New Settings links out to Logs instead of embedding a second page."""
 
     def test_logs_menu_entry_is_a_plain_link(self):
-        source = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        source = "".join((ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("next/settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         menu_line = next(line for line in source.splitlines() if 'data-tab="logs"' in line)
         self.assertIn('href="{{ url_for(\'logs_view\') }}"', menu_line)
         self.assertNotIn('onclick', menu_line)
 
     def test_settings_no_longer_embeds_the_logs_page(self):
-        source = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        source = "".join((ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("next/settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         self.assertNotIn('<iframe', source)
         self.assertIn("{{ _('Open Logs') }}", source)
 
@@ -447,7 +448,7 @@ class TestSettingsPhoneSectionBar(unittest.TestCase):
     """Settings uses a single expandable section bar on phones."""
 
     def test_phone_section_bar_exists_and_is_wired(self):
-        template = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        template = "".join((ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("next/settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         js = (ROOT / 'static/js/next/settings-p6.js').read_text(encoding='utf-8')
         mobile_slot = next(line for line in template.splitlines() if 'id="settings-mobile-slot"' in line)
         self.assertIn('id="settings-section-toggle"', mobile_slot)

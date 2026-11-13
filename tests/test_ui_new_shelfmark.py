@@ -52,7 +52,7 @@ class TestShelfmarkRedirectOnly(unittest.TestCase):
                 self.assertTrue(response.headers["Location"].endswith("/"))
 
     def test_settings_offer_open_shelfmark_when_configured(self):
-        text = (ROOT / "templates/next/settings.html").read_text(encoding="utf-8")
+        text = "".join((ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("next/settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         self.assertIn("{% if get_val('SHELFMARK_URL') %}", text)
         self.assertIn('href="/shelfmark" target="_blank" rel="noopener noreferrer"', text)
         self.assertNotIn("a Shelfmark tab appears", text)

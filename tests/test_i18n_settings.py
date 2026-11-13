@@ -87,7 +87,7 @@ class SettingsPageTests(I18nTestBase):
         Brand names, two-letter service badges, sample values and paths are
         allowed to stay as they are; anything else left bare would ship English.
         """
-        src = _SETTINGS.read_text(encoding="utf-8")
+        src = (_SETTINGS.parent / "next" / "_settings_form.html").read_text(encoding="utf-8")
         markup = src.split("<script>", 1)[0]
         markup = re.sub(r"\{#.*?#\}", "", markup, flags=re.S)
         markup = re.sub(r"\{%-?\s*trans\b.*?\{%-?\s*endtrans\s*-?%\}", "", markup, flags=re.S)
@@ -110,7 +110,7 @@ class SettingsPageTests(I18nTestBase):
     def test_extraction_finds_the_settings_strings(self):
         ids = {
             msg if isinstance(msg, str) else msg[0]
-            for path in (_SETTINGS, _SETTINGS.parent / 'next' / '_settings_scripts.html')
+            for path in (_SETTINGS, _SETTINGS.parent / 'next' / '_settings_form.html', _SETTINGS.parent / 'next' / '_settings_scripts.html')
             for _, msg, _, _ in extract_from_file(
                 "jinja2", str(path), options={"extensions": "jinja2.ext.i18n"})
         }

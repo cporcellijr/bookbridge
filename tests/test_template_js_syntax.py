@@ -189,7 +189,7 @@ class TestShippedTemplatesParse(unittest.TestCase):
 
     def test_settings_series_handlers_are_defined(self):
         """The two series buttons must reference functions that exist."""
-        source = (TEMPLATE_DIR / "settings.html").read_text(encoding="utf-8")
+        source = "".join((TEMPLATE_DIR / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         script = (TEMPLATE_DIR / "next" / "_settings_scripts.html").read_text(encoding="utf-8")
         for handler in ("backfillSeriesMetadata", "refreshSeriesMetadata"):
             self.assertIn(f'onclick="{handler}(this)"', source)

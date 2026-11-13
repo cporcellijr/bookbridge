@@ -16,7 +16,7 @@ from src.utils.config_loader import (
 )
 
 ROOT = Path(__file__).parent.parent
-TEMPLATE = (ROOT / 'templates' / 'settings.html').read_text(encoding='utf-8')
+TEMPLATE = "".join((ROOT / 'templates' / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
 WEB_SERVER = (ROOT / 'src' / 'web_server.py').read_text(encoding='utf-8')
 
 

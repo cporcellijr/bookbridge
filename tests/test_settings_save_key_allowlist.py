@@ -30,7 +30,7 @@ def _bool_keys() -> list:
 
 
 def _settings_form_field_names() -> set:
-    html = io.open(REPO / 'templates' / 'settings.html', encoding='utf-8').read()
+    html = "".join((REPO / 'templates' / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
     return set(re.findall(r'<(?:input|select|textarea)[^>]*\bname="([^"]+)"', html))
 
 

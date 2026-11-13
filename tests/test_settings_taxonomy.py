@@ -46,7 +46,7 @@ class TestServiceTaxonomyParity(unittest.TestCase):
         self.assertEqual(labels[1:], CANONICAL_SERVICES)
 
     def test_admin_integrations_panel_matches_canonical_order(self):
-        source = (TEMPLATES / 'settings.html').read_text(encoding='utf-8')
+        source = "".join((TEMPLATES / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         headers = [h.strip() for h in re.findall(r'<h3[^>]*>\s*([^<]+)', source)]
         found = [h for h in headers if h in CANONICAL_SERVICES]
         self.assertEqual(found, CANONICAL_SERVICES)

@@ -123,7 +123,7 @@ class TestKoSyncCrossDeviceRewinds:
 
     @staticmethod
     def _settings_template_source():
-        return (_ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
+        return "".join((_ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
 
     def test_setting_is_managed_and_defaults_to_safe_behavior(self):
         assert "KOSYNC_FURTHEST_WINS" in ALL_SETTINGS
@@ -258,7 +258,7 @@ class TestKoSyncCrossDeviceRewinds:
         assert "out-of-date second" in template_source
 
     def test_setting_lives_in_the_main_settings_template(self):
-        settings_template = (_ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
+        settings_template = "".join((_ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         base_template = (_ROOT / "templates" / "base.html").read_text(encoding="utf-8")
         partial_path = _ROOT / "templates" / "_kosync_cross_device_rewinds.html"
 

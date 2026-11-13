@@ -118,7 +118,7 @@ class ServiceIconUiTestCase(unittest.TestCase):
             self.assertIn(f'<img src="/static/{asset}" alt=""', html)
 
     def test_shelf_watch_bodies_use_section_body_collapse(self):
-        html = (ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
+        html = "".join((ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         # One "Up Next" shelf card now covers Grimmory, BookOrbit and Kavita.
         for body in ("all_apps_shelf_watch_body",):
             with self.subTest(body=body):

@@ -64,7 +64,7 @@ def test_stored_data_dir_does_not_override_environment(monkeypatch):
 
 
 def test_settings_page_does_not_post_data_dir():
-    template = (ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
+    template = "".join((ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
     assert 'name="DATA_DIR"' not in template
 
 

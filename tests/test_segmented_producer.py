@@ -290,7 +290,7 @@ class TestSettingRegistration:
     def test_key_greps_in_all_four_touchpoints(self):
         config_loader_src = (REPO_ROOT / "src" / "utils" / "config_loader.py").read_text(encoding="utf-8")
         web_server_src = (REPO_ROOT / "src" / "web_server.py").read_text(encoding="utf-8")
-        settings_html = (REPO_ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
+        settings_html = "".join((REPO_ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
 
         # ALL_SETTINGS + DEFAULT_CONFIG.
         assert config_loader_src.count("ALIGNMENT_SEGMENTED_MAPS") >= 2
