@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const mutations = {
   clamp: ['if (text.scrollHeight > text.clientHeight + 1) {', 'if (true) {'],
   expand: ["text.classList.toggle('is-clamped', !open);", "text.classList.toggle('is-clamped', open);"],
-  label: ["toggle.textContent = bbT(open ? 'Less' : 'More');", "toggle.textContent = bbT('More');"],
+  label: ["toggle.textContent = open ? toggle.dataset.less : toggle.dataset.more;", "toggle.textContent = open ? 'Less' : 'More';"],
   cached: ['if (text.textContent.trim()) show();', 'void 0;'],
   empty: ['if (!data || !data.text) return;', 'if (!data) return;'],
   safe: ['text.textContent = data.text;', 'text.innerHTML = data.text;'],
@@ -34,7 +34,7 @@ function setup({cached = '', url, height = 200, client = 100, reply}) {
     },
   };
   const toggle = {
-    hidden: true, textContent: 'More',
+    hidden: true, textContent: 'Plus', dataset: {more: 'Plus', less: 'Moins'},
     addEventListener: (_, fn) => { click = fn; },
     getAttribute: n => attrs[n], setAttribute: (n, v) => { attrs[n] = v; },
   };
@@ -70,10 +70,10 @@ const ok = body => () => Promise.resolve({ok: true, json: () => Promise.resolve(
   f.click();
   assert(!f.classes.has('is-clamped'), 'More expands');
   assert.equal(f.attrs['aria-expanded'], 'true');
-  assert.equal(f.toggle.textContent, 'Less');
+  assert.equal(f.toggle.textContent, 'Moins', 'Less label comes translated from the template');
   f.click();
   assert(f.classes.has('is-clamped'));
-  assert.equal(f.toggle.textContent, 'More');
+  assert.equal(f.toggle.textContent, 'Plus');
 
   // Cached short text: no toggle, no clamp.
   f = setup({cached: 'Short', height: 50, client: 100});

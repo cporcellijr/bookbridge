@@ -95,7 +95,7 @@ class TestBookAboutBrowser(unittest.TestCase):
         targets = {
             "clamp": "if (text.scrollHeight > text.clientHeight + 1) {",
             "expand": "text.classList.toggle('is-clamped', !open);",
-            "label": "toggle.textContent = bbT(open ? 'Less' : 'More');",
+            "label": "toggle.textContent = open ? toggle.dataset.less : toggle.dataset.more;",
             "cached": "if (text.textContent.trim()) show();",
             "empty": "if (!data || !data.text) return;",
             "safe": "text.textContent = data.text;",

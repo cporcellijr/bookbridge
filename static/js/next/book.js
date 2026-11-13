@@ -17,7 +17,7 @@
             const open = toggle.getAttribute('aria-expanded') !== 'true';
             toggle.setAttribute('aria-expanded', String(open));
             text.classList.toggle('is-clamped', !open);
-            toggle.textContent = bbT(open ? 'Less' : 'More');
+            toggle.textContent = open ? toggle.dataset.less : toggle.dataset.more;
         });
         if (!section.dataset.synopsisUrl) {
             if (text.textContent.trim()) show();
