@@ -14750,218 +14750,14 @@ def _build_combined_stats_payload(listening, reading, tz):
     }
 
 
-def stats_view():
-    return render_template(ui_template('stats.html'))
-
-
-def api_stats():
-    cached = _read_cached_stats()
-    if cached is not None:
-        return jsonify(cached)
-
-    tz = _get_stats_timezone()
-    listening = None
-    reading = None
-
-    try:
-        listening = _build_listening_stats_payload(tz)
-    except Exception as e:
-        logger.warning("Stats API: listening stats build failed: %s", e, exc_info=True)
-        listening = None
-
-    try:
-        reading = _build_reading_stats_payload(tz)
-    except Exception as e:
-        logger.warning("Stats API: reading stats build failed: %s", e, exc_info=True)
-        reading = {
-            "available": False,
-            "stats": None,
-            "daily": [],
-            "heatmap": [],
-            "recentSessions": [],
-            "activityDates": [],
-            "trackedBookIds": [],
-            "trackedBookKeys": [],
-        }
-
-    combined = _build_combined_stats_payload(
-        listening or {"available": False, "stats": None, "daily": [], "heatmap": [], "recentSessions": []},
-        reading,
-        tz,
-    )
-
-    response = {
-        "listening": listening,
-        "reading": {
-            "available": reading.get("available"),
-            "stats": reading.get("stats"),
-            "daily": reading.get("daily"),
-            "heatmap": reading.get("heatmap"),
-            "recentSessions": reading.get("recentSessions"),
-            "trackedBookIds": reading.get("trackedBookIds"),
-            "trackedBookKeys": reading.get("trackedBookKeys"),
-            "hourHistogram": reading.get("hourHistogram") or [],
-            "books": reading.get("books") or [],
-            "yearlyRecap": reading.get("yearlyRecap"),
-        } if reading else {
-            "available": False,
-            "stats": None,
-            "daily": [],
-            "heatmap": [],
-            "recentSessions": [],
-            "trackedBookIds": [],
-            "trackedBookKeys": [],
-            "hourHistogram": [],
-            "books": [],
-            "yearlyRecap": None,
-        },
-        "combined": combined,
-    }
-    _write_cached_stats(response)
-    return jsonify(response)
-
-
-def api_stats_reading_day():
-    date_str = str(request.args.get("date") or "").strip()
-    if not date_str:
-        return jsonify({"error": "Missing date"}), 400
-
-    try:
-        target_date = datetime.fromisoformat(date_str).date()
-    except ValueError:
-        return jsonify({"error": "Invalid date format"}), 400
-
-    try:
-        tz = _get_stats_timezone()
-        payload = database_service.get_koreader_books_for_date(
-            target_date.isoformat(),
-            getattr(tz, "key", str(tz)),
-        )
-    except Exception as e:
-        logger.warning("Stats API: reading day drilldown failed for %s: %s", date_str, e, exc_info=True)
-        return jsonify({"error": "Failed to load reading day details"}), 500
-
-    return jsonify(payload)
-
-
-def api_stats_reading_calendar():
-    month_str = str(request.args.get("month") or "").strip()
-    if not month_str:
-        return jsonify({"error": "Missing month"}), 400
-
-    try:
-        datetime.fromisoformat(f"{month_str}-01")
-    except ValueError:
-        return jsonify({"error": "Invalid month format"}), 400
-
-    try:
-        tz = _get_stats_timezone()
-        payload = database_service.get_koreader_calendar_month(
-            month_str,
-            getattr(tz, "key", str(tz)),
-        )
-    except Exception as e:
-        logger.warning("Stats API: reading calendar failed for %s: %s", month_str, e, exc_info=True)
-        return jsonify({"error": "Failed to load reading calendar"}), 500
-
-    return jsonify(payload)
-
-
-def api_stats_book_detail():
-    key = str(request.args.get("key") or "").strip()
-    if not key:
-        return jsonify({"error": "Missing key"}), 400
-
-    try:
-        tz = _get_stats_timezone()
-        tz_name = getattr(tz, "key", str(tz))
-        reading = database_service.get_koreader_book_detail(key, tz_name)
-
-        abs_id = None
-        if key.startswith("abs:"):
-            abs_id = key.split("abs:", 1)[1]
-        elif reading and reading.get("absId"):
-            abs_id = reading.get("absId")
-
-        listening = None
-        if abs_id:
-            # ABS holds the full listening history, including Storyteller-led time the
-            # bridge credits there; the bridge's own sessions only cover what it saw.
-            abs_client = _stats_abs_client()
-            detail = _abs_book_listening_detail(abs_client, abs_id) if abs_client else None
-            if detail is None:
-                detail = database_service.get_book_listening_detail(abs_id)
-            if detail and int(detail.get("totalSeconds") or 0) > 0:
-                book = database_service.get_book(abs_id)
-                snapshot_title = detail.pop("bookTitle", None)
-                listening = {
-                    "absId": abs_id,
-                    "title": getattr(book, "abs_title", None) or snapshot_title,
-                    **detail,
-                }
-
-        if not reading and not listening:
-            return jsonify({"error": "No detail for this book"}), 404
-
-        title = (reading or {}).get("title") or (listening or {}).get("title") or "Unknown book"
-        return jsonify({
-            "bookKey": key, "absId": abs_id, "title": title,
-            "reading": reading, "listening": listening,
-        })
-    except Exception as e:
-        logger.warning("Stats API: book detail failed for %s: %s", key, e, exc_info=True)
-        return jsonify({"error": "Failed to load book detail"}), 500
-
-
-def api_stats_yearly_recap():
-    scope = str(request.args.get("scope") or "combined").strip().lower()
-    year_str = str(request.args.get("year") or "").strip()
-
-    tz = _get_stats_timezone()
-    tz_name = getattr(tz, "key", str(tz))
-    try:
-        year = int(year_str) if year_str else datetime.now(tz).year
-    except ValueError:
-        return jsonify({"error": "Invalid year"}), 400
-
-    try:
-        # Each recap carries that calendar year's heatmap, so the page can show it.
-        first_day, last_day = datetime(year, 1, 1).date(), datetime(year, 12, 31).date()
-        reading_recap = database_service.get_koreader_yearly_recap(year, tz_name)
-        reading_heatmap = database_service.get_koreader_heatmap(first_day, last_day, tz_name)
-
-        listening_recap = None
-        listening_heatmap = []
-        finished_books = []
-        try:
-            abs_client = _stats_abs_client()
-            if abs_client:
-                raw_stats = abs_client.get_listening_stats()
-                if raw_stats:
-                    finished_books = _abs_finished_books(
-                        abs_client.get_all_progress_raw(), raw_stats.get("items"), tz, abs_client
-                    )
-            else:
-                raw_stats = _local_listening_stats(tz)
-                finished_books = database_service.get_listening_finished_books(tz_name)
-        except Exception:
-            raw_stats = None
-        if raw_stats:
-            listening_recap = _build_listening_yearly_recap(
-                raw_stats.get("days") or {}, year, finished_books, tz
-            )
-            listening_heatmap = _heatmap_from_mapping(raw_stats.get("days") or {}, first_day, last_day)
-
-        if scope == "reading":
-            return jsonify({**reading_recap, "heatmap": reading_heatmap})
-        if scope == "listening":
-            listening = listening_recap or _build_listening_yearly_recap({}, year, [], tz)
-            return jsonify({**listening, "heatmap": listening_heatmap})
-        combined = _build_combined_yearly_recap(reading_recap, listening_recap)
-        return jsonify({**combined, "heatmap": _merge_heatmap_activity(listening_heatmap, reading_heatmap)})
-    except Exception as e:
-        logger.warning("Stats API: yearly recap failed for %s/%s: %s", scope, year, e, exc_info=True)
-        return jsonify({"error": "Failed to load yearly recap"}), 500
+from src.web.routes.stats import (
+    stats_view,
+    api_stats,
+    api_stats_reading_day,
+    api_stats_reading_calendar,
+    api_stats_book_detail,
+    api_stats_yearly_recap,
+)
 
 
 def api_status():
@@ -15061,13 +14857,12 @@ def api_status_progress():
     return jsonify({"mappings": _build_dashboard_progress_rows(books, all_states)})
 
 
-def logs_view():
-    """Display logs frontend with filtering capabilities.
-
-    `?embed=1` renders without the page chrome so the viewer can be hosted
-    inside an iframe (the Settings → Logs tab)."""
-    embed = request.args.get('embed') in ('1', 'true', 'yes')
-    return render_template(ui_template('logs.html'), embed=embed)
+from src.web.routes.logs import (
+    logs_view,
+    api_logs,
+    api_logs_live,
+    view_log,
+)
 
 
 def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
@@ -15078,177 +14873,6 @@ def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
             return list(deque(f, maxlen=max_lines))
     except OSError:
         return []
-
-
-def api_logs():
-    """API endpoint for fetching logs with filtering and pagination."""
-    try:
-        # Get query parameters
-        lines_count = request.args.get('lines', 1000, type=int)
-        min_level = request.args.get('level', 'DEBUG')
-        search_term = request.args.get('search', '').lower()
-        offset = request.args.get('offset', 0, type=int)
-
-        # Limit lines count for performance
-        lines_count = min(lines_count, 5000)
-
-        # Read log files (current and backups)
-        all_lines = []
-
-        # Read current log file
-        if LOG_PATH and LOG_PATH.exists():
-            all_lines.extend(_tail_text_lines(LOG_PATH, lines_count))
-
-        # Read backup files if needed (for more history)
-        if LOG_PATH and lines_count > len(all_lines):
-            for i in range(1, 6):  # Check up to 5 backup files
-                backup_path = Path(str(LOG_PATH) + f'.{i}')
-                if backup_path.exists():
-                    remaining = lines_count - len(all_lines)
-                    backup_lines = _tail_text_lines(backup_path, remaining)
-                    all_lines = backup_lines + all_lines
-                    if len(all_lines) >= lines_count:
-                        break
-
-        # Parse and filter logs
-        log_levels = {
-            'DEBUG': 10, 'INFO': 20, 'WARNING': 30, 'ERROR': 40, 'CRITICAL': 50
-        }
-        min_level_num = log_levels.get(min_level.upper(), 10)
-
-        parsed_logs = []
-        for line in all_lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            # Parse log line format: [2024-01-09 10:30:45] LEVEL - MODULE: MESSAGE
-            try:
-                if line.startswith('[') and '] ' in line:
-                    timestamp_end = line.find('] ')
-                    timestamp_str = line[1:timestamp_end]
-                    rest = line[timestamp_end + 2:]
-
-                    if ': ' in rest:
-                        level_module_str, message = rest.split(': ', 1)
-
-                        # Check if format includes module (LEVEL - MODULE)
-                        if ' - ' in level_module_str:
-                            level_str, module_str = level_module_str.split(' - ', 1)
-                        else:
-                            # Old format without module
-                            level_str = level_module_str
-                            module_str = 'unknown'
-
-                        level_num = log_levels.get(level_str.upper(), 20)
-
-                        # Apply filters
-                        if level_num >= min_level_num:
-                            if not search_term or search_term in message.lower() or search_term in level_str.lower() or search_term in module_str.lower():
-                                parsed_logs.append({
-                                    'timestamp': timestamp_str,
-                                    'level': level_str,
-                                    'message': message,
-                                    'module': module_str,
-                                    'raw': line
-                                })
-                    else:
-                        # Line without level, treat as INFO
-                        if min_level_num <= 20:
-                            if not search_term or search_term in rest.lower():
-                                parsed_logs.append({
-                                    'timestamp': timestamp_str,
-                                    'level': 'INFO',
-                                    'message': rest,
-                                    'module': 'unknown',
-                                    'raw': line
-                                })
-                else:
-                    # Raw line without timestamp, treat as INFO
-                    if min_level_num <= 20:
-                        if not search_term or search_term in line.lower():
-                            parsed_logs.append({
-                                'timestamp': '',
-                                'level': 'INFO',
-                                'message': line,
-                                'module': 'unknown',
-                                'raw': line
-                            })
-            except Exception:
-                # If parsing fails, include as raw line
-                if not search_term or search_term in line.lower():
-                    parsed_logs.append({
-                        'timestamp': '',
-                        'level': 'INFO',
-                        'message': line,
-                        'module': 'unknown',
-                        'raw': line
-                    })
-
-        # Get recent logs first, then apply pagination
-        recent_logs = parsed_logs[-lines_count:] if len(parsed_logs) > lines_count else parsed_logs
-
-        # Apply offset for pagination
-        if offset > 0:
-            recent_logs = recent_logs[:-offset] if offset < len(recent_logs) else []
-
-        return jsonify({
-            'logs': recent_logs,
-            'total_lines': len(parsed_logs),
-            'displayed_lines': len(recent_logs),
-            'has_more': len(parsed_logs) > lines_count + offset
-        })
-
-    except Exception as e:
-        logger.error(f"❌ Error fetching logs: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to fetch logs', 'logs': [], 'total_lines': 0, 'displayed_lines': 0}), 500
-
-
-def api_logs_live():
-    """API endpoint for fetching recent live logs from memory."""
-    try:
-        # Get query parameters
-        count = request.args.get('count', 50, type=int)
-        min_level = request.args.get('level', 'DEBUG')
-        search_term = request.args.get('search', '').lower()
-
-        # Limit count for performance
-        count = min(count, 500)
-
-        log_levels = {
-            'DEBUG': 10, 'INFO': 20, 'WARNING': 30, 'ERROR': 40, 'CRITICAL': 50
-        }
-        min_level_num = log_levels.get(min_level.upper(), 10)
-
-        # Get recent logs from memory
-        recent_logs = memory_log_handler.get_recent_logs(count * 2)  # Get more to filter
-
-        # Filter logs
-        filtered_logs = []
-        for log_entry in recent_logs:
-            level_num = log_levels.get(log_entry['level'], 20)
-
-            # Apply filters
-            if level_num >= min_level_num:
-                if not search_term or search_term in log_entry['message'].lower() or search_term in log_entry['level'].lower():
-                    filtered_logs.append(log_entry)
-
-        # Return most recent filtered logs
-        result_logs = filtered_logs[-count:] if len(filtered_logs) > count else filtered_logs
-
-        return jsonify({
-            'logs': result_logs,
-            'timestamp': datetime.now().isoformat()
-        })
-
-    except Exception as e:
-        logger.error(f"❌ Error fetching live logs: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to fetch live logs', 'logs': [], 'timestamp': datetime.now().isoformat()}), 500
-
-
-def view_log():
-    """Legacy endpoint - redirect to new logs page."""
-    return redirect(url_for('logs_view'))
 
 
 # ---------------- SUGGESTION API ROUTES ----------------
@@ -17464,18 +17088,12 @@ def create_app(test_container=None):
     app.add_url_rule('/api/restart', 'api_restart', api_restart, methods=['POST'])
     app.add_url_rule('/api/status', 'api_status', api_status)
     app.add_url_rule('/api/status/progress', 'api_status_progress', api_status_progress)
-    app.add_url_rule('/stats', 'stats_view', stats_view)
-    app.add_url_rule('/api/stats', 'api_stats', api_stats)
-    app.add_url_rule('/api/stats/reading-day', 'api_stats_reading_day', api_stats_reading_day)
-    app.add_url_rule('/api/stats/reading-calendar', 'api_stats_reading_calendar', api_stats_reading_calendar)
+    from src.web.routes import stats as stats_routes
+    stats_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/api/library/hero/<abs_id>', 'api_library_hero', api_library_hero)
     app.add_url_rule('/api/book/<abs_id>/synopsis', 'api_book_synopsis', api_book_synopsis)
-    app.add_url_rule('/api/stats/book-detail', 'api_stats_book_detail', api_stats_book_detail)
-    app.add_url_rule('/api/stats/yearly-recap', 'api_stats_yearly_recap', api_stats_yearly_recap)
-    app.add_url_rule('/logs', 'logs_view', logs_view)
-    app.add_url_rule('/api/logs', 'api_logs', api_logs)
-    app.add_url_rule('/api/logs/live', 'api_logs_live', api_logs_live)
-    app.add_url_rule('/view_log', 'view_log', view_log)
+    from src.web.routes import logs as logs_routes
+    logs_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/settings', 'settings', settings, methods=['GET', 'POST'])
 
     # Suggestion routes
