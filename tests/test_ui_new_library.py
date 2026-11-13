@@ -858,7 +858,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('.library-toolbar .toolbar-primary { display: flex; flex-wrap: nowrap;', css)
         phone = css[css.rfind('@media (max-width: 760px)'):]
         self.assertIn('grid-template-columns: auto minmax(0, 1fr) auto;', phone)
-        self.assertIn('.library-hero { margin-inline: 4px; }', phone)
+        self.assertNotIn('.library-hero { margin-inline', phone)  # lines up with the toolbar
         self.assertIn('grid-column: 1 / -1; grid-row: 1;', phone)
         self.assertIn('.library-toolbar .library-filter-host { grid-column: 1; grid-row: 2; max-width: 128px;', phone)
         self.assertIn('.library-toolbar #library-filter-button-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;', phone)
