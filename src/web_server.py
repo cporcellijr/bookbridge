@@ -8068,60 +8068,9 @@ def _hero_reading_piece(abs_id: str) -> dict | None:
     return payload
 
 
-def api_book_synopsis(abs_id: str):
-    """Return this reader's linked book synopsis (cached or looked up), or null."""
-    user = current_user()
-    if user is None:
-        return jsonify({"error": "Authentication required"}), 401
-    book = database_service.get_book(abs_id)
-    if book is None or not database_service.is_user_linked(user.id, abs_id):
-        return jsonify({"error": "Not found"}), 404
-    try:
-        text = _hero_cached_synopsis(book, user)
-    except Exception as exc:
-        logger.warning("Book synopsis unavailable for %s: %s", abs_id, exc, exc_info=True)
-        text = None
-    return jsonify({"text": text or None})
+from src.web.routes.book import book_page, api_library_hero, api_book_synopsis
 
 
-def api_library_hero(abs_id: str):
-    """Load optional hero content after first paint, scoped to this reader's claims."""
-    user = current_user()
-    if user is None:
-        return jsonify({"error": "Authentication required"}), 401
-    settings = _display_settings_for(user)
-    if user_setting("UI_MODE", "classic") != "new" or settings["UI_SHOW_HERO"] != "true":
-        return jsonify({"error": "Not found"}), 404
-    if abs_id not in database_service.get_linked_abs_ids(user.id):
-        return jsonify({"error": "Not found"}), 404
-    book = database_service.get_book(abs_id)
-    if book is None:
-        return jsonify({"error": "Not found"}), 404
-
-    chosen = settings["UI_HERO_CONTENT"].split(",") if settings["UI_HERO_CONTENT"] else []
-    pieces = {}
-    if "synopsis" in chosen:
-        try:
-            description = _hero_cached_synopsis(book, user)
-            if description:
-                pieces["synopsis"] = {"text": description}
-        except Exception as exc:
-            logger.warning("Hero synopsis unavailable for %s: %s", abs_id, exc, exc_info=True)
-    if "listened" in chosen:
-        try:
-            detail = _hero_listening_piece(book, abs_id)
-            if detail:
-                pieces["listened"] = detail
-        except Exception as exc:
-            logger.warning("Hero listening unavailable for %s: %s", abs_id, exc, exc_info=True)
-    if "pages" in chosen:
-        try:
-            detail = _hero_reading_piece(abs_id)
-            if detail:
-                pieces["pages"] = detail
-        except Exception as exc:
-            logger.warning("Hero reading unavailable for %s: %s", abs_id, exc, exc_info=True)
-    return jsonify({"absId": abs_id, "pieces": pieces})
 
 
 def index():
@@ -8226,36 +8175,6 @@ def api_current_audio_chapter(abs_id: str) -> object:
         return jsonify(unavailable)
 
 
-def book_page(abs_id: str) -> object:
-    """Show one reader-owned dashboard mapping, optionally as a drawer fragment."""
-    user_id = get_current_user_id()
-    if user_id is None:
-        return jsonify({"error": "authentication required"}), 401
-    book = database_service.get_book(abs_id)
-    if book is None:
-        return jsonify({"error": "book not found"}), 404
-    if not database_service.is_user_linked(user_id, abs_id):
-        return jsonify({"error": "book not available for this user"}), 403
-    states = database_service.get_states_for_book(abs_id, user_id=user_id)
-    integrations = _build_dashboard_integrations()
-    mappings, _progress = _build_dashboard_mappings(
-        [book], states, integrations,
-        all_hardcover=database_service.get_all_hardcover_details(),
-        all_storygraph=database_service.get_all_storygraph_details(),
-        all_goodreads=database_service.get_all_goodreads_details(),
-        reading_stats_by_book={abs_id: database_service.get_reading_stats(abs_id, user_id=user_id) or {}},
-        cached_booklore_by_filename=_index_cached_booklore_books(database_service.get_all_booklore_books()),
-        claim_times_by_book=database_service.get_book_claim_times(user_id=user_id),
-    )
-    return render_template(
-        'next/_book_drawer.html' if request.args.get('fragment') == '1' else 'next/book.html',
-        mapping=mappings[0], integrations=integrations,
-        synopsis=database_service.get_user_book_synopsis_cache(user_id, abs_id)[1],
-        book_states={state.client_name: state for state in states},
-        kosync_devices=database_service.get_user_kosync_progress_for_book(abs_id, user_id=user_id),
-        recent_syncs=sorted(states, key=lambda state: state.last_updated or 0, reverse=True),
-        show_diagnostics_modal=False,
-    )
 
 
 def job_queue_page():
@@ -15383,7 +15302,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/start', 'admin_user_bookfusion_device_start', admin_user_bookfusion_device_start, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/poll', 'admin_user_bookfusion_device_poll', admin_user_bookfusion_device_poll, methods=['POST'])
     app.add_url_rule('/', 'index', index)
-    app.add_url_rule('/book/<abs_id>', 'book_page', book_page, methods=['GET'])
+    from src.web.routes import book as book_routes
+    book_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/api/books/<abs_id>/current-chapter', 'api_current_audio_chapter', api_current_audio_chapter, methods=['GET'])
     app.add_url_rule('/job-queue', 'job_queue_page', job_queue_page, methods=['GET'])
     app.add_url_rule('/job-queue/reorder', 'job_queue_reorder', job_queue_reorder, methods=['POST'])
@@ -15421,8 +15341,6 @@ def create_app(test_container=None):
     status_routes.register(app, sys.modules[__name__])
     from src.web.routes import stats as stats_routes
     stats_routes.register(app, sys.modules[__name__])
-    app.add_url_rule('/api/library/hero/<abs_id>', 'api_library_hero', api_library_hero)
-    app.add_url_rule('/api/book/<abs_id>/synopsis', 'api_book_synopsis', api_book_synopsis)
     from src.web.routes import logs as logs_routes
     logs_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/settings', 'settings', settings, methods=['GET', 'POST'])
