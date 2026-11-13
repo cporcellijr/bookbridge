@@ -7817,6 +7817,43 @@ def _warm_dashboard_sync_warnings() -> None:
                 reset_current_user_id(user_token)
 
 
+def _pick_hero_mapping(mappings: list[dict]) -> dict | None:
+    """Select the most recently propagated in-progress book, deterministically."""
+    eligible = [
+        mapping for mapping in mappings
+        if 0 < float(mapping.get("unified_progress") or 0) < 100
+        and any(float(state.get("percentage") or 0) > 0
+                for state in (mapping.get("states") or {}).values())
+    ]
+    return max(
+        eligible,
+        key=lambda mapping: (
+            float(mapping.get("last_sync_leader_at") or 0),
+            float(mapping.get("last_sync_unix") or 0),
+            str(mapping.get("abs_id") or ""),
+        ),
+        default=None,
+    )
+
+
+def _hero_leader_service(leader: str | None) -> str | None:
+    """Display the exact service that led the latest propagated sync."""
+    if not leader:
+        return None
+    key = str(leader).strip().lower()
+    if key.startswith("kosync") or key == "bridgesync_plugin":
+        return "KOReader"
+    return _FORMAT_STRIP_SERVICE_NAMES.get(key)
+
+
+def _hero_leader_percent(mapping: dict, leader: str | None) -> float | None:
+    """Use the specific leader's position when it has an owned progress row."""
+    key = str(leader or "").strip().lower()
+    if key.startswith("kosync") or key == "bridgesync_plugin":
+        key = "kosync"
+    return (mapping.get("states") or {}).get(key, {}).get("percentage")
+
+
 def index():
     """Dashboard - loads books and progress from database service"""
     user = current_user()
@@ -7824,6 +7861,15 @@ def index():
 
     suggestions = [s for s in database_service.get_all_pending_suggestions(user_id=get_current_user_id()) if len(s.matches) > 0]
     grouped_mappings = _group_dashboard_mappings_by_series(mappings)
+    library_template = ui_template('index.html')
+    hero_mapping = None
+    if library_template == 'next/index.html' and _display_settings_for(user)["UI_SHOW_HERO"] == "true":
+        hero_mapping = _pick_hero_mapping(mappings)
+        if hero_mapping:
+            hero_mapping["is_hero"] = True
+            leader = hero_mapping.get("last_sync_leader")
+            hero_mapping["hero_leader_service"] = _hero_leader_service(leader)
+            hero_mapping["hero_leader_progress"] = _hero_leader_percent(hero_mapping, leader)
 
     latest_version, update_available = get_update_status()
     whats_new_ctx = _build_whats_new_context(user)
@@ -7835,7 +7881,8 @@ def index():
     )
 
     return render_template(
-        ui_template('index.html'),
+        library_template,
+        hero_mapping=hero_mapping,
         mappings=mappings,
         grouped_mappings=grouped_mappings,
         integrations=integrations,
@@ -14596,6 +14643,8 @@ def _build_dashboard_progress_rows(books, all_states):
             "last_sync": _format_dashboard_last_sync(latest_update_time),
             "last_sync_unix": latest_update_time,
             "last_slot": _format_strip_slot(last_slot_client),
+            "last_slot_client": last_slot_client,
+            "last_slot_service": _hero_leader_service(last_slot_client),
             "last_slot_unix": last_slot_unix,
             "last_slot_sync": _format_dashboard_last_sync(last_slot_unix),
             "states": states,

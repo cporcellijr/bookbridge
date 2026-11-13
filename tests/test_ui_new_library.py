@@ -38,6 +38,50 @@ class TestNewLibrary(unittest.TestCase):
         self.service.link_user_book(self.reader.id, "library-book")
         self.service.link_user_book(self.reader.id, "library-finished")
 
+    def test_hero_rendered_and_grid_book_excluded_without_splitting_series(self):
+        self.service.save_state(State(abs_id="library-book", client_name="abs", percentage=.42,
+            timestamp=1512, last_updated=1793800300, user_id=self.reader.id))
+        self.service.record_sync_marker("library-book", "ABS", 1793800400, user_id=self.reader.id)
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        html = self.client.get("/").get_data(as_text=True)
+        hero = re.search(r'<section id="library-hero"[^>]*>.*?</section>', html, re.S).group()
+        self.assertIn('data-abs-id="library-book"', hero)
+        self.assertIn("Audiobookshelf", hero)
+        self.assertIn("42.0%", hero)
+        self.assertLess(html.index('id="library-hero"'), html.index('class="library-toolbar"'))
+        card = re.search(r'<article[^>]*data-abs-id="library-book"[^>]*>', html).group()
+        self.assertIn('data-hero-excluded="true"', card)
+        self.assertIn('class="series-group"', html)
+        self.assertEqual(html.count('id="library-hero"'), 1)
+        self.service.set_user_credential(self.reader.id, "UI_SHOW_HERO", "off")
+        off = self.client.get("/").get_data(as_text=True)
+        self.assertNotIn('id="library-hero"', off)
+        self.assertNotIn('data-hero-excluded="true"', off)
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "classic")
+        classic = self.client.get("/").get_data(as_text=True)
+        self.assertNotIn('id="library-hero"', classic)
+        self.assertNotIn('data-hero-excluded="true"', classic)
+
+    def test_classic_never_calls_the_hero_picker(self):
+        from src import web_server
+        self.service.save_state(State(abs_id="library-book", client_name="abs", percentage=.51,
+            timestamp=1800, last_updated=1793800500, user_id=self.reader.id))
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "classic")
+        self._login("ui-reader")
+        with patch.object(web_server, "_pick_hero_mapping",
+                          side_effect=AssertionError("Classic must not choose a hero")):
+            response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('id="library-hero"', response.get_data(as_text=True))
+
+    def test_no_in_progress_book_leaves_no_visible_hero(self):
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        markup = self.client.get("/").get_data(as_text=True)
+        self.assertRegex(markup, r'id="library-hero" class="library-hero" hidden')
+        self.assertNotIn('data-hero-excluded="true"', markup)
+
     def test_reader_style_renders_before_paint_without_toolbar_switch(self):
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
         self._login("ui-reader")
@@ -620,7 +664,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('id="bb-search-open"', stats)
         self.assertIn('id="bb-search-input"', stats)
 
-    def test_library_header_renders_count_actionable_notices_and_two_control_rows(self):
+    def test_library_header_renders_count_actionable_notices_and_one_control_row(self):
         from types import SimpleNamespace
         from src import web_server
 
@@ -658,12 +702,13 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn("dismissSuggestion(event", text)
         self.assertIn("review=test-suggestion", text)
         self.assertLess(toolbar.index('id="dashboard-search"'), toolbar.index('id="library-filter-button"'))
-        self.assertLess(toolbar.index('id="library-filter-button"'), toolbar.index('class="toolbar-secondary"'))
+        self.assertLess(toolbar.index('id="library-filter-button"'), toolbar.index('id="sort-select"'))
         self.assertIn('class="library-filter-state" hidden', toolbar)
         self.assertIn('id="status-filter"', toolbar)
         self.assertIn('id="author-filter"', toolbar)
         self.assertIn('id="series-filter"', toolbar)
-        self.assertLess(toolbar.index('class="toolbar-primary"'), toolbar.index('class="toolbar-secondary"'))
+        self.assertIn('class="toolbar-primary"', toolbar)
+        self.assertNotIn('class="toolbar-secondary"', toolbar)
         self.assertLess(toolbar.index('id="sort-select"'), toolbar.index('id="select-mode-button"'))
         self.assertIn('id="dashboard-search"', text)
         self.assertIn('aria-label="Filter books"', text)
@@ -676,15 +721,15 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn(".library-toolbar .sort-controls .field { min-width: 112px; }", css)
         self.assertNotIn(".view-switch", css)
 
-    def test_tablet_grouping_control_shares_row_and_phone_label_wraps_at_12px(self):
+    def test_tablet_toolbar_keeps_sort_alongside_filter(self):
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
-        self.assertIn("@media (min-width:761px) and (max-width:980px)", css)
-        self.assertIn(".library-toolbar .toolbar-left, .library-toolbar .toolbar-right { display: contents; }", css)
-        self.assertIn(".library-toolbar .group-toggle { grid-column: 1; grid-row: 2; justify-self: start; }", css)
-        self.assertIn(".library-toolbar #select-mode-button { grid-column: 3; grid-row: 2; }", css)
-        self.assertIn(".library-toolbar #select-mode-button { grid-column: 3; grid-row: 2; }", css)
-        self.assertIn("font-size: 12px; line-height: 1.2; white-space: normal;", css)
-        self.assertNotIn(".library-toolbar .group-toggle { font-size: 10px; }", css)
+        self.assertIn('.library-toolbar .toolbar-primary { display: flex; flex-wrap: nowrap;', css)
+        self.assertIn('.library-toolbar .toolbar-search { flex: 1 1 180px;', css)
+        self.assertIn('max-width: 400px;', css)
+        self.assertIn('.library-toolbar .toolbar-right { flex: 0 0 auto; margin-left: auto;', css)
+        self.assertIn('.library-filter-trigger.is-active,', css)
+        self.assertGreater(css.rindex('.library-toolbar .toolbar-primary { display: flex; flex-wrap: nowrap;'),
+                           css.index('@media (min-width:761px) and (max-width:980px)'))
 
     def test_processing_only_books_have_neutral_link_and_no_attention_control(self):
         from src import web_server
@@ -755,9 +800,12 @@ class TestNewLibrary(unittest.TestCase):
         self.assertNotIn('class="dashboard-section"', html)
         self.assertNotIn('id="not-started-header"', html)
         self.assertNotIn('not_started_expanded', html)
+        grid = html.split('id="library-grid"', 1)[1].split('<footer class="library-footer"', 1)[0]
         for book_id in ("library-book", "library-finished", "standalone-book"):
             with self.subTest(book_id=book_id):
-                self.assertEqual(html.count(f'data-abs-id="{book_id}"'), 1)
+                self.assertEqual(grid.count(f'data-abs-id="{book_id}"'), 1)
+        self.assertIn('data-hero-excluded="true"', grid)
+        self.assertEqual(html.count('id="library-hero"'), 1)
         self.assertEqual(html.count('class="series-group"'), 1)
         self.assertIn('value="reading">Reading status</option>', html)
         self.assertNotIn('value="status">', html)
@@ -796,6 +844,51 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('id="author-filter"', classic)
         self.assertIn('id="series-filter"', classic)
         self.assertNotIn('id="library-filter-button"', classic)
+
+    def test_hero_toolbar_single_row_and_phone_layout_contract(self):
+        page = (_ROOT / "templates/next/index.html").read_text(encoding="utf-8")
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        toolbar = page.split('<section class="library-toolbar"', 1)[1].split('<div id="search-handoff"', 1)[0]
+        ordered = ['id="dashboard-search"', 'id="library-filter-host"',
+                   'class="sort-controls"', 'id="sort-direction"',
+                   'id="select-mode-button"', 'id="filter-count"']
+        self.assertEqual(sorted(ordered, key=toolbar.index), ordered)
+        self.assertNotIn('class="toolbar-secondary"', toolbar)
+        self.assertIn('max-width: 400px;', css)
+        self.assertIn('.library-toolbar .toolbar-primary { display: flex; flex-wrap: nowrap;', css)
+        phone = css[css.rfind('@media (max-width: 760px)'):]
+        self.assertIn('grid-template-columns: auto minmax(0, 1fr) auto;', phone)
+        self.assertIn('.library-hero { margin-inline: 4px; }', phone)
+        self.assertIn('grid-column: 1 / -1; grid-row: 1;', phone)
+        self.assertIn('.library-toolbar .library-filter-host { grid-column: 1; grid-row: 2; max-width: 128px;', phone)
+        self.assertIn('.library-toolbar #library-filter-button-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;', phone)
+        self.assertIn('.library-toolbar .sort-controls { grid-column: 2; grid-row: 2;', phone)
+        self.assertIn('.library-toolbar .toolbar-right { grid-column: 3; grid-row: 2;', phone)
+        self.assertIn('.library-filter-trigger.is-active,', css)
+        self.assertIn('positionLibraryFilterPopover()', (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8"))
+        self.assertIn('stroke="currentColor"', toolbar)
+
+    def test_hero_poll_node_regressions(self):
+        import os
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js not available")
+        script = str(_ROOT / "tests/test_ui_new_library_hero.js")
+        def run(mutation=None):
+            env = os.environ.copy()
+            if mutation: env["P16C_MUTATE"] = mutation
+            else: env.pop("P16C_MUTATE", None)
+            return subprocess.run([node, script], cwd=_ROOT, capture_output=True,
+                                  text=True, timeout=30, env=env)
+        baseline = run()
+        self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+        for mutation in ("swap", "quiet", "eligible",  "progress", "restore", "count", "selection"):
+            with self.subTest(mutation=mutation):
+                reverted = run(mutation)
+                self.assertNotEqual(reverted.returncode, 0,
+                                    "Behaviour survived mutation: " + mutation)
 
     def test_library_filter_node_regressions(self):
         import shutil
@@ -1083,3 +1176,42 @@ class TestNewLibrary(unittest.TestCase):
         )
         self.assertRegex(scripts, r"(?s)bulkMarkFinished.*?confirm\(")
         self.assertRegex(scripts, r"(?s)bulkDeleteBooks.*?confirm\(")
+
+
+class TestHeroPicker(unittest.TestCase):
+    @staticmethod
+    def row(abs_id, progress=30, marker=0, last=0, states=None):
+        return {"abs_id": abs_id, "unified_progress": progress,
+                "states": states if states is not None else {"abs": {"percentage": progress}},
+                "last_sync_leader_at": marker, "last_sync_unix": last}
+
+    def test_newest_propagated_marker_wins_over_newer_state_update(self):
+        from src.web_server import _pick_hero_mapping
+        older_state = self.row("other", marker=10, last=900)
+        newest = self.row("winner", marker=20, last=100)
+        self.assertIs(_pick_hero_mapping([older_state, newest]), newest)
+
+    def test_ties_fall_back_to_last_update_then_abs_id(self):
+        from src.web_server import _pick_hero_mapping
+        rows = [self.row("z", marker=20, last=9), self.row("a", marker=20, last=10),
+                self.row("b", marker=20, last=10)]
+        self.assertEqual(_pick_hero_mapping(rows)["abs_id"], "b")
+        for row in rows: row["last_sync_leader_at"] = 0
+        self.assertEqual(_pick_hero_mapping(rows)["abs_id"], "b")
+
+    def test_koreader_leader_alias_resolves_its_real_progress(self):
+        from src.web_server import _hero_leader_percent, _hero_leader_service
+        mapping = {"states": {"kosync": {"percentage": 37.5}, "abs": {"percentage": 25.0}}}
+        self.assertEqual(_hero_leader_service("bridgesync_plugin"), "KOReader")
+        self.assertEqual(_hero_leader_percent(mapping, "bridgesync_plugin"), 37.5)
+        self.assertEqual(_hero_leader_percent(mapping, "kosync-device"), 37.5)
+        self.assertEqual(_hero_leader_percent(mapping, "ABS"), 25.0)
+
+    def test_finished_unstarted_and_zero_position_are_ineligible(self):
+        from src.web_server import _pick_hero_mapping
+        self.assertIsNone(_pick_hero_mapping([
+            self.row("finished", progress=100, marker=1000),
+            self.row("not-started", progress=0, marker=2000),
+            self.row("reset", progress=20, marker=3000, states={"abs": {"percentage": 0}}),
+        ]))
+        self.assertIsNone(_pick_hero_mapping([]))

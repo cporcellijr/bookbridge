@@ -104,6 +104,10 @@
                     <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
                 </form>
             </section>
+            <section class="display-group" data-display-group="behaviour" aria-labelledby="display-behaviour-title">
+                <header><h2 id="display-behaviour-title">{{ _('Behaviour') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
+                {{ cover_switch('UI_SHOW_HERO', _('Hero card'), display.UI_SHOW_HERO, _('Show your most recently synced in-progress book above the Library controls.')) }}
+            </section>
         </div>
     </div>
 </div>

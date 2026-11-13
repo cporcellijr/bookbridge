@@ -24,7 +24,7 @@ class TestDisplayValues(unittest.TestCase):
 
     def test_normalize_booleans_choices_and_rejects(self):
         cases = [
-            ("UI_SHOW_TITLES", "on", "true"), ("UI_SHOW_TITLES", " TRUE ", "true"),
+            ("UI_SHOW_HERO", "on", "true"), ("UI_SHOW_HERO", "off", "false"), ("UI_SHOW_TITLES", "on", "true"), ("UI_SHOW_TITLES", " TRUE ", "true"),
             ("UI_SHOW_TITLES", "1", "true"), ("UI_SHOW_TITLES", "off", "false"),
             ("UI_SHOW_TITLES", "false", "false"), ("UI_SHOW_TITLES", "maybe", None),
             ("UI_THEME", "Night", "night"), ("UI_THEME", "purple", None),
@@ -51,6 +51,7 @@ class TestDisplayValues(unittest.TestCase):
         self.assertEqual(resolved["UI_SHELF_FINISH"], DEFAULT_CONFIG["UI_SHELF_FINISH"])
         self.assertEqual(resolved["UI_SHOW_RATINGS"], DEFAULT_CONFIG["UI_SHOW_RATINGS"])
         self.assertEqual(set(resolved), set(DISPLAY_SETTINGS))
+        self.assertEqual(resolved["UI_SHOW_HERO"], "true")
 
 
 class TestDisplaySaveRoute(unittest.TestCase):
@@ -73,6 +74,14 @@ class TestDisplaySaveRoute(unittest.TestCase):
         self.assertEqual(self._stored(self.reader, "UI_SHOW_TITLES"), "true")
         self.assertIsNone(self._stored(self.reader, "csrf_token"))
         self.assertIsNone(self._stored(self.admin, "UI_THEME"))
+
+    def test_hero_setting_is_reader_scoped_and_hidden_false_saves(self):
+        self._login("ui-reader")
+        self.client.post("/account/display", data={"UI_SHOW_HERO": ["false", "on"]})
+        self.assertEqual(self._stored(self.reader, "UI_SHOW_HERO"), "true")
+        self.assertIsNone(self._stored(self.admin, "UI_SHOW_HERO"))
+        self.client.post("/account/display", data={"UI_SHOW_HERO": ["false"]})
+        self.assertEqual(self._stored(self.reader, "UI_SHOW_HERO"), "false")
 
     def test_hidden_false_then_checkbox_takes_the_last_value(self):
         self._login("ui-reader")
