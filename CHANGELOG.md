@@ -40,7 +40,16 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- **Acquisition jobs now discover and pair library arrivals across days and restarts** (#585, Phase D; local, uncommitted). Jobs persist the ebook and audiobook's exact source identities, edition-review choices, library import status and pairing state, without discarding provider receipts or outstanding submissions. Shelfmark readers can optionally choose an accessible **Audiobook destination library** in their own integrations: a completed Shelfmark audio delivery can request a tracked BookOrbit scan, with persistent claims, scan-history coalescing, bounded follow-ups and refusal reasons. A completed scan is not proof of a finished import; library files and reader-authorized mappings must be verified first. The picker and per-reader settings exist in both Classic and New. The Processing/search UI belongs to Phase E. This change requires the additive Phase D migration and a restart after review and merge; no live scan or deployment has been performed.
+- **Acquisition jobs now discover and pair library arrivals across days and restarts** (#585, Phase D). Jobs persist the ebook and audiobook's exact source identities, edition-review choices, library import status and pairing state, without discarding provider receipts or outstanding submissions. Shelfmark readers can optionally choose an accessible **Audiobook destination library** in their own integrations: a completed Shelfmark audio delivery can request a tracked BookOrbit scan, with persistent claims, scan-history coalescing, bounded follow-ups and refusal reasons. A completed scan is not proof of a finished import; library files and reader-authorized mappings must be verified first. The picker and per-reader settings exist in both Classic and New. The Processing/search UI belongs to Phase E. This change requires the additive Phase D migration and a restart after review and merge; no live scan or deployment has been performed.
+- **New Library hero details can show up to two reader-selected pieces on desktop and tablet** (P16d).
+  Display → Layout offers Progress per app, Time listened, Pages read, and Synopsis, always
+  in the same order and with missing information omitted. The pieces fetch only after the
+  Library opens; the progress bar for the leading service stays on the base when app bars
+  are off. Phones retain the compact hero. Reader-owned listening/reading details and a
+  durable shared-catalog synopsis cache (EPUB → Audiobookshelf → BookOrbit, including
+  checked-but-empty results) keep requests scoped and avoid repeated metadata reads.
+  Classic and synchronization are unchanged. Applying the new additive migration and
+  restarting the container are required before release.
 
 - **Acquisition requests now keep both formats together across partial submissions** (#585,
   Phase C; local review only). BookOrbit and Shelfmark requests begin with a saved

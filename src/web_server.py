@@ -1,4 +1,5 @@
 import glob
+import gzip
 import hashlib
 import hmac
 import html
@@ -21,6 +22,7 @@ import zipfile
 import zlib
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urljoin, urlparse
@@ -1158,6 +1160,33 @@ def inject_csrf_script(response):
         response.set_data(body[:idx] + snippet + body[idx:])
     except Exception as e:  # never let CSRF wiring break a page render
         logger.debug(f"CSRF inject skipped: {e}")
+    return response
+
+
+def gzip_html_response(response):
+    """after_request hook: compress HTML pages for browsers that accept gzip.
+
+    The Library page is about 500 KB of markup and compresses to a tenth of that in a
+    few milliseconds, which matters on a phone.
+    """
+    try:
+        if (
+            response.status_code != 200
+            or response.mimetype != 'text/html'
+            or response.direct_passthrough
+            or response.is_streamed
+            or 'Content-Encoding' in response.headers
+            or 'gzip' not in request.headers.get('Accept-Encoding', '').lower()
+        ):
+            return response
+        body = response.get_data()
+        if len(body) < 1024:
+            return response
+        response.set_data(gzip.compress(body, compresslevel=6))
+        response.headers['Content-Encoding'] = 'gzip'
+        response.vary.add('Accept-Encoding')
+    except Exception as e:  # compression must never break a page
+        logger.debug(f"Gzip skipped: {e}")
     return response
 
 
@@ -7920,6 +7949,198 @@ def _hero_leader_percent(mapping: dict, leader: str | None) -> float | None:
     return (mapping.get("states") or {}).get(key, {}).get("percentage")
 
 
+# Striped per-book locks prevent duplicate concurrent synopsis source reads.
+_HERO_SYNOPSIS_LOCKS = tuple(threading.Lock() for _ in range(32))
+# Sources answer None on a transient failure too, so an empty result is retried.
+_HERO_SYNOPSIS_RECHECK_SECONDS = 7 * 86400
+
+
+def _hero_plain_text(value: object) -> str:
+    """Strip markup and scripts from untrusted source metadata."""
+    if not isinstance(value, str):
+        return ""
+    safe = re.sub(r"<(script|style)[^>]*>.*?</(script|style)>", " ", value, flags=re.I | re.S)
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", safe))).strip()[:12000]
+
+
+def _hero_synopsis_source(book, user) -> str | None:
+    """Use local EPUB, the reader's ABS metadata, then their BookOrbit detail."""
+    for filename in dict.fromkeys((book.original_ebook_filename, book.ebook_filename)):
+        if not filename or not str(filename).lower().endswith(".epub"):
+            continue
+        path = find_ebook_file(filename)
+        if path:
+            description = _hero_plain_text(extract_epub_metadata(str(path)).get("summary"))
+            if description:
+                return description
+    bundle = container.user_client_registry().get_clients(user.id)
+    abs_client = getattr(bundle, "abs_client", None)
+    if abs_client and abs_client.is_configured():
+        info = abs_client.get_item_details(book.abs_id)
+        if isinstance(info, dict):
+            media = info.get("media") if isinstance(info.get("media"), dict) else {}
+            metadata = media.get("metadata") if isinstance(media.get("metadata"), dict) else {}
+            description = _hero_plain_text(
+                metadata.get("description") or media.get("description") or info.get("description")
+            )
+            if description:
+                return description
+    orbit_id = None
+    if (book.ebook_source or "").lower() == "bookorbit":
+        orbit_id = book.ebook_source_id
+    elif (book.audio_source or "").lower() in ("bookorbit", "bookorbitaudio"):
+        orbit_id = book.audio_source_id
+    orbit = getattr(bundle, "bookorbit_client", None)
+    if orbit_id and orbit and orbit.is_configured():
+        detail = orbit.get_book_detail(orbit_id)
+        if isinstance(detail, dict):
+            nested = detail.get("metadata") if isinstance(detail.get("metadata"), dict) else {}
+            description = _hero_plain_text(
+                detail.get("description") or detail.get("summary")
+                or nested.get("description") or nested.get("summary")
+            )
+            if description:
+                return description
+    return None
+
+
+def _hero_cached_synopsis(book, user) -> str | None:
+    """Share a found synopsis per book for good; retry an empty lookup after a week."""
+    lock = _HERO_SYNOPSIS_LOCKS[hash(book.abs_id) % len(_HERO_SYNOPSIS_LOCKS)]
+    with lock:
+        checked_at, description = database_service.get_book_synopsis_cache(book.abs_id)
+        if description or (checked_at and time.time() - checked_at < _HERO_SYNOPSIS_RECHECK_SECONDS):
+            return description
+        description = _hero_synopsis_source(book, user)
+        database_service.set_book_synopsis_cache(book.abs_id, description, time.time())
+        return description
+
+
+def _hero_daily_totals(rows: list[dict], count: int, field: str, tz) -> dict:
+    """Return today/week only with a complete history, never a truncated sample."""
+    if not rows or count > len(rows):
+        return {}
+    today = datetime.now(tz).date()
+    monday = today - timedelta(days=today.weekday())
+    amounts = {"today": 0, "week": 0}
+    for row in rows:
+        try:
+            when = row.get("date")
+            date_value = (
+                datetime.fromisoformat(when).date() if when
+                else datetime.fromtimestamp(float(row["endTime"]), tz).date()
+            )
+            value = int(row.get(field) or 0)
+        except (KeyError, TypeError, ValueError, OSError):
+            return {}
+        if monday <= date_value <= today:
+            amounts["week"] += value
+        if date_value == today:
+            amounts["today"] += value
+    return amounts
+
+
+def _hero_listening_piece(book, abs_id: str) -> dict | None:
+    """Per-reader duration totals, with optional local day/week breakdown."""
+    abs_client = _stats_abs_client()
+    detail = _abs_book_listening_detail(abs_client, abs_id) if abs_client else None
+    if detail is None:
+        detail = database_service.get_book_listening_detail(abs_id)
+    if not detail or int(detail.get("totalSeconds") or 0) <= 0:
+        return None
+    payload = {"seconds": int(detail["totalSeconds"])}
+    duration = float(book.duration or book.audio_duration or 0)
+    if duration > 0:
+        payload["lengthSeconds"] = round(duration)
+        if detail.get("progressPercent") is not None:
+            progress = min(100, max(0, float(detail["progressPercent"])))
+            payload["leftSeconds"] = max(0, round(duration * (1 - progress / 100)))
+    payload.update(_hero_daily_totals(
+        detail.get("sessions") or [], int(detail.get("sessionCount") or 0),
+        "durationSeconds", _get_stats_timezone(),
+    ))
+    return payload
+
+
+def _hero_reading_piece(abs_id: str) -> dict | None:
+    """Per-reader KOReader pages, enriched with catalog page totals where known."""
+    tz = _get_stats_timezone()
+    reading = database_service.get_koreader_book_detail(
+        f"abs:{abs_id}", getattr(tz, "key", str(tz)),
+    )
+    if not reading or int(reading.get("pagesRead") or 0) <= 0:
+        return None
+    payload = {"read": int(reading["pagesRead"])}
+    storygraph = database_service.get_storygraph_details(abs_id)
+    hardcover = database_service.get_hardcover_details(abs_id)
+    total = (
+        getattr(storygraph, "storygraph_pages", None)
+        or getattr(hardcover, "hardcover_pages", None)
+    )
+    if total and int(total) > 0:
+        payload["total"] = int(total)
+        payload["left"] = max(0, int(total) - payload["read"])
+    heatmap = reading.get("heatmap") or []
+    payload.update(_hero_daily_totals(heatmap, len(heatmap), "pages", tz))
+    return payload
+
+
+def api_book_synopsis(abs_id: str):
+    """Return this reader's linked book synopsis (cached or looked up), or null."""
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Authentication required"}), 401
+    book = database_service.get_book(abs_id)
+    if book is None or not database_service.is_user_linked(user.id, abs_id):
+        return jsonify({"error": "Not found"}), 404
+    try:
+        text = _hero_cached_synopsis(book, user)
+    except Exception as exc:
+        logger.warning("Book synopsis unavailable for %s: %s", abs_id, exc, exc_info=True)
+        text = None
+    return jsonify({"text": text or None})
+
+
+def api_library_hero(abs_id: str):
+    """Load optional hero content after first paint, scoped to this reader's claims."""
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Authentication required"}), 401
+    settings = _display_settings_for(user)
+    if user_setting("UI_MODE", "classic") != "new" or settings["UI_SHOW_HERO"] != "true":
+        return jsonify({"error": "Not found"}), 404
+    if abs_id not in database_service.get_linked_abs_ids(user.id):
+        return jsonify({"error": "Not found"}), 404
+    book = database_service.get_book(abs_id)
+    if book is None:
+        return jsonify({"error": "Not found"}), 404
+
+    chosen = settings["UI_HERO_CONTENT"].split(",") if settings["UI_HERO_CONTENT"] else []
+    pieces = {}
+    if "synopsis" in chosen:
+        try:
+            description = _hero_cached_synopsis(book, user)
+            if description:
+                pieces["synopsis"] = {"text": description}
+        except Exception as exc:
+            logger.warning("Hero synopsis unavailable for %s: %s", abs_id, exc, exc_info=True)
+    if "listened" in chosen:
+        try:
+            detail = _hero_listening_piece(book, abs_id)
+            if detail:
+                pieces["listened"] = detail
+        except Exception as exc:
+            logger.warning("Hero listening unavailable for %s: %s", abs_id, exc, exc_info=True)
+    if "pages" in chosen:
+        try:
+            detail = _hero_reading_piece(abs_id)
+            if detail:
+                pieces["pages"] = detail
+        except Exception as exc:
+            logger.warning("Hero reading unavailable for %s: %s", abs_id, exc, exc_info=True)
+    return jsonify({"absId": abs_id, "pieces": pieces})
+
+
 def index():
     """Dashboard - loads books and progress from database service"""
     user = current_user()
@@ -8046,6 +8267,7 @@ def book_page(abs_id: str) -> object:
     return render_template(
         'next/_book_drawer.html' if request.args.get('fragment') == '1' else 'next/book.html',
         mapping=mappings[0], integrations=integrations,
+        synopsis=database_service.get_book_synopsis_cache(abs_id)[1],
         book_states={state.client_name: state for state in states},
         kosync_devices=database_service.get_user_kosync_progress_for_book(abs_id, user_id=user_id),
         recent_syncs=sorted(states, key=lambda state: state.last_updated or 0, reverse=True),
@@ -13488,33 +13710,107 @@ def _extracted_cover_is_stale(cover_path, source_path) -> bool:
         return False
 
 
-_COVER_FRESH_TTL_SECONDS = 300
+# How long a cover is trusted before its ebook is looked at again. Looking means
+# resolve_book_path, which scans the library: measured at 0.2-8 s per book on a network
+# mount. So it never runs on a request: an existing cover is served at once and the
+# ebook is re-checked on one background thread, at most once per book per window.
+_COVER_FRESH_TTL_SECONDS = 3600
+# A book with no cover yet retries its extraction sooner: the ebook may still be arriving.
+_COVER_MISSING_RETRY_SECONDS = 300
 _cover_fresh_until: dict = {}
+_cover_recheck_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cover-fresh")
+
+
+def _schedule_cover_recheck(doc_hash: str) -> None:
+    """Queue one background ebook check for a cover, unless one ran this window."""
+    now = time.time()
+    if _cover_fresh_until.get(doc_hash, 0) > now:
+        return
+    _cover_fresh_until[doc_hash] = now + _COVER_FRESH_TTL_SECONDS
+    try:
+        _cover_recheck_pool.submit(_recheck_cover, doc_hash)
+    except RuntimeError:
+        _cover_fresh_until.pop(doc_hash, None)  # the pool is shutting down
+
+
+def _recheck_cover(doc_hash: str) -> None:
+    """Re-extract a cover whose ebook changed and retire a thumbnail that no longer matches."""
+    try:
+        cover_path = COVERS_DIR / f"{doc_hash}.jpg"
+        if not cover_path.exists():
+            return
+        book = database_service.get_book_by_kosync_id(doc_hash)
+        if book and book.ebook_filename:
+            parser = container.ebook_parser()
+            source_path = None
+            try:
+                source_path = parser.resolve_book_path(book.ebook_filename)
+            except Exception as e:
+                logger.debug(f"Cover freshness check could not resolve the ebook: {e}")
+            if source_path and _extracted_cover_is_stale(cover_path, source_path):
+                logger.info(
+                    "🖼️ Re-extracting cover for '%s': the ebook changed since it was cached",
+                    sanitize_log_data(getattr(book, "abs_title", None) or doc_hash),
+                )
+                parser.extract_cover(source_path, cover_path)
+        thumb_path = COVERS_DIR / "thumbs" / f"{doc_hash}.jpg"
+        if doc_hash in _thumb_versions and not cover_thumbnail_cache.is_current(cover_path, thumb_path):
+            # The page goes back to probing this cover until the new thumbnail is served.
+            _thumb_versions.pop(doc_hash, None)
+            cover_thumbnail_cache.enqueue(cover_path, thumb_path)
+    except Exception as e:
+        logger.warning(f"Cover freshness check failed for {doc_hash}: {e}", exc_info=True)
 
 # Browser-side cache window for extracted covers. Flask leaves `max_age` unset by
 # default, which sends `Cache-Control: no-cache` — the browser then revalidates
 # EVERY cover on EVERY dashboard load, so a large library pays hundreds of
 # conditional round trips just to be told 304. Covers are auth-gated, hence
-# `private`. The window deliberately matches _COVER_FRESH_TTL_SECONDS: a re-extracted
-# cover is already allowed to be up to that stale server-side, so the browser cache
-# adds no staleness the server does not already accept.
-_COVER_BROWSER_MAX_AGE_SECONDS = _COVER_FRESH_TTL_SECONDS
+# `private`. Kept short: an unversioned cover URL shows a re-extracted cover only
+# after this window, on top of the server's own re-check window.
+_COVER_BROWSER_MAX_AGE_SECONDS = 300
 
 # Thumbnails the New Library may render directly as `?v=<version>` URLs, which the
 # browser keeps for a year: a regenerated thumbnail gets a new version, so a new URL.
-# shortcut: an entry is trusted for a day without the route's ebook freshness check,
-# so an edited ebook's cover can take up to a day to appear; shorten if that matters.
-_THUMB_VERSION_TTL_SECONDS = 86400
+# Versions are read from the thumbnails on disk once per process, so the page renders
+# direct URLs straight after a restart. Each render queues the background ebook check
+# (_schedule_cover_recheck), which drops a version whose thumbnail went out of date.
 _THUMB_IMMUTABLE_CACHE = 'private, max-age=31536000, immutable'
 _thumb_versions: dict = {}
+_thumb_versions_seeded_dir = None
+
+
+def _thumb_version(stat: os.stat_result) -> str:
+    return f"{stat.st_size:x}-{stat.st_mtime_ns:x}"
+
+
+def _seed_thumb_versions() -> None:
+    """Read every finished thumbnail's version from disk, once per covers folder."""
+    global _thumb_versions_seeded_dir
+    if _thumb_versions_seeded_dir == COVERS_DIR:
+        return
+    _thumb_versions_seeded_dir = COVERS_DIR
+    try:
+        with os.scandir(COVERS_DIR / "thumbs") as entries:
+            for entry in entries:
+                if not entry.name.endswith(".jpg"):
+                    continue
+                stat = entry.stat()
+                if stat.st_size:
+                    _thumb_versions.setdefault(entry.name[:-len(".jpg")], _thumb_version(stat))
+    except OSError as e:
+        logger.debug(f"Could not read the cover thumbnail folder: {e}")
 
 
 def thumb_cover_src(doc_hash: str | None) -> str | None:
-    """Versioned thumbnail URL for a cover this process recently served, else None."""
-    entry = _thumb_versions.get(doc_hash) if doc_hash else None
-    if not entry or entry[1] <= time.time():
+    """Versioned thumbnail URL for a cover that has a finished thumbnail, else None."""
+    if not doc_hash:
         return None
-    return f"/covers/thumb/{doc_hash}.jpg?v={entry[0]}"
+    _seed_thumb_versions()
+    version = _thumb_versions.get(doc_hash)
+    if not version:
+        return None
+    _schedule_cover_recheck(doc_hash)
+    return f"/covers/thumb/{doc_hash}.jpg?v={version}"
 
 
 def _send_cover_cached(filename: str):
@@ -13536,33 +13832,19 @@ def serve_cover(filename):
     # 1. Check if file exists
     cover_path = COVERS_DIR / filename
 
-    # The dashboard requests one cover per mapping, so anything on this path runs
-    # hundreds of times per page load. Confirming freshness costs a DB lookup plus
-    # resolve_book_path, which falls back to an rglob of the whole library when its
-    # 100-entry path cache misses — and a large library has far more books than
-    # that. Remember a recent "fresh" verdict so that work happens at most once per
-    # book per TTL instead of on every request; an ebook edited inside the window is
-    # picked up on the next one.
-    if cover_path.exists() and _cover_fresh_until.get(doc_hash, 0) > time.time():
+    # The dashboard requests one cover per mapping, so nothing slow may run here for a
+    # cover that already exists: serve it, and let the background check look at the ebook.
+    if cover_path.exists():
+        _schedule_cover_recheck(doc_hash)
         return _send_cover_cached(filename)
 
-    book = database_service.get_book_by_kosync_id(doc_hash)
+    # A book whose cover could not be extracted would otherwise pay the library scan on
+    # every page view, holding a browser connection ahead of the covers that do exist.
+    if _cover_fresh_until.get(doc_hash, 0) > time.time():
+        return "Cover not found", 404
+    _cover_fresh_until[doc_hash] = time.time() + _COVER_MISSING_RETRY_SECONDS
 
-    if cover_path.exists():
-        source_path = None
-        if book and book.ebook_filename:
-            try:
-                source_path = container.ebook_parser().resolve_book_path(book.ebook_filename)
-            except Exception as e:
-                logger.debug(f"Cover freshness check could not resolve the ebook: {e}")
-        if not source_path or not _extracted_cover_is_stale(cover_path, source_path):
-            _cover_fresh_until[doc_hash] = time.time() + _COVER_FRESH_TTL_SECONDS
-            return _send_cover_cached(filename)
-        _cover_fresh_until.pop(doc_hash, None)
-        logger.info(
-            "🖼️ Re-extracting cover for '%s': the ebook changed since it was cached",
-            sanitize_log_data(getattr(book, "abs_title", None) or doc_hash),
-        )
+    book = database_service.get_book_by_kosync_id(doc_hash)
 
     # 2. Try to extract
 
@@ -13606,10 +13888,8 @@ def serve_thumbnail_cover(filename: str):
     doc_hash = filename[:-len(".jpg")]
     if cover_thumbnail_cache.is_current(source, target):
         original_response.close()
-        stat = target.stat()
-        version = f"{stat.st_size:x}-{stat.st_mtime_ns:x}"
-        # serve_cover above just re-checked the ebook, so the version is fresh again.
-        _thumb_versions[doc_hash] = (version, time.time() + _THUMB_VERSION_TTL_SECONDS)
+        version = _thumb_version(target.stat())
+        _thumb_versions[doc_hash] = version
         response = send_from_directory(
             target.parent, filename, max_age=_COVER_BROWSER_MAX_AGE_SECONDS
         )
@@ -17024,6 +17304,7 @@ def create_app(test_container=None):
     app.before_request(require_login_guard)
     app.before_request(csrf_protect_guard)
     app.teardown_request(_release_request_user_context)
+    app.after_request(gzip_html_response)  # registered first, so it runs after the CSRF injection
     app.after_request(inject_csrf_script)
 
     # Register context processors, jinja globals, etc.
@@ -17142,6 +17423,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/stats', 'api_stats', api_stats)
     app.add_url_rule('/api/stats/reading-day', 'api_stats_reading_day', api_stats_reading_day)
     app.add_url_rule('/api/stats/reading-calendar', 'api_stats_reading_calendar', api_stats_reading_calendar)
+    app.add_url_rule('/api/library/hero/<abs_id>', 'api_library_hero', api_library_hero)
+    app.add_url_rule('/api/book/<abs_id>/synopsis', 'api_book_synopsis', api_book_synopsis)
     app.add_url_rule('/api/stats/book-detail', 'api_stats_book_detail', api_stats_book_detail)
     app.add_url_rule('/api/stats/yearly-recap', 'api_stats_yearly_recap', api_stats_yearly_recap)
     app.add_url_rule('/logs', 'logs_view', logs_view)

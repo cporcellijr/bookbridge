@@ -272,7 +272,7 @@ class TestNewLibrary(unittest.TestCase):
             return mappings, progress
 
         self._login("ui-reader")
-        web_server._thumb_versions["coverlibrarybook"] = ("a-b", float("inf"))
+        web_server._thumb_versions["coverlibrarybook"] = "a-b"
         try:
             with patch.object(web_server, "_build_dashboard_mappings", side_effect=covers):
                 self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
@@ -822,6 +822,16 @@ class TestNewLibrary(unittest.TestCase):
             '<div id="search-handoff"', 1)[0]
         self.assertIn('id="dashboard-search"', toolbar)
         self.assertIn('id="library-filter-button"', toolbar)
+        self.assertIn('id="library-filter-reset"', toolbar)
+        self.assertIn('id="library-filter-clear"', toolbar)
+        self.assertEqual(toolbar.count("aria-label=\"{{ _('Clear library filters') }}\""), 2)
+        self.assertRegex(toolbar, r'id="library-filter-button"[^>]*>.*?</button>\s*<button[^>]*id="library-filter-reset"')
+        head = toolbar.split('<div class="library-filter-panel-head">', 1)[1]
+        self.assertLess(head.index('id="library-filter-clear"'), head.index('data-filter-close'))
+        self.assertIn('id="library-filter-clear" class="library-filter-clear"', head)
+        self.assertIn("disabled>{{ _('Clear') }}", head)
+        self.assertIn('id="library-filter-reset" class="library-filter-reset"', toolbar)
+        self.assertIn('hidden>×</button>', toolbar)
         self.assertIn('aria-controls="library-filter-panel"', toolbar)
         self.assertIn('aria-expanded="false"', toolbar)
         self.assertIn('id="sort-select"', page)
@@ -840,6 +850,10 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('.library-filter-panel:not([hidden]) { position: fixed', css)
         self.assertIn('bottom: 0', css)
         self.assertIn('max-height: min(76dvh, 580px)', css)
+        self.assertIn('.library-filter-reset:focus-visible', css)
+        self.assertIn('.library-filter-clear:focus-visible', css)
+        self.assertIn('.library-filter-reset[hidden] { display: none !important; }', css)
+        self.assertIn('flex: 1 1 auto; width: 100%; min-width: 0;', css)
         self.assertIn('id="filter-select"', classic)
         self.assertIn('id="author-filter"', classic)
         self.assertIn('id="series-filter"', classic)
@@ -891,6 +905,7 @@ class TestNewLibrary(unittest.TestCase):
                                     "Behaviour survived mutation: " + mutation)
 
     def test_library_filter_node_regressions(self):
+        import os
         import shutil
         import subprocess
         node = shutil.which("node")
@@ -901,6 +916,26 @@ class TestNewLibrary(unittest.TestCase):
             cwd=_ROOT, capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # Each mutation is an actual, uniquely matched source edit and must fail
+        # because a corresponding behaviour assertion catches it.
+        for mutation in (
+            "clearFacet", "clearSearch", "clearAttention", "clearSavedAttention",
+            "clearAuthorQuery", "clearSeriesQuery", "clearRerun", "clearFocus", "popoverReposition",
+            "activeFacet", "activeSearch", "activeAttention", "disableClear",
+            "hideReset", "preserveSort", "preserveGrouping",
+        ):
+            with self.subTest(mutation=mutation):
+                env = os.environ.copy()
+                env["P16E_MUTATE"] = mutation
+                reverted = subprocess.run(
+                    [node, str(_ROOT / "tests/test_ui_new_library_filter.js")],
+                    cwd=_ROOT, capture_output=True, text=True, timeout=30, env=env,
+                )
+                output = reverted.stdout + reverted.stderr
+                self.assertNotIn("Mutation target must exist exactly once", output,
+                                 "Missing or duplicated mutation target: " + mutation)
+                self.assertNotEqual(reverted.returncode, 0,
+                                    "Behaviour survived mutation: " + mutation)
 
     def test_reading_status_node_regressions(self):
         import shutil

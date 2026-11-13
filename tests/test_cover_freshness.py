@@ -90,9 +90,18 @@ class TestCoverFreshnessVerdictCaching(unittest.TestCase):
 
         web_server.database_service = _DB()
 
+        # The ebook check runs on a background pool; run it inline to count it.
+        class _InlinePool:
+            def submit(_self, fn, *args):
+                fn(*args)
+
+        self._saved_pool = web_server._cover_recheck_pool
+        web_server._cover_recheck_pool = _InlinePool()
+
         def _restore():
             web_server.COVERS_DIR = self._saved_covers
             web_server.database_service = self._saved_db
+            web_server._cover_recheck_pool = self._saved_pool
 
         self.addCleanup(_restore)
 

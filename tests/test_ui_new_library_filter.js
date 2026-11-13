@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-let source = fs.readFileSync('templates/next/_library_scripts.html', 'utf8');
+let source = fs.readFileSync('templates/next/_library_scripts.html', 'utf8').replaceAll(String.fromCharCode(13, 10), String.fromCharCode(10));
 const mutations = {
   status: ["return rank === ({in_progress: 0, not_started: 1, finished: 2})[statusValue];", "return false;"],
   group: ["groupedStatus.set(card, matches)", "groupedStatus.set(card, false)"],
@@ -13,11 +13,28 @@ const mutations = {
   attention: ["attention: attentionOnlyFilter ? attentionOnlyFilter.checked : savedAttentionPreference,", "attention: !!attentionOnlyFilter?.checked,"],
   focus: ["if (restoreFocus) filterButton?.focus();", "void filterButton;"],
   outsideFocus: ["closeFilterPanel(false);", "closeFilterPanel();"],
+  clearFacet: ["if (select) select.value = 'all';", "if (select) select.value = select.value;"],
+  clearSearch: ["if (dashboardSearch) dashboardSearch.value = '';", "if (dashboardSearch) dashboardSearch.value = dashboardSearch.value;"],
+  clearAttention: ["if (attentionOnlyFilter) attentionOnlyFilter.checked = false;", "if (attentionOnlyFilter) attentionOnlyFilter.checked = true;"],
+  clearSavedAttention: ["savedAttentionPreference = false;" + String.fromCharCode(10) + "                for (const group", "savedAttentionPreference = true;" + String.fromCharCode(10) + "                for (const group"],
+  clearAuthorQuery: ["for (const group of ['author', 'series']) {", "for (const group of ['series']) {"],
+  clearSeriesQuery: ["for (const group of ['author', 'series']) {", "for (const group of ['author']) {"],
+  clearRerun: ["filterBooks();" + String.fromCharCode(10) + "                positionLibraryFilterPopover();", "void filterBooks;" + String.fromCharCode(10) + "                positionLibraryFilterPopover();"],
+  clearFocus: ["if (focusTrigger) filterButton?.focus();", "void focusTrigger;"],
+  popoverReposition: ["positionLibraryFilterPopover();" + String.fromCharCode(10) + "                if (focusTrigger)", "void positionLibraryFilterPopover;" + String.fromCharCode(10) + "                if (focusTrigger)"],
+  activeFacet: ["Object.values(filterGroups).some(select => select && select.value !== 'all')", "false"],
+  activeSearch: ["|| !!dashboardSearch?.value.trim()" + String.fromCharCode(10) + "                    || (attentionOnlyFilter", "|| false" + String.fromCharCode(10) + "                    || (attentionOnlyFilter"],
+  activeAttention: ["(attentionOnlyFilter?.checked === true);", "false;"],
+  disableClear: ["if (filterClearButton) filterClearButton.disabled = !active;", "if (filterClearButton) filterClearButton.disabled = true;"],
+  hideReset: ["if (filterResetButton) filterResetButton.hidden = !active;", "if (filterResetButton) filterResetButton.hidden = true;"],
+  preserveSort: ["if (dashboardSearch) dashboardSearch.value = '';", "if (dashboardSearch) dashboardSearch.value = ''; sortSelect.value = 'title';"],
+  preserveGrouping: ["savedAttentionPreference = false;" + String.fromCharCode(10) + "                for (const group", "savedAttentionPreference = false; seriesGroupingToggle.checked = false;" + String.fromCharCode(10) + "                for (const group"],
 };
-if (process.env.P16B_MUTATE) {
-  const mutation = mutations[process.env.P16B_MUTATE];
+const mutationKey = process.env.P16E_MUTATE || process.env.P16B_MUTATE;
+if (mutationKey) {
+  const mutation = mutations[mutationKey];
   assert(mutation, 'Unknown mutation');
-  assert(source.includes(mutation[0]), 'Mutation target missing: ' + process.env.P16B_MUTATE);
+  assert.equal(source.split(mutation[0]).length - 1, 1, 'Mutation target must exist exactly once: ' + mutationKey);
   source = source.replace(mutation[0], mutation[1]);
 }
 function extract(first, last) {
@@ -58,10 +75,14 @@ const group = {
   querySelectorAll: () => members,
 };
 const cards = [...members, ...flat];
+const facetSearchFields = {author: {value: ""}, series: {value: ""}};
 const savedWrites = [];
 let groupingOff = false;
 const document = {
   body: {classList: {contains: k => k === 'series-grouping-off' && groupingOff}},
+  getElementById(id) {
+    return facetSearchFields[id.replace(/^filter-/, '').replace(/-search$/, '')] || null;
+  },
   querySelectorAll(query) {
     if (query === '.book-card') return cards;
     if (query === '.series-group') return [group];
@@ -138,10 +159,18 @@ assert.equal(closures.length, 3, 'An option closes the panel');
 
 
 const label = {textContent: ''};
-const labelCode = extract('function updateFilterButtonLabel()', 'function closeFilterPanel(')
+const labelCode = extract('function hasActiveLibraryFilters()', '// A click elsewhere')
   .replace(/\{\{\s*_\('Filter'\)\|tojson\s*\}\}/, JSON.stringify('Filter'));
+const labelClasses = new Set();
+const labelReset = {hidden: true};
+const labelClear = {disabled: true};
+const labelSearch = {value: ''};
+const labelAttention = {checked: false};
 const labels = scope(labelCode, {
   filterButtonLabel: label, filterGroups: choices,
+  filterButton: {classList: {toggle(key, on) {if (on) labelClasses.add(key); else labelClasses.delete(key);}}},
+  filterResetButton: labelReset, filterClearButton: labelClear,
+  dashboardSearch: labelSearch, attentionOnlyFilter: labelAttention, savedAttentionPreference: false,
   facetOptionBaseLabel: option => option.textContent,
 });
 labels.updateFilterButtonLabel();
@@ -158,6 +187,27 @@ choices.status.value = 'in_progress';
 labels.updateFilterButtonLabel();
 assert.equal(label.textContent, 'Filter · In progress');
 choices.status.value = 'all';
+labels.updateFilterButtonLabel();
+assert(labelReset.hidden && labelClear.disabled && !labelClasses.has('is-active'), 'Nothing active hides × and disables Clear');
+for (const [kind, turnOn, turnOff] of [
+  ['facet', () => {choices.series.value = 'series:Two';}, () => {choices.series.value = 'all';}],
+  ['search', () => {labelSearch.value = 's';}, () => {labelSearch.value = '';}],
+  ['attention', () => {labelAttention.checked = true;}, () => {labelAttention.checked = false;}],
+]) {
+  turnOn(); labels.updateFilterButtonLabel();
+  assert(!labelReset.hidden && !labelClear.disabled && labelClasses.has('is-active'), kind + ' shows × and enables Clear');
+  turnOff(); labels.updateFilterButtonLabel();
+  assert(labelReset.hidden && labelClear.disabled && !labelClasses.has('is-active'), kind + ' no longer active hides ×');
+}
+labels.attentionOnlyFilter = null;
+labels.savedAttentionPreference = true;
+labels.updateFilterButtonLabel();
+assert.equal(labelReset.hidden, true, 'A saved preference with no attention box filters nothing, so no ×');
+labels.savedAttentionPreference = false;
+labels.updateFilterButtonLabel();
+assert.equal(labelReset.hidden, true);
+assert.match(source, /filterResetButton\?\.addEventListener\('click', \(\) => clearLibraryFilters\(true\)\)/);
+assert.match(source, /filterClearButton\?\.addEventListener\('click', \(\) => \{\s*clearLibraryFilters\(\)/);
 
 const holders = {};
 const searches = {author: {value: ''}, series: {value: ''}};
@@ -245,4 +295,81 @@ panelContext.closeFilterPanel(false);
 assert.equal(trigger.focusCount, 1, 'A click outside leaves focus where the reader clicked');
 assert.match(source, /event.key === 'Escape'[\s\S]*?closeFilterPanel\(\)/);
 assert.match(source, /!filterHost.contains\(event.target\)\) \{\s*closeFilterPanel\(false\);/, 'Outside clicks close without stealing focus');
-console.log('Library P16b status, grouping, selection, search, restore, label and popover regressions ok');
+// Exercise Clear with the real filterBooks implementation and storage writes.
+const resetLabelCode = (extract('function hasActiveLibraryFilters()', '// A click elsewhere')
+  .replace(/\{\{\s*_\('Filter'\)\|tojson\s*\}\}/, JSON.stringify('Filter')))
+  + extract('function clearLibraryFilters(', '// Offers a route into');
+const resetClasses = new Set();
+const resetTrigger = {
+  focusCount: 0, focus() {this.focusCount++;},
+  classList: {toggle(key, on) {if (on) resetClasses.add(key); else resetClasses.delete(key);}},
+};
+const resetX = {hidden: true};
+const clearInPanel = {disabled: true};
+const sort = {value: 'reading'};
+const direction = {textContent: '↑'};
+const groupingToggle = {checked: true};
+let repositionCount = 0;
+Object.assign(filtering, {
+  filterGroups: {status: filtering.statusFilter, format: filtering.filterSelect,
+                 author: filtering.authorFilter, series: filtering.seriesFilter},
+  filterButton: resetTrigger, filterButtonLabel: {textContent: ''},
+  filterResetButton: resetX, filterClearButton: clearInPanel,
+  sortSelect: sort, directionBtn: direction, seriesGroupingToggle: groupingToggle,
+  facetOptionBaseLabel: option => option.textContent,
+  positionLibraryFilterPopover() {repositionCount++;},
+});
+for (const [key, select] of Object.entries(filtering.filterGroups)) select.options = choices[key].options;
+scope(resetLabelCode, filtering);
+filtering.filterGroups.status.value = 'in_progress';
+filtering.dashboardSearch.value = 'sea';
+filtering.attentionOnlyFilter.checked = true;
+facetSearchFields.author.value = 'Ada';
+facetSearchFields.series.value = 'One';
+filtering.savedAttentionPreference = true;
+filtering.filterBooks();
+assert(!resetX.hidden && !clearInPanel.disabled && resetClasses.has('is-active'));
+const beforeClearWrites = savedWrites.length;
+filtering.clearLibraryFilters(true);
+assert(Object.values(filtering.filterGroups).every(select => select.value === 'all'), 'Every facet clears');
+assert.equal(filtering.dashboardSearch.value, '', 'Search clears');
+assert.equal(filtering.attentionOnlyFilter.checked, false, 'Attention checkbox unticks');
+assert.equal(filtering.savedAttentionPreference, false, 'Saved attention preference resets');
+assert.equal(facetSearchFields.author.value, '', 'Author typeahead clears');
+assert.equal(facetSearchFields.series.value, '', 'Series typeahead clears');
+assert(cards.every(card => !hidden(card)), 'The full grid is visible after reset');
+assert.equal(savedWrites.length, beforeClearWrites + 1, 'Clear reruns the grid and saves once');
+assert.deepEqual(savedWrites.at(-1)[1],
+  {format:'all',series:'all',author:'all',attention:false,status:'all'},
+  'The saved state survives reload cleared, including Classic-compatible shape');
+assert.equal(sort.value, 'reading', 'Sort selection is untouched');
+assert.equal(direction.textContent, '↑', 'Sort direction is untouched');
+assert.equal(groupingToggle.checked, true, 'Group series is untouched');
+assert(resetX.hidden && clearInPanel.disabled && !resetClasses.has('is-active'), 'Clear hides × and disables itself');
+assert.equal(filtering.filterButtonLabel.textContent, 'Filter');
+assert.equal(resetTrigger.focusCount, 1, '× moves focus to Filter after hiding itself');
+assert.equal(repositionCount, 1, 'Clear repositions the open desktop popover after toolbar relayout');
+
+// The box is conditional; its former state must not persist if it is absent.
+filtering.filterGroups.format.value = 'paired';
+filtering.savedAttentionPreference = true;
+filtering.attentionOnlyFilter = null;
+filtering.clearLibraryFilters();
+assert.equal(filtering.savedAttentionPreference, false, 'Clear resets preference without checkbox');
+assert.deepEqual(savedWrites.at(-1)[1],
+  {format:'all',series:'all',author:'all',attention:false,status:'all'});
+assert.equal(sort.value, 'reading');
+assert.equal(groupingToggle.checked, true);
+for (const [key, value] of [
+  ['status', 'in_progress'], ['format', 'paired'],
+  ['author', 'author:Ada'], ['series', 'series:One'],
+]) {
+  filtering.filterGroups[key].value = value;
+  filtering.clearLibraryFilters();
+  assert(Object.values(filtering.filterGroups).every(select => select.value === 'all'),
+    'Clear resets the ' + key + ' facet');
+  assert.deepEqual(savedWrites.at(-1)[1],
+    {format:'all',series:'all',author:'all',attention:false,status:'all'},
+    'Each facet reset persists: ' + key);
+}
+console.log('Library P16b/P16e filter, clear, persistence, focus and popover regressions ok');

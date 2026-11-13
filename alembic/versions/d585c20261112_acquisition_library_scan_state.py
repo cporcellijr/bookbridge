@@ -1,14 +1,14 @@
 """Persist confirmed library arrivals, pairing and post-delivery scans (#585 Phase D).
 
 Revision ID: d585c20261112
-Revises: c585c20261112
+Revises: h16d20261112
 Create Date: 2026-11-12
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = "d585c20261112"
-down_revision = "c585c20261112"
+down_revision = "h16d20261112"
 branch_labels = None
 depends_on = None
 

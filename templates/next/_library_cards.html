@@ -1,7 +1,8 @@
 {% macro render_hero(mapping) %}
     {% set title = mapping.display_title ~ ((': ' ~ mapping.display_subtitle) if mapping.display_subtitle else '') %}
-    <section id="library-hero" class="library-hero" aria-label="{{ _('Currently reading') }}" data-abs-id="{{ mapping.abs_id }}" data-movement-at="{{ mapping.last_sync_leader_at or mapping.last_sync_unix or 0 }}" data-marker-at="{{ mapping.last_sync_leader_at or 0 }}">
+    <section id="library-hero" class="library-hero" aria-label="{{ _('Currently reading') }}" data-abs-id="{{ mapping.abs_id }}" data-movement-at="{{ mapping.last_sync_leader_at or mapping.last_sync_unix or 0 }}" data-marker-at="{{ mapping.last_sync_leader_at or 0 }}" data-hero-content="{{ display_settings().UI_HERO_CONTENT }}" data-hero-slots="{{ mapping.format_strip|tojson|forceescape }}">
         <a class="library-hero-link" href="{{ url_for('book_page', abs_id=mapping.abs_id) }}" onclick="openBookDrawer(this.href,this);return false;" aria-label="{{ _('Open %(title)s by %(author)s', title=title, author=mapping.display_author or _('Unknown author')) }}">
+            <div class="hero-base">
             <div class="hero-cover">
                 {% if mapping.kosync_doc_id %}
                 {% set thumb_src = thumb_cover_src(mapping.kosync_doc_id) %}
@@ -16,7 +17,10 @@
                 <h2 class="hero-title">{{ title }}</h2>
                 <span class="hero-author">{{ mapping.display_author }}</span>
                 <span class="hero-progress"><span class="hero-service" {% if not mapping.hero_leader_service %}hidden{% endif %}>{{ mapping.hero_leader_service or '' }}</span><span class="hero-percent">{{ '%.1f'|format(mapping.hero_leader_progress if mapping.hero_leader_progress is not none else mapping.unified_progress) }}%</span></span>
+                <span class="hero-mini-track" {% if "bars" in display_settings().UI_HERO_CONTENT.split(",") %}hidden{% endif %}><span style="width:{{ mapping.hero_leader_progress if mapping.hero_leader_progress is not none else mapping.unified_progress }}%"></span></span>
             </div>
+            </div>
+            <div class="hero-content" hidden></div>
         </a>
     </section>
 {% endmacro %}

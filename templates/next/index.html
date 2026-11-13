@@ -73,13 +73,15 @@
     {% from 'next/_library_cards.html' import render_card, render_series, render_hero with context %}
     {% if display.UI_SHOW_HERO == 'true' %}
         {% if hero_mapping %}{{ render_hero(hero_mapping) }}{% else %}
-        <section id="library-hero" class="library-hero" hidden aria-label="{{ _('Currently reading') }}">
+        <section id="library-hero" class="library-hero" hidden data-hero-content="{{ display.UI_HERO_CONTENT }}" aria-label="{{ _('Currently reading') }}">
             <a class="library-hero-link" href="#" onclick="openBookDrawer(this.href,this);return false;">
-                <div class="hero-cover"></div>
+                <div class="hero-base"><div class="hero-cover"></div>
                 <div class="hero-copy"><span class="hero-eyebrow">{{ _('Currently reading') }}</span>
                     <h2 class="hero-title"></h2><span class="hero-author"></span>
                     <span class="hero-progress"><span class="hero-service" hidden></span><span class="hero-percent"></span></span>
-                </div>
+                    <span class="hero-mini-track" hidden><span></span></span>
+                </div></div>
+                <div class="hero-content" hidden></div>
             </a>
         </section>{% endif %}
     {% endif %}
@@ -90,9 +92,10 @@
             <div class="toolbar-search"><input id="dashboard-search" type="search" class="field" aria-label="{{ _('Filter books') }}" placeholder="{{ _('Filter books…') }}" autocomplete="off"></div>
             <div class="library-filter-host" id="library-filter-host">
                 <button type="button" id="library-filter-button" class="btn library-filter-trigger" aria-expanded="false" aria-controls="library-filter-panel"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span id="library-filter-button-label">{{ _('Filter') }}</span><span aria-hidden="true">⌄</span></button>
+                <button type="button" id="library-filter-reset" class="library-filter-reset" aria-label="{{ _('Clear library filters') }}" title="{{ _('Clear filters') }}" hidden>×</button>
                 <div id="library-filter-backdrop" class="library-filter-backdrop" hidden></div>
                 <div id="library-filter-panel" class="library-filter-panel" role="dialog" aria-label="{{ _('Filters') }}" hidden>
-                    <div class="library-filter-panel-head"><strong>{{ _('Filters') }}</strong><button type="button" class="library-filter-close" aria-label="{{ _('Close filters') }}" data-filter-close>×</button></div>
+                    <div class="library-filter-panel-head"><strong>{{ _('Filters') }}</strong><div class="library-filter-head-actions"><button type="button" id="library-filter-clear" class="library-filter-clear" aria-label="{{ _('Clear library filters') }}" disabled>{{ _('Clear') }}</button><button type="button" class="library-filter-close" aria-label="{{ _('Close filters') }}" data-filter-close>×</button></div></div>
                     <div class="library-filter-panel-groups">
                         <section class="library-filter-group" data-filter-group="status"><h3>{{ _('Status') }}</h3><div class="library-filter-options" id="filter-status-options"></div></section>
                         <section class="library-filter-group" data-filter-group="format"><h3>{{ _('Format') }}</h3><div class="library-filter-options" id="filter-format-options"></div></section>
