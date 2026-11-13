@@ -467,3 +467,56 @@ class TestIntegrationsSaveBar(unittest.TestCase):
     def test_integrations_save_bar_is_sticky(self):
         css = (ROOT / 'static/css/next-p6.css').read_text(encoding='utf-8')
         self.assertIn('.integrations-wrap .integrations-save-bar { position: sticky;', css)
+
+
+class TestIntegrationsLayout(TestP6RenderedRoutes):
+    """Both New integrations pages use a gated Settings-style rail."""
+
+    def test_integrations_rail_has_only_visible_groups_and_preferences(self):
+        with patch.dict(os.environ, {"STORYTELLER_ENABLED": "false",
+                                     "BOOKORBIT_ENABLED": "true"}):
+            pages = self.get_pages(self.admin, "new")
+        routes = ("/account/integrations", f"/admin/users/{self.reader.id}/integrations")
+        for route in routes:
+            with self.subTest(route=route):
+                markup = pages[route]
+                self.assertIn('<aside class="rail rail-settings"', markup)
+                rail = markup.split('<aside class="rail rail-settings"', 1)[1].split("</aside>", 1)[0]
+                self.assertIn('class="settings-menu"', rail)
+                self.assertNotIn('class="rail-nav"', rail)
+                self.assertIn('href="#integrations-prefs"', rail)
+                self.assertNotIn("Storyteller</span>", rail)
+                self.assertIn("BookOrbit</span>", rail)
+                anchors = re.findall(r'class="settings-tab(?: active)?" href="#([^"]+)"', rail)
+                self.assertEqual(anchors.count("integrations-prefs"), 1)
+                groups = re.findall(r'id="(integration-group-\d+)" class="group( group--off)?"', markup)
+                enabled = {name for name, off in groups if not off}
+                disabled = {name for name, off in groups if off}
+                self.assertEqual(set(anchors), enabled - {
+                    next(name for name, _ in groups
+                         if 'id="' + name + '" class="group"' in markup
+                         and 'id="integrations-prefs"' in markup.split('id="' + name + '"', 1)[1].split('</div>', 1)[0])
+                } | {"integrations-prefs"})
+                self.assertTrue(disabled)
+                self.assertFalse(set(anchors) & disabled)
+                self.assertEqual(len(anchors), len(enabled))
+                self.assertEqual(markup.count('id="integrations-prefs"'), 1)
+                self.assertIn('/static/css/next-integrations.css', markup)
+                if route == "/account/integrations":
+                    self.assertIn('class="settings-back" href="/account"', rail)
+                else:
+                    self.assertIn('class="settings-back" href="/admin/users"', rail)
+
+    def test_integrations_styles_and_observer_live_outside_pinned_scripts(self):
+        for page in ("account_integrations", "admin_user_integrations"):
+            with self.subTest(page=page):
+                source = (ROOT / "templates/next" / (page + ".html")).read_text(encoding="utf-8")
+                self.assertNotIn("<style>", source)
+                self.assertIn('href="/static/css/next-integrations.css"', source)
+                self.assertIn("new IntersectionObserver(", source)
+                self.assertLess(source.index('_integrations_scripts.html" %}'),
+                                source.index("new IntersectionObserver("))
+        css = (ROOT / "static/css/next-integrations.css").read_text(encoding="utf-8")
+        for selector in (".link-actions", ".status-pill.linked", ".status-pill.unlinked",
+                         ".inline-status", "@media (min-width: 761px)"):
+            self.assertIn(selector, css)
