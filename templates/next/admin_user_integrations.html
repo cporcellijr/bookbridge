@@ -1,45 +1,44 @@
 {% extends "next/base.html" %}
+{% set settings_rail = true %}
+{% block rail_nav %}
+<div class="settings-rail-nav">
+    <div class="settings-navigation">
+        <a class="settings-back" href="{{ url_for('admin_users') }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#chevron"></use></svg><span>{{ _('Users') }}</span></a>
+        <nav class="settings-menu" aria-label="{{ _('Integrations') }}">
+            <a class="settings-tab active" href="#integrations-prefs"><span class="settings-tab-label">{{ _('Reading preferences') }}</span></a>
+            {% for group, fields in groups %}
+            {% set gate_keys = {
+                'Audiobookshelf': 'ABS_ENABLED',
+                'KOReader / KoSync': 'KOSYNC_ENABLED',
+                'Storyteller': 'STORYTELLER_ENABLED',
+                'Grimmory': 'BOOKLORE_ENABLED',
+                'BookFusion': 'BOOKFUSION_ENABLED',
+                'BookOrbit': 'BOOKORBIT_ENABLED',
+                'Kavita': 'KAVITA_ENABLED',
+                'Readest': 'READEST_ENABLED',
+                'Calibre-Web Automated': 'CWA_ENABLED',
+                'Hardcover': 'HARDCOVER_ENABLED',
+                'StoryGraph': 'STORYGRAPH_ENABLED',
+                'Goodreads': 'GOODREADS_ENABLED'
+            } %}
+            {% set gate_key = gate_keys.get(group) %}
+            {% set gate_globally_off = gate_key in service_enable_keys
+                and master.get(gate_key, '')|lower in ['false','0','no','off'] %}
+            {% if group != 'Reading preferences' and not gate_globally_off %}
+            <a class="settings-tab" href="#integration-group-{{ loop.index }}"><span class="settings-tab-label">{{ _(group) }}</span></a>
+            {% endif %}
+            {% endfor %}
+        </nav>
+    </div>
+</div>
+{% endblock %}
+
 {% set active_page = 'settings' %}
 {% block title %}{{ _('%(name)s - Integrations - BookBridge admin', name=target_user.username) }}{% endblock %}
 
 {% block head %}
-<style>
-    .integrations-wrap { padding: 40px 16px; }
-    .integrations-wrap .card { max-width: 560px; margin: 0 auto 20px; }
-    .integrations-wrap h1 {
-        font-size: 20px; margin: 0 0 4px;
-        background: var(--gradient);
-        -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
-    }
-    .integrations-wrap .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
-    .integrations-wrap .group { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 16px; }
-    .integrations-wrap .group:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
-    .integrations-wrap .group h2 { font-size: 14px; color: var(--muted); margin: 0 0 12px; }
-    .integrations-wrap label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
-    .integrations-wrap .card input[type="text"],
-    .integrations-wrap .card input[type="password"],
-    .integrations-wrap .card select { margin-bottom: 14px; }
-    .integrations-wrap .toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-    .integrations-wrap .toggle-row input { width: 16px; height: 16px; }
-    .integrations-wrap .toggle-row label { margin: 0; color: var(--text); }
-    .integrations-wrap .group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-    .integrations-wrap .group-head h2 { margin: 0; }
-    .integrations-wrap .group-head-actions { display: flex; align-items: center; gap: 10px; }
-    .integrations-wrap .group-body.collapsed { display: none; }
-    .integrations-wrap .toggle-switch-wrapper { display: flex; align-items: center; gap: 8px; }
-    .integrations-wrap .toggle-label { color: var(--muted-soft); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-    .integrations-wrap .test-btn {
-        width: auto; min-width: 72px; padding: 7px 10px; margin-top: 0;
-        font-size: 12px; background: rgba(255, 255, 255, .06); border: 1px solid var(--border);
-    }
-    .integrations-wrap .test-btn.ok { background: rgba(54, 211, 153, .18); border-color: rgba(54, 211, 153, .45); color: #b8e6ba; }
-    .integrations-wrap .test-btn.fail { background: rgba(255, 107, 107, .16); border-color: rgba(255, 107, 107, .45); color: #ffc2bc; }
-    .integrations-wrap .test-btn:disabled { cursor: wait; opacity: .75; }
-    .integrations-wrap .nav { max-width: 560px; margin: 0 auto 16px; }
-    .integrations-wrap .nav a { color: var(--accent); text-decoration: none; font-size: 13px; margin-right: 16px; }
-    .integrations-wrap .note { color: var(--muted); font-size: 12px; background: rgba(0, 0, 0, .2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 18px; }
-</style>
 <link rel="stylesheet" href="/static/css/next-p6.css">
+<link rel="stylesheet" href="/static/css/next-integrations.css">
 {% endblock %}
 
 {% block content %}
@@ -120,8 +119,8 @@
             {% set body_id = 'integration_body_' ~ loop.index %}
             {% set gate_id = 'integration_gate_' ~ loop.index %}
             {% if gate_globally_off %}{% set off_ns.names = off_ns.names + [_(group)] %}{% endif %}
-            <div class="group{% if gate_globally_off %} group--off{% endif %}">
-                <div class="group-head">
+            <div id="integration-group-{{ loop.index }}" class="group{% if gate_globally_off %} group--off{% endif %}">
+                <div class="group-head"{% if group == 'Reading preferences' %} id="integrations-prefs"{% endif %}>
                     <h2>{{ _(group) }}</h2>
                     <div class="group-head-actions">
                         {% if gate_key or source_gate %}
@@ -282,6 +281,37 @@
     const mark = function () { note.hidden = false; };
     form.addEventListener('input', mark);
     form.addEventListener('change', mark);
+}());
+</script>
+
+<script>
+(function () {
+    const menu = document.querySelector('.settings-rail-nav .settings-menu');
+    if (!menu) return;
+    const links = Array.from(menu.querySelectorAll('.settings-tab[href^="#"]'));
+    const targets = new Map(links.map(link => [link.getAttribute('href').slice(1), link]));
+    const activate = function (id) {
+        if (!targets.has(id)) return;
+        links.forEach(link => link.classList.toggle('active', link === targets.get(id)));
+    };
+    links.forEach(link => link.addEventListener('click', function () {
+        activate(link.getAttribute('href').slice(1));
+    }));
+    if (!('IntersectionObserver' in window)) return;
+    const visible = new Set();
+    const observer = new IntersectionObserver(function (entries) {
+        entries.forEach(entry => {
+            if (!targets.has(entry.target.id)) return;
+            if (entry.isIntersecting) visible.add(entry.target);
+            else visible.delete(entry.target);
+        });
+        const current = Array.from(visible).sort((a, b) =>
+            Math.abs(a.getBoundingClientRect().top - 90) -
+            Math.abs(b.getBoundingClientRect().top - 90))[0];
+        if (current) activate(current.id);
+    }, { rootMargin: '-80px 0px -45% 0px' });
+    document.querySelectorAll('[id^="integration-group-"], #integrations-prefs')
+        .forEach(section => observer.observe(section));
 }());
 </script>
 {% endblock %}

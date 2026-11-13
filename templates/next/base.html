@@ -92,7 +92,7 @@
     {%- endmacro %}
     <a class="skip-link" href="#main-content">{{ _('Skip to content') }}</a>
     <div class="app-shell">
-        <aside class="rail{% if active_page == 'settings' %} rail-settings{% endif %}" aria-label="{{ _('Main navigation') }}">
+        <aside class="rail{% if active_page == 'settings' or settings_rail %} rail-settings{% endif %}" aria-label="{{ _('Main navigation') }}">
             <div class="rail-head">
                 <a class="brand" href="/" aria-label="BookBridge — {{ _('Library') }}">
                 <svg class="brand-mark" aria-hidden="true"><use href="/static/icons.svg#brand"></use></svg><span>BookBridge</span>
