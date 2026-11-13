@@ -138,7 +138,7 @@
 @media (max-width: 760px) {
   .view .settings-mobile-slot { width: 100%; }
   .settings-mobile-slot .settings-navigation { padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
-  .settings-mobile-slot .settings-menu { flex: 0 1 auto; max-height: 280px; overflow-y: auto; }
+  .settings-mobile-slot .settings-menu { flex: 0 1 auto; }
 }
 @media (max-width: 600px) {
   .view .container { padding: 0 0 150px; }
@@ -150,4 +150,16 @@
   .view .submit-bar .btn { flex: none; min-height: 44px; }
   .view .settings-section .header-tail { width: 100%; }
   .view .account-wrap .card, .view .integrations-wrap .card, .view .admin-users-wrap .card { padding: 16px; }
+}
+
+.settings-section-toggle { display: none; }
+@media (max-width: 760px) {
+    .settings-section-toggle { display: flex; width: 100%; min-height: 48px; align-items: center; gap: 10px; padding: 8px 14px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); color: var(--text); font: 600 15px var(--font-ui); cursor: pointer; text-align: left; }
+    .settings-section-toggle-kicker { color: var(--text-3); font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; }
+    .settings-section-toggle .icon { margin-left: auto; transform: rotate(90deg); }
+    .settings-section-toggle[aria-expanded="true"] .icon { transform: rotate(-90deg); }
+    .settings-mobile-slot .settings-navigation { display: none; margin-top: 8px; }
+    .settings-mobile-slot.open .settings-navigation { display: flex; }
+    .settings-mobile-slot .settings-menu { max-height: none; overflow: visible; }
+    .view .submit-bar .save-effect:not(.warn) { display: none; }
 }

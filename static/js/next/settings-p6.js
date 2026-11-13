@@ -64,6 +64,22 @@
         else viewport.addListener(move);
     }
 
+    function mountSectionToggle() {
+        const slot = document.getElementById('settings-mobile-slot');
+        const toggle = document.getElementById('settings-section-toggle');
+        const menu = document.getElementById('settings-navigation');
+        if (!slot || !toggle || !menu) return;
+        const setOpen = function (open) {
+            slot.classList.toggle('open', open);
+            toggle.setAttribute('aria-expanded', String(open));
+        };
+        toggle.addEventListener('click', function () { setOpen(!slot.classList.contains('open')); });
+        // Close on a section pick only: clearing the search box also calls showSettingsTab.
+        menu.addEventListener('click', function (event) {
+            if (event.target.closest('.settings-tab')) setOpen(false);
+        });
+    }
+
     function disableServiceHeaderCollapse() {
         document.querySelectorAll('.settings-section[data-svc]').forEach(function (section) {
             const head = section.querySelector(':scope > .section-header');
@@ -111,6 +127,9 @@
             if (active) link.setAttribute('aria-current', 'page');
             else link.removeAttribute('aria-current');
         });
+        const current = document.getElementById('settings-section-current');
+        const activeLabel = document.querySelector('.settings-tab.active .settings-tab-label');
+        if (current && activeLabel) current.textContent = activeLabel.textContent;
         keepSelectedMenuLinkInView();
         document.querySelectorAll('.tab-panel').forEach(function (panel) {
             const active = panel.dataset.panel === (servicePage ? 'integrations' : page);
@@ -262,6 +281,7 @@
 
     document.addEventListener('DOMContentLoaded', function () {
         mountSettingsNavigation();
+        mountSectionToggle();
         disableServiceHeaderCollapse();
         buildServiceNavigation();
         showSettingsTab(requestedField || 'audiobookshelf',

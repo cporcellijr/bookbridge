@@ -435,3 +435,19 @@ class TestSettingsLogsLink(unittest.TestCase):
         source = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
         self.assertNotIn('<iframe', source)
         self.assertIn("{{ _('Open Logs') }}", source)
+
+
+class TestSettingsPhoneSectionBar(unittest.TestCase):
+    """Settings uses a single expandable section bar on phones."""
+
+    def test_phone_section_bar_exists_and_is_wired(self):
+        template = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        js = (ROOT / 'static/js/next/settings-p6.js').read_text(encoding='utf-8')
+        mobile_slot = next(line for line in template.splitlines() if 'id="settings-mobile-slot"' in line)
+        self.assertIn('id="settings-section-toggle"', mobile_slot)
+        self.assertIn('function mountSectionToggle()', js)
+        self.assertIn("getElementById('settings-section-current')", js)
+
+    def test_phone_menu_has_no_inner_scroll(self):
+        css = (ROOT / 'static/css/next-p6.css').read_text(encoding='utf-8')
+        self.assertNotIn('max-height: 280px', css)
