@@ -32,7 +32,10 @@
                     if (button) { button.disabled = false; button.textContent = original; }
                 });
         }
-        document.addEventListener('DOMContentLoaded', () => loadScanLibraries(null));
+        document.addEventListener('DOMContentLoaded', () => {
+            const picker = document.querySelector('[data-scan-library-picker]');
+            if (picker && picker.value) loadScanLibraries(null);
+        });
 
         function toggleIntegrationGroup(toggle) {
             const body = document.getElementById(toggle.dataset.bodyId || '');

@@ -58,6 +58,7 @@ class TestPhaseDArrivals(unittest.TestCase):
         self.other = self.db.create_user("other", "pw", role="user")
         self.pairer = Pairer(self.db)
         self.service = AcquisitionService(self.db, self.pairer)
+        self.service.job_reconcile_interval = timedelta(0)
         self.bo = MagicMock()
         self.bo.is_configured.return_value = True
         self.bo.get_libraries.return_value = [{"id": 7, "name": "Audio"}]
@@ -728,7 +729,9 @@ class TestPhaseDScanSerialization(unittest.TestCase):
             sorted(reloaded.get_acquisition_job(self.user.id, job["id"])["scan_state"] for job in self.jobs),
             ["claimed", "waiting_scope"],
         )
-        self.assertEqual(reloaded.claim_acquisition_scan(self.user.id, self.jobs[0]["id"], "7")["state"],
+        again = reloaded.claim_acquisition_scan(self.user.id, self.jobs[0]["id"], "7")
+        self.assertEqual(again["state"], "already_claimed")
+        self.assertEqual(again["scan_state"],
                          reloaded.get_acquisition_job(self.user.id, self.jobs[0]["id"])["scan_state"])
 
     def test_same_server_scope_coalesces_cross_reader_without_exposing_other_job(self):

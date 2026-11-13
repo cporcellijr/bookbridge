@@ -797,7 +797,7 @@
         $('acqForm').addEventListener('submit', submitAcq);
         $('acqPartnerSelect').addEventListener('change', updateAcqPartner);
         document.querySelectorAll('input[name="acqFormat"]').forEach((input) => input.addEventListener('change', () => {
-            if (acqPartner) {
+            if (acqPartner && acqPartnerChoices.length > 1) {
                 $('acqPartnerSelect').value = '';
                 updateAcqPartner();
             }

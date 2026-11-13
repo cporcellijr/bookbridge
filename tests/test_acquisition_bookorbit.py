@@ -75,6 +75,15 @@ class TestBookOrbitRequestClient(unittest.TestCase):
         for forbidden in ("targetBookId", "selfServe", "userId", "providerKey"):
             self.assertNotIn(forbidden, body)
 
+    def test_create_tells_a_definite_refusal_from_an_unknown_outcome(self):
+        for status in (400, 401, 403, 404, 422):
+            self.mock_request.return_value = _response(status, {})
+            self.assertEqual(self.client.create_request("Example Book", "ebook"),
+                             {"error": "refused", "status_code": status})
+        for outcome in (_response(500, {}), _response(502, {}), None):
+            self.mock_request.return_value = outcome
+            self.assertIsNone(self.client.create_request("Example Book", "ebook"))
+
     def test_pair_uses_pairs_route_with_both_halves(self):
         self.client.create_request_pair("Example Book", authors=["A. Writer"])
         method, endpoint, body = self.mock_request.call_args.args
@@ -392,6 +401,18 @@ class TestCreate(AcquisitionBase):
         self.assertEqual(self.svc.get_acquisition_requests(self.reg.id), [])
         self.assertEqual(self.create(job_id=job_id).get_json()["failures"], {"ebook": "submission_uncertain"})
         self.bo.create_request.assert_called_once()
+
+    def test_definite_refusal_is_a_failure_the_reader_can_retry(self):
+        self.bo.create_request.return_value = {"error": "refused", "status_code": 403}
+        resp = self.create()
+        self.assertEqual(resp.get_json()["failures"], {"ebook": "submission_failed"})
+        self.assertEqual(resp.get_json()["job"]["ebook_submission_state"], "failed")
+        job_id = resp.get_json()["job_id"]
+        self.bo.create_request.return_value = {"request": {"id": 11, "status": "pending"}, "subscribed": True}
+        retry = self.create(job_id=job_id)
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(self.bo.create_request.call_count, 2)
+        self.assertEqual(len(self.svc.get_acquisition_requests(self.reg.id)), 1)
 
 
 class TestMineCancelDismiss(AcquisitionBase):

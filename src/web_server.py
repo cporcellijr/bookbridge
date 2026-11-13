@@ -1620,13 +1620,14 @@ def account_integrations():
 
     from src.utils.user_config import PER_USER_FIELD_GROUPS
 
-    message = None
+    message = error = None
     if request.method == 'POST':
         error = _apply_user_integrations(user.id)
-        if error:
+        if error and _request_wants_json():
             return jsonify({"error": error}), 400
-        message = "Saved your integrations."
-        user = database_service.get_user(user.id)
+        if not error:
+            message = "Saved your integrations."
+            user = database_service.get_user(user.id)
 
     creds = database_service.get_user_credentials(user.id)
     master = {
@@ -1641,9 +1642,10 @@ def account_integrations():
         service_enable_keys=SERVICE_ENABLE_KEYS,
         allow_master_fallback=_global_fallback_allowed(database_service, user),
         message=message,
+        error=error,
         account_user=user,
         user_test_services=_USER_TEST_SERVICES,
-    )
+    ), (400 if error else 200)
 
 
 # Library-lookup credentials the primary admin's account also lends to the
@@ -1675,9 +1677,12 @@ def _apply_user_integrations(user_id):
                 values[key] = request.form.get(key, '')
 
     destination = values.get('SHELFMARK_AUDIOBOOK_LIBRARY_ID', '')
+    saved_destination = str(database_service.get_user_credential(user_id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID', '') or '')
     if destination:
         if not destination.isdecimal() or int(destination) <= 0:
             return 'Audiobook destination library must be a positive BookOrbit library ID.'
+    if destination and destination != saved_destination:
+        # Only a newly chosen destination needs the live check; unrelated edits must not depend on BookOrbit.
         target = database_service.get_user(user_id)
         libraries, error = _reader_scan_libraries(target, dict(request.form))
         if error:
@@ -1732,13 +1737,14 @@ def admin_user_integrations(user_id):
 
     from src.utils.user_config import PER_USER_FIELD_GROUPS
 
-    message = None
+    message = error = None
     if request.method == 'POST':
         error = _apply_user_integrations(user_id)
-        if error:
+        if error and _request_wants_json():
             return jsonify({"error": error}), 400
-        message = f"Saved integrations for {target.username}."
-        target = database_service.get_user(user_id)
+        if not error:
+            message = f"Saved integrations for {target.username}."
+            target = database_service.get_user(user_id)
 
     creds = database_service.get_user_credentials(user_id)
     # Master/global value per key, shown as the inherited fallback hint.
@@ -1754,9 +1760,10 @@ def admin_user_integrations(user_id):
         service_enable_keys=SERVICE_ENABLE_KEYS,
         allow_master_fallback=_global_fallback_allowed(database_service, target),
         message=message,
+        error=error,
         target_user=target,
         user_test_services=_USER_TEST_SERVICES,
-    )
+    ), (400 if error else 200)
 
 
 _USER_TEST_SERVICES = {

@@ -174,7 +174,7 @@
                                 <button type="button" class="job-queue-action" data-provider-action="bookorbit-picker"
                                         data-receipt-id="{{ receipt.id }}">{{ _('Choose a release') }}</button>
                                 {% endif %}
-                                {% if receipt.status in ('waiting', 'in_progress', 'needs_look') and (receipt.service != 'Shelfmark' or receipt.remote_kind != 'request' or receipt.remote_status == 'pending') %}
+                                {% if receipt.status in ('waiting', 'in_progress', 'needs_look') and not (receipt.status == 'needs_look' and receipt.remote_status in ('available', 'complete')) and (receipt.service != 'Shelfmark' or receipt.remote_kind != 'request' or receipt.remote_status == 'pending') %}
                                 <button type="button" class="job-queue-action" data-provider-action="cancel-receipt"
                                         data-receipt-id="{{ receipt.id }}">{{ _('Cancel request') }}</button>
                                 {% endif %}

@@ -265,8 +265,11 @@ def _intent(web, user_id: int, payload: dict, submit_formats: list[str]) -> tupl
 
 
 def _job_public(job: dict) -> dict:
-    """Stable job identity, two independent submission states, and accepted receipts for later UI."""
-    return {**job, "requests": [_public(row) for row in job["requests"]]}
+    """Stable job identity, two independent submission states, and accepted receipts for later UI.
+
+    ``scan_scope`` is the BookOrbit server address; it stays server-side.
+    """
+    return {**{k: v for k, v in job.items() if k != "scan_scope"}, "requests": [_public(row) for row in job["requests"]]}
 
 
 def _job_answer(web, user_id: int, job_id: str, **extra):
@@ -433,6 +436,13 @@ def acquisition_bookorbit():
             except Exception:
                 logger.warning("BookOrbit submission response uncertain for job %s %s", job_id, kind, exc_info=True)
                 failures[kind] = "submission_uncertain"
+                continue
+            if remote.get("error") == "refused":
+                web.database_service.set_acquisition_submission_state(
+                    user_id, job_id, kind, "failed", f"bookorbit_refused_{remote.get('status_code')}"[:100],
+                    confirmed_rejection=True,
+                )
+                failures[kind] = "submission_failed"
                 continue
             if remote.get("id") is None:
                 failures[kind] = "submission_uncertain"

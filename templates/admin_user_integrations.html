@@ -61,6 +61,7 @@
             their own accounts, tokens, and sync toggles from <strong>Account -> My Integrations</strong>.{% endtrans %}</div>
 
         {% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
+        {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
 
         <form method="POST" action="{{ url_for('admin_user_integrations', user_id=target_user.id) }}">
             {% for group, fields in groups %}
@@ -345,7 +346,10 @@
                     if (button) { button.disabled = false; button.textContent = original; }
                 });
         }
-        document.addEventListener('DOMContentLoaded', () => loadScanLibraries(null));
+        document.addEventListener('DOMContentLoaded', () => {
+            const picker = document.querySelector('[data-scan-library-picker]');
+            if (picker && picker.value) loadScanLibraries(null);
+        });
 
         function toggleIntegrationGroup(toggle) {
             const body = document.getElementById(toggle.dataset.bodyId || '');

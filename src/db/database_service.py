@@ -2875,11 +2875,34 @@ class DatabaseService:
             return [self._acquisition_job_dict(job, grouped[job.id]) for job in jobs]
 
     def dismiss_acquisition_job(self, user_id: int, job_id: str) -> bool:
-        """Hide an owned job without cancelling or dismissing its provider requests."""
+        """Hide an owned job without cancelling or dismissing its provider requests.
+
+        A dismissed job never reports its scan's provider id, so scan waiters
+        serialized behind its unacknowledged claim are released to claim afresh.
+        """
         with self.get_session() as session:
-            return bool(session.query(AcquisitionJob).filter_by(id=job_id, user_id=user_id).update(
-                {"dismissed": True, "updated_at": utcnow()}, synchronize_session=False,
-            ))
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            job = session.query(AcquisitionJob).filter_by(id=job_id, user_id=user_id).first()
+            if job is None:
+                return False
+            job.dismissed = True
+            job.updated_at = utcnow()
+            if job.scan_state in ("claimed", "waiting_scope") and not job.scan_job_id and job.scan_library_id:
+                scope_filter = (
+                    AcquisitionJob.scan_scope == job.scan_scope if job.scan_scope
+                    else AcquisitionJob.user_id == user_id
+                )
+                session.query(AcquisitionJob).filter(
+                    scope_filter,
+                    AcquisitionJob.id != job_id,
+                    AcquisitionJob.scan_library_id == job.scan_library_id,
+                    AcquisitionJob.scan_state == "waiting_scope",
+                    AcquisitionJob.scan_job_id.is_(None),
+                ).update({
+                    "scan_state": None, "scan_reason": None, "scan_library_id": None,
+                    "scan_scope": None, "updated_at": utcnow(),
+                }, synchronize_session=False)
+            return True
 
     def set_acquisition_job_existing_half(
         self, user_id: int, job_id: str, media_kind: str, identity: dict,
@@ -3058,9 +3081,13 @@ class DatabaseService:
             session.flush()
             return self._acquisition_dict(row)
 
-    def get_unpaired_acquisition_jobs(self, user_id: int) -> list[dict]:
-        """Reader jobs awaiting pairing or outstanding tracked scan outcomes."""
-        from sqlalchemy import and_, exists, or_
+    def get_unpaired_acquisition_jobs(self, user_id: int, created_after: Optional[datetime] = None) -> list[dict]:
+        """Reader jobs awaiting pairing or outstanding tracked scan outcomes.
+
+        Jobs created before ``created_after`` are given up on, except for an
+        outstanding scan, whose outcome is always tracked.
+        """
+        from sqlalchemy import and_, exists, or_, true
         with self.get_session() as session:
             unlinked_arrival = exists().where(and_(
                 AcquisitionRequest.user_id == user_id,
@@ -3068,14 +3095,15 @@ class DatabaseService:
                 AcquisitionRequest.status == "arrived",
                 AcquisitionRequest.remote_status.in_(("complete", "available")),
                 AcquisitionRequest.arrived_source_id.is_(None),
+                AcquisitionRequest.linked_abs_id.is_(None),
                 AcquisitionRequest.dismissed.is_(False),
             ))
+            recent = AcquisitionJob.created_at >= created_after if created_after is not None else true()
             jobs = session.query(AcquisitionJob).filter(
                 AcquisitionJob.user_id == user_id,
                 AcquisitionJob.dismissed.is_(False),
-                or_(AcquisitionJob.linked_abs_id.is_(None),
-                    AcquisitionJob.scan_state.in_(("claimed", "accepted", "coalesced", "waiting_scope", "uncertain")),
-                    unlinked_arrival),
+                or_(AcquisitionJob.scan_state.in_(("claimed", "accepted", "coalesced", "waiting_scope", "uncertain")),
+                    and_(recent, or_(AcquisitionJob.linked_abs_id.is_(None), unlinked_arrival))),
             ).order_by(AcquisitionJob.created_at).all()
             if not jobs:
                 return []
@@ -3243,6 +3271,11 @@ class DatabaseService:
                         receipt.status = "paired"
                         receipt.linked_abs_id = abs_id
                         receipt.status_detail = None
+                    elif (receipt.status == "arrived" and receipt.remote_status in ("complete", "available")
+                          and not receipt.linked_abs_id):
+                        # Completed before this pairing, so not a "late" arrival. It stays
+                        # unattributed: its delivered file is not proven to be a library copy.
+                        receipt.linked_abs_id = abs_id
             job.updated_at = utcnow()
             return True
 
@@ -3280,7 +3313,9 @@ class DatabaseService:
             if job is None or job.dismissed or job.audio_delivered_at is None:
                 return {"state": "not_ready"}
             if job.scan_state in ("claimed", "accepted", "coalesced", "waiting_scope", "uncertain"):
-                return {"state": job.scan_state, "job_id": job.scan_job_id, "library_id": job.scan_library_id}
+                # Another caller holds this job's claim; never report it as this caller's win.
+                return {"state": "already_claimed", "scan_state": job.scan_state,
+                        "job_id": job.scan_job_id, "library_id": job.scan_library_id}
             if job.scan_state == "completed" and (job.scan_attempts or 0) >= 2:
                 return {"state": "exhausted"}
             if job.scan_state == "completed" and job.scan_completed_at and utcnow() - job.scan_completed_at < timedelta(minutes=5):
@@ -3297,6 +3332,7 @@ class DatabaseService:
                 AcquisitionJob.id != job_id,
                 AcquisitionJob.scan_library_id == library_id,
                 AcquisitionJob.scan_state.in_(("claimed", "accepted", "coalesced", "waiting_scope")),
+                AcquisitionJob.dismissed.is_(False),
             ).order_by(AcquisitionJob.scan_claimed_at.desc()).all()
             if others:
                 first = others[0]
