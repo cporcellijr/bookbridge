@@ -14530,80 +14530,7 @@ def api_debug_abs_series():
 # --- Logger setup (already present) ---
 logger = logging.getLogger(__name__)
 
-def get_booklore_libraries():
-    """Return available Grimmory libraries."""
-    if not container.booklore_client().is_configured():
-        return jsonify({"error": "Grimmory not configured"}), 400
-
-    libraries = container.booklore_client().get_libraries()
-    return jsonify(libraries)
-
-
-def get_booklore_shelves():
-    """Return available Grimmory shelves (regular and magic)."""
-    if not container.booklore_client().is_configured():
-        return jsonify({"error": "Grimmory not configured"}), 400
-
-    try:
-        shelves = container.booklore_client().get_all_shelves()
-        magic_shelves = container.booklore_client().get_all_magic_shelves()
-        
-        all_shelves = shelves + magic_shelves
-        result = []
-        
-        for s in all_shelves:
-            is_magic = s.get("magicShelf") or s.get("magic") or s.get("isMagic", False)
-            name = s.get("name", "Unknown")
-            
-            # Add emoji prefix for UI distinction
-            if is_magic and not name.startswith("🪄"):
-                name = f"🪄 {name}"
-                
-            result.append({
-                "id": s.get("name"),  # Use original name as ID
-                "name": name,
-                "count": s.get("bookCount", 0)
-            })
-            
-        # Sort alphabetically by the original name
-        result.sort(key=lambda x: x["id"].lower() if x["id"] else "")
-        return jsonify(result)
-        
-    except Exception as e:
-        logger.error(f"Error fetching Grimmory shelves: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-
-def get_watch_shelves() -> Response:
-    """Shelves and collections that can be the "Up Next" shelf, from every library app in use."""
-    clients = uc()
-    apps = (('Grimmory', clients.booklore_client), ('BookOrbit', clients.bookorbit_client),
-            ('Kavita', clients.kavita_client))
-    found = {}
-    for app_name, client in apps:
-        if client is None or not client.is_configured():
-            continue
-        try:
-            shelves = client.get_all_shelves() or []
-        except Exception as e:
-            logger.warning(f"Could not list {app_name} shelves: {e}", exc_info=True)
-            continue
-        for shelf in shelves:
-            name = str(shelf.get('name') or shelf.get('title') or '').strip() if isinstance(shelf, dict) else ''
-            if name:
-                found.setdefault(name.lower(), (name, []))[1].append(app_name)
-    result = [{"id": name, "name": f"{name} ({', '.join(in_apps)})"} for name, in_apps in found.values()]
-    result.sort(key=lambda x: x["id"].lower())
-    return jsonify(result)
-
-
-def get_abs_libraries():
-    """Return available Audiobookshelf libraries."""
-    if not container.abs_client().is_configured():
-        return jsonify({"error": "Audiobookshelf not configured"}), 400
-
-    libraries = container.abs_client().get_libraries()
-    return jsonify(libraries)
+from src.web.routes.integration_lookups import get_booklore_libraries, get_booklore_shelves, get_watch_shelves, get_abs_libraries, api_booklore_refresh
 
 
 
@@ -14614,26 +14541,12 @@ def get_abs_libraries():
 
 
 
-def api_booklore_refresh():
-    """Clear Grimmory cache and trigger a full refresh."""
-    client = container.booklore_client()
-    if not client.is_configured():
-        return jsonify({"success": False, "error": "Grimmory not configured"}), 400
 
-    try:
-        refreshed = client.clear_and_refresh()
-    except Exception as e:
-        logger.error(f"❌ Grimmory cache refresh failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
 
-    if not refreshed:
-        return jsonify({"success": False, "error": "Grimmory refresh failed"}), 500
 
-    reconcile = getattr(client, "reconcile_mapping_filename_drift", None)
-    if callable(reconcile):
-        reconcile()
 
-    return jsonify({"success": True, "message": "Grimmory cache refreshed successfully"})
+
+
 
 
 def _test_conn_error(e: Exception) -> str:
@@ -16059,11 +15972,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/suggestions/<source_id>/ignore', 'ignore_suggestion', ignore_suggestion, methods=['POST'])
     app.add_url_rule('/api/suggestions/clear_stale', 'clear_stale_suggestions', clear_stale_suggestions, methods=['POST'])
     app.add_url_rule('/api/cache/clean', 'clean_cache', clean_inactive_cache, methods=['POST'])
-    app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
-    app.add_url_rule('/api/booklore/shelves', 'get_booklore_shelves', get_booklore_shelves, methods=['GET'])
-    app.add_url_rule('/api/watch-shelves', 'get_watch_shelves', get_watch_shelves, methods=['GET'])
-    app.add_url_rule('/api/abs/libraries', 'get_abs_libraries', get_abs_libraries, methods=['GET'])
-    app.add_url_rule('/api/booklore/refresh', 'api_booklore_refresh', api_booklore_refresh, methods=['POST'])
+    from src.web.routes import integration_lookups as integration_lookups_routes
+    integration_lookups_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/api/bookfusion/device/start', 'api_bookfusion_device_start', api_bookfusion_device_start, methods=['POST'])
     app.add_url_rule('/api/bookfusion/device/poll', 'api_bookfusion_device_poll', api_bookfusion_device_poll, methods=['POST'])
     app.add_url_rule('/api/bookfusion/search', 'api_bookfusion_search', api_bookfusion_search, methods=['GET'])
