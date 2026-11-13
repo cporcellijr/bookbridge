@@ -120,6 +120,8 @@
             const statusFilter = document.getElementById('status-filter');
             const filterButton = document.getElementById('library-filter-button');
             const filterButtonLabel = document.getElementById('library-filter-button-label');
+            const filterResetButton = document.getElementById('library-filter-reset');
+            const filterClearButton = document.getElementById('library-filter-clear');
             const filterPanel = document.getElementById('library-filter-panel');
             const filterBackdrop = document.getElementById('library-filter-backdrop');
             const filterHost = document.getElementById('library-filter-host');
@@ -266,6 +268,12 @@
                 applyFacetCounts(authorFilter, reachable, matchesAuthorFilter);
             }
 
+            function hasActiveLibraryFilters() {
+                return Object.values(filterGroups).some(select => select && select.value !== 'all')
+                    || !!dashboardSearch?.value.trim()
+                    || (attentionOnlyFilter ? !!attentionOnlyFilter.checked : savedAttentionPreference);
+            }
+
             function updateFilterButtonLabel() {
                 if (!filterButtonLabel) return;
                 const defaultLabel = {{ _('Filter')|tojson }};
@@ -277,7 +285,10 @@
                     break;
                 }
                 filterButtonLabel.textContent = label;
-                if (typeof filterButton !== 'undefined') filterButton?.classList.toggle('is-active', label !== defaultLabel || !!attentionOnlyFilter?.checked);
+                const active = hasActiveLibraryFilters();
+                filterButton?.classList.toggle('is-active', active);
+                if (filterResetButton) filterResetButton.hidden = !active;
+                if (filterClearButton) filterClearButton.disabled = !active;
             }
 
             // A click elsewhere keeps focus where the reader clicked (the search box, say).
@@ -376,6 +387,11 @@
                     else closeFilterPanel();
                 });
                 filterPanel?.querySelector('[data-filter-close]')?.addEventListener('click', () => closeFilterPanel());
+                filterResetButton?.addEventListener('click', () => clearLibraryFilters(true));
+                filterClearButton?.addEventListener('click', () => {
+                    clearLibraryFilters();
+                    filterPanel?.querySelector('[data-filter-close]')?.focus();
+                });
                 filterBackdrop?.addEventListener('click', () => closeFilterPanel());
                 document.addEventListener('click', event => {
                     if (filterPanel && !filterPanel.hidden && !filterHost.contains(event.target)) {
@@ -392,6 +408,22 @@
                     document.getElementById('filter-' + group + '-search')
                         ?.addEventListener('input', renderFilterOptions);
                 });
+            }
+
+            function clearLibraryFilters(focusTrigger = false) {
+                for (const select of Object.values(filterGroups)) {
+                    if (select) select.value = 'all';
+                }
+                if (dashboardSearch) dashboardSearch.value = '';
+                if (attentionOnlyFilter) attentionOnlyFilter.checked = false;
+                savedAttentionPreference = false;
+                for (const group of ['author', 'series']) {
+                    const search = document.getElementById('filter-' + group + '-search');
+                    if (search) search.value = '';
+                }
+                filterBooks();
+                positionLibraryFilterPopover();
+                if (focusTrigger) filterButton?.focus();
             }
 
             // Offers a route into the Search tab's library search for a title the dashboard
