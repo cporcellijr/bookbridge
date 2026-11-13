@@ -7,7 +7,8 @@ import shutil
 import unittest
 from unittest.mock import patch
 
-TEST_DIR = '/tmp/test_device_hash_pairs'
+from tests._tmpdirs import process_test_dir
+TEST_DIR = process_test_dir('test_device_hash_pairs')
 _ENV_KEYS = ('DATA_DIR', 'KOSYNC_USER', 'KOSYNC_KEY')
 _GLOBAL_NAMES = ('_database_service', '_container', '_manager', '_ebook_dir', '_debounce_thread_started')
 

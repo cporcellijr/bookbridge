@@ -16,13 +16,11 @@ import unittest
 from datetime import datetime
 from unittest.mock import patch
 
-TEST_DIR = '/tmp/test_kosync_internal_push'
+from tests._tmpdirs import process_test_dir
+TEST_DIR = process_test_dir('test_kosync_internal_push')
 os.environ['DATA_DIR'] = TEST_DIR
 os.environ.pop('KOSYNC_USER', None)
 os.environ.pop('KOSYNC_KEY', None)
-if os.path.exists(TEST_DIR):
-    shutil.rmtree(TEST_DIR)
-os.makedirs(TEST_DIR, exist_ok=True)
 
 from src.api import kosync_server
 from src.db.models import (

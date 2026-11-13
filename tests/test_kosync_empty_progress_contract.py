@@ -7,7 +7,8 @@ import os
 import shutil
 import unittest
 
-TEST_DIR = '/tmp/test_kosync_empty_progress_contract'
+from tests._tmpdirs import process_test_dir
+TEST_DIR = process_test_dir('test_kosync_empty_progress_contract')
 _ENV_KEYS = ('DATA_DIR', 'KOSYNC_USER', 'KOSYNC_KEY')
 _saved_env: dict = {}
 

@@ -10,7 +10,8 @@ from src.db.models import Book, KosyncDocument
 from src.services.koreader_device_sync_service import KOReaderDeviceSyncService
 
 
-TEST_DIR = "/tmp/test_koreader_device_sync_service"
+from tests._tmpdirs import process_test_dir
+TEST_DIR = process_test_dir('test_koreader_device_sync_service')
 
 
 class TestKOReaderDeviceSyncService(unittest.TestCase):
