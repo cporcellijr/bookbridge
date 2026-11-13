@@ -6,7 +6,7 @@ records the Calibre book id a name was found as, so the parser can follow a
 missing name to the book's current file through the library's metadata.db.
 
 Revision ID: c4e7a2b9d1f3
-Revises: e3b8d1f5a7c9
+Revises: p17a20261113
 Create Date: 2026-11-11
 """
 
@@ -15,7 +15,7 @@ from alembic import op
 
 
 revision = "c4e7a2b9d1f3"
-down_revision = "e3b8d1f5a7c9"
+down_revision = "p17a20261113"
 branch_labels = None
 depends_on = None
 

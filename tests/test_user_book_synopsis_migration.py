@@ -12,7 +12,7 @@ from alembic.script import ScriptDirectory
 
 pytestmark = pytest.mark.real_database_migrations
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "p17a20261113"
+HEAD = "c4e7a2b9d1f3"
 PREVIOUS = "d585c20261112"
 
 
