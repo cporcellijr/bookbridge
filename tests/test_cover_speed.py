@@ -240,6 +240,18 @@ class TestHtmlIsGzipped(unittest.TestCase):
         self.assertEqual(gzip.decompress(response.data).decode(), self.page)
         self.assertEqual(int(response.headers["Content-Length"]), len(response.data))
 
+    def test_html_is_untouched_when_gzip_is_refused(self):
+        for header in ("gzip;q=0", "br, gzip;q=0", "gzip;q=0, *", "*, gzip;q=0"):
+            with self.subTest(header=header):
+                response = self.client.get("/page", headers={"Accept-Encoding": header})
+                self.assertNotIn("Content-Encoding", response.headers)
+                self.assertEqual(response.get_data(as_text=True), self.page)
+
+    def test_html_is_compressed_for_a_low_but_positive_gzip_weight(self):
+        response = self.client.get("/page", headers={"Accept-Encoding": "deflate, gzip;q=0.5"})
+        self.assertEqual(response.headers["Content-Encoding"], "gzip")
+        self.assertEqual(gzip.decompress(response.data).decode(), self.page)
+
     def test_html_is_untouched_without_gzip_support(self):
         response = self.client.get("/page")
         self.assertNotIn("Content-Encoding", response.headers)

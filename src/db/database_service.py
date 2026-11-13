@@ -812,18 +812,20 @@ class DatabaseService:
                 session.expunge(book)  # Detach from session
             return book
 
-    def get_book_synopsis_cache(self, abs_id: str) -> tuple[Optional[float], Optional[str]]:
-        """Read the shared catalog synopsis and when it was last looked up (None = never)."""
+    def get_user_book_synopsis_cache(self, user_id: int, abs_id: str) -> tuple[Optional[float], Optional[str]]:
+        """Read this reader's stored synopsis and when it was last looked up (None = never)."""
         with self.get_session() as session:
-            row = session.query(Book.synopsis_checked_at, Book.synopsis_text).filter(
-                Book.abs_id == abs_id
+            row = session.query(UserBook.synopsis_checked_at, UserBook.synopsis_text).filter(
+                UserBook.user_id == user_id, UserBook.abs_id == abs_id
             ).first()
             return (row[0], row[1]) if row else (None, None)
 
-    def set_book_synopsis_cache(self, abs_id: str, text: Optional[str], checked_at: float) -> None:
-        """Store a lookup result without changing progress or ownership."""
+    def set_user_book_synopsis_cache(self, user_id: int, abs_id: str, text: Optional[str], checked_at: float) -> None:
+        """Store this reader's lookup result without changing progress or ownership."""
         with self.get_session() as session:
-            session.query(Book).filter(Book.abs_id == abs_id).update(
+            session.query(UserBook).filter(
+                UserBook.user_id == user_id, UserBook.abs_id == abs_id
+            ).update(
                 {"synopsis_checked_at": checked_at, "synopsis_text": text},
                 synchronize_session=False,
             )
