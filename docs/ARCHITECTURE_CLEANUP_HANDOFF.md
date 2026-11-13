@@ -1,6 +1,6 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Slice 4 steps 1–3 (Stats, Logs, What's New, Diagnostics, Forge, Alignments, Read-along EPUB, Status, Covers, Integration Lookups, Storyteller → `src/web/routes/`) are complete, integrated, restarted, and live-verified. `web_server.py` 16,126 lines. Next: step 4 (Library metadata GETs, BookFusion, admin series-backfill/debug — cohesive groups only).**
+Updated: 2026-11-13. **Slice 4 steps 1–4 (Stats, Logs, What's New, Diagnostics, Forge, Alignments, Read-along EPUB, Status, Covers, Integration Lookups, Storyteller, BookFusion, Admin Maintenance, Book Page → `src/web/routes/`) are complete, integrated, restarted, and live-verified. `web_server.py` 15,586 lines. Next: step 5 = admin users + integrations (auth-heavy; per-user credential isolation).**
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
