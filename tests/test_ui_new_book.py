@@ -745,3 +745,16 @@ class TestLogsSplitLayout(unittest.TestCase):
         self.assertIn('body:has(.ops-logs:not(.embed)) .app-shell { height: 100dvh;', css)
         self.assertIn('.view .logs-wrap:not(.embed) .log-container { height: auto;', css)
         self.assertNotIn('flex: 1 1 180px', css)
+
+
+class TestStatsPhoneHeader(unittest.TestCase):
+    """The Stats introduction stays concise in the phone layout."""
+
+    def test_stats_intro_is_trimmed_on_phones(self):
+        from pathlib import Path
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-ops.css').read_text(encoding='utf-8')
+        rule = '.view .stats-wrap .hero p, .view .stats-wrap .hero-meta { display: none; }'
+        self.assertIn(rule, css)
+        phone_block = css.rfind('@media (max-width: 760px)', 0, css.index(rule))
+        self.assertNotEqual(phone_block, -1)
+        self.assertGreater(css.index(rule), phone_block)

@@ -135,6 +135,10 @@
     .view .stats-wrap .calendar-cell { padding: 4px 2px; }
     .view .stats-wrap .calendar-day-total { font-size: 9px; }
     .view .stats-wrap .calendar-span { padding: 0 3px; font-size: 10px; }
+    .view .stats-wrap .hero { padding: 14px 16px; margin-bottom: 12px; }
+    .view .stats-wrap .hero h1 { font-size: 1.5rem; margin: 0; }
+    .view .stats-wrap .hero p, .view .stats-wrap .hero-meta { display: none; }
+    .view .stats-wrap .toolbar { margin-bottom: 14px; gap: 8px; }
     .view .logs-wrap .controls { gap: 12px; }
     .view .logs-wrap .control-group { flex: none; min-width: 0; }
     .view .logs-wrap .search-input { min-width: 0; width: 100%; }
