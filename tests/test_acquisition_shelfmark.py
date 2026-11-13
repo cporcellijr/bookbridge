@@ -19,6 +19,7 @@ def _shelfmark(**overrides):
         is_enabled=lambda: True,
         is_configured=lambda: True,
         get_policy=MagicMock(return_value=({"ebook": "download", "audiobook": "request_book"}, None)),
+        can_find_releases=lambda kind: client.get_policy()[0].get(kind) in ("download", "request_release"),
         find_releases=MagicMock(return_value=([_RELEASE], None)),
         release_for=MagicMock(return_value={"source": "s", "source_id": "rel1"}),
         found_for=MagicMock(return_value="ebook"),
@@ -60,7 +61,22 @@ class TestOptions(ShelfmarkBase):
     def test_formats_follow_the_readers_policy(self):
         os.environ["ACQUISITION_ALLOW_READERS"] = "on"
         self.login()
-        self.assertEqual(self.options(), {"usable": True, "reason": None, "formats": {"ebook": "download", "audiobook": "request_book"}})
+        self.assertEqual(self.options(), {
+            "usable": True, "reason": None,
+            "formats": {"ebook": "download", "audiobook": "request_book"},
+            "find_formats": ["ebook"],
+        })
+
+    def test_source_override_can_offer_release_search_alongside_request_book(self):
+        os.environ["ACQUISITION_ALLOW_READERS"] = "true"
+        self.sm.get_policy.return_value = ({"ebook": "request_book", "audiobook": "blocked"}, None)
+        self.sm.can_find_releases = lambda kind: kind == "ebook"
+        self.login()
+        options = self.options()
+        self.assertEqual(options, {
+            "usable": True, "reason": None,
+            "formats": {"ebook": "request_book"}, "find_formats": ["ebook"],
+        })
 
     def test_blocked_format_is_not_offered(self):
         os.environ["ACQUISITION_ALLOW_READERS"] = "true"
@@ -74,9 +90,11 @@ class TestOptions(ShelfmarkBase):
         os.environ["ACQUISITION_ALLOW_READERS"] = "true"
         self.sm.get_policy.return_value = ({"ebook": "blocked", "audiobook": "blocked"}, None)
         self.sm.available_modes = MagicMock(return_value=({"ebook": "download"}, None))
+        self.sm.can_find_releases = lambda kind: kind == "ebook"
         self.login()
         self.assertEqual(self.options(), {
             "usable": True, "reason": None, "formats": {"ebook": "download"},
+            "find_formats": ["ebook"],
         })
 
     def test_reasons_are_reported(self):
@@ -92,7 +110,9 @@ class TestOptions(ShelfmarkBase):
         os.environ["ACQUISITION_ALLOW_READERS"] = "true"
         self.sm.get_policy.return_value = (None, "no_login_saved")
         self.login()
-        self.assertEqual(self.options(), {"usable": False, "reason": "no_login_saved", "formats": {}})
+        self.assertEqual(self.options(), {
+            "usable": False, "reason": "no_login_saved", "formats": {}, "find_formats": [],
+        })
 
     def test_regular_user_never_uses_admin_shelfmark(self):
         os.environ["ACQUISITION_ALLOW_READERS"] = "true"
@@ -115,6 +135,7 @@ class TestReleasesAndSubmit(ShelfmarkBase):
         self.login()
 
     def test_release_list_is_passed_through_normalized(self):
+        self.sm.get_policy.return_value = ({"ebook": "download", "audiobook": "download"}, None)
         data = self.client.get("/api/acquisition/shelfmark/releases?title=Example%20Book&author=A&format=audiobook").get_json()
         self.assertEqual(data, {"releases": [_RELEASE]})
         self.sm.find_releases.assert_called_once_with("Example Book", "A", "audiobook")

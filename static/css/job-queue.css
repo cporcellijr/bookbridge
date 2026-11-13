@@ -29,6 +29,26 @@
 .job-queue-move-actions button:disabled{opacity:.3;cursor:default}
 .job-queue-empty{padding:15px 20px 23px;color:var(--muted);margin:0}
 @media(max-width:680px){.job-queue-page{padding:18px 12px 45px}.job-queue-header h1{font-size:1.5rem}}
+.acquisition-job-card{padding:18px 20px;border-top:1px solid var(--border);scroll-margin-top:24px}
+.acquisition-job-card:first-child{border-top:0}
+.acquisition-job-focused{outline:2px solid var(--accent);outline-offset:-2px}
+.acquisition-job-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.acquisition-job-heading h3{margin:0;font-size:1.05rem;overflow-wrap:anywhere}
+.acquisition-job-halves{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px;margin-top:12px}
+.acquisition-job-half{border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;min-width:0}
+.acquisition-job-half h4{margin:0 0 8px}
+.acquisition-job-statuses{display:grid;gap:5px;margin:0}
+.acquisition-job-statuses div{display:grid;grid-template-columns:minmax(80px,auto) 1fr;gap:10px}
+.acquisition-job-statuses dt{color:var(--muted)}
+.acquisition-job-statuses dd{margin:0;overflow-wrap:anywhere}
+.acquisition-job-review{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px}
+.acquisition-job-review strong{flex-basis:100%}
+.job-queue-action{border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);padding:7px 10px;cursor:pointer}
+.job-queue-action:disabled{opacity:.55;cursor:wait}
+.acquisition-job-pairing,.acquisition-job-bridge,.acquisition-job-scan{margin:12px 0 0;overflow-wrap:anywhere}
+.acquisition-job-bridge a{margin-left:8px}
+.acquisition-job-feedback:not([hidden]){padding:12px 20px;color:var(--muted)}
+@media(max-width:680px){.acquisition-job-card{padding:14px}.acquisition-job-heading{flex-wrap:wrap}.acquisition-job-statuses div{grid-template-columns:1fr}}
 /* Read-only pre-flight evidence, never styled as a failed job. */
 /* Advisory text must not change the job table's column widths. */
 .job-queue-preflight{display:flex;flex-wrap:wrap;gap:.35rem .75rem;margin-top:.5rem;padding:.6rem;border:1px solid var(--border);border-radius:.5rem;contain:inline-size;max-width:min(100%,calc(100vw - 5rem));overflow-wrap:anywhere;font-size:.85rem}

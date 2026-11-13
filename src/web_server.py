@@ -8312,7 +8312,25 @@ def job_queue_page():
         alignment_movable_ids=alignment_movable_ids,
         preflights=evidence,
     )
-    return render_template(ui_template('job_queue.html'), queue_view=snapshot)
+    acquisition_jobs = database_service.get_acquisition_jobs(user_id) if user_id is not None else []
+    bridge_statuses = {book.abs_id: book.status for book in books if book.abs_id}
+    for entry in snapshot["recent"]:
+        if entry.get("book_id") and entry.get("status") == "failed":
+            bridge_statuses[entry["book_id"]] = "failed"
+    for entry in snapshot["pending"]:
+        if entry.get("book_id"):
+            bridge_statuses[entry["book_id"]] = "pending"
+    for entry in snapshot["running"]:
+        if entry.get("book_id"):
+            bridge_statuses[entry["book_id"]] = "processing"
+    panel_context = {
+        "acquisition_jobs": acquisition_jobs,
+        "focused_acquisition_job_id": request.args.get("acquisition_job", ""),
+        "bridge_statuses": bridge_statuses,
+    }
+    if request.args.get("acquisition_fragment") == "1":
+        return render_template("_acquisition_jobs_panel.html", **panel_context)
+    return render_template(ui_template('job_queue.html'), queue_view=snapshot, **panel_context)
 
 
 def job_queue_reorder():

@@ -1,0 +1,52 @@
+<div data-only-tab="search">
+    <section class="acq-strip" id="acqStrip" aria-labelledby="acqStripTitle" hidden>
+        <h3 id="acqStripTitle">{{ _('My requests') }}</h3>
+        <div class="acq-list" id="acqList" role="list"></div>
+    </section>
+</div>
+
+<div class="modal-overlay" id="acqModal" aria-hidden="true">
+    <div class="modal modal-card" role="dialog" aria-modal="true" aria-labelledby="acqModalTitle">
+        <h3 id="acqModalTitle">{{ _('Get a book') }}</h3>
+        <form id="acqForm">
+            <label class="field-label" for="acqTitle">{{ _('Title') }}</label>
+            <input type="text" class="form-input" id="acqTitle" maxlength="500" required>
+            <label class="field-label" for="acqAuthor">{{ _('Author') }}</label>
+            <input type="text" class="form-input" id="acqAuthor" maxlength="500">
+            <label class="field-label" for="acqIsbn">{{ _('ISBN') }}</label>
+            <input type="text" class="form-input" id="acqIsbn" maxlength="20" autocomplete="off">
+            <p class="acq-note" id="acqIsbnBothNote" hidden>{{ _('ISBN applies to one format. It will be left out when getting both.') }}</p>
+            <label class="field-label" for="acqSeries">{{ _('Series') }}</label>
+            <input type="text" class="form-input" id="acqSeries" maxlength="500">
+            <label class="field-label" for="acqSeriesIndex">{{ _('Series number') }}</label>
+            <input type="number" class="form-input" id="acqSeriesIndex" step="any">
+            <div id="acqPartnerWrap" hidden>
+                <label class="field-label" for="acqPartnerSelect">{{ _('Existing copy to pair with') }}</label>
+                <select class="form-select" id="acqPartnerSelect"></select>
+                <p class="acq-note" id="acqPartnerSummary" role="status" aria-live="polite"></p>
+            </div>
+            <fieldset class="acq-formats">
+                <legend class="field-label">{{ _('Format') }}</legend>
+                <label><input type="radio" name="acqFormat" value="ebook" checked> {{ _('Ebook') }}</label>
+                <label><input type="radio" name="acqFormat" value="audiobook"> {{ _('Audiobook') }}</label>
+                <label id="acqBothLabel"><input type="radio" name="acqFormat" value="both"> {{ _('Both') }}</label>
+            </fieldset>
+            <fieldset class="acq-providers" id="acqProviderChoices" hidden>
+                <legend class="field-label">{{ _('Choose where to get each format') }}</legend>
+                <label class="field-label" id="acqEbookProviderWrap" for="acqProviderEbook">{{ _('Ebook provider') }}</label>
+                <select class="form-select" id="acqProviderEbook"></select>
+                <label class="field-label" id="acqAudioProviderWrap" for="acqProviderAudiobook">{{ _('Audiobook provider') }}</label>
+                <select class="form-select" id="acqProviderAudiobook"></select>
+            </fieldset>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" id="acqCancelBtn">{{ _('Close') }}</button>
+                <button type="submit" class="btn btn-primary" id="acqSubmitBtn">{{ _('Get') }}</button>
+            </div>
+            <button type="button" id="acqShelfmarkBtn" hidden></button>
+            <a id="acqShelfmarkLink" href="/shelfmark" hidden></a>
+            <div class="tabs acq-release-tabs" id="acqReleaseTabs" role="tablist" aria-label="{{ _('Release sources') }}" hidden></div>
+            <div class="acq-releases" id="acqReleases" role="list" aria-label="{{ _('Search results') }}" hidden></div>
+            <div class="acq-result" id="acqResult" role="status" aria-live="polite"></div>
+        </form>
+    </div>
+</div>

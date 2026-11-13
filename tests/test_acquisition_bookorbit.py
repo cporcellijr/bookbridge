@@ -428,7 +428,9 @@ class TestMineCancelDismiss(AcquisitionBase):
         row = self._row(self.reg)
         self.login()
         self.assertEqual(self.client.post(f"/api/acquisition/{row['id']}/dismiss").status_code, 200)
-        self.assertEqual(self.client.get("/api/acquisition/mine").get_json(), {"requests": [], "jobs": []})
+        self.assertEqual(self.client.get("/api/acquisition/mine").get_json(), {
+            "requests": [], "jobs": [], "tracked_jobs": [],
+        })
 
     def test_mine_maps_bookorbit_status_and_keeps_arrival_hint(self):
         row = self._row(self.reg)

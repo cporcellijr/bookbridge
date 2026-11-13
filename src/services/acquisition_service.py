@@ -200,7 +200,7 @@ class AcquisitionService:
             return False
         authors = _author_set(job.get("authors"))
         found = _author_set(candidate.get("authors"))
-        if authors and (not found or authors != found):
+        if authors and ((not found and not explicit) or (found and authors != found)):
             return False
         isbn = str(job.get("isbn13") or "").replace("-", "")
         found_isbn = str(candidate.get("isbn13") or "").replace("-", "")
@@ -211,12 +211,195 @@ class AcquisitionService:
             return False
         if not authors and (not isbn or found_isbn != isbn) and not explicit:
             return False
-        if job.get("series_name") or job.get("series_index") is not None:
-            expected = _series_key(job.get("series_name"), job.get("series_index"))
-            actual = _series_key(candidate.get("series_name"), candidate.get("series_index"))
-            if expected is None or expected != actual:
+        return AcquisitionService._series_matches(job, candidate, explicit=explicit)
+
+    @staticmethod
+    def _series_matches(job: dict, candidate: dict, *, explicit: bool) -> bool:
+        """Match known series parts; an explicit choice may fill missing metadata only."""
+        expected_name = BookOrbitClient._normalize_string(str(job.get("series_name") or ""))
+        found_name = BookOrbitClient._normalize_string(str(candidate.get("series_name") or ""))
+        expected_index = job.get("series_index")
+        found_index = candidate.get("series_index")
+        expected_has_index = expected_index not in (None, "")
+        found_has_index = found_index not in (None, "")
+
+        if not explicit:
+            if not expected_name and not expected_has_index:
+                return True
+            expected = _series_key(job.get("series_name"), expected_index)
+            actual = _series_key(candidate.get("series_name"), found_index)
+            return expected is not None and expected == actual
+
+        if found_name and expected_name and found_name != expected_name:
+            return False
+        expected_number = None
+        if expected_has_index:
+            if isinstance(expected_index, bool):
+                return False
+            try:
+                expected_number = float(expected_index)
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(expected_number):
+                return False
+        if found_has_index:
+            if isinstance(found_index, bool):
+                return False
+            try:
+                found_number = float(found_index)
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(found_number):
+                return False
+            if expected_number is not None and expected_number != found_number:
                 return False
         return True
+
+    def choose_review_candidate(
+        self, user_id: int, job_id: str, media_kind: str, selection: dict, clients: Any,
+    ) -> tuple[Optional[dict], Optional[str]]:
+        """Confirm one persisted review choice after checking the reader's live catalog."""
+        if media_kind not in ("ebook", "audiobook") or not isinstance(selection, dict):
+            return None, "invalid_candidate"
+        job = self.database_service.get_acquisition_job(user_id, job_id)
+        if job is None:
+            return None, "not_found"
+        if job.get("dismissed") or media_kind not in job.get("formats", []):
+            return None, "not_allowed"
+        prefix = "ebook" if media_kind == "ebook" else "audio"
+        if job.get(f"{prefix}_library_state") != "needs_review":
+            return None, "review_not_pending"
+
+        source = str(selection.get("source") or "")
+        source_id = str(selection.get("source_id") or "")
+        filename = str(selection.get("filename") or "") if media_kind == "ebook" else ""
+        persisted = job.get("review_candidates", {}).get(media_kind, [])
+        offered = any(
+            candidate.get("source") == source
+            and str(candidate.get("source_id")) == source_id
+            and (media_kind != "ebook" or candidate.get("filename") == filename)
+            for candidate in persisted if isinstance(candidate, dict)
+        )
+        if not offered or not source or not source_id or (media_kind == "ebook" and not filename):
+            return None, "candidate_not_offered"
+
+        candidates, errors = search_reader_library(clients, media_kind, job["title"])
+        if source in errors:
+            return None, "catalog_unavailable"
+        matches = [candidate for candidate in candidates if (
+            candidate.get("source") == source
+            and str(candidate.get("source_id")) == source_id
+            and (media_kind != "ebook" or candidate.get("filename") == filename)
+        )]
+        if len(matches) != 1:
+            return None, "candidate_not_current"
+        selected = matches[0]
+        if not self._candidate_matches(job, selected, explicit=True):
+            return None, "candidate_metadata_conflict"
+
+        identity = {"source": selected["source"], "source_id": str(selected["source_id"])}
+        if media_kind == "ebook":
+            identity["filename"] = selected["filename"]
+        try:
+            saved = self.database_service.confirm_acquisition_arrival(
+                user_id, job_id, media_kind, identity,
+            )
+        except ValueError:
+            return None, "identity_conflict"
+        return (saved, None) if saved else (None, "not_found")
+
+    def retry_acquisition_scan(self, user_id: int, job_id: str, clients: Any) -> tuple[dict, Optional[str]]:
+        """Retry only a settled/refused scan after validating its reader scope and history."""
+        job = self.database_service.get_acquisition_job(user_id, job_id)
+        if job is None:
+            return {}, "not_found"
+        if job.get("dismissed"):
+            return {}, "job_dismissed"
+        if not job.get("audio_delivered_at") or not any(
+            row.get("service") == "Shelfmark" and row.get("media_kind") == "audiobook"
+            and row.get("remote_status") == "complete" for row in job.get("requests", [])
+        ):
+            return job, "scan_not_ready"
+        if job.get("audio_library_state") == "indexed" or job.get("linked_abs_id"):
+            return job, "audiobook_already_indexed"
+
+        state = job.get("scan_state")
+        if state not in ("failed", "completed", "refused", "invalid", "unavailable", "conflict"):
+            return job, "scan_not_retryable"
+        if (job.get("scan_attempts") or 0) >= 2:
+            return job, "scan_retry_limit_reached"
+        if state in ("failed", "completed") and not job.get("scan_job_id"):
+            return job, "scan_operation_unverified"
+        if state in ("refused", "invalid", "unavailable", "conflict") and job.get("scan_job_id"):
+            return job, "scan_operation_unverified"
+
+        bookorbit = getattr(clients, "bookorbit_client", None) if clients is not None else None
+        if bookorbit is None or not bookorbit.is_configured():
+            return job, "reader_bookorbit_unavailable"
+        scope_reader = getattr(bookorbit, "get_scan_scope", None)
+        scope_value = scope_reader() if callable(scope_reader) else ""
+        scope = scope_value if isinstance(scope_value, str) and scope_value else None
+        if not scope:
+            return job, "scan_server_scope_unavailable"
+        if job.get("scan_scope") and job["scan_scope"] != scope:
+            return job, "scan_server_scope_changed"
+        if job.get("scan_job_id") and not job.get("scan_scope"):
+            return job, "scan_server_scope_unverified"
+
+        configured_destination = self._scan_target(user_id)
+        destination = job.get("scan_library_id") or configured_destination
+        if not destination or not str(destination).isdigit() or int(destination) <= 0:
+            return job, "invalid_scan_library_id"
+        destination = str(destination)
+        if job.get("scan_library_id") and configured_destination != destination:
+            return job, "scan_destination_changed"
+        try:
+            libraries = bookorbit.get_libraries()
+            if not any(isinstance(item, dict) and str(item.get("id")) == destination for item in libraries):
+                return job, "scan_library_missing_or_inaccessible"
+            history, error = bookorbit.get_scan_history(destination)
+        except Exception:
+            logger.warning("📥 Acquisition: could not verify scan retry for job %s", job_id, exc_info=True)
+            return job, "scan_history_unavailable"
+        if history is None:
+            return job, error or "scan_history_unavailable"
+
+        history_entry = None
+        if job.get("scan_job_id"):
+            history_entry = next((entry for entry in history if (
+                isinstance(entry, dict) and str(entry.get("id")) == str(job["scan_job_id"])
+            )), None)
+            if history_entry is None:
+                return job, "scan_operation_not_in_history"
+            status = str(history_entry.get("status") or "").lower()
+            settled = ({"failed", "error", "cancelled"} if state == "failed"
+                       else {"completed", "complete", "success"})
+            if status not in settled:
+                return job, "scan_operation_not_settled"
+        if any(str(entry.get("status") or "").lower() in ("running", "queued")
+               for entry in history if isinstance(entry, dict)):
+            return job, "scan_already_running"
+
+        claim = self.database_service.claim_acquisition_scan_retry(
+            user_id, job_id, destination, scope,
+            expected_state=state,
+            expected_job_id=job.get("scan_job_id"),
+            expected_library_id=job.get("scan_library_id"),
+            expected_scan_scope=job.get("scan_scope"),
+        )
+        if claim.get("state") != "claimed":
+            return job, claim.get("state", "scan_not_retryable")
+        try:
+            result = bookorbit.start_library_scan_tracked(destination)
+        except Exception:
+            logger.warning("📥 Acquisition scan retry acknowledgement is uncertain for job %s", job_id, exc_info=True)
+            result = {"state": "uncertain", "reason": "scan_acknowledgement_missing", "job_id": None}
+        self.database_service.update_acquisition_scan(
+            user_id, job_id, result["state"],
+            provider_job_id=result.get("job_id"), reason=result.get("reason"),
+        )
+        updated = self.database_service.get_acquisition_job(user_id, job_id) or job
+        return updated, (None if result.get("state") == "accepted" else result.get("reason") or result.get("state"))
 
     @staticmethod
     def _candidate_reviewable(job: dict, candidate: dict) -> bool:
@@ -232,12 +415,7 @@ class AcquisitionService:
         found_isbn = str(candidate.get("isbn13") or "").replace("-", "")
         if expected_isbn and found_isbn and expected_isbn != found_isbn:
             return False
-        if job.get("series_name") or job.get("series_index") is not None:
-            expected_series = _series_key(job.get("series_name"), job.get("series_index"))
-            found_series = _series_key(candidate.get("series_name"), candidate.get("series_index"))
-            if found_series is not None and expected_series != found_series:
-                return False
-        return True
+        return AcquisitionService._series_matches(job, candidate, explicit=True)
 
     def _reconcile_jobs(self, user_id: int, clients: Any) -> None:
         """Reconcile each saved half independent of receipt timing and page lifetime.

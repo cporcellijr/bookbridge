@@ -3321,6 +3321,74 @@ class DatabaseService:
             job.updated_at = utcnow()
             return {"state": job.scan_state, "library_id": library_id, "job_id": job.scan_job_id}
 
+    def claim_acquisition_scan_retry(
+        self, user_id: int, job_id: str, library_id: str, scan_scope: str, *,
+        expected_state: str, expected_job_id: Optional[str],
+        expected_library_id: Optional[str], expected_scan_scope: Optional[str],
+    ) -> dict:
+        """Atomically claim an explicitly requested retry from a settled scan state."""
+        from sqlalchemy import or_
+
+        if (not isinstance(library_id, str) or not library_id.isdigit() or int(library_id) <= 0
+                or not isinstance(scan_scope, str) or not scan_scope or len(scan_scope) > 500):
+            return {"state": "invalid_scope_or_library"}
+        allowed = ("failed", "completed", "refused", "invalid", "unavailable", "conflict")
+        if expected_state not in allowed:
+            return {"state": "not_retryable"}
+        with self.get_session() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            job = session.query(AcquisitionJob).filter_by(id=job_id, user_id=user_id).first()
+            if job is None or job.dismissed or job.audio_delivered_at is None:
+                return {"state": "not_ready"}
+            if job.audio_library_state == "indexed" or job.linked_abs_id:
+                return {"state": "audiobook_already_indexed"}
+            receipt = session.query(AcquisitionRequest).filter_by(
+                user_id=user_id, group_key=job_id, service="Shelfmark", media_kind="audiobook",
+                remote_status="complete",
+            ).first()
+            if receipt is None:
+                return {"state": "not_ready"}
+            if (job.scan_state != expected_state
+                    or job.scan_job_id != expected_job_id
+                    or job.scan_library_id != expected_library_id
+                    or job.scan_scope != expected_scan_scope):
+                return {"state": "changed"}
+            if (job.scan_attempts or 0) >= 2:
+                return {"state": "exhausted"}
+            if job.scan_library_id and job.scan_library_id != library_id:
+                return {"state": "destination_changed"}
+            if job.scan_scope and job.scan_scope != scan_scope:
+                return {"state": "scope_changed"}
+            if job.scan_job_id and not job.scan_scope:
+                return {"state": "scope_unverified"}
+            if job.scan_state == "conflict" and job.scan_job_id:
+                return {"state": "operation_unverified"}
+            if not job.scan_job_id and job.scan_state in ("failed", "completed"):
+                return {"state": "operation_unverified"}
+
+            active = session.query(AcquisitionJob).filter(
+                AcquisitionJob.id != job_id,
+                AcquisitionJob.scan_library_id == library_id,
+                AcquisitionJob.scan_state.in_(("claimed", "accepted", "coalesced", "waiting_scope")),
+                or_(AcquisitionJob.scan_scope == scan_scope, AcquisitionJob.scan_scope.is_(None)),
+                AcquisitionJob.dismissed.is_(False),
+            ).first()
+            if active is not None:
+                return {"state": "scan_already_running"}
+
+            # Only a settled old operation (or a refusal before acceptance) can
+            # reach here. Its exact ID was checked against live history first.
+            job.scan_library_id = library_id
+            job.scan_scope = scan_scope
+            job.scan_job_id = None
+            job.scan_state = "claimed"
+            job.scan_reason = "user_requested_scan_retry"
+            job.scan_claimed_at = utcnow()
+            job.scan_completed_at = None
+            job.scan_attempts = (job.scan_attempts or 0) + 1
+            job.updated_at = utcnow()
+            return {"state": "claimed", "library_id": library_id}
+
     def update_acquisition_scan(
         self, user_id: int, job_id: str, state: str, *,
         provider_job_id: Optional[str] = None, reason: Optional[str] = None,

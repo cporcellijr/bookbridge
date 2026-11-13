@@ -1,6 +1,6 @@
 # Plan: get the missing half from the search page (#585)
 
-Status: **Follow-up workflow redesign approved 2026-11-12. Phases A–D are complete and independently verified locally. Phases E–F will be completed here with Luna before one final local-dev merge and deployment/live verification.** The current plan and findings below override older design notes. The original #585 implementation is already live; its delivery history follows the current plan. Phase D has not been pushed, merged into dev, deployed or live-tested through provider writes.
+Status: **Phases A–E are complete. Phase F fake-provider browser acceptance and the final full suite passed. Post-merge live verification remains pending and will use only an already-owned pair; no new acquisition or download will be tested.** The primary will merge once into local dev, then deploy/live-verify dev. The original #585 implementation is already live; this follow-up remains unpushed.
 
 ## Current follow-up plan (2026-11-12)
 
@@ -181,8 +181,8 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
 | B | COMPLETE; verified 2026-11-12 | Durable jobs, linked halves, and explicit existing-edition identities; additive migration and regressions |
 | C | COMPLETE; independent review and regression verification passed; upstream auto flag still absent | Durable provider receipts, BookOrbit conservative release decisions, Shelfmark Both and source policy |
 | D | COMPLETE locally; independently reviewed; full suite 7753 passed / 15 skipped / zero failures | Supported-library arrival detection, integration picker, completion-triggered scans |
-| E | Planned | Processing job UI/actions, clear-search handoff, existing-job search behavior |
-| F | Planned | Full regression/browser acceptance, docs, additive migration/deployment as needed |
+| E | COMPLETE; final tests passed | Classic/New Search→Get handoff, one saved Processing job, mixed providers, reopening, refresh and owned provider controls |
+| F | Fake-provider browser acceptance COMPLETE; live verification pending | Isolated real-Flask app and temporary SQLite passed; primary will verify only the already-owned pair after deployment |
 
 ### Phase D implementation and review (2026-11-12; verified locally)
 
@@ -233,14 +233,46 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
 - Schema: new additive `d585c20261112` on `acquisition_jobs` records per-half
   library/review state, pairing, delivered time, and scan claim/destination/scope/
   job ID/state/attempts. Existing requests/receipts and their history are preserved.
-  The owned job API exposes all Phase D fields for the later Phase E UI.
-  Classic/New Processing layout, the search handoff and Library UI are unchanged.
+  The owned job API exposes all Phase D fields to the completed Phase E Processing and Search/Get workflow.
+  Library UI is unchanged.
 - Verification is limited to temporary SQLite migrations/concurrency and synthetic
   provider fixtures, plus installed source inspection. No live scan, arrival,
   cancellation, acquire, deployment, server restart, schema migration or push
-  was performed. **Independent review and an authorized local-dev merge must
-  precede deployment; migration + restart are required.** The reviewer owns the
-  local merge and Phase E handoff. Record final test counts in BRANCH_STATUS.md.
+  was performed during Phase D. The additive migration and an application restart
+  remain required for deployment; final integration and verification are handled
+  after Phase F.
+
+### Phase E implementation and Phase F browser acceptance (2026-11-13; locally verified)
+
+- Classic and New Search now support one Get flow for a saved reader-owned job.
+  The selected existing edition stays canonical; multiple matches require an
+  explicit choice. Both sends each missing half to BookOrbit, Shelfmark, or a
+  mixed provider choice under the same parent job. Saved responses clear the
+  search and open that job in Processing; save failures keep the form usable.
+- Processing shows the two requested halves, delivery/import/review/scan state,
+  provider release and retry controls, and the downstream normal Bridge queue
+  separately from pairing. Dismissal preserves provider activity; unsupported or
+  uncertain actions remain unavailable. Existing matching jobs can be reopened,
+  and confirmed arrivals refresh only the affected current search.
+- Final focused suite passed **164 tests / 45 subtests / 1 warning**; the final full
+  suite passed **7813 tests / 1409 subtests / 15 skipped / 0 failures / 14 warnings**
+  (485.45s). Phase E adds **19 test functions** versus the feature refresh at
+  `1b926118`. A mutation removing the stale-focused-picker refresh bypass failed the
+  targeted regression as expected; production files were not changed by mutation.
+- Browser acceptance used `.local-review-notes/585-browser-fixture.py`: real Flask
+  routes/templates, temporary SQLite and synthetic BookOrbit/Shelfmark clients. It
+  passed ebook-only to BookOrbit exact partner; audio-only to Shelfmark release
+  choice; Neither to mixed Both in one parent job with separate indexing and
+  pending-to-active pairing; explicit choice among multiple copies; saved failure
+  preserving the form; uncertain 502 opening Processing and later search reopening
+  the same job; per-half Shelfmark submission; completed scan remaining waiting for
+  import; and second-provider network loss preserving the first saved half. It also
+  verified stale focused BookOrbit picker closure after handback, Classic/New
+  behavior, empty-search beforeunload, modal closure and 390px mobile layout.
+- This browser run used fake providers and is not live-service verification. No
+  provider write, deployment or merge occurred here. The user selected an already-
+  owned pair for post-deploy verification; do not test a new acquisition/download.
+  Deployment requires **migration + restart**.
 
 ### Phase C implementation handoff (2026-11-12; historical local implementation)
 
@@ -324,9 +356,8 @@ full combined suite on `ca983774`, including dev through `e088ff73`: **7681 pass
 Later Library UI changes are inherited from dev without a separate UI review or UI-specific test run,
 as the user requested; acquisition implementation files did not change during that refresh.
 No unrelated UI files were authored for Phase C, and no live provider POST, deployment, restart or
-live migration was performed by this reviewer. Deployment requires **additive migration + restart**.
-The next agent should use [the Phase D prompt](PROMPT_585_PHASE_D.md) on the refreshed feature branch
-and leave its work uncommitted for independent review before the next local phase merge.
+live migration was performed at that historical checkpoint. Deployment requires **additive migration + restart**.
+The current E–F completion and single-merge workflow is stated at the top of this plan.
 
 Phase B branch: `codex/585-acquisition-jobs`, created from local dev `b177d362` in isolated worktree
 `C:/Server/stacks/abs-kosync-enhanced/.local-review-notes/585-acquisition-jobs-worktree`.
@@ -360,17 +391,10 @@ that fails with its change reverted. Run focused checks and the full project sui
 run, check for an existing test process and wait if occupied; do not overlap suites. Omni edit passes
 must not launch tests independently. Work on an isolated branch/worktree from current local dev.
 
-**Implementation workflow (user, 2026-11-12):** use a Luna agent for code writing if Omni fails.
-After each phase is complete and verified, merge it into local dev. Before starting the next phase,
-update `codex/585-acquisition-jobs` from the current local dev, including concurrent Library UI work.
-Review the combined changes and rerun applicable checks without overlapping another test run.
-The user runs implementation in another agent on this same feature branch/worktree. This chat supplies
-one phase prompt at a time and reviews only after the user reports that agent is done; the reviewer
-handles the authorized local phase merge. The implementation agent must not merge or deploy on its own.
-
-Update CHANGELOG and BRANCH_STATUS with final counts and deployment requirements after implementation.
-Local phase merges into dev are authorized. No push/deploy or new real acquisition/scan test is
-included in the current Phase B request.
+**Current implementation workflow (user, 2026-11-13):** finish Phases E–F in this feature worktree,
+then the primary performs one local-dev merge and deployment/live verification. Do not merge per phase,
+push, or run a new real acquisition/scan. The final live check uses an already-owned pair. The primary
+owns test-process coordination, final test counts, merge, migration/restart decision and live actions.
 Existing external BookOrbit adoption remains intact; expanding independent Shelfmark-UI adoption
 is not implied by grouped requests started in Bridge.
 
