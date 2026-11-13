@@ -167,7 +167,11 @@ class TestShippedTemplatesParse(unittest.TestCase):
 
     def test_every_template_script_block_has_terminated_strings(self):
         checked = 0
-        paths = [*sorted(TEMPLATE_DIR.glob("*.html")), TEMPLATE_DIR / "next" / "_stats_scripts.html"]
+        paths = [
+            *sorted(TEMPLATE_DIR.glob("*.html")),
+            TEMPLATE_DIR / "next" / "_stats_scripts.html",
+            TEMPLATE_DIR / "next" / "_logs_scripts.html",
+        ]
         for path in paths:
             for index, block in enumerate(script_blocks(path)):
                 checked += 1

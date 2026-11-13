@@ -652,16 +652,53 @@ class TestOpsPages(unittest.TestCase):
                 stats_scripts.append(scripts[stats[0]].strip())
         self.assertEqual(stats_scripts[0], stats_scripts[1])
         self.client.get('/logout')
-        self.service.set_user_credential(self.admin.id, 'UI_MODE', 'new')
-        self._login('ui-admin')
-        html = self.client.get('/logs').get_data(as_text=True)
-        for expected in (
-            '/api/logs', '/api/logs/live', 'id="logLevel"', 'id="searchInput"',
-            'id="linesCount"', 'id="autoRefresh"', 'id="liveMode"',
-            'id="loadMore"', 'toggleLiveMode();',
-        ):
-            with self.subTest(log=expected):
-                self.assertIn(expected, html)
+        logs_scripts = []
+        for mode in ('classic', 'new'):
+            self.service.set_user_credential(self.admin.id, 'UI_MODE', mode)
+            self._login('ui-admin')
+            for path in ('/logs', '/logs?embed=1'):
+                with self.subTest(mode=mode, path=path):
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 200)
+                    html = response.get_data(as_text=True)
+                    for expected in (
+                        '/api/logs', '/api/logs/live', 'id="logLevel"', 'id="searchInput"',
+                        'id="linesCount"', 'id="autoRefresh"', 'id="liveMode"',
+                        'id="loadMore"', 'toggleLiveMode();', 'id="scrollToTop"',
+                        'id="scrollToBottom"', 'bbPlural(LINES_TOTAL,',
+                        'setInterval(fetchLiveLogs, 2000)',
+                        'setInterval(() => fetchLogs(), 30000)',
+                    ):
+                        self.assertIn(expected, html)
+                    scripts = re.findall(r'<script\b[^>]*>.*?</script>', html, flags=re.DOTALL)
+                    shared = [i for i, script in enumerate(scripts)
+                              if 'let autoRefreshInterval = null;' in script]
+                    options = [i for i, script in enumerate(scripts)
+                               if "document.getElementById('logsOptionsToggle')" in script]
+                    self.assertEqual(len(shared), 1)
+                    self.assertEqual(len(options), int(mode == 'new'))
+                    if options:
+                        self.assertLess(shared[0], options[0])
+                        self.assertIn("options.classList.toggle('open')", scripts[options[0]])
+                    if path == '/logs':
+                        logs_scripts.append(scripts[shared[0]].strip())
+            self.client.get('/logout')
+        self.assertEqual(logs_scripts[0], logs_scripts[1])
+
+    def test_logs_admin_only_classic_and_new_including_embedded(self):
+        for mode in ('classic', 'new'):
+            self.service.set_user_credential(self.reader.id, 'UI_MODE', mode)
+            self.service.set_user_credential(self.admin.id, 'UI_MODE', mode)
+            self._login('ui-reader')
+            for path in ('/logs', '/logs?embed=1', '/api/logs', '/api/logs/live'):
+                with self.subTest(mode=mode, user='reader', path=path):
+                    self.assertEqual(self.client.get(path).status_code, 403)
+            self.client.get('/logout')
+            self._login('ui-admin')
+            for path in ('/logs', '/logs?embed=1'):
+                with self.subTest(mode=mode, user='admin', path=path):
+                    self.assertEqual(self.client.get(path).status_code, 200)
+            self.client.get('/logout')
 
 
 class TestOpsScriptDrift(unittest.TestCase):
@@ -708,7 +745,21 @@ class TestOpsScriptDrift(unittest.TestCase):
                     self.assertEqual(partial.count('const BRIDGE_TIMEZONE ='), 1)
                     continue
                 elif page == 'logs':
-                    expected = original[original.index(start) + 1:original.rindex(end)]
+                    shared_include = "{% include 'next/_logs_scripts.html' %}"
+                    new_page = (root / 'next' / 'logs.html').read_text(encoding='utf-8')
+                    self.assertEqual(original.count(shared_include), 1)
+                    self.assertEqual(new_page.count(shared_include), 1)
+                    self.assertLess(original.index('{% block content %}'), original.index(shared_include))
+                    self.assertLess(original.index(shared_include), original.rfind('{% endblock %}'))
+                    self.assertNotIn('{% block scripts %}', original)
+                    self.assertNotIn('<script', original)
+                    self.assertIn('{% block scripts %}' + shared_include, new_page)
+                    self.assertEqual(new_page.count('<script>'), 1)
+                    self.assertLess(new_page.index(shared_include), new_page.index('<script>'))
+                    self.assertIn("document.getElementById('logsOptionsToggle')", new_page)
+                    self.assertEqual(partial.count('let autoRefreshInterval = null;'), 1)
+                    self.assertIn('plural_forms()', partial)
+                    continue
                 else:
                     expected = original[original.index(start):original.rindex(end)]
                 self.assertEqual(partial.strip(), expected.strip(),
@@ -743,8 +794,8 @@ class TestOpsScriptDrift(unittest.TestCase):
             next_page = (root / 'next' / f'{page}.html').read_text(encoding='utf-8')
             scripts = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
             source = next_page + '\n' + scripts
-            if page == 'stats':
-                original += '\n' + scripts  # Classic includes this partial rather than copying it.
+            if page in ('stats', 'logs'):
+                original += '\n' + scripts  # Classic includes these partials rather than copying them.
             targets = re.findall(r'fetch\s*\(|href="/[^\"]*|action="/[^\"]*|url_for\s*\(', original)
             for target in targets:
                 with self.subTest(page=page, target=target):

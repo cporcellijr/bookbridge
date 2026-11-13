@@ -162,7 +162,7 @@ class RenderedJsStringsTests(I18nTestBase):
         })
 
     def test_logs_filter_pending_is_checked_by_marker_not_text(self):
-        source = (TEMPLATES / "logs.html").read_text(encoding="utf-8")
+        source = self._page('/logs')
         script = source.split("<script>", 1)[1]
         self.assertNotIn("includes('Switching filter')", script)
         self.assertNotIn("includes('Applying filter')", script)
