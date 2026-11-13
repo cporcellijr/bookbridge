@@ -217,3 +217,17 @@ class TestDiscoverPhoneFilters(unittest.TestCase):
         self.assertLess(template.index('id="discoverFiltersToggle"'), template.index('id="seriesFilter"'))
         self.assertIn('.discover-page #filterBar:not(.open) > .filter-field:not(.grow)', css)
         self.assertIn('.discover-page .discover-filters-toggle { display: none; }', css)
+
+
+class TestDiscoverPhoneQueueBar(unittest.TestCase):
+    """Phone Discover can reach the selected book and queued items without a long scroll."""
+
+    def test_queue_bar_and_row_scroll_are_available_on_phones(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/next/suggestions.html').read_text(encoding='utf-8')
+        css = (root / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('id="discoverQueueBar"', template)
+        self.assertLess(template.index('id="layout"'), template.index('id="discoverQueueBar"'))
+        self.assertIn('scrollIntoView', template)
+        self.assertIn('queueCount', template)
+        self.assertIn('.discover-queue-bar:not([hidden]) { position: fixed;', css)
