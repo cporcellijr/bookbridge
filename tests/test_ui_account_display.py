@@ -62,6 +62,28 @@ class TestAccountDisplayPage(unittest.TestCase):
         self.assertRegex(markup, r'id="bb-next-user-menu"[\s\S]*?href="/account/display"')
         self.assertRegex(markup, r'id="bb-next-mobile-user-menu"[\s\S]*?href="/account/display"')
 
+    def test_hero_switch_appears_only_in_new_display_behaviour_group(self):
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        markup = self.client.get("/account/display").get_data(as_text=True)
+        behaviour = re.search(
+            r'<section class="display-group" data-display-group="behaviour".*?</section>',
+            markup, re.S)
+        self.assertIsNotNone(behaviour)
+        self.assertIn("Behaviour", behaviour.group())
+        self.assertIn('data-display-setting="UI_SHOW_HERO"', behaviour.group())
+        self.assertRegex(behaviour.group(), r'name="UI_SHOW_HERO" value="true" role="switch"[^>]*checked')
+        response = self.client.post("/account/display?next=/account/display",
+            data={"UI_SHOW_HERO": "off"}, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.service.get_user_credential(self.reader.id, "UI_SHOW_HERO"), "false")
+        self.assertIn('name="UI_SHOW_HERO" value="true" role="switch" aria-checked="false"',
+                      response.get_data(as_text=True))
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "classic")
+        self.assertNotIn("Behaviour", self.client.get("/account/display").get_data(as_text=True))
+        self.assertIsNone(self.service.get_user_credential(self.admin.id, "UI_SHOW_HERO"))
+
     def test_shelf_finish_rendering_visibility_and_fallback(self):
         self._real_templates()
         self._series_books()

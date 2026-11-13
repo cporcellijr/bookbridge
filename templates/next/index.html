@@ -5,7 +5,7 @@
 
 {% block content %}
 {% set display = display_settings() %}
-<div id="library-page" class="library-page" data-view="{{ {'spines': 'spines', 'faceout': 'spines', 'list': 'list'}.get(display.UI_LIBRARY_STYLE, 'covers') }}" data-select-mode="off" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}">
+<div id="library-page" class="library-page" data-view="{{ {'spines': 'spines', 'faceout': 'spines', 'list': 'list'}.get(display.UI_LIBRARY_STYLE, 'covers') }}" data-select-mode="off" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}" data-show-hero="{{ display.UI_SHOW_HERO }}">
     {% set attention = namespace(items=[]) %}
     {% set processing = namespace(items=[]) %}
     {% for book in mappings %}
@@ -70,13 +70,26 @@
 
     {% set series_options = mappings|map(attribute='series_name')|reject('none')|unique|sort(case_sensitive=false) %}
     {% set author_options = mappings|map(attribute='display_author')|reject('none')|reject('equalto','')|unique|sort(case_sensitive=false) %}
+    {% from 'next/_library_cards.html' import render_card, render_series, render_hero with context %}
+    {% if display.UI_SHOW_HERO == 'true' %}
+        {% if hero_mapping %}{{ render_hero(hero_mapping) }}{% else %}
+        <section id="library-hero" class="library-hero" hidden aria-label="{{ _('Currently reading') }}">
+            <a class="library-hero-link" href="#" onclick="openBookDrawer(this.href,this);return false;">
+                <div class="hero-cover"></div>
+                <div class="hero-copy"><span class="hero-eyebrow">{{ _('Currently reading') }}</span>
+                    <h2 class="hero-title"></h2><span class="hero-author"></span>
+                    <span class="hero-progress"><span class="hero-service" hidden></span><span class="hero-percent"></span></span>
+                </div>
+            </a>
+        </section>{% endif %}
+    {% endif %}
     {% if mappings %}
 
     <section class="library-toolbar" aria-label="{{ _('Library controls') }}">
         <div class="toolbar-primary">
             <div class="toolbar-search"><input id="dashboard-search" type="search" class="field" aria-label="{{ _('Filter books') }}" placeholder="{{ _('Filter books…') }}" autocomplete="off"></div>
             <div class="library-filter-host" id="library-filter-host">
-                <button type="button" id="library-filter-button" class="btn library-filter-trigger" aria-expanded="false" aria-controls="library-filter-panel"><span id="library-filter-button-label">{{ _('Filter') }}</span><span aria-hidden="true">⌄</span></button>
+                <button type="button" id="library-filter-button" class="btn library-filter-trigger" aria-expanded="false" aria-controls="library-filter-panel"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span id="library-filter-button-label">{{ _('Filter') }}</span><span aria-hidden="true">⌄</span></button>
                 <div id="library-filter-backdrop" class="library-filter-backdrop" hidden></div>
                 <div id="library-filter-panel" class="library-filter-panel" role="dialog" aria-label="{{ _('Filters') }}" hidden>
                     <div class="library-filter-panel-head"><strong>{{ _('Filters') }}</strong><button type="button" class="library-filter-close" aria-label="{{ _('Close filters') }}" data-filter-close>×</button></div>
@@ -95,9 +108,7 @@
                 <select id="author-filter" aria-label="{{ _('Author') }}"><option value="all">{{ _('All authors') }}</option><option value="none">{{ _('No author') }}</option>{% for name in author_options %}<option value="author:{{ name }}">{{ name }}</option>{% endfor %}</select>
                 <select id="series-filter" aria-label="{{ _('Series') }}"><option value="all">{{ _('All series') }}</option><option value="none">{{ _('No series') }}</option>{% for name in series_options %}<option value="series:{{ name }}">{{ name }}</option>{% endfor %}</select>
             </div>
-        </div>
-        <div class="toolbar-secondary">
-            <div class="toolbar-left"><div class="sort-controls"><label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field" aria-label="{{ _('Sort') }}"><option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="reading">{{ _('Reading status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option></select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button></div></div>
+            <div class="sort-controls"><label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field" aria-label="{{ _('Sort') }}"><option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="reading">{{ _('Reading status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option></select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button></div>
             <div class="toolbar-right"><button type="button" id="select-mode-button" class="btn" aria-pressed="false" aria-controls="selection-bar">{{ _('Select') }}</button><span id="filter-count" role="status" aria-live="polite"></span></div>
         </div>
     </section>
@@ -107,8 +118,6 @@
         <button type="button" data-bulk-action onclick="bulkSyncNow()">{{ _('Sync now') }}</button><button type="button" data-bulk-action onclick="bulkMarkFinished()">{{ _('Mark finished') }}</button><button type="button" data-bulk-action onclick="bulkGenerateReadalong()">{{ _('Create read-along EPUB') }}</button><button type="button" data-bulk-action onclick="bulkDeleteBooks()">{{ _('Remove') }}</button>
         <button type="button" class="selection-done" aria-label="{{ _('Exit selection') }}" title="{{ _('Exit selection') }}" onclick="exitBookSelection()" ><span aria-hidden="true">×</span></button>
     </div>
-
-    {% from 'next/_library_cards.html' import render_card, render_series with context %}
 
     <div class="book-grid" id="library-grid">
         {% for entry in grouped_mappings %}
