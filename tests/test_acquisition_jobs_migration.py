@@ -18,7 +18,7 @@ from src.db.models import AcquisitionJob, AcquisitionRequest
 
 pytestmark = pytest.mark.real_database_migrations
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "c585c20261112"
+HEAD = "h16d20261112"
 PREVIOUS = "e3b7c1a9d2f4"
 
 
@@ -55,6 +55,11 @@ class TestAcquisitionJobsMigration(unittest.TestCase):
         self.assertEqual({c["name"] for c in inspector.get_columns("acquisition_requests")},
                          set(AcquisitionRequest.__table__.columns.keys()))
         self.assertIn("ix_acquisition_jobs_user_id", {i["name"] for i in inspector.get_indexes("acquisition_jobs")})
+        book_columns = {col["name"] for col in inspector.get_columns("books")}
+        self.assertIn("synopsis_text", book_columns)
+        self.assertIn("synopsis_checked", book_columns)
+        self.assertFalse(next(col for col in inspector.get_columns("books")
+                              if col["name"] == "synopsis_checked")["nullable"])
         self.assertEqual(ScriptDirectory.from_config(self.cfg).get_heads(), [HEAD])
         with self.engine.connect() as conn:
             self.assertEqual(conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar(), HEAD)

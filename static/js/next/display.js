@@ -18,6 +18,9 @@
         '2 per row on a phone', '2 per row on a phone', '2 per row on a phone'];
 
     function selected(form) {
+        if (form.dataset.displaySetting === 'UI_HERO_CONTENT') {
+            return Array.from(form.querySelectorAll('[data-hero-piece]:checked')).map(input => input.value).join(',');
+        }
         if (form.dataset.displaySetting === 'UI_COVER_SIZE') {
             return form.querySelector('input[name="UI_COVER_SIZE"]').value;
         }
@@ -59,7 +62,19 @@
         if (help) help.textContent = window.bbT(sizeHelp[n - 1]);
     }
 
+    function syncHeroChoices(form, value) {
+        var values = value ? value.split(',') : [];
+        var checks = form.querySelectorAll('[data-hero-piece]');
+        checks.forEach(function (check) {
+            check.checked = values.includes(check.value);
+            check.disabled = !check.checked && values.length >= 2;
+        });
+        var hidden = form.querySelector('input[name="UI_HERO_CONTENT"]');
+        if (hidden) hidden.value = values.join(',');
+    }
+
     function setSelected(form, value) {
+        if (form.dataset.displaySetting === 'UI_HERO_CONTENT') syncHeroChoices(form, value);
         form.querySelectorAll('[data-display-value]').forEach(function (button) {
             button.setAttribute('aria-pressed', String(button.dataset.displayValue === value));
         });
@@ -144,10 +159,12 @@
             showStatus(form, window.bbT('Saved'));
         }).catch(function () {
             setSelected(form, before);
+            if (key === 'UI_HERO_CONTENT') form.dataset.lastSavedValue = before;
             showStatus(form, window.bbT("Couldn't save"), true);
         }).finally(function () {
             controls.forEach(function (control) { control.disabled = false; });
             if (key === 'UI_COVER_SIZE') refreshSizeStepper(form, selected(form));
+            if (key === 'UI_HERO_CONTENT') syncHeroChoices(form, selected(form));
         });
     }
 
@@ -164,6 +181,19 @@
             event.preventDefault();
             save(form, button.dataset.displayValue, selected(form));
         });
+        if (form.dataset.displaySetting === 'UI_HERO_CONTENT') {
+            var initial = selected(form);
+            syncHeroChoices(form, initial);
+            form.addEventListener('change', function (event) {
+                if (!event.target.matches('[data-hero-piece]')) return;
+                var before = form.dataset.lastSavedValue ?? initial;
+                var next = selected(form);
+                initial = next;
+                form.dataset.lastSavedValue = next;
+                syncHeroChoices(form, next);
+                save(form, next, before);
+            });
+        }
         var toggle = form.querySelector('[role="switch"]');
         if (toggle) toggle.addEventListener('change', function () {
             save(form, toggle.checked ? 'true' : 'false', toggle.checked ? 'false' : 'true');

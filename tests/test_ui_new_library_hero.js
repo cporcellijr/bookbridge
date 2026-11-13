@@ -27,7 +27,8 @@ const stop = source.indexOf("let refreshPaused = false;", start);
 assert(start >= 0 && stop > start, 'Missing actual hero lifecycle');
 const code = source.slice(start, stop)
   .replace(/\{\{\s*_\('Open \{title\} by \{author\}'\)\|tojson\s*\}\}/g, JSON.stringify('Open {title} by {author}'))
-  .replace(/\{\{\s*_\('Unknown author'\)\|tojson\s*\}\}/g, JSON.stringify('Unknown author'));
+  .replace(/\{\{\s*_\('Unknown author'\)\|tojson\s*\}\}/g, JSON.stringify('Unknown author'))
+  .replace(/\{\{\s*_\('([^']*)'\)\|tojson\s*\}\}/g, (_, value) => JSON.stringify(value));
 const node = () => ({textContent: '', hidden: false});
 const ui = {
   '.hero-title': node(), '.hero-author': node(), '.hero-service': node(), '.hero-percent': node(),
@@ -56,6 +57,7 @@ const context = {
   sortBooks() {sorting++;}, filterBooks() {filtering++;},
   updateSelectionBar() {selectionUpdates++;},
   bbFormat: (template, attrs) => template.replace(/\{(\w+)\}/g, (_, k) => attrs[k]),
+  window: {requestAnimationFrame() {}, addEventListener() {}, setTimeout() {}},
 };
 vm.runInNewContext(code, context);
 assert.equal(books[0].dataset.heroExcluded, 'true', 'Initial hero excluded before poll');

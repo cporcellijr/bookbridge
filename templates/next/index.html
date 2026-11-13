@@ -73,13 +73,15 @@
     {% from 'next/_library_cards.html' import render_card, render_series, render_hero with context %}
     {% if display.UI_SHOW_HERO == 'true' %}
         {% if hero_mapping %}{{ render_hero(hero_mapping) }}{% else %}
-        <section id="library-hero" class="library-hero" hidden aria-label="{{ _('Currently reading') }}">
+        <section id="library-hero" class="library-hero" hidden data-hero-content="{{ display.UI_HERO_CONTENT }}" aria-label="{{ _('Currently reading') }}">
             <a class="library-hero-link" href="#" onclick="openBookDrawer(this.href,this);return false;">
-                <div class="hero-cover"></div>
+                <div class="hero-base"><div class="hero-cover"></div>
                 <div class="hero-copy"><span class="hero-eyebrow">{{ _('Currently reading') }}</span>
                     <h2 class="hero-title"></h2><span class="hero-author"></span>
                     <span class="hero-progress"><span class="hero-service" hidden></span><span class="hero-percent"></span></span>
-                </div>
+                    <span class="hero-mini-track" hidden><span></span></span>
+                </div></div>
+                <div class="hero-content" hidden></div>
             </a>
         </section>{% endif %}
     {% endif %}
