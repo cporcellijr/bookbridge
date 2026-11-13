@@ -149,6 +149,9 @@ summary::-webkit-details-marker { display: none; }
 [hidden], .hidden { display: none !important; }
 .book-section { padding: 24px 0; border-top: 1px solid var(--line); }
 .book-section h2 { font-size: 1.1rem; margin: 0 0 16px; }
+.book-about-text { margin: 0; white-space: pre-line; }
+.book-about-text.is-clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; line-clamp: 5; overflow: hidden; }
+.book-about-toggle { margin-top: 8px; padding: 0; border: 0; background: none; color: inherit; text-decoration: underline; font: inherit; cursor: pointer; }
 .book-alert { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--warn); border-radius: 10px; }
 .book-alert h3 { margin: 0 0 6px; font-size: .95rem; color: var(--warn); }
 .book-alert p { margin: 0; overflow-wrap: anywhere; }

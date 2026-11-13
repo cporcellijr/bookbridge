@@ -7990,6 +7990,22 @@ def _hero_reading_piece(abs_id: str) -> dict | None:
     return payload
 
 
+def api_book_synopsis(abs_id: str):
+    """Return this reader's linked book synopsis (cached or looked up), or null."""
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Authentication required"}), 401
+    book = database_service.get_book(abs_id)
+    if book is None or not database_service.is_user_linked(user.id, abs_id):
+        return jsonify({"error": "Not found"}), 404
+    try:
+        text = _hero_cached_synopsis(book, user)
+    except Exception as exc:
+        logger.warning("Book synopsis unavailable for %s: %s", abs_id, exc, exc_info=True)
+        text = None
+    return jsonify({"text": text or None})
+
+
 def api_library_hero(abs_id: str):
     """Load optional hero content after first paint, scoped to this reader's claims."""
     user = current_user()
@@ -8156,6 +8172,7 @@ def book_page(abs_id: str) -> object:
     return render_template(
         'next/_book_drawer.html' if request.args.get('fragment') == '1' else 'next/book.html',
         mapping=mappings[0], integrations=integrations,
+        synopsis=database_service.get_book_synopsis_cache(abs_id)[1],
         book_states={state.client_name: state for state in states},
         kosync_devices=database_service.get_user_kosync_progress_for_book(abs_id, user_id=user_id),
         recent_syncs=sorted(states, key=lambda state: state.last_updated or 0, reverse=True),
@@ -17251,6 +17268,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/stats/reading-day', 'api_stats_reading_day', api_stats_reading_day)
     app.add_url_rule('/api/stats/reading-calendar', 'api_stats_reading_calendar', api_stats_reading_calendar)
     app.add_url_rule('/api/library/hero/<abs_id>', 'api_library_hero', api_library_hero)
+    app.add_url_rule('/api/book/<abs_id>/synopsis', 'api_book_synopsis', api_book_synopsis)
     app.add_url_rule('/api/stats/book-detail', 'api_stats_book_detail', api_stats_book_detail)
     app.add_url_rule('/api/stats/yearly-recap', 'api_stats_yearly_recap', api_stats_yearly_recap)
     app.add_url_rule('/logs', 'logs_view', logs_view)
