@@ -136,10 +136,49 @@
     .view .stats-wrap .calendar-day-total { font-size: 9px; }
     .view .stats-wrap .calendar-span { padding: 0 3px; font-size: 10px; }
     .view .logs-wrap .controls { gap: 12px; }
-    .view .logs-wrap .control-group { flex: 1 1 180px; min-width: 0; }
+    .view .logs-wrap .control-group { flex: none; min-width: 0; }
     .view .logs-wrap .search-input { min-width: 0; width: 100%; }
     .view .whats-new-notes { padding: 18px; }
     .view .job-queue-table-scroll { -webkit-overflow-scrolling: touch; }
+}
+.view .logs-wrap .logs-options { display: contents; }
+.view .logs-wrap .logs-options-toggle { display: none; }
+/* Logs: filters stay put; the log list is the only scroll region. */
+body:has(.ops-logs:not(.embed)) .app-shell { height: 100dvh; min-height: 0; }
+body:has(.ops-logs:not(.embed)) .main-column { height: 100dvh; min-height: 0; }
+body:has(.ops-logs:not(.embed)) .view { flex: 1 1 auto; min-height: 0; max-width: none; display: flex; flex-direction: column; padding-bottom: 20px; }
+.view .logs-wrap:not(.embed) { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; padding: 0; margin: 0; }
+.view .logs-wrap:not(.embed) .logs-side { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.view .logs-wrap:not(.embed) .page-header { margin: 0; }
+.view .logs-wrap:not(.embed) .page-header h1 { margin: 0; }
+.view .logs-wrap:not(.embed) .page-header p { margin: 6px 0 0; font-size: 14px; }
+.view .logs-wrap:not(.embed) .controls { flex-direction: column; flex-wrap: nowrap; gap: 14px; margin: 0; padding: 16px; }
+.view .logs-wrap:not(.embed) .control-group { flex: none; min-width: 0; }
+.view .logs-wrap:not(.embed) .control-group select,
+.view .logs-wrap:not(.embed) .control-group input:not([type="checkbox"]),
+.view .logs-wrap:not(.embed) .control-group .btn { width: 100%; min-width: 0; }
+.view .logs-wrap:not(.embed) .control-group.auto-refresh { flex-direction: row; align-items: center; justify-content: space-between; min-height: 32px; }
+.view .logs-wrap:not(.embed) .logs-refresh-group label { display: none; }
+.view .logs-wrap:not(.embed) .log-stats { flex-direction: column; gap: 4px; margin: 0; font-size: 13px; }
+.view .logs-wrap:not(.embed) .log-container { height: auto; min-height: 0; }
+@media (max-width: 760px) {
+    body:has(.ops-logs:not(.embed)) .main-column { height: 100%; }
+    body:has(.ops-logs:not(.embed)) .view { padding-bottom: 10px; }
+    .view .logs-wrap:not(.embed) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+    .view .logs-wrap:not(.embed) .logs-side { overflow: visible; gap: 8px; }
+    .view .logs-wrap:not(.embed) .page-header { display: none; }
+    .view .logs-wrap:not(.embed) .controls { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 10px; }
+    .view .logs-wrap:not(.embed) .logs-primary > label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .view .logs-wrap:not(.embed) .logs-options-toggle { display: inline-flex; }
+    .view .logs-wrap:not(.embed) .logs-options { display: none; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: end; }
+    .view .logs-wrap:not(.embed) .logs-options.open { display: grid; }
+    .view .logs-wrap:not(.embed) .log-stats { flex-direction: row; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; padding: 0 2px; }
+    .view .logs-wrap:not(.embed) .log-header { padding: 8px 12px; }
+    .view .logs-wrap:not(.embed) .log-header h3 { margin: 0; font-size: 15px; }
+    .view .logs-wrap:not(.embed) .log-line { padding: 6px 12px; gap: 2px 8px; }
+    .view .logs-wrap:not(.embed) .log-timestamp { min-width: 0; font-size: 11px; }
+    .view .logs-wrap:not(.embed) .log-module { min-width: 0 !important; }
+    .view .logs-wrap:not(.embed) .log-message { flex: 1 1 100%; }
 }
 /* Embed retains the Classic Settings iframe's internal log scrolling. */
 body:has(.ops-logs.embed) .view { padding: 0; max-width: none; min-height: 0; }

@@ -719,3 +719,29 @@ class TestOpsScriptDrift(unittest.TestCase):
             for target in targets:
                 with self.subTest(page=page, target=target):
                     self.assertIn(target, source)
+
+
+class TestLogsSplitLayout(unittest.TestCase):
+    """The New Logs layout keeps control ids while isolating the log scroller."""
+
+    def test_logs_page_keeps_every_control_and_adds_the_side_panel(self):
+        from pathlib import Path
+        html = (Path(__file__).resolve().parents[1] / 'templates/next/logs.html').read_text(encoding='utf-8')
+        for marker in ('class="logs-side"', 'id="logsOptionsToggle"', 'id="logsOptions"'):
+            self.assertIn(marker, html)
+        for element_id in (
+            'logLevel', 'searchInput', 'linesCount', 'refreshBtn', 'autoRefresh',
+            'liveMode', 'logContent', 'loadMore', 'scrollToTop', 'scrollToBottom',
+            'totalLinesStats', 'displayedLinesStats', 'lastUpdated',
+        ):
+            with self.subTest(element_id=element_id):
+                self.assertEqual(html.count(f'id="{element_id}"'), 1)
+        self.assertLess(html.index('id="searchInput"'), html.index('id="logsOptions"'))
+        self.assertLess(html.index('id="logsOptions"'), html.index('id="linesCount"'))
+
+    def test_log_list_is_the_only_scroller(self):
+        from pathlib import Path
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-ops.css').read_text(encoding='utf-8')
+        self.assertIn('body:has(.ops-logs:not(.embed)) .app-shell { height: 100dvh;', css)
+        self.assertIn('.view .logs-wrap:not(.embed) .log-container { height: auto;', css)
+        self.assertNotIn('flex: 1 1 180px', css)

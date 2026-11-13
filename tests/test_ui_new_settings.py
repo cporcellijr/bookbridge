@@ -291,8 +291,11 @@ class TestP6RenderedRoutes(unittest.TestCase):
         self.assertIn('class="settings-menu"', rail)
         self.assertIn('id="settings-navigation"', rail)
         self.assertNotIn('class="rail-nav"', rail)
-        for link in ('href="/stats"', 'href="/logs"', 'href="/settings"'):
+        for link in ('href="/stats"', 'href="/settings"'):
             self.assertNotIn(link, rail)
+        # The only Logs link is the Settings menu entry that opens the Logs page.
+        self.assertEqual(rail.count('href="/logs"'),
+                         rail.count('href="/logs" class="settings-tab" data-tab="logs"'))
         library = self.client.get('/').get_data(as_text=True)
         self.assertIn('class="rail-nav"', library)
         self.assertIn('href="/stats"', library)
@@ -417,3 +420,18 @@ class TestP11SettingsNavigation(unittest.TestCase):
         self.assertIn("bar.style.display = page === 'maintenance' ? 'none' : ''", self.js)
         self.assertIn('keepSelectedMenuLinkInView()', self.js)
         self.assertNotIn('-webkit-line-clamp', self.css)
+
+
+class TestSettingsLogsLink(unittest.TestCase):
+    """New Settings links out to Logs instead of embedding a second page."""
+
+    def test_logs_menu_entry_is_a_plain_link(self):
+        source = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        menu_line = next(line for line in source.splitlines() if 'data-tab="logs"' in line)
+        self.assertIn('href="{{ url_for(\'logs_view\') }}"', menu_line)
+        self.assertNotIn('onclick', menu_line)
+
+    def test_settings_no_longer_embeds_the_logs_page(self):
+        source = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        self.assertNotIn('<iframe', source)
+        self.assertIn("{{ _('Open Logs') }}", source)

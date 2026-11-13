@@ -13,13 +13,16 @@
             <input type="text" class="form-input" id="acqTitle" maxlength="500" required>
             <label class="field-label" for="acqAuthor">{{ _('Author') }}</label>
             <input type="text" class="form-input" id="acqAuthor" maxlength="500">
-            <label class="field-label" for="acqIsbn">{{ _('ISBN') }}</label>
-            <input type="text" class="form-input" id="acqIsbn" maxlength="20" autocomplete="off">
-            <p class="acq-note" id="acqIsbnBothNote" hidden>{{ _('ISBN applies to one format. It will be left out when getting both.') }}</p>
-            <label class="field-label" for="acqSeries">{{ _('Series') }}</label>
-            <input type="text" class="form-input" id="acqSeries" maxlength="500">
-            <label class="field-label" for="acqSeriesIndex">{{ _('Series number') }}</label>
-            <input type="number" class="form-input" id="acqSeriesIndex" step="any">
+            <details class="acq-more" id="acqMore">
+                <summary>{{ _('More details (ISBN, series)') }}</summary>
+                <label class="field-label" for="acqIsbn">{{ _('ISBN') }}</label>
+                <input type="text" class="form-input" id="acqIsbn" maxlength="20" autocomplete="off">
+                <p class="acq-note" id="acqIsbnBothNote" hidden>{{ _('ISBN applies to one format. It will be left out when getting both.') }}</p>
+                <label class="field-label" for="acqSeries">{{ _('Series') }}</label>
+                <input type="text" class="form-input" id="acqSeries" maxlength="500">
+                <label class="field-label" for="acqSeriesIndex">{{ _('Series number') }}</label>
+                <input type="number" class="form-input" id="acqSeriesIndex" step="any">
+            </details>
             <div id="acqPartnerWrap" hidden>
                 <label class="field-label" for="acqPartnerSelect">{{ _('Existing copy to pair with') }}</label>
                 <select class="form-select" id="acqPartnerSelect"></select>

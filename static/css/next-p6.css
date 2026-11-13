@@ -94,7 +94,6 @@
 /* Keep disabled services closed, but an enabled section no longer has a manual collapse affordance. */
 .view .settings-section[data-svc] > .section-header { cursor: default; }
 .view .next-logs-panel h3 { font: 600 25px var(--font-book); margin: 4px 0 14px; }
-.view .next-logs-panel iframe { display: block; width: 100%; min-height: 72vh; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 /* Account and per-reader integrations retain the complete Classic forms. */
 .view .account-wrap, .view .integrations-wrap, .view .admin-users-wrap { padding: 12px 0 60px; max-width: 1320px; margin: 0 auto; }
 .view .account-wrap .card { max-width: 740px; }
