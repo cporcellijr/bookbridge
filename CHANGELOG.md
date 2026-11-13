@@ -18,6 +18,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Books keep syncing after you rename them in Calibre or CWA.** Editing a book's title or
+  author renames its EPUB, and the bridge used to lose the file ("Could not locate or download
+  locator target EPUB" every cycle) until you matched the book again. It now remembers which
+  Calibre book each file belongs to and follows it to the new name, including when the library
+  is mounted twice (Calibre library path plus an extra ebook folder).
+  Contributed by [@chemicalsno](https://github.com/chemicalsno) in #589.
+
 - **Acquisition submission safety and receipt reconciliation** (#585, Phase C review corrections).
   An uncertain Shelfmark POST now stays blocked through concurrent policy and
   release-choice checks and ambiguous server failures, preventing blind duplicate downloads.
