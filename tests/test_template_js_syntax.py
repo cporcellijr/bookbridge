@@ -37,7 +37,7 @@ def unterminated_string_lines(js: str) -> list:
     """Return 1-based line numbers where a quoted string runs past end-of-line.
 
     Understands line/block comments, template literals (which legally span
-    lines) and regex literals -- templates/stats.html contains ``/\\"/g``,
+    lines) and regex literals -- templates/next/_stats_scripts.html contains ``/\\"/g``,
     whose quote is not a string delimiter -- so only real ``'`` and ``"``
     strings are reported.
     """
@@ -167,7 +167,8 @@ class TestShippedTemplatesParse(unittest.TestCase):
 
     def test_every_template_script_block_has_terminated_strings(self):
         checked = 0
-        for path in sorted(TEMPLATE_DIR.glob("*.html")):
+        paths = [*sorted(TEMPLATE_DIR.glob("*.html")), TEMPLATE_DIR / "next" / "_stats_scripts.html"]
+        for path in paths:
             for index, block in enumerate(script_blocks(path)):
                 checked += 1
                 bad = unterminated_string_lines(block)

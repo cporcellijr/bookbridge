@@ -624,18 +624,33 @@ class TestOpsPages(unittest.TestCase):
         self.assertIn('reorderSubmitting', html)
 
     def test_stats_dashboard_and_logs_live_controls_are_preserved(self):
-        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
         self._login('ui-reader')
-        html = self.client.get('/stats').get_data(as_text=True)
-        for expected in (
-            '/static/vendor/chart.umd.min.js',
-            '/api/stats/reading-calendar', '/api/stats/reading-day',
-            '/api/stats/book-detail', '/api/stats/yearly-recap',
-            'data-tab="combined"', 'data-tab="reading"', 'data-tab="listening"',
-            'day-detail-backdrop', 'book-detail-backdrop', 'loadYearlyRecap(',
-        ):
-            with self.subTest(stat=expected):
-                self.assertIn(expected, html)
+        stats_scripts = []
+        for mode in ('classic', 'new'):
+            with self.subTest(mode=mode):
+                self.service.set_user_credential(self.reader.id, 'UI_MODE', mode)
+                response = self.client.get('/stats')
+                self.assertEqual(response.status_code, 200)
+                html = response.get_data(as_text=True)
+                for expected in (
+                    '/static/vendor/chart.umd.min.js',
+                    '/api/stats/reading-calendar', '/api/stats/reading-day',
+                    '/api/stats/book-detail', '/api/stats/yearly-recap',
+                    'data-tab="combined"', 'data-tab="reading"', 'data-tab="listening"',
+                    'day-detail-backdrop', 'book-detail-backdrop', 'loadYearlyRecap(',
+                    'const BRIDGE_TIMEZONE =',
+                    'refreshButton.addEventListener("click", () => loadStats(true));',
+                    'loadStats();',
+                ):
+                    self.assertIn(expected, html)
+                scripts = re.findall(r'<script\b[^>]*>.*?</script>', html, flags=re.DOTALL)
+                chart = [i for i, script in enumerate(scripts) if '/static/vendor/chart.umd.min.js' in script]
+                stats = [i for i, script in enumerate(scripts) if 'const BRIDGE_TIMEZONE =' in script]
+                self.assertEqual(len(chart), 1)
+                self.assertEqual(len(stats), 1)
+                self.assertLess(chart[0], stats[0])
+                stats_scripts.append(scripts[stats[0]].strip())
+        self.assertEqual(stats_scripts[0], stats_scripts[1])
         self.client.get('/logout')
         self.service.set_user_credential(self.admin.id, 'UI_MODE', 'new')
         self._login('ui-admin')
@@ -650,7 +665,7 @@ class TestOpsPages(unittest.TestCase):
 
 
 class TestOpsScriptDrift(unittest.TestCase):
-    """Copied P5 scripts stay shared with Classic, except explicit page differences.
+    """P5 scripts stay shared where included and in sync where copied.
 
     Deliberate template-only differences:
     * next/base.html and an operations stylesheet, never changes in Classic;
@@ -665,7 +680,7 @@ class TestOpsScriptDrift(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent / 'templates'
         for page, start, end in (
             ('job_queue', "\n{% if queue_view['running'] %}\n<script>", "\n{% endblock %}\n{% endblock %}"),
-            ('stats', '<script src="/static/vendor/chart.umd.min.js"></script>', "\n{% endblock %}"),
+            ('stats', None, None),
             ('logs', '\n<script>', "\n{% endblock %}"),
         ):
             with self.subTest(page=page):
@@ -678,6 +693,19 @@ class TestOpsScriptDrift(unittest.TestCase):
                     self.assertIn(shared_include, new_page)
                     self.assertIn("acquisition_jobs.js", partial)
                     self.assertIn("setInterval", partial)
+                    continue
+                elif page == 'stats':
+                    shared_include = "{% include 'next/_stats_scripts.html' %}"
+                    new_page = (root / 'next' / 'stats.html').read_text(encoding='utf-8')
+                    self.assertEqual(original.count(shared_include), 1)
+                    self.assertEqual(new_page.count(shared_include), 1)
+                    self.assertLess(original.index('{% block content %}'), original.index(shared_include))
+                    self.assertLess(original.index(shared_include), original.rfind('{% endblock %}'))
+                    self.assertNotIn('{% block scripts %}', original)
+                    self.assertIn('{% block scripts %}' + shared_include + '{% endblock %}', new_page)
+                    self.assertNotIn('<script', original)
+                    self.assertEqual(partial.count('/static/vendor/chart.umd.min.js'), 1)
+                    self.assertEqual(partial.count('const BRIDGE_TIMEZONE ='), 1)
                     continue
                 elif page == 'logs':
                     expected = original[original.index(start) + 1:original.rindex(end)]
@@ -715,6 +743,8 @@ class TestOpsScriptDrift(unittest.TestCase):
             next_page = (root / 'next' / f'{page}.html').read_text(encoding='utf-8')
             scripts = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
             source = next_page + '\n' + scripts
+            if page == 'stats':
+                original += '\n' + scripts  # Classic includes this partial rather than copying it.
             targets = re.findall(r'fetch\s*\(|href="/[^\"]*|action="/[^\"]*|url_for\s*\(', original)
             for target in targets:
                 with self.subTest(page=page, target=target):
