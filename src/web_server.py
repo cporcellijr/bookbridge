@@ -1176,7 +1176,7 @@ def gzip_html_response(response):
             or response.direct_passthrough
             or response.is_streamed
             or 'Content-Encoding' in response.headers
-            or 'gzip' not in request.headers.get('Accept-Encoding', '').lower()
+            or request.accept_encodings.quality('gzip') <= 0
         ):
             return response
         body = response.get_data()
