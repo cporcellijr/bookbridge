@@ -219,6 +219,11 @@
         </div>
     </div>
 
+    <div class="discover-queue-bar" id="discoverQueueBar" hidden>
+        <span id="discoverQueueBarCount"></span>
+        <button type="button" class="btn btn-primary" id="discoverQueueBarBtn">{{ _('Review queue') }}</button>
+    </div>
+
     <div class="reader-docs-wrap" data-only-tab="search">
         {% include "_reader_documents.html" %}
     </div>
@@ -257,6 +262,37 @@
     toggle.addEventListener('click', function () {
         toggle.setAttribute('aria-expanded', String(bar.classList.toggle('open')));
     });
+}());
+</script>
+<script>
+(function () {
+    const phone = window.matchMedia('(max-width: 1020px)');
+    const list = document.getElementById('resultsList');
+    const selection = document.querySelector('#queuePanel .selection');
+    const queueList = document.getElementById('queueList');
+    const count = document.getElementById('queueCount');
+    const bar = document.getElementById('discoverQueueBar');
+    const barCount = document.getElementById('discoverQueueBarCount');
+    const barBtn = document.getElementById('discoverQueueBarBtn');
+    if (!list || !selection || !queueList || !count || !bar) return;
+    let queueVisible = false;
+    const update = function () {
+        const items = parseInt(count.textContent, 10) || 0;
+        barCount.textContent = count.textContent;
+        bar.hidden = !phone.matches || items < 1 || queueVisible;
+    };
+    list.addEventListener('click', function (event) {
+        // Same taps _discover_scripts.html treats as "select this book".
+        if (!phone.matches || !event.target.closest('.sugg-row.pair-row')) return;
+        const review = event.target.closest('[data-act="review"], [data-act="review-search"]');
+        if (!review && event.target.closest('a, input, label, button')) return;
+        setTimeout(function () { selection.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+    });
+    barBtn.addEventListener('click', function () { queueList.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+    new MutationObserver(update).observe(count, { childList: true, characterData: true, subtree: true });
+    new IntersectionObserver(function (entries) { queueVisible = entries[0].isIntersecting; update(); }).observe(queueList);
+    if (phone.addEventListener) phone.addEventListener('change', update);
+    update();
 }());
 </script>
 {% endblock %}

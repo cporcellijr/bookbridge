@@ -342,3 +342,13 @@
     .discover-page #filterBar:not(.open) > .series-grouping-label { display: none; }
     .discover-page #filterBar.open > .filter-field:not(.grow) { flex: 1 1 calc(50% - 5px); }
 }
+
+.discover-queue-bar { display: none; }
+@media (max-width: 1020px) {
+    .discover-queue-bar:not([hidden]) { position: fixed; left: 12px; right: 12px; bottom: 18px; z-index: 40; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 16px 42px rgba(0,0,0,.25); font-weight: 600; }
+    .discover-page .queue-panel { scroll-margin-top: 80px; }
+    .discover-page .queue-panel .selection, .discover-page #queueList { scroll-margin-top: 80px; }
+}
+@media (max-width: 760px) {
+    .discover-queue-bar:not([hidden]) { bottom: calc(74px + env(safe-area-inset-bottom)); }
+}
