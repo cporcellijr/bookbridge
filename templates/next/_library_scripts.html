@@ -182,7 +182,7 @@
                 const seen = new Map();
                 document.querySelectorAll('.book-card').forEach(card => {
                     const absId = card.dataset.absId;
-                    if (absId && !seen.has(absId)) seen.set(absId, card);
+                    if (absId && card.dataset.heroExcluded !== 'true' && !seen.has(absId)) seen.set(absId, card);
                 });
                 return Array.from(seen.values());
             }
@@ -266,7 +266,8 @@
 
             function updateFilterButtonLabel() {
                 if (!filterButtonLabel) return;
-                let label = {{ _('Filter')|tojson }};
+                const defaultLabel = {{ _('Filter')|tojson }};
+                let label = defaultLabel;
                 for (const [group, select] of Object.entries(filterGroups)) {
                     if (!select || select.value === 'all') continue;
                     const choice = Array.from(select.options).find(option => option.value === select.value);
@@ -274,6 +275,7 @@
                     break;
                 }
                 filterButtonLabel.textContent = label;
+                if (typeof filterButton !== 'undefined') filterButton?.classList.toggle('is-active', label !== defaultLabel || !!attentionOnlyFilter?.checked);
             }
 
             // A click elsewhere keeps focus where the reader clicked (the search box, say).
@@ -285,11 +287,21 @@
                 if (restoreFocus) filterButton?.focus();
             }
 
+            function positionLibraryFilterPopover() {
+                if (!filterPanel || filterPanel.hidden || typeof window === 'undefined' || window.innerWidth <= 760) return;
+                filterPanel.style.removeProperty('--library-filter-shift');
+                const bounds = filterPanel.getBoundingClientRect();
+                const left = Math.max(14, Math.min(bounds.left, window.innerWidth - bounds.width - 14));
+                filterPanel.style.setProperty('--library-filter-shift', (left - bounds.left) + 'px');
+            }
+            if (typeof window !== 'undefined') window.addEventListener('resize', positionLibraryFilterPopover);
+
             function openFilterPanel() {
                 if (!filterPanel) return;
                 filterPanel.hidden = false;
                 if (filterBackdrop) filterBackdrop.hidden = false;
                 filterButton?.setAttribute('aria-expanded', 'true');
+                positionLibraryFilterPopover();
                 filterPanel.querySelector('[data-filter-close]')?.focus();
             }
 
@@ -476,6 +488,11 @@
                 // Filter flat book cards
                 const cards = document.querySelectorAll('.book-card');
                 cards.forEach(card => {
+                    if (card.dataset.heroExcluded === 'true') {
+                        card.classList.add('hidden');
+                        card.style.display = 'none';
+                        return;
+                    }
                     const title = (card.dataset.title || '').toLowerCase();
                     const author = (card.dataset.author || '').toLowerCase();
                     const filename = (card.dataset.filename || '').toLowerCase();
@@ -522,6 +539,11 @@
                         }
                     });
 
+                    if (!anyChildVisible && group.querySelector?.('[data-hero-excluded]') &&
+                        !searchString && filterValue === 'all' && authorValue === 'all' &&
+                        seriesValue === 'all' && statusValue === 'all' && !attentionOnlyFilter?.checked) {
+                        anyChildVisible = true;
+                    }
                     if (anyChildVisible) {
                         group.classList.remove('hidden');
                         group.style.display = '';
@@ -956,6 +978,126 @@
                 dashboardSearch.addEventListener('input', filterBooks);
             }
 
+            const heroRoot = document.getElementById('library-hero');
+
+            function heroIsInProgress(row) {
+                return Number(row.unified_progress) > 0 && Number(row.unified_progress) < 100 &&
+                    Object.values(row.states || {}).some(state => Number(state.percentage) > 0);
+            }
+
+            function heroMovementTime(row) {
+                return Number(row.last_slot_unix || row.last_sync_unix || 0);
+            }
+
+            function chooseHeroPollRow(rows, currentId, currentMarker) {
+                const eligible = rows.filter(row => heroIsInProgress(row) &&
+                    (!currentId || String(row.abs_id) !== String(currentId)) &&
+                    (currentId ? Number(row.last_slot_unix || 0) > currentMarker : true));
+                eligible.sort((a, b) =>
+                    Number(b.last_slot_unix || 0) - Number(a.last_slot_unix || 0) ||
+                    Number(b.last_sync_unix || 0) - Number(a.last_sync_unix || 0) ||
+                    String(b.abs_id).localeCompare(String(a.abs_id)));
+                return eligible[0] || null;
+            }
+
+            function excludeHeroFromGrid(absId) {
+                document.querySelectorAll('#library-grid .book-card').forEach(card => {
+                    const excluded = !!absId && card.dataset.absId === String(absId);
+                    if (excluded) card.dataset.heroExcluded = 'true';
+                    else delete card.dataset.heroExcluded;
+                    const input = card.querySelector('[data-select-book]');
+                    if (input) {
+                        if (excluded) input.checked = false;
+                        input.disabled = excluded;
+                    }
+                });
+            }
+
+            function populateHeroFromCard(card, row) {
+                if (!heroRoot || !card) return;
+                const link = heroRoot.querySelector('.library-hero-link');
+                const bookLink = card.querySelector('.book-open');
+                const cover = card.querySelector('.cover-wrap');
+                const heroCover = heroRoot.querySelector('.hero-cover');
+                if (!link || !bookLink || !heroCover) return;
+                link.href = bookLink.href;
+                const title = card.dataset.title || '';
+                const author = card.dataset.author || '';
+                link.setAttribute('aria-label', bbFormat({{ _('Open {title} by {author}')|tojson }}, {
+                    title, author: author || {{ _('Unknown author')|tojson }}
+                }));
+                heroRoot.querySelector('.hero-title').textContent = title;
+                heroRoot.querySelector('.hero-author').textContent = author;
+                const coverNodes = ['.cover-image', '.typographic-cover']
+                    .map(selector => cover?.querySelector(selector)).filter(Boolean)
+                    .map(node => node.cloneNode(true));
+                heroCover.replaceChildren(...coverNodes);
+                // The cover loader observes grid images only once at page load.
+                // A new hero clone has not been observed, so resolve its pending
+                // thumb without ever loading the full original unnecessarily.
+                const pendingThumb = heroCover.querySelector?.('img[data-thumb-url]');
+                if (pendingThumb && !pendingThumb.getAttribute('src')) {
+                    const url = pendingThumb.dataset.thumbUrl;
+                    fetch(url, {method: 'HEAD', credentials: 'same-origin', cache: 'no-store'})
+                        .then(response => {
+                            if (!pendingThumb.isConnected) return;
+                            pendingThumb.loading = 'eager';
+                            pendingThumb.addEventListener('load', () => { pendingThumb.hidden = false; }, {once: true});
+                            if (response.status === 200) pendingThumb.src = url;
+                            else if (response.status === 404) pendingThumb.dispatchEvent(new Event('error'));
+                            else pendingThumb.src = url.replace('/covers/thumb/', '/covers/');
+                        })
+                        .catch(() => {
+                            if (pendingThumb.isConnected) pendingThumb.src = url.replace('/covers/thumb/', '/covers/');
+                        });
+                }
+                heroRoot.dataset.absId = String(row.abs_id);
+                heroRoot.dataset.movementAt = String(heroMovementTime(row));
+                heroRoot.dataset.markerAt = String(Number(row.last_slot_unix || 0));
+                heroRoot.hidden = false;
+            }
+
+            function updateHeroProgress(row) {
+                if (!heroRoot || !row || heroRoot.hidden) return;
+                const service = heroRoot.querySelector('.hero-service');
+                const leader = (row.last_slot_client || '').toLowerCase();
+                const client = leader.startsWith('kosync') || leader === 'bridgesync_plugin' ? 'kosync' : leader;
+                const state = (row.states || {})[client];
+                const percentage = state && state.percentage != null
+                    ? Number(state.percentage) : Number(row.unified_progress || 0);
+                service.textContent = row.last_slot_service || '';
+                service.hidden = !row.last_slot_service;
+                heroRoot.querySelector('.hero-percent').textContent = percentage.toFixed(1) + '%';
+                heroRoot.dataset.movementAt = String(Math.max(
+                    Number(heroRoot.dataset.movementAt || 0), heroMovementTime(row)));
+                heroRoot.dataset.markerAt = String(Math.max(
+                    Number(heroRoot.dataset.markerAt || 0), Number(row.last_slot_unix || 0)));
+            }
+
+            function refreshHeroFromPoll(rows, cardsById) {
+                if (!heroRoot) return;
+                const currentId = heroRoot.dataset.absId || '';
+                const currentRow = rows.find(row => String(row.abs_id) === currentId);
+                const currentMarker = Math.max(Number(heroRoot.dataset.markerAt || 0),
+                    Number(currentRow?.last_slot_unix || 0));
+                const candidate = chooseHeroPollRow(rows, currentId, currentMarker);
+                if (candidate && cardsById.has(String(candidate.abs_id))) {
+                    const card = cardsById.get(String(candidate.abs_id))[0];
+                    populateHeroFromCard(card, candidate);
+                    excludeHeroFromGrid(String(candidate.abs_id));
+                    if (sortSelect) sortBooks(sortSelect.value, sortState[sortSelect.value]);
+                    filterBooks();
+                    if (typeof updateSelectionBar === 'function') updateSelectionBar();
+                }
+                const active = rows.find(row => String(row.abs_id) === heroRoot.dataset.absId);
+                if (active) updateHeroProgress(active);
+            }
+
+            if (heroRoot?.dataset.absId) {
+                excludeHeroFromGrid(heroRoot.dataset.absId);
+                filterBooks();
+            }
+
             let refreshPaused = false;
 
             function refreshDashboard(signal) {
@@ -1032,6 +1174,7 @@
                             if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, book.last_slot_sync);
                             });
                         });
+                        refreshHeroFromPoll(data.mappings, cardsById);
                     })
                     .catch(() => { });
             }

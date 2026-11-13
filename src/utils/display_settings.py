@@ -23,6 +23,7 @@ DISPLAY_SETTINGS: dict[str, tuple[str, ...]] = {
     "UI_SHOW_FORMAT_STRIP": _BOOL,
     "UI_SHOW_RATINGS": _BOOL,
     "UI_SHOW_TITLES": _BOOL,
+    "UI_SHOW_HERO": _BOOL,
     "SERIES_SHOW_CURRENT_BOOK_DETAIL": _BOOL,
 }
 

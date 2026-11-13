@@ -233,8 +233,9 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
         start = library.index('/* P3 additions:')
         end = library.index('</script>', start)
         library = library[:start] + library[end:]
-        # P16b's one-filter panel is New-only and exercised by test_ui_new_library_filter.js.
-        for first, last in P16B_LIBRARY_NEW_ONLY:
+        # P16b's one-filter panel and P16c's hero lifecycle are New-only.
+        # Preserve exact Classic parity for the surrounding shared drawer/poll blocks.
+        for first, last in P16B_LIBRARY_NEW_ONLY + P16C_LIBRARY_NEW_ONLY:
             start = library.index(first)
             end = library.index(last, start)
             library = library[:start] + '</script><script>' + library[end:]
@@ -249,7 +250,7 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
         library = normalize(library)
         # Exact allowed changes: new paired/attention predicates; localized counts;
         # storage denial handling; duplicate-card/spine updates and live sort values.
-        changes = LIBRARY_HEADER_ALLOWED_CHANGES + LIBRARY_ALLOWED_CHANGES
+        changes = LIBRARY_HEADER_ALLOWED_CHANGES + LIBRARY_ALLOWED_CHANGES + P16C_LIBRARY_ALLOWED_CHANGES
         for new, original in changes:
             new = normalize(new)
             self.assertIn(new, library, 'Allowed change moved: review it explicitly')
@@ -272,6 +273,19 @@ P16B_LIBRARY_NEW_ONLY = (
     ('function matchesStatusFilter(', 'function matchesFormatFilter('),
     ('function filterBooks() {', 'window.toggleSeries = function'),
     ('// One active facet at a time', 'if (dashboardSearch) {'),
+)
+
+
+# P16c: only the hero lifecycle is New-only. Its two touches to shared
+# grid-count and polling code are pinned separately to catch accidental drift.
+P16C_LIBRARY_NEW_ONLY = (
+    ("const heroRoot = document.getElementById('library-hero');",
+     "let refreshPaused = false;"),
+)
+P16C_LIBRARY_ALLOWED_CHANGES = (
+    ("if (absId && card.dataset.heroExcluded !== 'true' && !seen.has(absId)) seen.set(absId, card);",
+     "if (absId && !seen.has(absId)) seen.set(absId, card);"),
+    ("refreshHeroFromPoll(data.mappings, cardsById);", ""),
 )
 
 
