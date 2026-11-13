@@ -175,10 +175,14 @@ class EbookParser:
     # tests keep working.
     INLINE_TEXT_JOINER = INLINE_TEXT_JOINER
 
-    def __init__(self, books_dir, epub_cache_dir=None, ollama_client=None):
+    def __init__(self, books_dir, epub_cache_dir=None, ollama_client=None, calibre_file_ids=None):
         self.books_dir = Path(books_dir)
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir else Path("/data/epub_cache")
         self.ollama_client = ollama_client
+        # Records which Calibre book each library file name was found as
+        # (DatabaseService), so the parser can follow a name that Calibre has
+        # since renamed.
+        self.calibre_file_ids = calibre_file_ids
         # Additional library folders to search for ebook files (multi-library
         # setups where a user's library is not under BOOKS_DIR). Comma- or
         # newline-separated container paths from EXTRA_EBOOK_DIRS.
@@ -285,6 +289,7 @@ class EbookParser:
                 if d.exists():
                     result = next(d.glob(f"**/{safe_name}"))
                     self._remember_resolved_path(filename, result)
+                    self._note_calibre_book(filename, result)
                     return result
             except StopIteration:
                 continue
@@ -299,6 +304,7 @@ class EbookParser:
                 for f in d.rglob("*"):
                     if f.name == filename:
                         self._remember_resolved_path(filename, f)
+                        self._note_calibre_book(filename, f)
                         return f
             except OSError as e:
                 logger.debug("Could not scan ebook directory '%s' for '%s': %s", d, filename, e)
@@ -314,7 +320,43 @@ class EbookParser:
         except OSError as e:
             logger.debug("Could not check ebook cache path for '%s': %s", filename, e)
 
+        # 5. Calibre renames a book's file when its title or author changes.
+        renamed = self._follow_calibre_rename(filename)
+        if renamed is not None:
+            return renamed
+
         raise FileNotFoundError(f"Could not locate {filename}")
+
+    def _note_calibre_book(self, filename: str, path: Path) -> None:
+        """Record which Calibre book a library file name was found as."""
+        if self.calibre_file_ids is None:
+            return
+        from src.services.cwa_checksum_resolver import find_calibre_book_id_for_path
+
+        try:
+            calibre_book_id = find_calibre_book_id_for_path(path, self.search_dirs())
+            if calibre_book_id:
+                self.calibre_file_ids.remember_calibre_book_id(filename, calibre_book_id)
+        except Exception as e:
+            logger.debug("Could not record the Calibre book for '%s': %s", filename, e)
+
+    def _follow_calibre_rename(self, filename: str) -> Optional[Path]:
+        """Return the current file of the Calibre book a missing name was found as."""
+        if self.calibre_file_ids is None:
+            return None
+        from src.services.cwa_checksum_resolver import find_calibre_epub_path
+
+        try:
+            calibre_book_id = self.calibre_file_ids.get_calibre_book_id(filename)
+            path = find_calibre_epub_path(calibre_book_id, self.search_dirs()) if calibre_book_id else None
+        except Exception as e:
+            logger.debug("Could not follow '%s' through Calibre: %s", filename, e)
+            return None
+        if path is None:
+            return None
+        logger.info(f"📚 '{filename}' was renamed in Calibre (book {calibre_book_id}); using '{path}'")
+        self._remember_resolved_path(filename, path)
+        return path
 
     def _remember_resolved_path(self, filename: str, path: Path) -> None:
         """Store a resolved path and evict least-recently-used entries."""

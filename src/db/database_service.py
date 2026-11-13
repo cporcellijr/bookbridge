@@ -53,6 +53,7 @@ from .models import (
     UserBook,
     TranscriptionPreflight,
     BookSyncMarker,
+    CalibreLibraryFile,
     AcquisitionRequest,
     AcquisitionJob,
     UserBookFusionLink,
@@ -4328,6 +4329,38 @@ class DatabaseService:
             if book:
                 session.expunge(book)
             return book
+
+    def get_calibre_book_id(self, filename: str) -> Optional[str]:
+        """The Calibre book id an EPUB name was found as, or None if unknown or shared."""
+        if not filename:
+            return None
+        with self.get_session() as session:
+            row = session.query(CalibreLibraryFile.calibre_book_id).filter(
+                CalibreLibraryFile.filename == filename
+            ).first()
+            return row[0] if row else None
+
+    def remember_calibre_book_id(self, filename: str, calibre_book_id: str) -> None:
+        """Record the Calibre book an EPUB name was found as.
+
+        A name later found as a different book loses its id permanently: two
+        editions with the same title and author share a file name, and following
+        that name after a rename could open the wrong one.
+        """
+        if not filename or not calibre_book_id:
+            return
+        calibre_book_id = str(calibre_book_id)
+        with self.get_session() as session:
+            row = session.query(CalibreLibraryFile).filter(
+                CalibreLibraryFile.filename == filename
+            ).first()
+            if row is None:
+                session.add(CalibreLibraryFile(
+                    filename=filename, calibre_book_id=calibre_book_id, updated_at=time.time()
+                ))
+            elif row.calibre_book_id is not None and row.calibre_book_id != calibre_book_id:
+                row.calibre_book_id = None
+                row.updated_at = time.time()
 
     def get_book_by_ebook_source(self, ebook_source: str, ebook_source_id: str) -> Optional['Book']:
         """Find a book by its ebook source + source id (e.g. BookLore/<grimmory_id>)."""

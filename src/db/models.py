@@ -532,6 +532,21 @@ class BookSyncMarker(Base):
     synced_at = Column(Float, nullable=False)
 
 
+class CalibreLibraryFile(Base):
+    """The Calibre book an EPUB file name was found as in a Calibre library.
+
+    Mappings store only a file name, and editing a book's title in Calibre or CWA
+    renames its file. The book id survives the rename, so the parser can follow a
+    name that no longer exists to the book's current file. A NULL id means the
+    parser found two Calibre books under this name and never follows it.
+    """
+    __tablename__ = "calibre_library_files"
+
+    filename = Column(String(500), primary_key=True)
+    calibre_book_id = Column(String(64), nullable=True)
+    updated_at = Column(Float, nullable=False)
+
+
 class AcquisitionRequest(Base):
     """A book a reader asked a service (BookOrbit) to fetch, with the book it was asked for."""
     __tablename__ = 'acquisition_requests'
