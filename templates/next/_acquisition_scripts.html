@@ -1,0 +1,839 @@
+<script>
+    // ===== Get the missing half (BookOrbit and Shelfmark requests) =====
+    // Each service is offered only once GET /api/acquisition/options says it is usable for this reader.
+    const ACQ = {
+        getAudiobook: {{ _('Get the audiobook')|tojson }},
+        getEbook: {{ _('Get the ebook')|tojson }},
+        quietLink: {{ _("Can't find it? Get a book")|tojson }},
+        missingTitle: {{ _('Not in your library yet')|tojson }},
+        missingText: {{ _('Nothing in your libraries matches “{query}”. You can request it here.')|tojson }},
+        missingAudioTitle: {{ _('Audiobook missing')|tojson }},
+        missingAudioText: {{ _('You have the ebook. Get the audiobook and BookBridge will pair the two.')|tojson }},
+        missingEbookTitle: {{ _('Ebook missing')|tojson }},
+        missingEbookText: {{ _('You have the audiobook. Get the ebook and BookBridge will pair the two.')|tojson }},
+        getBoth: {{ _('Get both')|tojson }},
+        missingVia: {{ _('Requests go through {providers}.')|tojson }},
+        requested: {{ _('Requested from BookOrbit.')|tojson }},
+        requesting: {{ _('Requesting...')|tojson }},
+        alreadyOwned: {{ _('BookOrbit already has this book.')|tojson }},
+        partial: {{ _('Only part of the request was accepted.')|tojson }},
+        cancel: {{ _('Cancel')|tojson }},
+        dismiss: {{ _('Dismiss')|tojson }},
+        openBook: {{ _('Open book')|tojson }},
+        review: {{ _('Review in Discover')|tojson }},
+        ebook: {{ _('Ebook')|tojson }},
+        audiobook: {{ _('Audiobook')|tojson }},
+        findShelfmark: {{ _('Find in Shelfmark')|tojson }},
+        searching: {{ _('Searching Shelfmark, this can take a minute…')|tojson }},
+        noReleases: {{ _('Shelfmark found nothing for this book.')|tojson }},
+        pickRelease: {{ _('Choose a result to get.')|tojson }},
+        pickOne: {{ _('Choose one format to use Shelfmark.')|tojson }},
+        notOffered: {{ _('Shelfmark does not offer this format to you.')|tojson }},
+        downloadStarted: {{ _('Download started.')|tojson }},
+        kinds: {
+            direct: {{ _('Direct download')|tojson }}, torrent: {{ _('Torrent')|tojson }}, usenet: {{ _('Usenet')|tojson }},
+            irc: {{ _('IRC')|tojson }}, soulseek: {{ _('Soulseek')|tojson }},
+        },
+        by: {{ _('by {author}')|tojson }},
+        get: {{ _('Get')|tojson }},
+        requestedShelfmark: {{ _('Requested from Shelfmark.')|tojson }},
+        pickAction: {{ _('Pick a release')|tojson }},
+        pickNow: {{ _('Pick a release now')|tojson }},
+        loadingReleases: {{ _('Loading releases…')|tojson }},
+        noBookorbitReleases: {{ _('BookOrbit found no releases for this book yet.')|tojson }},
+        picked: {{ _('Release sent to BookOrbit.')|tojson }},
+        needsSignIn: {{ _('{name} needs you to sign in again.')|tojson }},
+        indexerFailed: {{ _('{name} could not be searched.')|tojson }},
+        stalled: {{ _('No progress for over 30 minutes. Check your download client or indexer sign-in.')|tojson }},
+        choosePartner: {{ _('Choose the existing copy to pair with.')|tojson }},
+        openExisting: {{ _('Open existing request')|tojson }},
+        existingPartner: {{ _('Will pair with: {edition}')|tojson }},
+        noProvider: {{ _('Choose an available provider for each format.')|tojson }},
+        noPair: {{ _('Do not pair with a current copy')|tojson }},
+        wrongPartner: {{ _('Choose a copy of the other format, or select “Do not pair”.')|tojson }},
+        jobSaved: {{ _('Your request is saved in Processing.')|tojson }},
+        noSavedJob: {{ _('We could not confirm that the request was saved. Check Processing before trying again.')|tojson }},
+        both: {{ _('Both')|tojson }},
+        invalidSeriesIndex: {{ _('Enter a whole number for the series number.')|tojson }},
+    };
+    const ACQ_STATUS = {
+        waiting: {{ _('Waiting for approval')|tojson }},
+        in_progress: {{ _('In progress')|tojson }},
+        needs_look: {{ _('Needs a look')|tojson }},
+        arrived: {{ _('Arrived')|tojson }},
+        paired: {{ _('Paired')|tojson }},
+        declined: {{ _('Declined')|tojson }},
+        failed: {{ _('Failed')|tojson }},
+        cancelled: {{ _('Cancelled')|tojson }},
+    };
+    const ACQ_CHIP_CLASS = { waiting: 'manual', in_progress: 'reason', needs_look: 'manual', arrived: 'queued', paired: 'exact', declined: 'ignored', failed: 'ignored', cancelled: 'reason' };
+    const ACQ_OPEN = ['waiting', 'in_progress', 'needs_look'];
+    const ACQ_ERRORS = {
+        not_allowed: {{ _('Getting books is not turned on for readers.')|tojson }},
+        title_required: {{ _('Enter a title.')|tojson }},
+        invalid_formats: {{ _('Choose a format.')|tojson }},
+        invalid_series_index: {{ _('Enter a whole number for the series number.')|tojson }},
+        bookorbit_not_configured: {{ _('BookOrbit is not set up for your account.')|tojson }},
+        request_failed: {{ _('BookOrbit did not accept the request. Try again later.')|tojson }},
+        cancel_failed: {{ _('The service did not cancel the request. Try again later.')|tojson }},
+        shelfmark_not_configured: {{ _('Shelfmark is not set up for your account.')|tojson }},
+        no_login_saved: {{ _('Save your Shelfmark username and password in your integrations first.')|tojson }},
+        bad_credentials: {{ _('Shelfmark refused your saved username or password.')|tojson }},
+        locked: {{ _('Shelfmark has locked your account after failed sign-ins. Try again later.')|tojson }},
+        password_login_disabled: {{ _('Shelfmark does not accept a password sign-in here.')|tojson }},
+        unreachable: {{ _('Shelfmark could not be reached. Try again later.')|tojson }},
+        policy_refused: {{ _('Shelfmark does not show results to you. File a request instead.')|tojson }},
+        sources_failed: {{ _('Shelfmark could not search right now. Try again later.')|tojson }},
+        release_expired: {{ _('That result has expired. Search again.')|tojson }},
+        release_wrong_format: {{ _('That result is not this format. Search again.')|tojson }},
+        duplicate_pending_request: {{ _('You already have a pending request for this book in Shelfmark.')|tojson }},
+        policy_blocked: {{ _('Shelfmark does not allow this for your account.')|tojson }},
+        no_pick_permission: {{ _("Your BookOrbit login can't pick releases. Ask for the \"Download books directly\" permission.")|tojson }},
+        request_state_changed: {{ _('That request changed in BookOrbit. Check its status and try again.')|tojson }},
+        already_picked: {{ _('A release was already picked for this request.')|tojson }},
+        no_destination_library: {{ _('BookOrbit has no destination library for this request yet.')|tojson }},
+        request_media_mismatch: {{ _('BookOrbit searched for a different format than this request.')|tojson }},
+        invalid_release: {{ _('That result is not valid. Choose another.')|tojson }},
+    };
+    const acqError = (code) => ACQ_ERRORS[code] || bbFormat(API_ERRORS.fallback, { code });
+    let acqUsable = false;
+    let acqBookorbit = false;
+    let acqCanPick = false;
+    let acqPickRow = null;
+    let acqShelfmark = null;
+    let acqAbort = null;
+    let acqRows = [];
+    let acqJobs = [];
+    let acqTrackedJobs = [];
+    let acqPartnerChoices = [];
+    let acqTimer = null;
+    let acqPartner = null;
+    let acqSubmitting = false;
+    let acqSearchRefreshPending = false;
+
+    function acqActionsHtml(view) {
+        if (!view) return '';
+        const hasAudio = view.audiobooks.length > 0;
+        const hasEbook = view.ebooks.length > 0;
+        const matching = matchingAcqJobs(view);
+        const existing = matching.map((job) => `<a class="btn btn-small btn-muted" data-acq-existing="${esc(job.id)}" href="/job-queue?acquisition_job=${encodeURIComponent(job.id)}">${esc(acqExistingLabel(job, view))}</a>`).join('');
+        const quiet = acqUsable ? `<button type="button" class="btn-link" data-acq="open" data-acq-kind="any">${esc(ACQ.quietLink)}</button>` : '';
+        const can = (kind) => providerOptions(kind).length > 0;
+        const missing = hasEbook && !hasAudio ? 'audiobook' : (hasAudio && !hasEbook ? 'ebook' : (!hasAudio && !hasEbook ? 'any' : ''));
+        if (!acqUsable || !missing || (missing !== 'any' && !can(missing)) || (missing === 'any' && !can('ebook') && !can('audiobook'))) {
+            return `<div class="acq-actions">${quiet}${existing}</div>`;
+        }
+        const open = (kind, label, primary) => `<button type="button" class="btn ${primary ? 'btn-primary' : 'btn-muted'}" data-acq="open" data-acq-kind="${kind}">${esc(label)}</button>`;
+        let title, text, buttons;
+        if (missing === 'audiobook') { title = ACQ.missingAudioTitle; text = ACQ.missingAudioText; buttons = open('audiobook', ACQ.getAudiobook, true); }
+        else if (missing === 'ebook') { title = ACQ.missingEbookTitle; text = ACQ.missingEbookText; buttons = open('ebook', ACQ.getEbook, true); }
+        else {
+            title = ACQ.missingTitle; text = bbFormat(ACQ.missingText, { query: tabState.search.q || '' });
+            const both = can('ebook') && can('audiobook');
+            buttons = (both ? open('any', ACQ.getBoth, true) : '') + (can('ebook') ? open('ebook', ACQ.getEbook, !both) : '') + (can('audiobook') ? open('audiobook', ACQ.getAudiobook, !both) : '');
+        }
+        const providers = [...new Set(['ebook', 'audiobook'].flatMap((kind) => providerOptions(kind).map((option) => option[1])))];
+        return `<section class="acq-missing${missing === 'any' ? ' acq-missing--none' : ''}" aria-label="${esc(title)}"><h4 class="acq-missing-title">${esc(title)}</h4><p class="acq-missing-text">${esc(text)}</p><div class="acq-missing-actions">${buttons}${existing}</div>${missing === 'any' ? '' : `<div class="acq-actions">${quiet}</div>`}<p class="acq-note acq-missing-via">${esc(bbFormat(ACQ.missingVia, { providers: providers.join(' / ') }))}</p></section>`;
+    }
+
+    // Search results usually carry authors as one display string; a list is cut to its first author.
+    const acqAuthors = (value) => (Array.isArray(value) ? (value[0] || '') : (value || ''));
+
+    // Prefill from the existing half the reader is looking at; it travels as the pairing partner.
+    function acqPrefill(kind) {
+        const view = views.search || { audiobooks: [], ebooks: [] };
+        const prefill = { title: tabState.search.q || '', authors: '', partner: null, format: kind === 'any' ? 'both' : kind };
+        if (kind === 'audiobook') {
+            const filename = $('selected_ebook_filename').value;
+            const choices = view.ebooks || [];
+            const ebook = choices.find((item) => item.name === filename) || (choices.length === 1 ? choices[0] : null);
+            if (ebook) {
+                prefill.title = ebook.title || ebook.display_name || prefill.title;
+                prefill.authors = acqAuthors(ebook.authors);
+                prefill.partner = { kind: 'ebook', source: ebook.source, source_id: String(ebook.source_id || ''), filename: ebook.name, item: ebook };
+            }
+        } else if (kind === 'ebook') {
+            const audio = (selectedSearchIndex !== null && selectedSearchIndex >= 0 && view.audiobooks[selectedSearchIndex]) || (view.audiobooks.length === 1 ? view.audiobooks[0] : null);
+            if (audio) {
+                prefill.title = audio.title || prefill.title;
+                prefill.authors = acqAuthors(audio.authors);
+                prefill.partner = { kind: 'audiobook', source: audio.source, source_id: String(audio.source_id || ''), filename: '', item: audio };
+            }
+        }
+        return prefill;
+    }
+
+    // An ebook-only row asks for its own audiobook; the row's ebook travels as the pairing partner.
+    function acqPrefillFromEbookRow(key) {
+        const entry = ((views.ebook_only || {}).entries || []).find((item) => item.suggestion_key === key);
+        if (!entry) return null;
+        return {
+            title: entry.title || entry.filename || '', authors: acqAuthors(entry.author), format: 'audiobook',
+            partner: { kind: 'ebook', source: entry.source, source_id: String(entry.source_id || ''), filename: entry.filename || '', item: entry },
+        };
+    }
+
+    function partnerChoices(view, preferred) {
+        const choices = [];
+        (view.ebooks || []).forEach((item) => choices.push({
+            kind: 'ebook', source: item.source, source_id: String(item.source_id || ''), filename: item.name || '', item,
+        }));
+        (view.audiobooks || []).forEach((item) => choices.push({
+            kind: 'audiobook', source: item.source, source_id: String(item.source_id || ''), filename: '', item,
+        }));
+        const unique = choices.filter((choice, index) => choice.source && choice.source_id
+            && choices.findIndex((other) => other.kind === choice.kind && other.source === choice.source
+                && String(other.source_id) === String(choice.source_id) && other.filename === choice.filename) === index);
+        if (preferred && preferred.source && preferred.source_id && !unique.some((choice) => choice.kind === preferred.kind
+            && choice.source === preferred.source && String(choice.source_id) === String(preferred.source_id)
+            && choice.filename === preferred.filename)) unique.unshift(preferred);
+        if (preferred) {
+            const found = unique.find((choice) => choice.kind === preferred.kind && choice.source === preferred.source
+                && String(choice.source_id) === String(preferred.source_id) && choice.filename === preferred.filename);
+            if (found) return unique;
+        }
+        return unique;
+    }
+
+    function partnerLabel(partner) {
+        const item = partner.item || {};
+        const sourceLabel = String(partner.source || '').toLocaleLowerCase() === 'booklore'
+            ? 'Grimmory' : (partner.source || '');
+        const filename = partner.kind === 'ebook' ? String(partner.filename || item.name || item.filename || '').split(/[\\/]/).pop() : '';
+        return [item.title || item.display_name || item.name || item.filename || '', item.subtitle || '',
+            acqAuthors(item.authors), item.series_label || item.series_name || '', sourceLabel, filename]
+            .filter(Boolean).filter((value, index, values) => values.indexOf(value) === index).join(' · ');
+    }
+
+    function matchingAcqJobs(view) {
+        const norm = (value) => String(value || '').trim().toLocaleLowerCase();
+        return (acqJobs || []).filter((job) => {
+            if (!job || job.dismissed) return false;
+            const items = [...(view.audiobooks || []), ...(view.ebooks || [])];
+            const query = norm(tabState.search.q);
+            const titleQueryMatch = query === norm(job.title)
+                || (!!job.authors && query === norm(`${job.title} ${job.authors}`));
+            const returnedTitleMatch = items.some((item) => norm(item.title || item.display_name || item.name) === norm(job.title));
+            let canonicalMatch = false;
+            if (job.ebook_source_id) {
+                const copies = view.ebooks || [];
+                const known = copies.filter((item) => item.source && item.source_id);
+                canonicalMatch = known.some((item) => item.source === job.ebook_source
+                    && String(item.source_id) === String(job.ebook_source_id)
+                    && (!job.ebook_filename || !item.name || item.name === job.ebook_filename));
+                if (known.length && !canonicalMatch) return false;
+            }
+            if (job.audio_source_id) {
+                const copies = view.audiobooks || [];
+                const known = copies.filter((item) => item.source && item.source_id);
+                const matched = known.some((item) => item.source === job.audio_source
+                    && String(item.source_id) === String(job.audio_source_id));
+                canonicalMatch = canonicalMatch || matched;
+                if (known.length && !matched) return false;
+            }
+            if (!titleQueryMatch && !returnedTitleMatch && !canonicalMatch) return false;
+
+            const jobAuthors = norm(job.authors);
+            const knownAuthors = items.map((item) => norm(acqAuthors(item.authors))).filter(Boolean);
+            if (jobAuthors && knownAuthors.length && !knownAuthors.includes(jobAuthors)) return false;
+            const jobIsbn = String(job.isbn13 || '').replace(/[^0-9x]/gi, '').toLowerCase();
+            const knownIsbns = items.map((item) => String(item.isbn13 || '').replace(/[^0-9x]/gi, '').toLowerCase()).filter(Boolean);
+            if (jobIsbn && knownIsbns.length && !knownIsbns.includes(jobIsbn)) return false;
+            if (job.series_name || job.series_index != null) {
+                const knownNames = items.map((item) => norm(item.series_name)).filter(Boolean);
+                const knownIndices = items.map((item) => item.series_index).filter((value) => value != null);
+                if (job.series_name && knownNames.length && !knownNames.includes(norm(job.series_name))) return false;
+                if (job.series_index != null && knownIndices.length
+                    && !knownIndices.some((value) => Number(value) === Number(job.series_index))) return false;
+            }
+            return Array.isArray(job.formats) && job.formats.length > 0;
+        });
+    }
+
+    function acqExistingLabel(job, view) {
+        const formats = (job.formats || []).map((kind) => kind === 'ebook' ? ACQ.ebook : ACQ.audiobook).join(' + ');
+        const remembered = job.ebook_source_id
+            ? (view.ebooks || []).find((item) => item.source === job.ebook_source
+                && String(item.source_id) === String(job.ebook_source_id) && (item.name || '') === (job.ebook_filename || ''))
+            : job.audio_source_id ? (view.audiobooks || []).find((item) => item.source === job.audio_source
+                && String(item.source_id) === String(job.audio_source_id)) : null;
+        const partner = remembered ? partnerLabel({
+            kind: job.ebook_source_id ? 'ebook' : 'audiobook', source: remembered.source,
+            filename: remembered.name || '', item: remembered,
+        }) : '';
+        const metadata = [job.authors, job.isbn13 ? `ISBN ${job.isbn13}` : '',
+            job.series_name ? `${job.series_name}${job.series_index != null ? ` #${job.series_index}` : ''}` : ''].filter(Boolean).join(' · ');
+        const date = job.created_at ? new Date(job.created_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '';
+        return [ACQ.openExisting, formats, partner, metadata,
+            !partner && matchingAcqJobs(view).length > 1 ? date : ''].filter(Boolean).join(' · ');
+    }
+
+    function affectsCurrentSearch(job) {
+        if (!job || activeTab !== 'search' || !views.search) return false;
+        const norm = (value) => String(value || '').trim().toLocaleLowerCase();
+        const query = norm(tabState.search.q);
+        if (query === norm(job.title) || (job.authors && query === norm(`${job.title} ${job.authors}`))) return true;
+        const items = [...(views.search.audiobooks || []), ...(views.search.ebooks || [])];
+        if (items.some((item) => norm(item.title || item.display_name || item.name) === norm(job.title))) return true;
+        return matchingAcqJobs(views.search).some((item) => item.id === job.id);
+    }
+
+    function decorateEbookRows() {
+        if (!acqUsable || activeTab !== 'ebook_only') return;
+        document.querySelectorAll('#resultsList .ebook-row:not(.is-ignored) .row-actions').forEach((actions) => {
+            const key = actions.closest('.ebook-row').dataset.key;
+            actions.insertAdjacentHTML('beforeend', `<button type="button" class="btn btn-small btn-muted" data-acq="open-row" data-key="${esc(key)}">${esc(ACQ.getAudiobook)}</button>`);
+        });
+    }
+
+    // BookOrbit lets a request be given a release by hand while it waits at one of these.
+    const ACQ_GRABBABLE = ['approved', 'searching', 'failed'];
+    const acqCanPickRow = (row) => acqCanPick && row.service === 'BookOrbit' && row.remote_kind === 'request'
+        && row.decision_action === 'pick_release' && ACQ_GRABBABLE.includes(row.remote_status);
+
+    function openAcqDialog(kind, prefillOverride) {
+        acqPickRow = null;
+        const prefill = prefillOverride || acqPrefill(kind);
+        const view = views.search || { audiobooks: [], ebooks: [] };
+        acqPartnerChoices = partnerChoices(view, prefill.partner);
+        acqPartner = null;
+        const select = $('acqPartnerSelect');
+        select.innerHTML = `<option value="">${esc(acqPartnerChoices.length > 1 ? ACQ.choosePartner : '')}</option><option value="none">${esc(ACQ.noPair)}</option>`
+            + acqPartnerChoices.map((item, index) => `<option value="${index}" data-kind="${esc(item.kind)}" data-source="${esc(item.source)}" data-source-id="${esc(item.source_id)}" data-filename="${esc(item.filename)}">${esc(partnerLabel(item))}</option>`).join('');
+        const preferredIndex = prefill.partner ? acqPartnerChoices.findIndex((item) => item.kind === prefill.partner.kind
+            && item.source === prefill.partner.source && String(item.source_id) === String(prefill.partner.source_id)
+            && item.filename === prefill.partner.filename) : -1;
+        if (acqPartnerChoices.length === 1) select.value = '0';
+        else if (prefillOverride && preferredIndex >= 0) select.value = String(preferredIndex);
+        $('acqPartnerWrap').hidden = !acqPartnerChoices.length;
+        updateAcqPartner();
+        $('acqTitle').value = prefill.title;
+        $('acqAuthor').value = prefill.authors;
+        $('acqIsbn').value = '';
+        $('acqSeries').value = prefill.partner && prefill.partner.item ? (prefill.partner.item.series_name || '') : '';
+        $('acqSeriesIndex').value = prefill.partner && prefill.partner.item ? (prefill.partner.item.series_index ?? '') : '';
+        $('acqMore').open = !!($('acqSeries').value || $('acqSeriesIndex').value);
+        const bothNeeds = ['ebook', 'audiobook'].filter((format) => !acqPartner || format !== acqPartner.kind);
+        $('acqBothLabel').hidden = bothNeeds.some((format) => !providerOptions(format).length);
+        $('acqSubmitBtn').hidden = false;
+        document.querySelector(`input[name="acqFormat"][value="${prefill.format}"]`).checked = true;
+        populateAcqProvider('ebook');
+        populateAcqProvider('audiobook');
+        updateAcqProviderVisibility();
+        resetAcqReleases();
+        $('acqTitle').readOnly = false;
+        $('acqAuthor').readOnly = false;
+        $('acqResult').textContent = '';
+        $('acqModal').classList.add('open');
+        $('acqModal').setAttribute('aria-hidden', 'false');
+        $('acqTitle').focus();
+    }
+
+    function updateAcqPartner() {
+        const value = $('acqPartnerSelect').value;
+        acqPartner = value === '' || value === 'none' ? null : acqPartnerChoices[Number(value)] || null;
+        $('acqPartnerSummary').textContent = acqPartner
+            ? bbFormat(ACQ.existingPartner, { edition: partnerLabel(acqPartner) }) : '';
+        if (acqPartner) {
+            const item = acqPartner.item || {};
+            $('acqTitle').value = item.title || item.display_name || item.title || $('acqTitle').value;
+            $('acqAuthor').value = acqAuthors(item.authors) || $('acqAuthor').value;
+            $('acqSeries').value = item.series_name || '';
+            $('acqSeriesIndex').value = item.series_index ?? '';
+        }
+        updateAcqProviderVisibility();
+    }
+
+    function providerOptions(kind) {
+        const result = [];
+        if (acqBookorbit) result.push(['bookorbit', 'BookOrbit']);
+        if (acqShelfmark && acqShelfmark.formats && acqShelfmark.formats[kind]) result.push(['shelfmark', 'Shelfmark']);
+        return result;
+    }
+
+    function populateAcqProvider(kind) {
+        const id = kind === 'ebook' ? 'acqProviderEbook' : 'acqProviderAudiobook';
+        const select = $(id);
+        const options = providerOptions(kind);
+        select.innerHTML = options.map(([key, label]) => `<option value="${key}">${label}</option>`).join('');
+        select.disabled = options.length < 2;
+        $(kind === 'ebook' ? 'acqEbookProviderWrap' : 'acqAudioProviderWrap').hidden = options.length === 0;
+        select.hidden = options.length === 0;
+    }
+
+    function updateAcqProviderVisibility() {
+        const selected = document.querySelector('input[name="acqFormat"]:checked').value;
+        $('acqIsbnBothNote').hidden = selected !== 'both';
+        const bothNeeds = ['ebook', 'audiobook'].filter((format) => !acqPartner || format !== acqPartner.kind);
+        $('acqBothLabel').hidden = bothNeeds.some((format) => !providerOptions(format).length);
+        const kinds = selected === 'both' ? ['ebook', 'audiobook'] : [selected];
+        const submitKinds = kinds.filter((kind) => !acqPartner || kind !== acqPartner.kind);
+        $('acqProviderChoices').hidden = !submitKinds.some((kind) => providerOptions(kind).length > 1);
+        $('acqEbookProviderWrap').hidden = !submitKinds.includes('ebook') || !providerOptions('ebook').length;
+        $('acqProviderEbook').hidden = $('acqEbookProviderWrap').hidden;
+        $('acqAudioProviderWrap').hidden = !submitKinds.includes('audiobook') || !providerOptions('audiobook').length;
+        $('acqProviderAudiobook').hidden = $('acqAudioProviderWrap').hidden;
+        $('acqSubmitBtn').disabled = submitKinds.some((kind) => !providerOptions(kind).length);
+    }
+
+    function closeAcqDialog() {
+        resetAcqReleases();
+        $('acqModal').classList.remove('open');
+        $('acqModal').setAttribute('aria-hidden', 'true');
+        if (acqSearchRefreshPending) {
+            acqSearchRefreshPending = false;
+            if (typeof window.refreshSuggestionSearch === 'function') window.refreshSuggestionSearch();
+        }
+    }
+
+    function handoffSavedJob(jobId) {
+        if (!jobId) return false;
+        acqSearchRefreshPending = false;
+        closeAcqDialog();
+        if (typeof window.clearSuggestionsSearch === 'function') window.clearSuggestionsSearch();
+        window.location.assign(`/job-queue?acquisition_job=${encodeURIComponent(jobId)}`);
+        return true;
+    }
+
+    async function submitAcq(event) {
+        event.preventDefault();
+        if (acqPickRow) return;
+        if (acqSubmitting) return;
+        const choice = document.querySelector('input[name="acqFormat"]:checked').value;
+        const formats = choice === 'both' ? ['ebook', 'audiobook'] : [choice];
+        const submitKinds = formats.filter((kind) => !acqPartner || kind !== acqPartner.kind);
+        if (acqPartnerChoices.length > 1 && !$('acqPartnerSelect').value) {
+            $('acqResult').textContent = ACQ.choosePartner;
+            return;
+        }
+        if (choice !== 'both' && acqPartner && acqPartner.kind === choice) {
+            $('acqResult').textContent = ACQ.wrongPartner;
+            return;
+        }
+        if (!submitKinds.length || submitKinds.some((kind) => !providerOptions(kind).length)) {
+            $('acqResult').textContent = ACQ.noProvider;
+            return;
+        }
+        const metadata = {
+            title: $('acqTitle').value.trim(),
+            authors: $('acqAuthor').value.trim(),
+            isbn13: choice === 'both' ? undefined : $('acqIsbn').value.trim(),
+            series_name: $('acqSeries').value.trim(),
+            series_index: $('acqSeriesIndex').value ? Number($('acqSeriesIndex').value) : null,
+            formats,
+        };
+        if (metadata.series_index !== null && !Number.isInteger(metadata.series_index)) {
+            $('acqResult').textContent = ACQ.invalidSeriesIndex;
+            return;
+        }
+        if (!metadata.title) { $('acqResult').textContent = ACQ_ERRORS.title_required; return; }
+        if (acqPartner) {
+            const identity = { source: acqPartner.source, source_id: acqPartner.source_id };
+            if (acqPartner.kind === 'ebook') identity.filename = acqPartner.filename;
+            metadata.existing = { [acqPartner.kind]: identity };
+        }
+        acqSubmitting = true;
+        $('acqSubmitBtn').disabled = true;
+        $('acqResult').textContent = ACQ.requesting;
+        let savedJobId = null;
+        try {
+            for (const kind of submitKinds) {
+                const provider = $(kind === 'ebook' ? 'acqProviderEbook' : 'acqProviderAudiobook').value;
+                const endpoint = provider === 'shelfmark' ? '/api/acquisition/shelfmark' : '/api/acquisition/bookorbit';
+                const body = savedJobId
+                    ? { job_id: savedJobId, submit_formats: [kind] }
+                    : { ...metadata, submit_formats: [kind] };
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await response.json().catch(() => null);
+                const receivedId = data && (data.job_id || (data.job && data.job.id));
+                if (receivedId) savedJobId = receivedId;
+                if (!savedJobId) {
+                    const code = (data && data.error) || (data && data.failures && data.failures[kind]);
+                    $('acqResult').textContent = ACQ_ERRORS[code] || ACQ.noSavedJob;
+                    return;
+                }
+            }
+            if (savedJobId) {
+                handoffSavedJob(savedJobId);
+            } else {
+                $('acqResult').textContent = ACQ.noSavedJob;
+            }
+        } catch (err) {
+            if (savedJobId) {
+                handoffSavedJob(savedJobId);
+                return;
+            }
+            console.error('Acquisition request failed before a job was saved.', err);
+            $('acqResult').textContent = ACQ.noSavedJob;
+        } finally {
+            acqSubmitting = false;
+            $('acqSubmitBtn').disabled = false;
+        }
+    }
+
+    // Service-neutral list of things to pick from:
+    // releases is [{key, title, format, size, source, language, detail, author, kind, group, group_label, peers, flags, formats_more}].
+    // Releases that carry a group get one tab per group, in order of first appearance; without groups it is one plain list.
+    function renderReleaseList(releases, onPick, activeGroup) {
+        const list = $('acqReleases');
+        const tabs = $('acqReleaseTabs');
+        const groups = [];
+        releases.forEach((release) => { if (release.group && !groups.some((g) => g.code === release.group)) groups.push({ code: release.group, label: release.group_label || release.group, count: 0 }); });
+        releases.forEach((release) => { const g = groups.find((x) => x.code === release.group); if (g) g.count += 1; });
+        const current = groups.some((g) => g.code === activeGroup) ? activeGroup : (groups[0] && groups[0].code);
+        tabs.innerHTML = groups.length > 1 ? groups.map((g) => `<button type="button" class="tab${g.code === current ? ' active' : ''}" role="tab" aria-selected="${g.code === current}" tabindex="${g.code === current ? 0 : -1}" data-group="${esc(g.code)}">${esc(g.label)} <span class="tab-count">${g.count}</span></button>`).join('') : '';
+        tabs.hidden = groups.length < 2;
+        tabs.onclick = (event) => {
+            const tab = event.target.closest('[data-group]');
+            if (tab) renderReleaseList(releases, onPick, tab.dataset.group);
+        };
+        tabs.onkeydown = (event) => {
+            const index = groups.findIndex((g) => g.code === current);
+            const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+            const next = step ? groups[(index + step + groups.length) % groups.length] : (event.key === 'Home' ? groups[0] : (event.key === 'End' ? groups[groups.length - 1] : null));
+            if (!next) return;
+            event.preventDefault();
+            renderReleaseList(releases, onPick, next.code);
+            tabs.querySelector('[aria-selected="true"]').focus();
+        };
+        const shown = groups.length > 1 ? releases.filter((release) => release.group === current) : releases;
+        list.innerHTML = shown.map((release) => {
+            const kind = ACQ.kinds[release.kind] || '';
+            const groupLabel = (groups.find((g) => g.code === release.group) || {}).label;
+            const indexer = release.source && release.source !== groupLabel && release.source !== release.group && release.source !== kind ? release.source : '';
+            const sourceName = groups.length === 1 ? groupLabel : '';
+            const peers = release.peers || release.detail;
+            const flags = (release.flags || []).map((flag) => `<span class="source-badge manual">${esc(flag)}</span>`).join('');
+            const more = release.formats_more ? ` +${Number(release.formats_more)}` : '';
+            return `<div class="acq-release" role="listitem" data-key="${esc(release.key)}">
+            <span class="acq-release-main">
+                <span class="acq-release-title">${esc(release.title)}</span>
+                ${release.author ? `<span class="acq-note">${esc(bbFormat(ACQ.by, { author: release.author }))}</span>` : ''}
+            </span>
+            <span class="acq-release-meta">
+                ${sourceName ? `<span class="acq-note">${esc(sourceName)}</span>` : ''}
+                ${indexer ? `<span class="acq-note">${esc(indexer)}</span>` : ''}
+                ${peers ? `<span class="acq-note">${esc(peers)}</span>` : ''}
+                ${flags}
+                ${release.language ? `<span class="source-badge reason">${esc(release.language.toUpperCase())}</span>` : ''}
+                ${release.format ? `<span class="source-badge reason">${esc(release.format + more)}</span>` : ''}
+                ${release.size ? `<span class="acq-note">${esc(release.size)}</span>` : ''}
+            </span>
+            <button type="button" class="btn btn-small btn-primary" data-key="${esc(release.key)}">${esc(ACQ.get)}</button>
+        </div>`;
+        }).join('');
+        list.onclick = (event) => {
+            const row = event.target.closest('[data-key]');
+            if (row) onPick(row.dataset.key);
+        };
+        list.hidden = !releases.length;
+    }
+
+    function resetAcqReleases() {
+        if (acqAbort) acqAbort.abort();
+        acqAbort = null;
+        $('acqReleases').hidden = true;
+        $('acqReleases').innerHTML = '';
+        $('acqReleaseTabs').hidden = true;
+        $('acqReleaseTabs').innerHTML = '';
+    }
+
+    function acqSelection() {
+        const format = document.querySelector('input[name="acqFormat"]:checked').value;
+        return { format, title: $('acqTitle').value.trim(), authors: $('acqAuthor').value.trim() };
+    }
+
+    // Shelfmark's own policy decides what the reader gets: a release list, or a one-click request.
+    async function findInShelfmark() {
+        const { format, title, authors } = acqSelection();
+        resetAcqReleases();
+        if (!title) { $('acqResult').textContent = ACQ_ERRORS.title_required; return; }
+        if (format === 'both') { $('acqResult').textContent = ACQ.pickOne; return; }
+        const mode = acqShelfmark.formats[format];
+        if (!mode) { $('acqResult').textContent = ACQ.notOffered; return; }
+        if (mode === 'request_book') { submitShelfmark(null); return; }
+        const controller = new AbortController();
+        acqAbort = controller;
+        $('acqResult').textContent = ACQ.searching;
+        try {
+            const query = new URLSearchParams({ title, author: authors, format });
+            const response = await fetch(`/api/acquisition/shelfmark/releases?${query}`, { headers: { Accept: 'application/json' }, signal: controller.signal });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data) {
+                $('acqResult').textContent = acqError((data && data.error) || `http_${response.status}`);
+                return;
+            }
+            $('acqResult').textContent = data.releases.length ? ACQ.pickRelease : ACQ.noReleases;
+            renderReleaseList(data.releases, (key) => submitShelfmark(key));
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.error('Shelfmark search failed.', err);
+            $('acqResult').textContent = bbFormat(API_ERRORS.fallback, { code: 'network' });
+        } finally {
+            if (acqAbort === controller) acqAbort = null;
+        }
+    }
+
+    async function submitShelfmark(releaseKey) {
+        if (acqSubmitting) return;
+        const { format, title, authors } = acqSelection();
+        const body = { title, authors, format };
+        if (releaseKey) body.release_key = releaseKey;
+        if (acqPartner) body.partner = acqPartner;
+        acqSubmitting = true;
+        $('acqResult').textContent = ACQ.requesting;
+        try {
+            const response = await fetch('/api/acquisition/shelfmark', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data) {
+                $('acqResult').textContent = acqError((data && data.error) || `http_${response.status}`);
+                return;
+            }
+            resetAcqReleases();
+            $('acqResult').textContent = data.kind === 'download' ? ACQ.downloadStarted : ACQ.requestedShelfmark;
+            loadAcqMine();
+        } catch (err) {
+            console.error('Request to Shelfmark failed.', err);
+            $('acqResult').textContent = bbFormat(API_ERRORS.fallback, { code: 'network' });
+        } finally {
+            acqSubmitting = false;
+        }
+    }
+
+    // Lists what BookOrbit's indexers offer for one of the reader's requests; nothing is picked until they click Get.
+    async function openAcqPicker(row) {
+        openAcqDialog(row.media_kind, { title: row.title, authors: '', partner: null, format: row.media_kind });
+        acqPickRow = row;
+        ['acqTitle', 'acqAuthor'].forEach((id) => { $(id).readOnly = true; });
+        ['acqSubmitBtn', 'acqShelfmarkBtn', 'acqShelfmarkLink'].forEach((id) => { $(id).hidden = true; });
+        const controller = new AbortController();
+        acqAbort = controller;
+        $('acqResult').textContent = ACQ.loadingReleases;
+        try {
+            const response = await fetch(`/api/acquisition/${encodeURIComponent(row.id)}/releases`, { headers: { Accept: 'application/json' }, signal: controller.signal });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data) {
+                $('acqResult').textContent = acqError((data && data.error) || `http_${response.status}`);
+                return;
+            }
+            const problems = (data.indexer_problems || []).map((p) => bbFormat(p.failure === 'unauthorized' ? ACQ.needsSignIn : ACQ.indexerFailed, { name: p.name }));
+            $('acqResult').textContent = [data.releases.length ? ACQ.pickRelease : ACQ.noBookorbitReleases, ...problems].join(' ');
+            renderReleaseList(data.releases, (key) => grabAcqRelease(row, key));
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.error('BookOrbit release list failed.', err);
+            $('acqResult').textContent = bbFormat(API_ERRORS.fallback, { code: 'network' });
+        } finally {
+            if (acqAbort === controller) acqAbort = null;
+        }
+    }
+
+    async function grabAcqRelease(row, key) {
+        if (acqSubmitting) return;
+        acqSubmitting = true;
+        $('acqReleases').querySelectorAll('button').forEach((button) => { button.disabled = true; });
+        $('acqResult').textContent = ACQ.requesting;
+        let sent = false;
+        try {
+            const response = await fetch(`/api/acquisition/${encodeURIComponent(row.id)}/grab`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ key }),
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data) {
+                $('acqResult').textContent = acqError((data && data.error) || `http_${response.status}`);
+                return;
+            }
+            sent = true;
+            resetAcqReleases();
+            $('acqResult').textContent = ACQ.picked;
+            loadAcqMine();
+        } catch (err) {
+            console.error('Picking a release failed.', err);
+            $('acqResult').textContent = bbFormat(API_ERRORS.fallback, { code: 'network' });
+        } finally {
+            acqSubmitting = false;
+            if (!sent) $('acqReleases').querySelectorAll('button').forEach((button) => { button.disabled = false; });
+        }
+    }
+
+    function renderAcqStrip() {
+        const legacyRows = acqRows.filter((row) => !row.parent_job_id);
+        $('acqStrip').hidden = !legacyRows.length;
+        $('acqList').innerHTML = legacyRows.map((row) => {
+            const reviewing = row.status === 'needs_look' && ['available', 'complete'].includes(row.remote_status);
+            const open = ACQ_OPEN.includes(row.status) && !reviewing;
+            // Shelfmark only lets a reader cancel a request that is still pending, or a plain download.
+            const cancellable = !(row.service === 'Shelfmark' && row.remote_kind === 'request' && row.remote_status !== 'pending');
+            const action = open ? 'cancel' : 'dismiss';
+            const link = row.status === 'paired' && row.linked_abs_id
+                ? `<a class="btn btn-small btn-muted" href="/book/${encodeURIComponent(row.linked_abs_id)}">${esc(ACQ.openBook)}</a>`
+                : reviewing ? `<a class="btn btn-small btn-muted" href="/suggestions?tab=pairs">${esc(ACQ.review)}</a>` : '';
+            return `<div class="acq-row" role="listitem">
+                <div class="acq-main">
+                    <span class="row-title-text">${esc(row.title)}</span>
+                    <span class="acq-note">${esc(ACQ[row.media_kind] || row.media_kind)} · ${esc(row.service)}</span>
+                </div>
+                <span class="source-badge ${ACQ_CHIP_CLASS[row.status] || 'reason'}">${esc(ACQ_STATUS[row.status] || row.status)}</span>
+                ${row.status_detail ? `<span class="acq-note">${esc(row.status_detail)}</span>` : ''}
+                ${row.stalled ? `<span class="acq-note">${esc(ACQ.stalled)}</span>` : ''}
+                ${link}
+                ${acqCanPickRow(row) ? `<button type="button" class="btn btn-small btn-primary" data-acq-act="pick" data-id="${esc(row.id)}">${esc(ACQ.pickAction)}</button>` : ''}
+                ${open && !cancellable ? '' : `<button type="button" class="btn btn-small btn-muted" data-acq-act="${action}" data-id="${esc(row.id)}">${esc(open ? ACQ.cancel : ACQ.dismiss)}</button>`}
+            </div>`;
+        }).join('');
+        clearTimeout(acqTimer);
+        if (acquisitionNeedsPolling()) {
+            acqTimer = setTimeout(() => { if (!document.hidden) loadAcqMine(); else renderAcqStrip(); }, 30000);
+        }
+    }
+
+    function acquisitionNeedsPolling() {
+        const activeReceipts = acqRows.some((row) => ['waiting', 'in_progress', 'needs_look', 'arrived'].includes(row.status));
+        if (activeReceipts) return true;
+        return acqTrackedJobs.some((job) => acquisitionJobKinds(job).some((kind) => {
+            const prefix = kind === 'ebook' ? 'ebook' : 'audio';
+            const library = job[`${prefix}_library_state`];
+            const submission = job[`${prefix}_submission_state`];
+            if (library === 'indexed') return false;
+            const hasActiveReceipt = (job.requests || []).some((row) => row.media_kind === kind
+                && ['waiting', 'in_progress', 'needs_look', 'arrived'].includes(row.status));
+            if (submission === 'failed' && !hasActiveReceipt) return false;
+            return hasActiveReceipt || ['accepted', 'uncertain', 'needs_release', 'needs_identification'].includes(submission)
+                || ['waiting_import', 'catalog_unavailable', 'needs_review'].includes(library);
+        }));
+    }
+
+    function acquisitionJobKinds(job) {
+        return ['ebook', 'audiobook'].filter((kind) => {
+            const prefix = kind === 'ebook' ? 'ebook' : 'audio';
+            return (job.formats || []).includes(kind) || !!job[`${prefix}_source_id`];
+        });
+    }
+
+    async function loadAcqMine() {
+        try {
+            const response = await fetch('/api/acquisition/mine', { headers: { Accept: 'application/json' } });
+            if (!response.ok) return;
+            const data = await response.json();
+            const priorRows = acqRows;
+            const priorTrackedJobs = acqTrackedJobs;
+            acqRows = Array.isArray(data.requests) ? data.requests : [];
+            acqJobs = Array.isArray(data.jobs) ? data.jobs : [];
+            acqTrackedJobs = Array.isArray(data.tracked_jobs) ? data.tracked_jobs : acqJobs;
+            renderAcqStrip();
+            if (views.search && activeTab === 'search') renderList();
+            const arrivedIds = new Set(priorRows.filter((row) => row.group_key && ['arrived', 'paired'].includes(row.status))
+                .map((row) => String(row.id)));
+            const receiptArrived = acqRows.some((row) => {
+                if (!row.group_key || !['arrived', 'paired'].includes(row.status) || arrivedIds.has(String(row.id))) return false;
+                const parent = acqTrackedJobs.find((job) => String(job.id) === String(row.parent_job_id || row.group_key));
+                return affectsCurrentSearch(parent);
+            });
+            const priorIndexed = new Map(priorTrackedJobs.map((job) => [String(job.id), job]));
+            const indexedTransition = acqTrackedJobs.some((job) => acquisitionJobKinds(job).some((kind) => {
+                const prefix = kind === 'ebook' ? 'ebook' : 'audio';
+                const current = job[`${prefix}_library_state`];
+                const previous = priorIndexed.get(String(job.id));
+                return current === 'indexed' && (!previous || previous[`${prefix}_library_state`] !== 'indexed')
+                    && affectsCurrentSearch(job);
+            }));
+            if (receiptArrived || indexedTransition) {
+                if (activeTab === 'search' && $('acqModal').classList.contains('open')) {
+                    acqSearchRefreshPending = true;
+                } else if (typeof window.refreshSuggestionSearch === 'function') {
+                    window.refreshSuggestionSearch();
+                }
+            }
+        } catch (err) {
+            console.error('Could not load requests.', err);
+        }
+    }
+
+    async function actOnAcq(action, id) {
+        try {
+            const response = await fetch(`/api/acquisition/${encodeURIComponent(id)}/${action}`, { method: 'POST', headers: { Accept: 'application/json' } });
+            if (!response.ok) {
+                const data = await response.json().catch(() => null);
+                const code = (data && data.error) || `http_${response.status}`;
+                setFeedback(acqError(code), true);
+            }
+        } catch (err) {
+            console.error('Request action failed.', err);
+        }
+        loadAcqMine();
+    }
+
+    async function initAcquisition() {
+        bindAcquisitionEvents();
+        try {
+            const response = await fetch('/api/acquisition/options', { headers: { Accept: 'application/json' } });
+            if (response.ok) {
+                const data = await response.json();
+                const services = data.services || {};
+                acqBookorbit = !!(services.bookorbit && services.bookorbit.usable);
+                acqCanPick = acqBookorbit && !!services.bookorbit.can_pick;
+                acqShelfmark = services.shelfmark && services.shelfmark.usable ? services.shelfmark : null;
+                acqUsable = acqBookorbit || !!acqShelfmark;
+            }
+        } catch (err) {
+            console.error('Could not load acquisition options.', err);
+        }
+        if (acqUsable) {
+            const renderListBase = renderList;
+            renderList = () => { renderListBase(); decorateEbookRows(); };
+        }
+        if (activeTab === 'search' || (acqUsable && activeTab === 'ebook_only')) renderList();
+        loadAcqMine();
+    }
+
+    function bindAcquisitionEvents() {
+        $('resultsList').addEventListener('click', (event) => {
+            const opener = event.target.closest('[data-acq="open"]');
+            if (opener) { openAcqDialog(opener.dataset.acqKind); return; }
+            const rowOpener = event.target.closest('[data-acq="open-row"]');
+            const prefill = rowOpener && acqPrefillFromEbookRow(rowOpener.dataset.key);
+            if (prefill) openAcqDialog('audiobook', prefill);
+        });
+        $('acqList').addEventListener('click', (event) => {
+            const button = event.target.closest('[data-acq-act]');
+            if (!button) return;
+            if (button.dataset.acqAct !== 'pick') { actOnAcq(button.dataset.acqAct, button.dataset.id); return; }
+            const row = acqRows.find((item) => String(item.id) === button.dataset.id);
+            if (row) openAcqPicker(row);
+        });
+        $('acqForm').addEventListener('submit', submitAcq);
+        $('acqPartnerSelect').addEventListener('change', updateAcqPartner);
+        document.querySelectorAll('input[name="acqFormat"]').forEach((input) => input.addEventListener('change', () => {
+            if (acqPartner && acqPartnerChoices.length > 1) {
+                $('acqPartnerSelect').value = '';
+                updateAcqPartner();
+            }
+            updateAcqProviderVisibility();
+        }));
+        $('acqTitle').addEventListener('input', () => {
+            acqPartnerChoices = [];
+            acqPartner = null;
+            $('acqPartnerSelect').innerHTML = '';
+            $('acqPartnerWrap').hidden = true;
+            $('acqPartnerSummary').textContent = '';
+            updateAcqProviderVisibility();
+        });
+        $('acqShelfmarkBtn').addEventListener('click', findInShelfmark);
+        $('acqCancelBtn').addEventListener('click', closeAcqDialog);
+        $('acqModal').addEventListener('click', (event) => { if (event.target === $('acqModal')) closeAcqDialog(); });
+        document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && $('acqModal').classList.contains('open')) closeAcqDialog(); });
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && acquisitionNeedsPolling()) loadAcqMine();
+        });
+    }
+</script>

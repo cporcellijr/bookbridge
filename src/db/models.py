@@ -190,6 +190,8 @@ class Book(Base):
     audio_provider_book_id = Column(String(255), nullable=True)
     audio_provider_file_id = Column(String(255), nullable=True)
     ebook_filename = Column(String(500))
+    synopsis_text = Column(Text, nullable=True)
+    synopsis_checked_at = Column(Float, nullable=True)  # epoch of the last lookup; empty results are retried
     ebook_source = Column(String(32), nullable=True)
     ebook_source_id = Column(String(255), nullable=True)
     original_ebook_filename = Column(String(500))
@@ -226,6 +228,7 @@ class Book(Base):
     jobs = relationship("Job", back_populates="book", cascade="all, delete-orphan")
     hardcover_details = relationship("HardcoverDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     storygraph_details = relationship("StorygraphDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
+    goodreads_details = relationship("GoodreadsDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     alignment = relationship("BookAlignment", back_populates="book", uselist=False, cascade="all, delete-orphan")
     reading_sessions = relationship("ReadingSession", back_populates="book", passive_deletes="all")
 
@@ -358,6 +361,43 @@ class StorygraphDetails(Base):
 
     def __repr__(self):
         return f"<StorygraphDetails(abs_id='{self.abs_id}', storygraph_book_id='{self.storygraph_book_id}')>"
+
+
+class GoodreadsDetails(Base):
+    """A BookBridge book's Goodreads match and cached metadata."""
+
+    __tablename__ = 'goodreads_details'
+
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
+    goodreads_book_id = Column(String(255), nullable=False)
+    goodreads_url = Column(String(1000))
+    goodreads_pages = Column(Integer)
+    goodreads_rating = Column(Float)
+    goodreads_review_count = Column(Integer)
+    goodreads_rating_updated_at = Column(Float)
+    isbn = Column(String(255))
+    asin = Column(String(255))
+    matched_by = Column(String(50))
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    book = relationship("Book", back_populates="goodreads_details")
+
+    def __init__(self, abs_id: str, goodreads_book_id: str, goodreads_url: str = None,
+                 goodreads_pages: int = None, goodreads_rating: float = None,
+                 goodreads_review_count: int = None,
+                 goodreads_rating_updated_at: float = None, isbn: str = None,
+                 asin: str = None, matched_by: str = None):
+        self.abs_id = abs_id
+        self.goodreads_book_id = goodreads_book_id
+        self.goodreads_url = goodreads_url
+        self.goodreads_pages = goodreads_pages
+        self.goodreads_rating = goodreads_rating
+        self.goodreads_review_count = goodreads_review_count
+        self.goodreads_rating_updated_at = goodreads_rating_updated_at
+        self.isbn = isbn
+        self.asin = asin
+        self.matched_by = matched_by
 
 
 class State(Base):
@@ -505,6 +545,88 @@ class CalibreLibraryFile(Base):
     filename = Column(String(500), primary_key=True)
     calibre_book_id = Column(String(64), nullable=True)
     updated_at = Column(Float, nullable=False)
+
+
+class AcquisitionRequest(Base):
+    """A book a reader asked a service (BookOrbit) to fetch, with the book it was asked for."""
+    __tablename__ = 'acquisition_requests'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    last_checked_at = Column(DateTime, nullable=True)
+    service = Column(String(30), nullable=False)
+    media_kind = Column(String(20), nullable=False)
+    remote_kind = Column(String(20), nullable=True)
+    remote_id = Column(String(255), nullable=True)
+    title = Column(String(500), nullable=False)
+    authors = Column(String(500), nullable=True)
+    isbn13 = Column(String(20), nullable=True)
+    series_name = Column(String(500), nullable=True)
+    series_index = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False, default='waiting', server_default='waiting')
+    remote_status = Column(String(50), nullable=True)
+    status_detail = Column(Text, nullable=True)
+    partner_source = Column(String(50), nullable=True)
+    partner_source_id = Column(String(255), nullable=True)
+    partner_filename = Column(String(500), nullable=True)
+    group_key = Column(String(64), nullable=True)
+    arrived_source = Column(String(50), nullable=True)
+    arrived_source_id = Column(String(255), nullable=True)
+    arrived_filename = Column(String(500), nullable=True)
+    linked_abs_id = Column(String(255), nullable=True)
+    dismissed = Column(Boolean, nullable=False, default=False, server_default='0')
+    adopted = Column(Boolean, nullable=False, default=False, server_default='0')
+    progress_mark = Column(String(64), nullable=True)
+    progress_changed_at = Column(DateTime, nullable=True)
+    decision_code = Column(String(100), nullable=True)
+    decision_action = Column(String(40), nullable=True)
+
+
+class AcquisitionJob(Base):
+    """A reader's acquisition intent, saved before provider requests."""
+    __tablename__ = 'acquisition_jobs'
+
+    id = Column(String(32), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    title = Column(String(500), nullable=False)
+    authors = Column(String(500), nullable=True)
+    isbn13 = Column(String(20), nullable=True)
+    series_name = Column(String(500), nullable=True)
+    series_index = Column(Integer, nullable=True)
+    requested_ebook = Column(Boolean, nullable=False, default=False, server_default='0')
+    requested_audiobook = Column(Boolean, nullable=False, default=False, server_default='0')
+    ebook_source = Column(String(50), nullable=True)
+    ebook_source_id = Column(String(255), nullable=True)
+    ebook_filename = Column(String(500), nullable=True)
+    audio_source = Column(String(50), nullable=True)
+    audio_source_id = Column(String(255), nullable=True)
+    ebook_submission_state = Column(String(30), nullable=True)
+    audio_submission_state = Column(String(30), nullable=True)
+    ebook_submission_reason = Column(String(100), nullable=True)
+    audio_submission_reason = Column(String(100), nullable=True)
+    ebook_library_state = Column(String(30), nullable=True)
+    audio_library_state = Column(String(30), nullable=True)
+    ebook_library_reason = Column(String(255), nullable=True)
+    audio_library_reason = Column(String(255), nullable=True)
+    ebook_review_candidates = Column(Text, nullable=True)
+    audio_review_candidates = Column(Text, nullable=True)
+    pairing_state = Column(String(30), nullable=True)
+    pairing_reason = Column(String(255), nullable=True)
+    linked_abs_id = Column(String(255), nullable=True)
+    audio_delivered_at = Column(DateTime, nullable=True)
+    scan_library_id = Column(String(50), nullable=True)
+    scan_scope = Column(String(500), nullable=True)
+    scan_job_id = Column(String(100), nullable=True)
+    scan_state = Column(String(30), nullable=True)
+    scan_reason = Column(String(255), nullable=True)
+    scan_attempts = Column(Integer, nullable=False, default=0, server_default='0')
+    scan_claimed_at = Column(DateTime, nullable=True)
+    scan_completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    dismissed = Column(Boolean, nullable=False, default=False, server_default='0')
 
 
 class PendingSuggestion(Base):
@@ -1173,6 +1295,8 @@ class UserBook(Base):
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
     abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), nullable=False, index=True)
     created_at = Column(DateTime, nullable=True)
+    synopsis_text = Column(Text, nullable=True)
+    synopsis_checked_at = Column(Float, nullable=True)
 
     __table_args__ = (
         Index('ix_user_books_user_abs', 'user_id', 'abs_id', unique=True),

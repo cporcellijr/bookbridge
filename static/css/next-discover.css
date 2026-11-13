@@ -168,6 +168,28 @@
     .ebook-card.audio-only-card, .sugg-row.ghost-row { border-style: dashed; background: transparent; }
     .queue-action-note { font-size: 12px; color: var(--muted); }
     .reader-docs-wrap { margin-top: 20px; }
+    /* Get the missing half: actions under search results, My requests strip, request dialog */
+    .acq-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; }
+    .acq-note { color: var(--muted); font-size: 13px; }
+    .acq-strip { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+    .acq-strip h3 { font-size: 15px; margin-bottom: 8px; }
+    .acq-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+    .acq-row:first-child { border-top: 0; }
+    .acq-main { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+    #acqModal { display: none; }
+    #acqModal.open { display: flex; }
+    #acqModal .form-input { margin-bottom: 12px; }
+    .acq-formats { border: 0; padding: 0; margin: 0 0 4px; display: flex; flex-wrap: wrap; gap: 16px; }
+    .acq-formats legend { padding: 0; }
+    #acqModal .modal { width: min(920px, 100%); }
+    .acq-release-tabs { margin-top: 12px; }
+    .acq-releases { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-height: 50vh; overflow-y: auto; }
+    .acq-release { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; width: 100%; padding: 8px 10px; text-align: left; color: inherit; font: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+    .acq-release:hover, .acq-release:focus-within { border-color: var(--ribbon); }
+    .acq-release-main { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .acq-release-title { font-weight: 600; overflow-wrap: anywhere; }
+    .acq-release-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+    .acq-result { margin-top: 12px; min-height: 1.4em; color: var(--muted); font-size: 13px; }
     /* Forge staging modal (shared .modal-overlay/.modal visuals, page-toggled) */
     #forgeStageModal { display: none; }
     #forgeStageModal.open { display: flex; }
@@ -292,4 +314,41 @@
     grid-area: actions; width: 100%; justify-content: flex-start; margin-top: 4px;
   }
   .discover-page .sugg-row .row-title-text { overflow-wrap: break-word; word-break: normal; }
+}
+
+/* Dialogs: Classic gets these visuals from app.css, which New does not load. */
+.view .modal-overlay { position: fixed; inset: 0; z-index: 300; align-items: center; justify-content: center; padding: 20px; background: rgba(6, 8, 14, .72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.view .modal { width: min(560px, 100%); max-height: min(85dvh, 860px); overflow: auto; overscroll-behavior: contain; padding: 24px; border: 1px solid var(--line-2); border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: 0 25px 70px rgba(0, 0, 0, .45); }
+.view #acqModal .modal { width: min(600px, 100%); }
+.view #acqModal .modal:has(#acqReleases:not([hidden])) { width: min(920px, 100%); }
+.view #acqModal .acq-releases { max-height: none; overflow: visible; }
+.view .modal .modal-actions { gap: 10px; flex-wrap: wrap; }
+@media (max-width: 600px) {
+    .view .modal-overlay { align-items: flex-end; padding: 0; }
+    .view .modal, .view #acqModal .modal { width: 100%; max-height: 92dvh; border-radius: 18px 18px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); }
+    .view .modal .modal-actions .btn { flex: 1 1 0; }
+}
+
+.discover-page .discover-filters-toggle { display: none; }
+@media (max-width: 760px) {
+    .discover-page .page-header { margin-bottom: 12px; }
+    .discover-page .page-header .subtitle, .discover-page .discover-note { display: none; }
+    .discover-page .sugg-tabs { margin-top: 0; }
+    .discover-page .sugg-tabs .tab { flex-wrap: nowrap; justify-content: center; align-items: center; white-space: nowrap; padding-inline: 6px; font-size: 14px; }
+    .discover-page .toolbar { margin-top: 12px; }
+    .discover-page .discover-filters-toggle { display: inline-flex; flex: none; align-self: flex-end; }
+    .discover-page #filterBar .filter-field.grow { flex: 1 1 0; }
+    .discover-page #filterBar:not(.open) > .filter-field:not(.grow),
+    .discover-page #filterBar:not(.open) > .series-grouping-label { display: none; }
+    .discover-page #filterBar.open > .filter-field:not(.grow) { flex: 1 1 calc(50% - 5px); }
+}
+
+.discover-queue-bar { display: none; }
+@media (max-width: 1020px) {
+    .discover-queue-bar:not([hidden]) { position: fixed; left: 12px; right: 12px; bottom: 18px; z-index: 40; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 16px 42px rgba(0,0,0,.25); font-weight: 600; }
+    .discover-page .queue-panel { scroll-margin-top: 80px; }
+    .discover-page .queue-panel .selection, .discover-page #queueList { scroll-margin-top: 80px; }
+}
+@media (max-width: 760px) {
+    .discover-queue-bar:not([hidden]) { bottom: calc(74px + env(safe-area-inset-bottom)); }
 }

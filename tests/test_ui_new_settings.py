@@ -15,14 +15,6 @@ ROOT = Path(__file__).resolve().parent.parent
 PAGES = ("settings", "account", "account_integrations", "admin_users", "admin_user_integrations")
 
 
-def page_fields_only(markup):
-    """Exclude the independent chrome switch, not any account or settings form."""
-    return re.sub(
-        r'<form class="(?:nav-interface-form|interface-switch [^"]+)"[^>]*>.*?</form>',
-        '', markup, flags=re.S,
-    )
-
-
 class Fields(HTMLParser):
     """Collect every submitted form name and its control type, including hidden fields,
     plus what a save would send: input values, checkbox/radio state and selected options."""
@@ -82,6 +74,11 @@ class TestP6Sources(unittest.TestCase):
                 new = (ROOT / "templates" / "next" / f"{page}.html").read_text(encoding="utf-8")
                 script = (ROOT / "templates" / "next" / f"_{page}_scripts.html").read_text(encoding="utf-8")
                 self.assertIn('{% extends "next/base.html" %}', new)
+                if page == "account":
+                    # P15h intentionally moved New's Display forms to /account/display.
+                    self.assertIn("account_display_page", new)
+                    self.assertNotIn('id="account-display"', new)
+                    continue
                 for pattern in (r'fetch\s*\(', r'href="/[^"]*', r'action="/[^"]*', r'url_for\('):
                     old_tokens = Counter(re.findall(pattern, old))
                     new_tokens = Counter(re.findall(pattern, new + script))
@@ -197,9 +194,16 @@ class TestP6RenderedRoutes(unittest.TestCase):
             for url in classic:
                 with self.subTest(role=user.role, url=url):
                     old_fields, new_fields = Fields(), Fields()
-                    old_fields.feed(page_fields_only(classic[url]))
-                    new_fields.feed(page_fields_only(modern[url]))
-                    self.assertEqual(old_fields.fields, new_fields.fields)
+                    old_fields.feed(classic[url])
+                    new_fields.feed(modern[url])
+                    if url == "/account":
+                        # The Classic-only Display card no longer has a New Account counterpart.
+                        excluded = {"SERIES_SHOW_CURRENT_BOOK_DETAIL", "csrf_token"}
+                        classic_non_display = Counter({k: v for k, v in old_fields.fields.items() if k[0] not in excluded})
+                        new_non_display = Counter({k: v for k, v in new_fields.fields.items() if k[0] not in excluded})
+                        self.assertEqual(classic_non_display, new_non_display)
+                    else:
+                        self.assertEqual(old_fields.fields, new_fields.fields)
 
     def test_classic_and_new_forms_would_save_the_same_values(self):
         """A save from New must send exactly what Classic sends, so seed every setting with a
@@ -216,9 +220,15 @@ class TestP6RenderedRoutes(unittest.TestCase):
                 for url in classic:
                     with self.subTest(role=user.role, url=url):
                         old_fields, new_fields = Fields(), Fields()
-                        old_fields.feed(page_fields_only(classic[url]))
-                        new_fields.feed(page_fields_only(modern[url]))
-                        self.assertEqual(old_fields.values, new_fields.values)
+                        old_fields.feed(classic[url])
+                        new_fields.feed(modern[url])
+                        if url == "/account":
+                            excluded = {"SERIES_SHOW_CURRENT_BOOK_DETAIL", "csrf_token"}
+                            shared_values = Counter({k: n for k, n in new_fields.values.items() if k[0] not in excluded})
+                            old_values = Counter({k: n for k, n in old_fields.values.items() if k[0] not in excluded})
+                            self.assertEqual(old_values, shared_values)
+                        else:
+                            self.assertEqual(old_fields.values, new_fields.values)
                         if url == "/settings":
                             self.assertGreater(sum(n for k, n in old_fields.values.items() if k[3].startswith("v-")), 50)
 
@@ -281,8 +291,11 @@ class TestP6RenderedRoutes(unittest.TestCase):
         self.assertIn('class="settings-menu"', rail)
         self.assertIn('id="settings-navigation"', rail)
         self.assertNotIn('class="rail-nav"', rail)
-        for link in ('href="/stats"', 'href="/logs"', 'href="/settings"'):
+        for link in ('href="/stats"', 'href="/settings"'):
             self.assertNotIn(link, rail)
+        # The only Logs link is the Settings menu entry that opens the Logs page.
+        self.assertEqual(rail.count('href="/logs"'),
+                         rail.count('href="/logs" class="settings-tab" data-tab="logs"'))
         library = self.client.get('/').get_data(as_text=True)
         self.assertIn('class="rail-nav"', library)
         self.assertIn('href="/stats"', library)
@@ -298,7 +311,7 @@ class TestP6RenderedRoutes(unittest.TestCase):
         self.assertLess(markup.index('class="settings-legends"'), markup.index('class="settings-layout"'))
         self.assertIn('Press Ctrl K to jump to any setting', markup)
         self.assertIn('class="rail-foot"', markup)
-        self.assertIn('interface-switch-rail', markup)
+        self.assertNotIn('interface-switch-rail', markup)
 
     def test_new_service_headers_do_not_offer_manual_collapse(self):
         markup = self._new_html('/settings')
@@ -407,3 +420,103 @@ class TestP11SettingsNavigation(unittest.TestCase):
         self.assertIn("bar.style.display = page === 'maintenance' ? 'none' : ''", self.js)
         self.assertIn('keepSelectedMenuLinkInView()', self.js)
         self.assertNotIn('-webkit-line-clamp', self.css)
+
+
+class TestSettingsLogsLink(unittest.TestCase):
+    """New Settings links out to Logs instead of embedding a second page."""
+
+    def test_logs_menu_entry_is_a_plain_link(self):
+        source = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        menu_line = next(line for line in source.splitlines() if 'data-tab="logs"' in line)
+        self.assertIn('href="{{ url_for(\'logs_view\') }}"', menu_line)
+        self.assertNotIn('onclick', menu_line)
+
+    def test_settings_no_longer_embeds_the_logs_page(self):
+        source = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        self.assertNotIn('<iframe', source)
+        self.assertIn("{{ _('Open Logs') }}", source)
+
+
+class TestSettingsPhoneSectionBar(unittest.TestCase):
+    """Settings uses a single expandable section bar on phones."""
+
+    def test_phone_section_bar_exists_and_is_wired(self):
+        template = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        js = (ROOT / 'static/js/next/settings-p6.js').read_text(encoding='utf-8')
+        mobile_slot = next(line for line in template.splitlines() if 'id="settings-mobile-slot"' in line)
+        self.assertIn('id="settings-section-toggle"', mobile_slot)
+        self.assertIn('function mountSectionToggle()', js)
+        self.assertIn("getElementById('settings-section-current')", js)
+
+    def test_phone_menu_has_no_inner_scroll(self):
+        css = (ROOT / 'static/css/next-p6.css').read_text(encoding='utf-8')
+        self.assertNotIn('max-height: 280px', css)
+
+
+class TestIntegrationsSaveBar(unittest.TestCase):
+    """Both New integrations forms retain one sticky Save action."""
+
+    def test_both_integrations_forms_keep_one_save_button_and_dirty_note(self):
+        for page in ('account_integrations', 'admin_user_integrations'):
+            with self.subTest(page=page):
+                template = (ROOT / 'templates/next' / f'{page}.html').read_text(encoding='utf-8')
+                self.assertIn('class="integrations-save-bar"', template)
+                self.assertIn('id="integrationsDirty"', template)
+                self.assertEqual(template.count('type="submit"'), 1)
+
+    def test_integrations_save_bar_is_sticky(self):
+        css = (ROOT / 'static/css/next-p6.css').read_text(encoding='utf-8')
+        self.assertIn('.integrations-wrap .integrations-save-bar { position: sticky;', css)
+
+
+class TestIntegrationsLayout(TestP6RenderedRoutes):
+    """Both New integrations pages use a gated Settings-style rail."""
+
+    def test_integrations_rail_has_only_visible_groups_and_preferences(self):
+        with patch.dict(os.environ, {"STORYTELLER_ENABLED": "false",
+                                     "BOOKORBIT_ENABLED": "true"}):
+            pages = self.get_pages(self.admin, "new")
+        routes = ("/account/integrations", f"/admin/users/{self.reader.id}/integrations")
+        for route in routes:
+            with self.subTest(route=route):
+                markup = pages[route]
+                self.assertIn('<aside class="rail rail-settings"', markup)
+                rail = markup.split('<aside class="rail rail-settings"', 1)[1].split("</aside>", 1)[0]
+                self.assertIn('class="settings-menu"', rail)
+                self.assertNotIn('class="rail-nav"', rail)
+                self.assertIn('href="#integrations-prefs"', rail)
+                self.assertNotIn("Storyteller</span>", rail)
+                self.assertIn("BookOrbit</span>", rail)
+                anchors = re.findall(r'class="settings-tab(?: active)?" href="#([^"]+)"', rail)
+                self.assertEqual(anchors.count("integrations-prefs"), 1)
+                groups = re.findall(r'id="(integration-group-\d+)" class="group( group--off)?"', markup)
+                enabled = {name for name, off in groups if not off}
+                disabled = {name for name, off in groups if off}
+                self.assertEqual(set(anchors), enabled - {
+                    next(name for name, _ in groups
+                         if 'id="' + name + '" class="group"' in markup
+                         and 'id="integrations-prefs"' in markup.split('id="' + name + '"', 1)[1].split('</div>', 1)[0])
+                } | {"integrations-prefs"})
+                self.assertTrue(disabled)
+                self.assertFalse(set(anchors) & disabled)
+                self.assertEqual(len(anchors), len(enabled))
+                self.assertEqual(markup.count('id="integrations-prefs"'), 1)
+                self.assertIn('/static/css/next-integrations.css', markup)
+                if route == "/account/integrations":
+                    self.assertIn('class="settings-back" href="/account"', rail)
+                else:
+                    self.assertIn('class="settings-back" href="/admin/users"', rail)
+
+    def test_integrations_styles_and_observer_live_outside_pinned_scripts(self):
+        for page in ("account_integrations", "admin_user_integrations"):
+            with self.subTest(page=page):
+                source = (ROOT / "templates/next" / (page + ".html")).read_text(encoding="utf-8")
+                self.assertNotIn("<style>", source)
+                self.assertIn('href="/static/css/next-integrations.css"', source)
+                self.assertIn("new IntersectionObserver(", source)
+                self.assertLess(source.index('_integrations_scripts.html" %}'),
+                                source.index("new IntersectionObserver("))
+        css = (ROOT / "static/css/next-integrations.css").read_text(encoding="utf-8")
+        for selector in (".link-actions", ".status-pill.linked", ".status-pill.unlinked",
+                         ".inline-status", "@media (min-width: 761px)"):
+            self.assertIn(selector, css)

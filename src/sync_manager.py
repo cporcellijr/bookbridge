@@ -48,6 +48,7 @@ from src.utils.user_config import user_preference_enabled
 from src.utils.storyteller_transcript import StorytellerTranscript
 # Logging utilities (placed at top to ensure availability during sync)
 from src.utils.cache_paths import safe_cache_path, is_plain_basename
+from src.services.audio_cache_ownership import owned_cache_names, remove_book_cache_dirs
 from src.utils.transcription_cancel import (
     CancellationToken,
     is_cancelled,
@@ -56,6 +57,7 @@ from src.utils.transcription_cancel import (
     unregister_worker,
 )
 from src.utils.transcriber import TranscriptionCancelled
+from src.utils.source_fingerprint import AcquiredPaths, SourceAudioChanged, verify_unchanged
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
 from src.utils.progress_metadata import state_metadata_kwargs
 from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename
@@ -98,7 +100,7 @@ logger = logging.getLogger(__name__)
 _STATE_FETCH_SLOW_SECONDS = 15.0
 
 # Clients that must not receive completion propagation writes.
-# StoryGraph and Hardcover are write-only trackers driven exclusively by the
+# StoryGraph, Hardcover, and Goodreads are write-only trackers driven by the
 # trailing-edge idle-cooldown handlers (_handle_tracker_cooldown), which bypass
 # their cooldown and post immediately at completion. Writing to them here would
 # be a layering violation and redundant.
@@ -114,6 +116,7 @@ _KOREADER_READING_MIN_PCT: float = 0.01
 _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS: frozenset[str] = frozenset({
     "StoryGraph",
     "Hardcover",
+    "Goodreads",
     "ABSEbook",
 })
 
@@ -207,6 +210,7 @@ class SyncManager:
                  migration_service: MigrationService = None,
                  shelf_watch_service=None,
                  shelf_watch_services=None,
+                 acquisition_service=None,
                  audio_source_adapters: dict | None = None,
                  epub_cache_dir=None,
                  data_dir=None,
@@ -238,6 +242,7 @@ class SyncManager:
         self.shelf_watch_services = list(shelf_watch_services) if shelf_watch_services else (
             [shelf_watch_service] if shelf_watch_service else []
         )
+        self.acquisition_service = acquisition_service
         self.audio_source_adapters = audio_source_adapters or {}
         # Injected by web_server.create_app (ForgeService.generate_readalong_if_requested),
         # like the Forge read-along callbacks, so this module never imports web_server.
@@ -279,6 +284,8 @@ class SyncManager:
         # Hardcover idle-cooldown tracker (same trailing-edge scheme as StoryGraph).
         self._hardcover_cooldown: dict[tuple[int | None, str], dict] = {}
         self._hardcover_cooldown_lock = threading.Lock()
+        self._goodreads_cooldown: dict[tuple[int | None, str], dict] = {}
+        self._goodreads_cooldown_lock = threading.Lock()
         # (user_id, abs_id) -> monotonic time of the last attempt to fill a KoSync
         # follower; an attempt that never completes is not retried for the cooldown.
         self._follower_init_attempts: dict[tuple[int | None, str], float] = {}
@@ -509,7 +516,7 @@ class SyncManager:
         """Mark a book finished on non-leader clients once the leader crosses
         the configured completion threshold.
 
-        Trackers (StoryGraph, Hardcover) and ABSEbook are excluded: trackers
+        Trackers (StoryGraph, Hardcover, Goodreads) and ABSEbook are excluded: trackers
         are driven by trailing-edge idle-cooldown handlers, and ABSEbook rejects
         a percentage-only locator. ABS uses mark_finished instead of
         update_progress.
@@ -991,7 +998,10 @@ class SyncManager:
         files = audio_adapter.get_audio_files(audio_source_id, bridge_key=abs_id)
         paths = [f.get("local_path") for f in (files or []) if f.get("local_path")]
         if files and len(paths) == len(files):
-            return paths
+            return AcquiredPaths(paths, {
+                f["local_path"]: tuple(f["source_fingerprint"])
+                for f in files if f.get("source_fingerprint")
+            })
         return None
 
     def _dispatch_readalong_intent(self, book) -> None:
@@ -1016,7 +1026,8 @@ class SyncManager:
 
     def _try_ctc_alignment(self, abs_id: str, audio_paths: list, book_text: str,
                            spine_chapters: Optional[list], abs_title: str,
-                           audio_duration: Optional[float], source_label: str) -> bool:
+                           audio_duration: Optional[float], source_label: str,
+                           progress_callback=None) -> bool:
         """Run one CTC forced-alignment attempt and log its outcome (issue #426).
 
         `_run_background_job` calls `AlignmentService.align_forced_and_store` from
@@ -1030,16 +1041,24 @@ class SyncManager:
         ``"upgrade"`` for the post-transcript one; it selects each site's existing,
         byte-identical success and failure log text (the two sites word their
         failure log differently, so this is not just a success-message suffix).
+
+        `progress_callback`, when given, receives the model pass's 0.0-1.0 progress.
         """
         is_upgrade = source_label == "upgrade"
+        ctc_kwargs = {"spine_chapters": spine_chapters, "audio_duration": audio_duration}
+        fingerprints = getattr(audio_paths, "fingerprints", None)
+        if fingerprints:
+            ctc_kwargs["source_check"] = lambda seam: verify_unchanged(abs_id, fingerprints, seam)
+        if progress_callback is not None:
+            ctc_kwargs["progress_callback"] = progress_callback
         try:
             stored = self.alignment_service.align_forced_and_store(
-                abs_id, audio_paths, book_text, spine_chapters=spine_chapters,
-                audio_duration=audio_duration,
+                abs_id, audio_paths, book_text, **ctc_kwargs,
             )
-        except TranscriptionCancelled:
+        except (TranscriptionCancelled, SourceAudioChanged):
             raise
         except Exception as ctc_err:
+            verify_unchanged(abs_id, fingerprints, "falling back after a CTC failure")
             if is_upgrade:
                 logger.warning(f"CTC upgrade failed for '{abs_id}': {ctc_err}", exc_info=True)
             else:
@@ -1896,6 +1915,8 @@ class SyncManager:
             for book in books:
                 if book.ebook_filename:
                     valid_filenames.add(book.ebook_filename)
+                if book.original_ebook_filename:
+                    valid_filenames.add(book.original_ebook_filename)
             
             # From Pending Suggestions (covers auto-discovery matches)
             suggestions = self.database_service.get_all_pending_suggestions(all_users=True)
@@ -3576,14 +3597,23 @@ class SyncManager:
             audio_source_id = getattr(book, "audio_source_id", None) or abs_id
             abs_client = self.active_abs_client
 
-            def update_progress(local_pct, phase):
+            def update_progress(local_pct, phase, check_active=True):
                 """
                 Map local phase progress to global 0-100% progress.
                 Phase 1: 0-10%
                 Phase 2: 10-90%
                 Phase 3: 90-100%
+
+                CTC passes ``check_active=False``: its progress is reported from inside
+                the aligner, whose catch-all error handling would log a cancellation as
+                a failed pass. Cancellation is still checked around the CTC calls.
                 """
-                ensure_active()
+                if check_active:
+                    ensure_active()
+                elif is_cancelled(abs_id, cancellation_token):
+                    # Called inside the CTC aligner: do not raise cancellation
+                    # into its fallback handler, but never write stale progress.
+                    return
                 global_pct = 0.0
                 if phase == 1:
                     global_pct = 0.0 + (local_pct * 0.1)
@@ -3592,8 +3622,15 @@ class SyncManager:
                 elif phase == 3:
                     global_pct = 0.9 + (local_pct * 0.1)
 
-                # Save to DB every time for now (or throttle if too frequent).
-                self.database_service.update_latest_job(abs_id, kind=JOB_KIND_ALIGNMENT, progress=global_pct)
+                # Bind progress to this worker's job generation, never to a
+                # replacement created for the same book while CTC is running.
+                options = {"progress": global_pct}
+                job_id = getattr(current_alignment_job, "id", None)
+                if isinstance(job_id, int):
+                    options["expected_job_id"] = job_id
+                self.database_service.update_latest_job(
+                    abs_id, kind=JOB_KIND_ALIGNMENT, **options
+                )
 
             current_alignment_job = self.database_service.get_latest_job(
                 abs_id, kind=JOB_KIND_ALIGNMENT
@@ -3716,6 +3753,7 @@ class SyncManager:
             # Local audio paths for CTC, resolved once and reused for the post-transcript
             # CTC upgrade (new long books have no prior map to chunk against up front).
             ctc_local_paths = None
+            whisper_fingerprints = {}
 
             # [MOVED UP] Fetch item details to get chapters (for time alignment) and for Ebook Acquisition
             # item_details = self.abs_client.get_item_details(abs_id) # Already fetched above
@@ -3809,15 +3847,18 @@ class SyncManager:
                             abs_id, ctc_local_paths, book_text, spine_chapters, abs_title,
                             getattr(book, "audio_duration", None) or getattr(book, "duration", None),
                             source_label="attempt",
+                            progress_callback=lambda p: update_progress(p, 2, check_active=False),
                         ):
                             direct_aligned = True
                             transcript_source = "ctc"
                             update_progress(1.0, 2)
                     else:
                         logger.info(f"CTC enabled but audio for '{abs_id}' is not fully local; using SMIL/Whisper")
-                except TranscriptionCancelled:
+                except (TranscriptionCancelled, SourceAudioChanged):
                     raise
                 except Exception as ctc_err:
+                    verify_unchanged(abs_id, getattr(ctc_local_paths, "fingerprints", None),
+                                     "falling back after a CTC failure")
                     logger.warning(f"CTC alignment failed for '{abs_id}': {ctc_err}", exc_info=True)
 
             # Attempt SMIL extraction
@@ -3850,6 +3891,10 @@ class SyncManager:
                 if not audio_adapter:
                     raise RuntimeError(f"No audio source adapter configured for '{audio_source}'")
                 audio_files = audio_adapter.get_audio_files(audio_source_id, bridge_key=abs_id)
+                whisper_fingerprints = {
+                    f["local_path"]: tuple(f["source_fingerprint"])
+                    for f in (audio_files or []) if f.get("source_fingerprint")
+                }
                 raw_transcript = self.transcriber.process_audio(
                     abs_id, audio_files,
                     full_book_text=book_text, # Passed for context/alignment inside transcriber if old logic used
@@ -3883,6 +3928,11 @@ class SyncManager:
                 success = True
             else:
                 ensure_active()
+                try:
+                    verify_unchanged(abs_id, whisper_fingerprints, "storing the transcript alignment")
+                except SourceAudioChanged:
+                    self.transcriber.invalidate_transcript_cache(abs_id)
+                    raise
                 success = self.alignment_service.align_and_store(
                     abs_id, raw_transcript, book_text, spine_chapters
                 )
@@ -3901,11 +3951,16 @@ class SyncManager:
                                 abs_id, upgrade_paths, book_text, spine_chapters, abs_title,
                                 getattr(book, "audio_duration", None) or getattr(book, "duration", None),
                                 source_label="upgrade",
+                                # Fills the 91% -> 95% step that follows.
+                                progress_callback=lambda p: update_progress(
+                                    0.1 + 0.4 * p, 3, check_active=False),
                             ):
                                 transcript_source = "ctc"
-                        except TranscriptionCancelled:
+                        except (TranscriptionCancelled, SourceAudioChanged):
                             raise
                         except Exception as ctc_err:
+                            verify_unchanged(abs_id, getattr(upgrade_paths, "fingerprints", None),
+                                             "falling back after a CTC failure")
                             logger.warning(f"CTC upgrade failed for '{abs_id}': {ctc_err}", exc_info=True)
 
             # Alignment done
@@ -4030,14 +4085,23 @@ class SyncManager:
                 
                 # Keep the completed transcript so correcting the pairing does not repeat Whisper.
                 if self.data_dir and not recovery_mode:
-                    audio_cache_dir = Path(self.data_dir) / "audio_cache" / abs_id
-                    if audio_cache_dir.exists():
+                    audio_cache_root = Path(self.data_dir) / "audio_cache"
+                    try:
+                        from src.utils.transcriber import AudioTranscriber
                         try:
-                            from src.utils.transcriber import AudioTranscriber
-                            AudioTranscriber._prune_audio_cache(audio_cache_dir, remove_directories=True)
+                            known_ids = [b.abs_id for b in self.database_service.get_all_books()]
+                        except Exception:
+                            known_ids = None
+                        pruned = False
+                        for cache_name in owned_cache_names(abs_id, known_ids):
+                            if (audio_cache_root / cache_name).exists():
+                                pruned = AudioTranscriber._prune_audio_cache(
+                                    audio_cache_root / cache_name, remove_directories=True,
+                                    cache_root=audio_cache_root, own_token=cancellation_token) or pruned
+                        if pruned:
                             logger.info(f"✅ Cleaned up audio cache for {sanitize_log_data(abs_title)}")
-                        except Exception as cleanup_err:
-                            logger.warning(f"⚠️ Failed to clean audio cache: {cleanup_err}", exc_info=True)
+                    except Exception as cleanup_err:
+                        logger.warning(f"⚠️ Failed to clean audio cache: {cleanup_err}", exc_info=True)
             else:
                 book.status = 'failed_retry_later'
                 # Log which claimant was used so cross-user identity mismatches
@@ -4054,14 +4118,21 @@ class SyncManager:
 
         finally:
             if is_cancelled(abs_id, cancellation_token) and self.data_dir:
-                import shutil
-                audio_cache_dir = Path(self.data_dir) / "audio_cache" / abs_id
-                if audio_cache_dir.exists():
+                try:
                     try:
-                        shutil.rmtree(audio_cache_dir)
+                        other_ids = [b.abs_id for b in self.database_service.get_all_books()]
+                    except Exception:
+                        other_ids = None
+                    delete_errors = []
+                    removed_dirs = remove_book_cache_dirs(Path(self.data_dir) / "audio_cache", abs_id,
+                                                          other_ids=other_ids, own_token=cancellation_token,
+                                                          errors=delete_errors)
+                    for delete_error in delete_errors:
+                        logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {delete_error}", exc_info=delete_error)
+                    if removed_dirs:
                         logger.info(f"✅ Cleaned cancelled transcription cache for {sanitize_log_data(abs_title)}")
-                    except Exception as cleanup_err:
-                        logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {cleanup_err}", exc_info=True)
+                except Exception as cleanup_err:
+                    logger.warning(f"⚠️ Failed to clean cancelled transcription cache: {cleanup_err}", exc_info=True)
             unregister_worker(abs_id, cancellation_token)
             if library_token is not None:
                 _library_service_override.reset(library_token)
@@ -4188,6 +4259,21 @@ class SyncManager:
             schedule_followup=schedule_followup,
         )
 
+    def _handle_goodreads_cooldown(
+        self, book, config, now: float, schedule_followup: bool = True
+    ) -> None:
+        """Post Goodreads progress on the shared trailing-edge idle cooldown."""
+        self._handle_tracker_cooldown(
+            book, config, now,
+            client_key='Goodreads',
+            state_name='goodreads',
+            cooldown_env='GOODREADS_UPDATE_COOLDOWN_MINS',
+            cooldown_store_attr='_goodreads_cooldown',
+            cooldown_lock_attr='_goodreads_cooldown_lock',
+            schedule_followup=schedule_followup,
+            allow_reset=True,
+        )
+
     def _handle_hardcover_cooldown(
         self, book, config, now: float, schedule_followup: bool = True
     ) -> None:
@@ -4268,16 +4354,17 @@ class SyncManager:
     def _handle_tracker_cooldown(self, book, config, now: float, *, client_key: str,
                                  state_name: str, cooldown_env: str,
                                  cooldown_store_attr: str, cooldown_lock_attr: str,
-                                 schedule_followup: bool) -> None:
+                                 schedule_followup: bool, allow_reset: bool = False) -> None:
         """Post a write-only tracker's progress on a trailing-edge idle cooldown.
 
-        The tracker (StoryGraph/Hardcover) is intentionally excluded from the normal
+        The tracker is intentionally excluded from the normal
         per-cycle dispatch and driven here instead. While a book keeps progressing the
         timer resets and no write happens; once the book has been idle (no new progress)
         for ``<cooldown_env>`` minutes we post the latest position. Completion (~100%)
-        bypasses the cooldown and posts at once. A failed post backs off exponentially
-        instead of being retried every cycle; new progress starts a fresh cooldown and
-        attempt.
+        bypasses the cooldown and posts at once. Near-zero progress is never posted
+        unless ``allow_reset`` is set, in which case a previously posted position is
+        reset to the start. A failed post backs off exponentially instead of being
+        retried every cycle; new progress starts a fresh cooldown and attempt.
         """
         EPS = 1e-4
         COMPLETION_THRESHOLD = 0.99
@@ -4301,12 +4388,17 @@ class SyncManager:
             current_pct = max(pcts)
 
             is_completion = current_pct >= COMPLETION_THRESHOLD
-            # Skip near-zero progress (reuses the 1% suggestion-eligibility floor),
-            # but completion always bypasses the floor.
-            if not is_completion and current_pct <= 0.01:
+            near_zero = not is_completion and current_pct <= 0.01
+            if near_zero and not allow_reset:
                 return
 
             abs_id = book.abs_id
+            posted = self.database_service.get_state(abs_id, state_name)
+            posted_pct = posted.percentage if posted else None
+            # An untouched book stays unposted; only a prior post can be reset.
+            if near_zero and (posted_pct is None or posted_pct <= 0.01):
+                return
+
             user_id = get_current_user_id()
             cooldown_key = (user_id, abs_id)
             # Resolved lazily (only once the tracker is configured and progress is real)
@@ -4322,8 +4414,6 @@ class SyncManager:
                 changed_at = rec['changed_at']
                 retry_at = rec.get('retry_at')
 
-            posted = self.database_service.get_state(abs_id, state_name)
-            posted_pct = posted.percentage if posted else None
             if posted_pct is not None and abs(current_pct - posted_pct) <= EPS:
                 return  # Already in sync with the tracker.
 
@@ -5247,7 +5337,9 @@ class SyncManager:
         for user in users:
             try:
                 bundle = registry.get_clients(user.id)
-                if any(c.is_configured() for c in bundle.sync_clients.values()):
+                has_sync = any(c.is_configured() for c in bundle.sync_clients.values())
+                acquisition = getattr(self, 'acquisition_service', None)
+                if has_sync or (acquisition is not None and acquisition.has_work(user.id)):
                     eligible.append(user)
             except Exception as e:
                 logger.warning("Skipping user %s (client build failed): %s", getattr(user, "id", None), e, exc_info=True)
@@ -5268,6 +5360,40 @@ class SyncManager:
                 self.sync_cycle(target_abs_id=target_abs_id, user_id=user.id)
             except Exception as e:
                 logger.error("Sync cycle failed for user %s: %s", getattr(user, "id", None), e, exc_info=True)
+
+    def _refresh_acquisition_requests(self, user_id: int) -> None:
+        """Check one user's BookOrbit and Shelfmark book requests with their own clients; never raises.
+
+        Makes no HTTP call unless the database shows a request that needs checking or
+        the reader has opted in to adopting their BookOrbit requests and a scan is due.
+        """
+        acquisition = getattr(self, 'acquisition_service', None)
+        registry = getattr(self, 'user_client_registry', None)
+        if acquisition is None or registry is None:
+            return
+        user_token = credentials_token = None
+        try:
+            if not acquisition.has_work(user_id):
+                return
+            bundle = registry.get_clients(user_id)
+            client, shelfmark = (
+                found if found is not None and found.is_configured() else None
+                for found in (getattr(bundle, 'bookorbit_client', None), getattr(bundle, 'shelfmark_client', None))
+            )
+            # Durable jobs with already-owned halves can pair without either
+            # acquisition provider, using the reader's ordinary library clients.
+            if client is None and shelfmark is None and not acquisition.has_work(user_id):
+                return
+            user_token = set_current_user_id(user_id)
+            credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))
+            acquisition.refresh_user(user_id, client, shelfmark, library_clients=bundle)
+        except Exception:
+            logger.warning("Acquisition check failed for user %s", user_id, exc_info=True)
+        finally:
+            if credentials_token is not None:
+                reset_current_user_credentials(credentials_token)
+            if user_token is not None:
+                reset_current_user_id(user_token)
 
     def _filter_books_for_current_user(self, books, bulk_states_per_client=None):
         """Limit a per-user cycle to the books this user has matched/claimed.
@@ -5469,6 +5595,10 @@ class SyncManager:
                     except Exception as e:
                         logger.warning(f"Shelf-watch run failed: {e}", exc_info=True)
 
+            for acquisition_user in user_ids_to_watch:
+                if acquisition_user is not None:
+                    self._refresh_acquisition_requests(acquisition_user)
+
         # Optimization: Pre-fetch bulk data from all clients that support it
         # Only do this if we are in a full cycle (target_abs_id is None)
         bulk_states_per_client = {}
@@ -5626,7 +5756,7 @@ class SyncManager:
                     continue
                 init_followers_only = False
 
-                # StoryGraph and Hardcover are driven by an idle cooldown rather than the
+                # Write-only trackers are driven by an idle cooldown rather than the
                 # per-cycle dispatch. Evaluate them for every active book each cycle
                 # (including idle books that early-skip below) so the trailing-edge post
                 # can fire.
@@ -5638,6 +5768,9 @@ class SyncManager:
                     book, decision_config, time.time(), schedule_followup=tracker_followup
                 )
                 self._handle_hardcover_cooldown(
+                    book, decision_config, time.time(), schedule_followup=tracker_followup
+                )
+                self._handle_goodreads_cooldown(
                     book, decision_config, time.time(), schedule_followup=tracker_followup
                 )
 
@@ -6027,7 +6160,7 @@ class SyncManager:
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
-                        if client_name in ('StoryGraph', 'Hardcover'):
+                        if client_name in ('StoryGraph', 'Hardcover', 'Goodreads'):
                             # Driven by the idle-cooldown handlers, not the dispatch loop.
                             continue
                         client_state = config.get(client_name)

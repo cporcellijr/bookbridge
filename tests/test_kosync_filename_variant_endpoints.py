@@ -93,6 +93,8 @@ class TestFilenameVariantEndpoints(unittest.TestCase):
         discovery = patch.object(kosync_server, "_schedule_auto_discovery")
         self.schedule_discovery = discovery.start()
         self.addCleanup(discovery.stop)
+        kosync_server._book_positions_sent.clear()
+        self.addCleanup(kosync_server._book_positions_sent.clear)
 
     def _put(self, device):
         return self.client.put(
@@ -221,6 +223,10 @@ class TestFilenameVariantEndpoints(unittest.TestCase):
         self.assertEqual(self.db.get_kosync_document(DEVICE_HASH).linked_abs_id, "exact-book")
 
     def test_variant_index_is_reused_and_rebuilt_when_the_catalog_or_links_change(self):
+        # A metadata read finishing in the background rebuilds the index on its own.
+        warm = patch.object(kosync_server, "_start_author_warm")
+        warm.start()
+        self.addCleanup(warm.stop)
         with patch.object(self.db, "get_books_by_status", wraps=self.db.get_books_by_status) as spy:
             for _ in range(3):
                 kosync_server._resolve_book_by_filename_variants(DEVICE_HASH, user_id=self.user_id)
@@ -238,6 +244,207 @@ class TestFilenameVariantEndpoints(unittest.TestCase):
             self.assertIsNotNone(kosync_server._resolve_book_by_filename_variants(DEVICE_HASH, user_id=other))
             self.db.unlink_user_book(other, ABS_ID)
             self.assertIsNone(kosync_server._resolve_book_by_filename_variants(DEVICE_HASH, user_id=other))
+
+    def _catalog_title_book(self):
+        """A CWA search match: stored under "cwa_398.epub", downloaded as "Author - Title.epub"."""
+        self.db.save_book(Book(
+            abs_id="struggle-1", abs_title="My Struggle, Book 1", original_ebook_filename="cwa_398.epub",
+            ebook_filename="storyteller_71139CE3-1D44-46EB-B536-3E5EBAD89E59.epub",
+            kosync_doc_id="d" * 32, status="active",
+        ))
+        self.db.link_user_book(self.user_id, "struggle-1")
+        warm = patch.object(kosync_server, "_start_author_warm")
+        warm.start()
+        self.addCleanup(warm.stop)
+        kosync_server._epub_title_cache["cwa_398.epub"] = "My Struggle: Book 1"
+        kosync_server._epub_author_cache["cwa_398.epub"] = ("Karl Ove Knausgaard",)
+        self.addCleanup(kosync_server._epub_title_cache.pop, "cwa_398.epub", None)
+        self.addCleanup(kosync_server._epub_author_cache.pop, "cwa_398.epub", None)
+        kosync_server._invalidate_filename_variant_index()
+        # md5 of "Karl Ove Knausgaard - My Struggle_ Book 1.epub"
+        return "3a5a84f9da73fa57676bb5cfda058248"
+
+    def test_first_get_links_a_catalog_title_download(self):
+        device_hash = self._catalog_title_book()
+
+        self.client.get(f'/syncs/progress/{device_hash}', headers=self.auth_headers)
+
+        self.assertEqual(self.db.get_kosync_document(device_hash).linked_abs_id, "struggle-1")
+
+    def test_device_put_links_a_catalog_title_download_that_has_its_own_position(self):
+        device_hash = self._catalog_title_book()
+        self.db.save_kosync_document(KosyncDocument(document_hash=device_hash, user_id=self.user_id))
+        self.db.upsert_user_kosync_progress(
+            device_hash, 0.0164, progress="/body/DocFragment[5]/body/p[2]/text().0",
+            device="hitv205n", device_id="HITV205N", user_id=self.user_id,
+        )
+
+        response = self.client.put('/syncs/progress', headers=self.auth_headers, json={
+            'document': device_hash, 'progress': '/body/DocFragment[5]/body/p[3].0',
+            'percentage': 0.0170, 'device': 'hitv205n', 'device_id': 'HITV205N',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.db.get_kosync_document(device_hash).linked_abs_id, "struggle-1")
+
+    def _book_state(self, abs_id, pct):
+        self.db.save_state(State(
+            abs_id=abs_id, client_name="kosync", percentage=pct, timestamp=1, last_updated=1,
+            xpath="/body/DocFragment[5]/body/p[1076].0", user_id=self.user_id,
+        ))
+
+    def _put_own_position(self, device_hash, own_pct, new_pct):
+        self.db.save_kosync_document(KosyncDocument(document_hash=device_hash, user_id=self.user_id))
+        self.db.upsert_user_kosync_progress(
+            device_hash, own_pct, progress="/body/DocFragment[5]/body/p[2]/text().0",
+            device="hitv205n", device_id="HITV205N", user_id=self.user_id,
+        )
+        return self.client.put('/syncs/progress', headers=self.auth_headers, json={
+            'document': device_hash, 'progress': '/body/DocFragment[5]/body/p[3].0',
+            'percentage': new_pct, 'device': 'hitv205n', 'device_id': 'HITV205N',
+        })
+
+    def test_a_position_saved_before_the_match_cannot_rewind_the_book(self):
+        """The copy's own 1.64% predates the match; the book is at 29%."""
+        device_hash = self._catalog_title_book()
+        self._book_state("struggle-1", 0.29)
+
+        self._put_own_position(device_hash, 0.0164, 0.0170)
+
+        self.assertEqual(self.db.get_kosync_document(device_hash).linked_abs_id, "struggle-1")
+        state = self.db.get_state("struggle-1", "kosync", user_id=self.user_id)
+        self.assertAlmostEqual(float(state.percentage), 0.29)
+        body = self.client.get(f'/syncs/progress/{device_hash}', headers=self.auth_headers).get_json()
+        self.assertAlmostEqual(float(body['percentage']), 0.29)
+
+    def test_the_furthest_wins_gate_and_the_link_use_one_match(self):
+        """The catalog titles load in the background, so a second lookup in the same
+        PUT can match where the gate's lookup did not, and must not link a push the gate didn't check."""
+        device_hash = self._catalog_title_book()
+        self._book_state("struggle-1", 0.29)
+        book = self.db.get_book("struggle-1")
+        lookups = iter([None, book])
+        resolve = patch.object(
+            kosync_server, "_resolve_book_by_sibling_hash", side_effect=lambda *a, **k: next(lookups, book),
+        )
+        resolve.start()
+        self.addCleanup(resolve.stop)
+
+        self._put_own_position(device_hash, 0.0164, 0.0170)
+
+        state = self.db.get_state("struggle-1", "kosync", user_id=self.user_id)
+        self.assertAlmostEqual(float(state.percentage), 0.29)
+
+    def _push(self, device_hash, pct):
+        return self.client.put('/syncs/progress', headers=self.auth_headers, json={
+            'document': device_hash, 'progress': '/body/DocFragment[5]/body/p[3].0',
+            'percentage': pct, 'device': 'hitv205n', 'device_id': 'HITV205N',
+        })
+
+    def _book_pct(self):
+        return float(self.db.get_state("struggle-1", "kosync", user_id=self.user_id).percentage)
+
+    def test_opening_a_matched_copy_is_answered_with_the_books_position(self):
+        device_hash = self._catalog_title_book()
+        self._book_state("struggle-1", 0.29)
+        self.db.save_kosync_document(KosyncDocument(document_hash=device_hash, user_id=self.user_id))
+        self.db.upsert_user_kosync_progress(
+            device_hash, 0.0164, progress="/body/DocFragment[5]/body/p[2]/text().0",
+            device="hitv205n", device_id="HITV205N", user_id=self.user_id,
+        )
+
+        body = self.client.get(f'/syncs/progress/{device_hash}', headers=self.auth_headers).get_json()
+
+        self.assertAlmostEqual(float(body['percentage']), 0.29)
+        self.assertEqual(self.db.get_kosync_document(device_hash).linked_abs_id, "struggle-1")
+
+    def test_pushes_before_the_copy_is_sent_the_books_position_cannot_rewind_it(self):
+        device_hash = self._catalog_title_book()
+        self._book_state("struggle-1", 0.29)
+
+        self._put_own_position(device_hash, 0.0164, 0.0170)
+        self._push(device_hash, 0.0175)
+        self._push(device_hash, 0.0180)
+
+        self.assertAlmostEqual(self._book_pct(), 0.29)
+        body = self.client.get(f'/syncs/progress/{device_hash}', headers=self.auth_headers).get_json()
+        self.assertAlmostEqual(float(body['percentage']), 0.29)
+
+    def test_reading_back_after_the_books_position_was_sent_still_counts(self):
+        device_hash = self._catalog_title_book()
+        self._book_state("struggle-1", 0.29)
+        self._put_own_position(device_hash, 0.0164, 0.0170)
+        self.client.get(f'/syncs/progress/{device_hash}', headers=self.auth_headers)
+
+        self._push(device_hash, 0.0175)
+        self._push(device_hash, 0.0180)
+
+        self.assertLess(self._book_pct(), 0.29)
+
+    def test_what_a_copy_was_sent_is_kept_for_its_own_reader_only(self):
+        device_hash = self._catalog_title_book()
+        self._book_state("struggle-1", 0.29)
+        self._put_own_position(device_hash, 0.0164, 0.0170)
+
+        self.client.get(f'/syncs/progress/{device_hash}', headers=self.auth_headers)
+
+        self.assertAlmostEqual(kosync_server._last_book_position_sent(self.user_id, device_hash), 0.29)
+        self.assertIsNone(kosync_server._last_book_position_sent(self._other_user_id(), device_hash))
+
+    def test_a_get_that_sends_no_position_keeps_the_copy_held(self):
+        """A book position with no locator answers 404, which sends the copy nothing."""
+        device_hash = self._catalog_title_book()
+        self.db.save_state(State(
+            abs_id="struggle-1", client_name="kosync", percentage=0.29, timestamp=1, last_updated=1,
+            xpath="", user_id=self.user_id,
+        ))
+        self._put_own_position(device_hash, 0.0164, 0.0170)
+
+        response = self.client.get(f'/syncs/progress/{device_hash}', headers=self.auth_headers)
+        self._push(device_hash, 0.0175)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIsNone(kosync_server._last_book_position_sent(self.user_id, device_hash))
+        self.assertAlmostEqual(self._book_pct(), 0.29)
+
+    def test_the_bridges_own_push_to_a_held_copy_is_not_held(self):
+        device_hash = self._catalog_title_book()
+        self._book_state("struggle-1", 0.29)
+        self._put_own_position(device_hash, 0.0164, 0.0170)
+
+        self.client.put('/syncs/progress', headers=self.auth_headers, json={
+            'document': device_hash, 'progress': '/body/DocFragment[5]/body/p[900].0',
+            'percentage': 0.20, 'device': 'abs-sync-bot', 'device_id': 'abs-sync-bot',
+        })
+
+        self.assertAlmostEqual(float(self.db.get_kosync_document(device_hash).percentage), 0.20)
+
+    def test_a_held_push_leaves_another_readers_position_alone(self):
+        device_hash = self._catalog_title_book()
+        other = self._other_user_id()
+        self.db.link_user_book(other, "struggle-1")
+        self._book_state("struggle-1", 0.29)
+        self.db.save_state(State(
+            abs_id="struggle-1", client_name="kosync", percentage=0.50, timestamp=1, last_updated=1,
+            xpath="/body/DocFragment[9]/body/p[1].0", user_id=other,
+        ))
+
+        self._put_own_position(device_hash, 0.0164, 0.0170)
+
+        self.assertAlmostEqual(self._book_pct(), 0.29)
+        theirs = self.db.get_state("struggle-1", "kosync", user_id=other)
+        self.assertAlmostEqual(float(theirs.percentage), 0.50)
+        self.assertIsNone(self.db.get_user_kosync_progress(device_hash, other))
+
+    def test_a_copy_ahead_of_the_book_still_advances_it_when_it_matches(self):
+        device_hash = self._catalog_title_book()
+        self._book_state("struggle-1", 0.01)
+
+        self._put_own_position(device_hash, 0.02, 0.03)
+
+        self.assertEqual(self.db.get_kosync_document(device_hash).linked_abs_id, "struggle-1")
+        state = self.db.get_state("struggle-1", "kosync", user_id=self.user_id)
+        self.assertAlmostEqual(float(state.percentage), 0.03)
 
 
 if __name__ == "__main__":

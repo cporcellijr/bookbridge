@@ -519,9 +519,41 @@ StoryGraph notes:
   reflowable ebook or audiobook. Books without a page count continue using
   percent.
 
+#### Goodreads
+
+Goodreads is a **write-only tracker**, like Hardcover and StoryGraph: it receives your
+progress, page count and finished books, and never leads a sync. It is **off by default**.
+
+Goodreads has no public API, so BookBridge works through your own signed-in Goodreads
+session. Its progress updates appear in your Goodreads feed like ones you post yourself.
+Goodreads' terms don't allow automated access and its pages can change, so updates may
+stop working until BookBridge is updated.
+
+| Setting | Key | Default | Description |
+|---|---|---|---|
+| Enable | `GOODREADS_ENABLED` | `false` | Turns on Goodreads updates. |
+| Browser URL | `GOODREADS_BROWSER_URL` | empty | WebDriver address of a Chrome that is signed in to Goodreads (recommended). |
+| Session Cookie | `GOODREADS_SESSION_COOKIE` | empty | Your Goodreads `Cookie` header, for use without a browser. |
+| Cookie Refresher URL | `GOODREADS_COOKIE_REFRESH_URL` | empty | Address of a [goodreads-cookie-refresher](https://github.com/Lyfts/goodreads-cookie-refresher) service. |
+| Cookie Refresher Token | `GOODREADS_COOKIE_REFRESH_TOKEN` | empty | That service's `AUTH_TOKEN`, if set. |
+| Update Cooldown (minutes) | `GOODREADS_UPDATE_COOLDOWN_MINS` | `60` | Global. Same meaning as StoryGraph's cooldown. |
+
+Goodreads notes:
+
+- **Recommended: a signed-in browser.** Goodreads often blocks plain HTTP requests as a bot.
+  Run a `selenium/standalone-chrome` container on the same Docker network as BookBridge
+  (give it `shm_size: 2gb`), open its noVNC view (port 7900) once, sign in to Goodreads,
+  and leave that tab open. Set **Browser URL** to its internal address, for example
+  `http://selenium:4444`. Keep port 4444 off your host ports: that browser is signed in as you.
+  Each Goodreads account needs its own browser.
+- **Without a browser**, paste your Goodreads `Cookie` header as **Session Cookie**. This needs no
+  extra container but is the least reliable option.
+- Books are matched by ISBN, ASIN or title and author, and you can pick the edition from the
+  book's page.
+
 #### Progress Trackers
 
-Hardcover and StoryGraph are independent - enable either or both on their cards in
+Hardcover, StoryGraph and Goodreads are independent - enable any of them on their cards in
 **Settings -> Services**. Each reader then picks which they use, and supplies their own
 token/cookies, under **Account -> My Integrations**. Admins can also manage those values under
 **Settings -> Users -> Integrations**.

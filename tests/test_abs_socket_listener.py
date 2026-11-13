@@ -398,6 +398,8 @@ class TestKosyncPutInstantSync(unittest.TestCase):
 
         mock_db = MagicMock()
         mock_db.get_user_kosync_progress.return_value = None
+        # No KoSync State yet: a bare MagicMock State reads as 100% and holds the push.
+        mock_db.get_state.return_value = None
         original_db = ks._database_service
         ks._database_service = mock_db
         original_manager = ks._manager

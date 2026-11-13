@@ -1,3 +1,4 @@
+<script src="{{ url_for('static', filename='js/acquisition_jobs.js') }}" defer></script>
 {% if queue_view['running'] %}
 <script>
 (function () {
@@ -8,7 +9,14 @@
         });
     });
     window.setInterval(function () {
-        if (document.hidden || reorderSubmitting) return;
+        const active = document.activeElement;
+        const editing = active && (
+            ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)
+            || active.isContentEditable
+            || !!active.closest('[data-acquisition-editor]')
+            || !!active.closest('#acquisition-jobs')
+        );
+        if (document.hidden || reorderSubmitting || editing || window.acquisitionJobActionActive || window.acquisitionJobEditorActive) return;
         window.location.reload();
     }, 20000);
 })();

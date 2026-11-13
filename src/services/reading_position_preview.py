@@ -24,7 +24,7 @@ _AUDIO_CLIENTS = {"abs", "bookloreaudio", "bookorbitaudio"}
 # Write-only trackers never lead a sync, and the percentage stored against them is
 # an echo of what BookBridge last pushed there — never an observed reading
 # position. They must not be offered as the source of a preview.
-_WRITE_ONLY_CLIENTS = {"hardcover", "storygraph"}
+_WRITE_ONLY_CLIENTS = {"hardcover", "storygraph", "goodreads"}
 _SOURCE_LABELS = {
     "abs": "Audiobookshelf",
     "absebook": "Audiobookshelf (ebook)",

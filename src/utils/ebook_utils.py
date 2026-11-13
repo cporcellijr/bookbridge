@@ -402,13 +402,11 @@ class EbookParser:
                 ids.add(norm)
         return ids
 
-    def get_book_authors(self, filepath) -> list[str]:
-        """Return the authors among an EPUB's dc:creators in package order, or [] if unreadable.
+    def _read_package_document(self, filepath, purpose: str):
+        """Return an EPUB's parsed package document, or None if it can't be read.
 
-        A creator whose role (EPUB 2 ``opf:role`` or an EPUB 3 ``refines`` meta) is
-        not ``aut`` is skipped, unless no creator is an author. Reads only the
-        container and the package document, not the whole book, because filename
-        matching calls this for every library book.
+        Reads only the container and the package document, not the whole book,
+        because filename matching calls this for every library book.
         """
         import xml.etree.ElementTree as ElementTree
 
@@ -417,7 +415,7 @@ class EbookParser:
             try:
                 path = self.resolve_book_path(str(path))
             except FileNotFoundError:
-                return []
+                return None
         try:
             with zipfile.ZipFile(path) as archive:
                 container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
@@ -425,10 +423,30 @@ class EbookParser:
                     (el for el in container.iter() if el.tag.rsplit("}", 1)[-1] == "rootfile"), None
                 )
                 if rootfile is None or not rootfile.get("full-path"):
-                    return []
-                package = ElementTree.fromstring(archive.read(rootfile.get("full-path")))
+                    return None
+                return ElementTree.fromstring(archive.read(rootfile.get("full-path")))
         except Exception as e:
-            logger.debug(f"Could not read authors for '{path}': {e}")
+            logger.debug(f"Could not read {purpose} for '{path}': {e}")
+            return None
+
+    def get_book_title(self, filepath) -> str:
+        """Return an EPUB's first non-empty dc:title, or "" if unreadable."""
+        package = self._read_package_document(filepath, "title")
+        if package is None:
+            return ""
+        for el in package.iter():
+            if el.tag == "{http://purl.org/dc/elements/1.1/}title" and el.text and el.text.strip():
+                return el.text.strip()
+        return ""
+
+    def get_book_authors(self, filepath) -> list[str]:
+        """Return the authors among an EPUB's dc:creators in package order, or [] if unreadable.
+
+        A creator whose role (EPUB 2 ``opf:role`` or an EPUB 3 ``refines`` meta) is
+        not ``aut`` is skipped, unless no creator is an author.
+        """
+        package = self._read_package_document(filepath, "authors")
+        if package is None:
             return []
         refined_roles = {
             el.get("refines")[1:]: (el.text or "").strip().lower()

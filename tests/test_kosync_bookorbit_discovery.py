@@ -44,6 +44,7 @@ class TestBookOrbitDiscovery(unittest.TestCase):
 
         self.bookorbit = MagicMock()
         self.bookorbit.is_configured.return_value = True
+        self.bookorbit.get_all_books.return_value = []
         self.parser = MagicMock()
 
         container = MagicMock()
@@ -146,6 +147,41 @@ class TestBookOrbitDiscovery(unittest.TestCase):
         result = kosync_server._scan_bookorbit_for_hash("want")
 
         self.assertEqual(result, "b.epub")
+
+    def test_unmatched_catalog_book_is_discovered(self):
+        self.db.get_books_by_status.return_value = []
+        self.bookorbit.get_all_books.return_value = [{"id": 42, "kind": "ebook"}]
+        self.bookorbit._enrich_ebook.return_value = {"id": 42, "fileName": "new.epub"}
+        self.bookorbit.download_book.return_value = b"NEW"
+        self.parser.get_kosync_id_from_bytes.return_value = "want"
+
+        self.assertEqual(kosync_server._scan_bookorbit_for_hash("want"), "new.epub")
+        self.bookorbit.download_book.assert_called_once_with("42")
+
+    def test_catalog_scan_keeps_budget_and_skips_tracked_ids_and_audio(self):
+        os.environ[self.KEY] = "2"
+        self.db.get_books_by_status.return_value = [_book("a", "bookorbit", "1", "a.epub")]
+        self.bookorbit.get_all_books.return_value = [
+            {"id": 1, "kind": "ebook"}, {"id": 2, "kind": "audiobook"},
+            {"id": 3, "kinds": ["ebook", "audiobook"]}, {"id": 4, "kind": "ebook"},
+        ]
+        self.bookorbit._enrich_ebook.return_value = {"id": 3, "fileName": "3.epub"}
+        self.bookorbit.download_book.return_value = b"MISS"
+        self.parser.get_kosync_id_from_bytes.return_value = "other"
+
+        self.assertIsNone(kosync_server._scan_bookorbit_for_hash("want"))
+        self.assertEqual(self.bookorbit.download_book.call_count, 2)
+        self.bookorbit._enrich_ebook.assert_called_once_with(3, {"id": 3, "kinds": ["ebook", "audiobook"]})
+
+    def test_failed_downloads_also_spend_budget(self):
+        os.environ[self.KEY] = "1"
+        self.db.get_books_by_status.return_value = [
+            _book("a", "bookorbit", "1", "a.epub"),
+            _book("b", "bookorbit", "2", "b.epub"),
+        ]
+        self.bookorbit.download_book.side_effect = RuntimeError("offline")
+        self.assertIsNone(kosync_server._scan_bookorbit_for_hash("want"))
+        self.bookorbit.download_book.assert_called_once()
 
 
 if __name__ == "__main__":

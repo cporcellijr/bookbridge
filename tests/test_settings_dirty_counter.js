@@ -22,16 +22,18 @@ for (const field of fields) {
 }
 const note = { style: {}, textContent: '' };
 const windowHandlers = {};
-// The settings form plus the chrome's Classic/New switch form (a separate form that saves nothing).
+// The settings form plus an unrelated settings-page action form.
 const makeForm = cls => ({ cls, handlers: {}, addEventListener(name, handler) { this.handlers[name] = handler; } });
 const settingsForm = makeForm('settings-form');
-const switchForm = makeForm('nav-interface-form');
+const secondaryForm = makeForm('secondary-form');
 const context = vm.createContext({
     document: {
         getElementById: () => note,
-        querySelectorAll: selector => selector.startsWith('form')
-            ? [settingsForm, switchForm].filter(f => !selector.includes(':not(.' + f.cls + ')'))
-            : fields,
+        querySelectorAll: selector => {
+            if (selector === 'form') return [settingsForm, secondaryForm];
+            if (selector.startsWith('form')) throw new Error('Unexpected form selector: ' + selector);
+            return fields;
+        },
     },
     window: { addEventListener: (name, handler) => { windowHandlers[name] = handler; } },
 });
@@ -57,9 +59,8 @@ checkbox.checked = true;
 checkbox.handlers.change();
 assert.equal(note.textContent, '1 unsaved change');
 assert.ok(warning());
-// Submitting the interface switch must not clear the warning (P14 #2); a settings save does.
-if (switchForm.handlers.submit) switchForm.handlers.submit();
-assert.ok(warning());
+// Every remaining form is a real save/action and must clear dirty state on submit.
+assert.ok(secondaryForm.handlers.submit);
 assert.ok(settingsForm.handlers.submit);
 text.value = 'ru';
 text.handlers.input();
@@ -79,6 +80,13 @@ select.handlers.change();
 assert.equal(warning(), undefined);
 assert.equal(picker.handlers.change, undefined);
 assert.equal(hidden.handlers.input, undefined);
+text.value = 'changed';
+text.handlers.input();
+assert.ok(warning());
+secondaryForm.handlers.submit();
+assert.equal(warning(), undefined);
+text.value = '';
+text.handlers.input();
 
 // Shelf pickers update the actual saved input without a native input event.
 const pickerStart = html.indexOf('function applyShelfPickerSelection(');

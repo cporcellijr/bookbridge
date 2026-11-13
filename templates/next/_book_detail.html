@@ -10,7 +10,7 @@
     'failed_retry_later': pgettext('book state', 'failed_retry_later'),
     'failed_permanent': pgettext('book state', 'failed_permanent')
 }.get(mapping.status, mapping.status) %}
-{% set app_labels = {'abs': _('Audiobookshelf'), 'absebook': _('Audiobookshelf Ebook'), 'kosync': _('KoSync'), 'storyteller': _('Storyteller'), 'booklore': _('Grimmory'), 'bookloreaudio': _('Grimmory Audio'), 'bookorbit': _('BookOrbit'), 'bookorbitaudio': _('BookOrbit Audio'), 'kavita': _('Kavita'), 'cwa': _('CWA Kobo Sync'), 'hardcover': _('Hardcover'), 'storygraph': _('StoryGraph'), 'bookfusion': _('BookFusion')} %}
+{% set app_labels = {'abs': _('Audiobookshelf'), 'absebook': _('Audiobookshelf Ebook'), 'kosync': _('KoSync'), 'storyteller': _('Storyteller'), 'booklore': _('Grimmory'), 'bookloreaudio': _('Grimmory Audio'), 'bookorbit': _('BookOrbit'), 'bookorbitaudio': _('BookOrbit Audio'), 'kavita': _('Kavita'), 'cwa': _('CWA Kobo Sync'), 'hardcover': _('Hardcover'), 'storygraph': _('StoryGraph'), 'goodreads': _('Goodreads'), 'bookfusion': _('BookFusion')} %}
 {% macro app(key, label, url=none, tracker=false, action=none, linked=false) %}
 {% if integrations.get(key) %}
 {% set state = mapping.states.get(key, {}) %}
@@ -41,6 +41,7 @@
 <span class="ctc-alignment-badge" {% if not mapping.ctc_aligned %}hidden{% endif %}>{{ _('CTC') }}</span><span class="readalong-badge" {% if not mapping.readalong_ready %}hidden{% endif %}>{{ _('Read-along EPUB ready') }}</span>
 {% for source, label in [('storygraph', _('StoryGraph')), ('goodreads', _('Goodreads'))] %}{% if mapping.get(source ~ '_rating') is not none %}{% call chip(mapping.get(source ~ '_url')) %}{{ label }} {{ mapping.get(source ~ '_rating') }}{% if mapping.get(source ~ '_review_count') %} · {{ ngettext('%(num)s review', '%(num)s reviews', mapping.get(source ~ '_review_count'), num=mapping.get(source ~ '_review_count')) }}{% endif %}{% endcall %}{% endif %}{% endfor %}</div>
 </div></header>
+<section class="book-section book-about" data-book-about{% if not synopsis %} data-synopsis-url="/api/book/{{ mapping.abs_id|urlencode }}/synopsis" hidden{% endif %}><h2>{{ _('About this book') }}</h2><p class="book-about-text is-clamped" data-about-text>{{ synopsis or '' }}</p><button type="button" class="book-about-toggle" data-about-toggle aria-expanded="false" data-more="{{ _('More') }}" data-less="{{ _('Less') }}" hidden>{{ _('More') }}</button></section>
 <section class="book-section"><h2>{{ _('Where you are') }}</h2><div class="book-thread" aria-label="{{ _('App positions') }}">{% for key,state in mapping.states.items() %}<span style="--position:{{ state.percentage }}%" title="{{ app_labels.get(key,key) }} {{ state.percentage }}%">{{ app_labels.get(key,key) }} {{ state.percentage }}%</span>{% endfor %}</div>
 <progress max="100" value="{{ mapping.unified_progress }}">{{ mapping.unified_progress }}%</progress><p class="your-place">{{ '%.1f'|format(mapping.unified_progress) }}%{% if mapping.last_leader_service %} · {{ _('Last: %(app)s', app=app_labels.get(mapping.last_leader_service, mapping.last_leader)) }}{% endif %}</p>
 {% if mapping.is_out_of_sync %}<p class="sync-warning">{{ _('Out of sync by %(pct)s%%', pct=mapping.sync_warning_pct) }}</p>{% endif %}
@@ -69,6 +70,7 @@
 {% if mapping.states.cwa is defined or mapping.ebook_source == 'CWA' %}{{ app('cwa', _('CWA Kobo Sync'), get_user_val('CWA_WEB_URL') or get_user_val('CWA_SERVER')) }}{% endif %}
 {{ app('hardcover', _('Hardcover'), mapping.hardcover_url, true, 'linkHardcover', mapping.hardcover_book_id) }}
 {{ app('storygraph', _('StoryGraph'), mapping.storygraph_url, true, 'linkStorygraph', mapping.storygraph_book_id) }}
+{{ app('goodreads', _('Goodreads'), mapping.goodreads_url, true, 'linkGoodreads', mapping.goodreads_book_id) }}
 {{ app('bookfusion', _('BookFusion'), 'https://www.bookfusion.com', true, 'linkBookFusion', mapping.bookfusion_linked) }}
 </section>
 <section class="book-section"><h2>{{ _('Recent syncs') }}</h2><p>{{ _('Synced %(when)s', when=mapping.last_sync) }}</p>

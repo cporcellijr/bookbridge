@@ -2,6 +2,7 @@
         const TEST_URL_BASE = {{ url_for('admin_user_test_connection', user_id=target_user.id, service='__service__')|tojson }};
         const ABS_LIB_URL = {{ url_for('admin_user_abs_libraries', user_id=target_user.id)|tojson }};
         const BOOKLORE_LIB_URL = {{ url_for('admin_user_booklore_libraries', user_id=target_user.id)|tojson }};
+        const SCAN_LIB_URL = {{ url_for('admin_user_bookorbit_scan_libraries', user_id=target_user.id)|tojson }};
         const BF_DEVICE_START_URL = {{ url_for('admin_user_bookfusion_device_start', user_id=target_user.id)|tojson }};
         const BF_DEVICE_POLL_URL = {{ url_for('admin_user_bookfusion_device_poll', user_id=target_user.id)|tojson }};
 
@@ -51,6 +52,39 @@
                     .catch(err => { status.textContent = bbFormat({{ _('BookFusion token poll failed: {error}')|tojson }}, { error: err }); });
             }, intervalSeconds * 1000);
         }
+
+        function loadScanLibraries(button) {
+            const picker = document.querySelector('[data-scan-library-picker]');
+            if (!picker) return;
+            const original = button ? button.textContent : '';
+            if (button) { button.disabled = true; button.textContent = '...'; }
+            const selected = picker.value;
+            fetch(SCAN_LIB_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectIntegrationPayload())
+            })
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok || !Array.isArray(data)) throw new Error(data.error || 'Library lookup unavailable');
+                    picker.replaceChildren(new Option({{ _('Normal scheduled scanning')|tojson }}, ''));
+                    data.forEach(lib => {
+                        picker.add(new Option((lib.name || lib.id) + ' (' + lib.id + ')', String(lib.id)));
+                    });
+                    if (selected && !data.some(lib => String(lib.id) === selected)) {
+                        picker.add(new Option({{ _('Saved library no longer accessible')|tojson }} + ' (' + selected + ')', selected));
+                    }
+                    picker.value = selected;
+                })
+                .catch(err => { if (button) alert(err.message); })
+                .finally(() => {
+                    if (button) { button.disabled = false; button.textContent = original; }
+                });
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            const picker = document.querySelector('[data-scan-library-picker]');
+            if (picker && picker.value) loadScanLibraries(null);
+        });
 
         function toggleIntegrationGroup(toggle) {
             const body = document.getElementById(toggle.dataset.bodyId || '');

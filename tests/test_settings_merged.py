@@ -89,7 +89,7 @@ class TestMergedValues(unittest.TestCase):
     def test_shortest_highlight_interval_and_longest_cooldown(self):
         values = merged_setting_values({**DEFAULT_CONFIG, 'READEST_ANNOTATION_SYNC_MINUTES': '5',
                                         'HARDCOVER_ANNOTATION_SYNC_MINUTES': '0',
-                                        'STORYGRAPH_UPDATE_COOLDOWN_MINS': '240'})
+                                        'GOODREADS_UPDATE_COOLDOWN_MINS': '240'})
         self.assertEqual(values['ALL_APPS_ANNOTATION_SYNC_MINUTES'], '5')
         self.assertEqual(values['ALL_APPS_TRACKER_COOLDOWN_MINS'], '240')
 

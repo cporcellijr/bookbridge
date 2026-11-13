@@ -187,3 +187,47 @@ class TestReadalongAskedOnceAtMatchAll(unittest.TestCase):
         for panel in ('_match_queue_panel.html', 'next/_match_queue_panel.html'):
             with self.subTest(panel=panel):
                 self.assertIn('id="queueReadalongCheckbox"', (root / panel).read_text(encoding='utf-8'))
+
+
+class TestNewDialogStyling(unittest.TestCase):
+    """The New view supplies its own dialog visuals without overriding visibility."""
+
+    def test_new_interface_styles_its_own_dialogs(self):
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('.view .modal-overlay {', css)
+        self.assertIn('.view .modal {', css)
+        self.assertIn('.view #acqModal .modal:has(#acqReleases:not([hidden]))', css)
+
+    def test_overlay_rule_never_forces_display(self):
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        for line in css.splitlines():
+            if line.strip().startswith('.view .modal-overlay'):
+                self.assertNotIn('display', line)
+
+
+class TestDiscoverPhoneFilters(unittest.TestCase):
+    """Discover keeps phone filters collapsed behind a visible control."""
+
+    def test_filters_fold_behind_a_button_on_phones(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/next/suggestions.html').read_text(encoding='utf-8')
+        css = (root / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('id="discoverFiltersToggle"', template)
+        self.assertLess(template.index('id="searchInput"'), template.index('id="discoverFiltersToggle"'))
+        self.assertLess(template.index('id="discoverFiltersToggle"'), template.index('id="seriesFilter"'))
+        self.assertIn('.discover-page #filterBar:not(.open) > .filter-field:not(.grow)', css)
+        self.assertIn('.discover-page .discover-filters-toggle { display: none; }', css)
+
+
+class TestDiscoverPhoneQueueBar(unittest.TestCase):
+    """Phone Discover can reach the selected book and queued items without a long scroll."""
+
+    def test_queue_bar_and_row_scroll_are_available_on_phones(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/next/suggestions.html').read_text(encoding='utf-8')
+        css = (root / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('id="discoverQueueBar"', template)
+        self.assertLess(template.index('id="layout"'), template.index('id="discoverQueueBar"'))
+        self.assertIn('scrollIntoView', template)
+        self.assertIn('queueCount', template)
+        self.assertIn('.discover-queue-bar:not([hidden]) { position: fixed;', css)

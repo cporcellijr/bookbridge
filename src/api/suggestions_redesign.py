@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from typing import Any, Optional
 
@@ -82,6 +83,21 @@ def init_suggestions_redesign_routes(app: Any, web_module: Any = None) -> None:
     )
 
 
+def _series_index_value(value: Any) -> Optional[int | float]:
+    """Preserve a finite series sequence in the JSON result without rounding."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return int(number) if number.is_integer() else number
+
+
 def suggestions_search():
     """Search audiobooks, ebooks and Storyteller for the Suggestions Search tab."""
     web = _web_server()
@@ -113,6 +129,8 @@ def suggestions_search():
                 "title": ab.title or "",
                 "subtitle": ab.subtitle or "",
                 "series_label": ab.series_label or "",
+                "series_name": getattr(ab, "series_name", None) or "",
+                "series_index": _series_index_value(getattr(ab, "series_sequence", None)),
                 "authors": ab.authors or "",
                 "language": ab.language or "",
                 "cover_url": web._browser_cover_url(
@@ -131,6 +149,8 @@ def suggestions_search():
                 "title": eb.title or "",
                 "subtitle": eb.subtitle or "",
                 "authors": eb.authors or "",
+                "series_name": getattr(eb, "series_name", None) or "",
+                "series_index": _series_index_value(getattr(eb, "series_sequence", None)),
                 "source": eb.source or "",
                 "source_id": "" if eb.source_id is None else str(eb.source_id),
                 "path": str(eb.path) if eb.path else "",

@@ -14,7 +14,7 @@ import sys
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.utils.kosync_headers import KOSYNC_ACCEPT, hash_kosync_key
+from src.utils.kosync_headers import BRIDGE_INTERNAL_HEADER, KOSYNC_ACCEPT, hash_kosync_key
 
 
 def _http_response(status_code, payload=None, text="", headers=None):
@@ -85,6 +85,10 @@ class MockContainer:
 
     def user_client_registry(self):
         return self.mock_user_client_registry
+
+    def acquisition_service(self):
+        from src.services.acquisition_service import AcquisitionService
+        return AcquisitionService(self.mock_database_service, Mock())
 
     def sync_clients(self):
         """Return mock sync clients for integrations."""
@@ -158,6 +162,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_storygraph_details.return_value = []
+        self.mock_database_service.get_all_goodreads_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_reading_stats.return_value = {}
         self.mock_database_service.get_booklore_book.return_value = None
@@ -207,6 +212,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         cwa=False,
         hardcover=False,
         storygraph=False,
+        goodreads=False,
     ):
         clients_dict = {
             'ABS': Mock(is_configured=Mock(return_value=True)),
@@ -217,6 +223,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             'CWA': Mock(is_configured=Mock(return_value=cwa)),
             'Hardcover': Mock(is_configured=Mock(return_value=hardcover)),
             'StoryGraph': Mock(is_configured=Mock(return_value=storygraph)),
+            'Goodreads': Mock(is_configured=Mock(return_value=goodreads)),
         }
         self.mock_container.mock_sync_clients.items.return_value = clients_dict.items()
 
@@ -409,6 +416,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_hardcover_details.return_value = None
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_storygraph_details.return_value = []
+        self.mock_database_service.get_all_goodreads_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
 
         # Mock the sync_clients call for integrations
@@ -1604,6 +1612,33 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(mapping['goodreads_review_count'], 3456)
         self.mock_storygraph_client.get_book_rating.assert_not_called()
 
+    def test_index_endpoint_prefers_linked_goodreads_rating(self):
+        from src.db.models import Book, BookloreBook, GoodreadsDetails
+
+        self.mock_database_service.get_all_books.return_value = [
+            Book(abs_id='ratings-linked', abs_title='Linked Ratings', ebook_filename='linked.epub', status='active')
+        ]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = [
+            BookloreBook(filename='linked.epub', raw_metadata=json.dumps({
+                'metadata': {'goodreadsRating': 4.12, 'goodreadsReviewCount': 3456}
+            }))
+        ]
+        self.mock_database_service.get_all_goodreads_details.return_value = [
+            GoodreadsDetails(
+                abs_id='ratings-linked', goodreads_book_id='123',
+                goodreads_url='https://www.goodreads.com/book/show/123',
+                goodreads_rating=4.73, goodreads_review_count=None,
+            )
+        ]
+        self.mock_booklore_client.is_configured.return_value = False
+        self._set_dashboard_integrations(storygraph=False)
+
+        mapping = self._capture_index_mapping()
+
+        self.assertEqual(mapping['goodreads_rating'], 4.73)
+        self.assertEqual(mapping['goodreads_review_count'], 3456)
+
     def test_index_template_renders_rating_badges_under_cover(self):
         from src.db.models import Book, BookloreBook, StorygraphDetails
 
@@ -2300,7 +2335,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
     @patch('src.web_server.requests.get')
     def test_test_connection_kosync_supports_cwa_basic_auth(self, mock_get):
         def fake_get(url, headers=None, auth=None, timeout=None):
-            self.assertEqual(headers, {'accept': KOSYNC_ACCEPT})
+            self.assertEqual(headers, {'accept': KOSYNC_ACCEPT, BRIDGE_INTERNAL_HEADER: '1'})
             self.assertEqual(auth, ('reader', 'cwa-password'))
             self.assertEqual(timeout, 5)
             if url == 'https://cwa.example/kosync/healthcheck':
@@ -2630,6 +2665,27 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('StoryGraph', html)
         self.assertIn('linkStorygraph(event)', html)
         self.assertIn('https://app.thestorygraph.com/books/sg-1', html)
+
+    def test_goodreads_card_renders_saved_link_and_progress(self):
+        from src.db.models import Book, GoodreadsDetails, State
+
+        self._set_dashboard_integrations(goodreads=True)
+        self.mock_database_service.get_all_books.return_value = [
+            Book(abs_id='abs-goodreads-1', abs_title='Goodreads Book', ebook_filename='book.epub')
+        ]
+        self.mock_database_service.get_all_states.return_value = [
+            State(abs_id='abs-goodreads-1', client_name='goodreads', percentage=0.42, last_updated=1)
+        ]
+        self.mock_database_service.get_all_goodreads_details.return_value = [
+            GoodreadsDetails('abs-goodreads-1', '123', 'https://www.goodreads.com/book/show/123')
+        ]
+
+        html = self._render_index_template_source()
+
+        self.assertIn('Goodreads', html)
+        self.assertIn('linkGoodreads(event)', html)
+        self.assertIn('https://www.goodreads.com/book/show/123', html)
+        self.assertIn('42%', html)
 
     def test_api_storygraph_resolve_uses_abs_metadata(self):
         from src.db.models import Book

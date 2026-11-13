@@ -1,0 +1,139 @@
+{% extends 'next/base.html' %}
+{% from 'next/_library_cards.html' import render_card, render_series with context %}
+{% set active_page = 'display' %}
+{% block title %}{{ _('Display') }} · BookBridge{% endblock %}
+{% macro segmented(key, values, current, label) %}
+<div class="display-segment" role="group" aria-label="{{ label }}">
+    {% for value, name in values %}<button type="submit" name="{{ key }}" value="{{ value }}" data-display-value="{{ value }}" aria-pressed="{{ 'true' if current == value else 'false' }}">{{ name }}</button>{% endfor %}
+</div>
+{% endmacro %}
+{% macro cover_switch(key, name, current, help_text='') %}
+<form class="account-cover-toggle-form display-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="{{ key }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="{{ key }}" value="false">
+    <label class="display-label" for="display-switch-{{ key|lower }}"><strong>{{ name }}</strong>{% if help_text %}<small>{{ help_text }}</small>{% endif %}</label>
+    <input id="display-switch-{{ key|lower }}" class="display-switch" type="checkbox" name="{{ key }}" value="true" role="switch" aria-checked="{{ 'true' if current == 'true' else 'false' }}" {% if current == 'true' %}checked{% endif %}>
+    <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
+</form>
+{% endmacro %}
+{% block content %}
+{% set display = display_settings() %}
+<div class="display-page">
+    <header class="display-heading">
+        <h1>{{ _('Display') }}</h1>
+        <p>{{ _('Changes save as you make them and follow you to every device you sign in on.') }}</p>
+    </header>
+    <div class="display-layout">
+        <aside class="display-preview" aria-label="{{ _('Your library preview') }}">
+            <div class="display-preview-head"><strong>{{ _('Your library') }}</strong><small>{{ _('Live preview') }}</small></div>
+            {% if preview_mappings %}
+            <div id="display-preview-stage" class="library-page" data-view="{{ {'spines': 'spines', 'faceout': 'spines', 'list': 'list'}.get(display.UI_LIBRARY_STYLE, 'covers') }}" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-series-on="{{ display.SERIES_SHOW_CURRENT_BOOK_DETAIL }}" data-select-mode="off" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}">
+                <div class="book-grid display-preview-flat">{% for mapping in preview_mappings %}{{ render_card(mapping, false) }}{% endfor %}</div>
+                <div class="book-grid display-preview-grouped">
+                    {% for entry in preview_groups %}{% if entry.is_series_group %}
+                    <div class="display-preview-series-off">{{ render_series(entry, false, 'preview-off-') }}</div>
+                    <div class="display-preview-series-on">{{ render_series(entry, true, 'preview-on-') }}</div>
+                    {% else %}{{ render_card(entry, false) }}{% endif %}{% endfor %}
+                </div>
+            </div>
+            {% else %}
+            <p class="display-empty">{{ _('Your library is empty. Add a book to see your own covers here.') }}</p>
+            {% endif %}
+        </aside>
+        <div class="display-settings">
+            <section class="display-group" data-display-group="interface" aria-labelledby="display-interface-title">
+                <header><h2 id="display-interface-title">{{ _('Interface') }}</h2></header>
+                <form class="account-interface-form display-row" method="POST" action="{{ url_for('account_interface', next=url_for('account_display_page')) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="display-label"><strong>{{ _('Look') }}</strong><small>{{ _('Classic is the original layout.') }}</small></div>
+                    {{ segmented('ui_mode', [('classic', _('Classic')), ('new', _('New'))], 'new', _('Interface')) }}
+                </form>
+            </section>
+            <section class="display-group" data-display-group="theme" aria-labelledby="display-theme-title">
+                <header><h2 id="display-theme-title">{{ _('Theme') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
+                <form class="account-theme-form display-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_THEME">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_THEME" value="{{ display.UI_THEME }}">
+                    <div class="display-label"><strong>{{ _('Theme') }}</strong><small>{{ _('The Day/Night button in the sidebar changes this too.') }}</small></div>
+                    {{ segmented('UI_THEME', [('auto', _('Follow device')), ('day', _('Day')), ('night', _('Night'))], display.UI_THEME, _('Theme')) }}
+                    <button class="display-fallback-save" type="submit">{{ _('Save theme') }}</button>
+                </form>
+                <form class="account-library-style-form display-row display-row-stacked" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_LIBRARY_STYLE">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_LIBRARY_STYLE" value="{{ display.UI_LIBRARY_STYLE }}">
+                    <div class="display-label"><strong>{{ _('Library style') }}</strong></div>
+                    <div class="display-style-tiles" role="group" aria-label="{{ _('Library style') }}">
+                        <button type="submit" name="UI_LIBRARY_STYLE" value="cards" data-display-value="cards" aria-pressed="{{ 'true' if display.UI_LIBRARY_STYLE == 'cards' else 'false' }}"><svg viewBox="0 0 80 34" aria-hidden="true"><rect x="4" y="2" width="20" height="28" rx="2"/><rect x="30" y="2" width="20" height="28" rx="2"/><rect x="56" y="2" width="20" height="28" rx="2"/></svg><span>{{ _('Cards') }}</span></button>
+                        <button type="submit" name="UI_LIBRARY_STYLE" value="faceout" data-display-value="faceout" aria-pressed="{{ 'true' if display.UI_LIBRARY_STYLE == 'faceout' else 'false' }}"><svg viewBox="0 0 80 34" aria-hidden="true"><rect x="6" y="3" width="18" height="24" rx="1"/><rect x="31" y="3" width="18" height="24" rx="1"/><rect x="56" y="3" width="18" height="24" rx="1"/><path d="M0 29h80v4H0z"/></svg><span>{{ _('Face-out shelves') }}</span></button>
+                        <button type="submit" name="UI_LIBRARY_STYLE" value="spines" data-display-value="spines" aria-pressed="{{ 'true' if display.UI_LIBRARY_STYLE == 'spines' else 'false' }}"><svg viewBox="0 0 80 34" aria-hidden="true"><path d="M7 6h7v23H7zM16 2h8v27h-8zM26 4h16v25H26zM45 7h8v22h-8zM55 2h8v27h-8zM65 5h7v24h-7zM0 29h80v4H0z"/></svg><span>{{ _('Spine shelves') }}</span></button>
+                        <button type="submit" name="UI_LIBRARY_STYLE" value="list" data-display-value="list" aria-pressed="{{ 'true' if display.UI_LIBRARY_STYLE == 'list' else 'false' }}"><svg viewBox="0 0 80 34" aria-hidden="true"><path d="M4 3h10v8H4zM4 14h10v8H4zM4 25h10v8H4zM20 5h54v4H20zM20 16h47v4H20zM20 27h51v4H20z"/></svg><span>{{ _('List') }}</span></button>
+                    </div>
+                    <button class="display-fallback-save" type="submit">{{ _('Save library style') }}</button>
+                </form>
+                <form class="account-shelf-finish-form display-row display-finish-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_SHELF_FINISH" {% if display.UI_LIBRARY_STYLE not in ('faceout', 'spines') %}hidden{% endif %}>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_SHELF_FINISH" value="{{ display.UI_SHELF_FINISH }}">
+                    <div class="display-label"><strong>{{ _('Shelf finish') }}</strong><small>{{ _('Shown only for the shelf styles.') }}</small></div>
+                    {{ segmented('UI_SHELF_FINISH', [('theme', _('Match theme')), ('wood', _('Wood')), ('dark', _('Dark')), ('plain', _('Plain'))], display.UI_SHELF_FINISH, _('Shelf finish')) }}
+                    <button class="display-fallback-save" type="submit">{{ _('Save shelf finish') }}</button>
+                </form>
+            </section>
+            <section class="display-group" data-display-group="covers" aria-labelledby="display-covers-title">
+                <header><h2 id="display-covers-title">{{ _('Book covers') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
+                {% set size = display.UI_COVER_SIZE|int %}
+                <form class="account-cover-size-form display-row display-size-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_COVER_SIZE" {% if display.UI_LIBRARY_STYLE in ('spines', 'list') %}hidden{% endif %}>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_COVER_SIZE" value="{{ size }}">
+                    <div class="display-label"><strong>{{ _('Cover size') }}</strong><small class="display-size-help" aria-live="polite">{{ _('4 per row on a phone') if size == 1 else _('3 per row on a phone') if size == 2 else _('2 per row on a phone') }}</small></div>
+                    <div class="display-size-stepper" role="group" aria-label="{{ _('Cover size') }}">
+                        <button type="submit" data-display-step="-1" name="UI_COVER_SIZE" value="{{ [1, size-1]|max }}" aria-label="{{ _('Smaller covers') }}" {% if size == 1 %}disabled{% endif %}>−</button>
+                        <span class="display-size-dots" aria-hidden="true">{% for n in range(1, 6) %}<span data-size-dot="{{ n }}" {% if n <= size %}class="is-active"{% endif %}></span>{% endfor %}</span>
+                        <button type="submit" data-display-step="1" name="UI_COVER_SIZE" value="{{ [5, size+1]|min }}" aria-label="{{ _('Bigger covers') }}" {% if size == 5 %}disabled{% endif %}>+</button>
+                    </div>
+                </form>
+                {{ cover_switch('UI_SHOW_PROGRESS', _('Progress'), display.UI_SHOW_PROGRESS, _("Percent and bar under books you're reading.")) }}
+                {{ cover_switch('UI_SHOW_FINISHED', _('Finished tick'), display.UI_SHOW_FINISHED) }}
+                {{ cover_switch('UI_SHOW_FORMAT_STRIP', _('Format strip'), display.UI_SHOW_FORMAT_STRIP, _('Ebook, audio and read-along icons on the cover.')) }}
+                {{ cover_switch('UI_SHOW_RATINGS', _('Rating stars'), display.UI_SHOW_RATINGS) }}
+                {{ cover_switch('UI_SHOW_TITLES', _('Title and author'), display.UI_SHOW_TITLES, _('Off gives a clean wall of covers.')) }}
+                <form class="account-series-form display-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="SERIES_SHOW_CURRENT_BOOK_DETAIL">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="false">
+                    <label class="display-label" for="display-series-switch"><strong>{{ _('Current book on series stacks') }}</strong><small>{{ _('Show the book you are reading, or the next unread book, on each series stack.') }}</small></label>
+                    <input id="display-series-switch" class="display-switch" type="checkbox" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true" role="switch" aria-checked="{{ 'true' if display.SERIES_SHOW_CURRENT_BOOK_DETAIL == 'true' else 'false' }}" {% if display.SERIES_SHOW_CURRENT_BOOK_DETAIL == 'true' %}checked{% endif %}>
+                    <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
+                </form>
+            </section>
+            <section class="display-group" data-display-group="layout" aria-labelledby="display-layout-title">
+                <header><h2 id="display-layout-title">{{ _('Layout') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
+                <form class="display-row display-hero-choices" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_HERO_CONTENT">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_HERO_CONTENT" value="{{ display.UI_HERO_CONTENT }}">
+                    <div class="display-label"><strong>{{ _('Hero content') }}</strong><small>{{ _('Choose up to two for wider screens. Phones keep the simple hero.') }}</small></div>
+                    <div class="display-hero-checks" role="group" aria-label="{{ _('Hero content') }}">
+                        {% for key, label in [('synopsis', _('Synopsis')), ('bars', _('Progress per app')), ('listened', _('Time listened')), ('pages', _('Pages read'))] %}
+                        <label><input type="checkbox" data-hero-piece value="{{ key }}" {% if key in display.UI_HERO_CONTENT.split(',') %}checked{% endif %}><span>{{ label }}</span></label>
+                        {% endfor %}
+                    </div>
+                    <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
+                </form>
+            </section>
+            <section class="display-group" data-display-group="behaviour" aria-labelledby="display-behaviour-title">
+                <header><h2 id="display-behaviour-title">{{ _('Behaviour') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
+                {{ cover_switch('UI_SHOW_HERO', _('Hero card'), display.UI_SHOW_HERO, _('Show your most recently synced in-progress book above the Library controls.')) }}
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+window.BB_STRINGS = Object.assign(window.BB_STRINGS || {}, {
+    "4 per row on a phone": {{ _('4 per row on a phone')|tojson }},
+    "3 per row on a phone": {{ _('3 per row on a phone')|tojson }},
+    "2 per row on a phone": {{ _('2 per row on a phone')|tojson }}
+});
+</script>
+<script src="/static/js/next/display.js" defer></script>
+<script src="/static/js/next/cover-loader.js" defer></script>
+{% endblock %}

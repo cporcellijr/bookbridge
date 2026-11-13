@@ -48,6 +48,8 @@ TRACKERS = {
                   '_hardcover_cooldown', '_hardcover_cooldown_lock'),
     'StoryGraph': ('_handle_storygraph_cooldown', 'STORYGRAPH_UPDATE_COOLDOWN_MINS',
                    '_storygraph_cooldown', '_storygraph_cooldown_lock'),
+    'Goodreads': ('_handle_goodreads_cooldown', 'GOODREADS_UPDATE_COOLDOWN_MINS',
+                  '_goodreads_cooldown', '_goodreads_cooldown_lock'),
 }
 
 
@@ -108,7 +110,7 @@ def _bare_manager(sync_clients, database_service):
 class _EnvMixin:
     _ENV_KEYS = (
         'HARDCOVER_ENABLED', 'HARDCOVER_TOKEN', 'HARDCOVER_UPDATE_COOLDOWN_MINS',
-        'STORYGRAPH_UPDATE_COOLDOWN_MINS',
+        'STORYGRAPH_UPDATE_COOLDOWN_MINS', 'GOODREADS_UPDATE_COOLDOWN_MINS',
     )
 
     def _save_env(self):

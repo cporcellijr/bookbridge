@@ -55,7 +55,7 @@ def _env():
 
 
 def _context(*, admin=False, providers=None, overrides=False, disabled=(), shelfmark=False, shelfmark_legacy=False,
-             shelfmark_off=False, abs_url="", queued=0, hide_chrome=False):
+             shelfmark_off=False, abs_url="", queued=0, hide_chrome=False, theme="auto"):
     providers = providers or {}
     vals = {}
     settings = {}
@@ -108,6 +108,7 @@ def _context(*, admin=False, providers=None, overrides=False, disabled=(), shelf
         ),
         "request": SimpleNamespace(path="/"),
         "csrf_token": lambda: "test-csrf-token",
+        "display_settings": lambda: {"UI_THEME": theme},
         "get_val": get_val,
         "get_user_val": get_user_val,
         "get_user_bool": get_user_bool,
@@ -126,17 +127,6 @@ def _external_targets(markup):
     return sorted(link["attrs"].get("href", "") for link in parser.links if link["attrs"].get("target") == "_blank")
 
 
-def _in_app_links(markup):
-    parser = Links()
-    parser.feed(markup)
-    return sorted(link["attrs"].get("href", "") for link in parser.links if link["attrs"].get("target") != "_blank")
-
-
-def _classic_external_except_shelfmark(markup):
-    """Classic's external links; New opens Shelfmark inside the app instead."""
-    return [href for href in _external_targets(markup) if href != "/shelfmark"]
-
-
 def test_provider_link_targets_match_classic_nav_for_every_provider_combination():
     env = _env()
     for bits in product((False, True), repeat=5):
@@ -146,7 +136,7 @@ def test_provider_link_targets_match_classic_nav_for_every_provider_combination(
             classic = env.get_template("_nav.html").render(**context)
             new_shell = env.get_template("next/base.html").render(**context)
             new_rail = new_shell.split("<aside class=\"rail\"", 1)[1].split("</aside>", 1)[0]
-            assert _external_targets(new_rail) == _classic_external_except_shelfmark(classic), (providers, overrides)
+            assert _external_targets(new_rail) == _external_targets(classic), (providers, overrides)
 
 
 def test_abs_disabled_sentinel_and_disabled_provider_gates_match_classic_nav():
@@ -156,7 +146,7 @@ def test_abs_disabled_sentinel_and_disabled_provider_gates_match_classic_nav():
         classic = env.get_template("_nav.html").render(**context)
         new = env.get_template("next/base.html").render(**context)
         rail = new.split("<aside class=\"rail\"", 1)[1].split("</aside>", 1)[0]
-        assert _external_targets(rail) == _classic_external_except_shelfmark(classic)
+        assert _external_targets(rail) == _external_targets(classic)
         assert "https://grimmory.example/server" in _external_targets(rail)
         assert "https://disabled.example/server" not in _external_targets(rail)
     for provider in ("grimmory", "bookorbit", "kavita", "cwa"):
@@ -164,7 +154,7 @@ def test_abs_disabled_sentinel_and_disabled_provider_gates_match_classic_nav():
         classic = env.get_template("_nav.html").render(**context)
         new = env.get_template("next/base.html").render(**context)
         rail = new.split("<aside class=\"rail\"", 1)[1].split("</aside>", 1)[0]
-        assert _external_targets(rail) == _classic_external_except_shelfmark(classic)
+        assert _external_targets(rail) == _external_targets(classic)
 
 
 def test_role_navigation_queue_badge_and_logout_are_rendered():
@@ -194,19 +184,16 @@ def test_mobile_app_menu_and_hidden_chrome_fallback():
     hidden = _render("next/base.html", admin=False, hide_chrome=True)
     assert 'class="app-shell"' not in hidden
     assert 'id="main-content"' in hidden
+    assert '/static/js/next/shell.js' in hidden
+    assert '/static/js/next/search.js' not in hidden
 
 
-def test_shelfmark_current_legacy_and_disabled_gates():
-    env = _env()
-    for kwargs, expected in (({"shelfmark": True}, True), ({"shelfmark": True, "shelfmark_legacy": True}, True),
-                             ({"shelfmark": True, "shelfmark_off": True}, False), ({}, False)):
-        classic = env.get_template("_nav.html").render(**_context(**kwargs))
-        new = env.get_template("next/base.html").render(**_context(**kwargs))
-        rail = new.split("<aside class=\"rail\"", 1)[1].split("</aside>", 1)[0]
-        assert ("/shelfmark" in _external_targets(classic)) is expected
-        assert ("/shelfmark" in _in_app_links(rail)) is expected
-        assert "/shelfmark" not in _external_targets(rail)
-        assert _external_targets(rail) == _classic_external_except_shelfmark(classic)
+def test_chrome_hidden_template_without_signed_in_user_keeps_device_default():
+    context = {**_context(hide_chrome=True), "current_user": None}
+    html = _env().get_template("next/base.html").render(**context)
+    assert 'data-theme="dark" data-theme-pref="auto"' in html
+    assert '/static/js/next/shell.js' in html
+    assert 'class="app-shell"' not in html
 
 
 def test_shell_sprite_font_and_static_script_references_exist():
@@ -229,8 +216,35 @@ def test_shell_sprite_font_and_static_script_references_exist():
     defined = set(re.findall(r'<symbol id="([\w-]+)"', sprite))
     assert referenced <= defined
     assert "prefers-reduced-motion" in css
-    assert "localStorage.getItem" in script and "localStorage.setItem" in script
+    assert "bookbridge-theme" not in script and "bookbridge-theme" not in html
+    assert "localStorage.setItem('bookbridge-rail'" in script
+    assert "localStorage.getItem('bookbridge-rail')" in html
     assert "event.key === 'Escape'" in script
+
+
+def test_theme_is_embedded_before_stylesheets_and_does_not_change_classic():
+    for preference, initial in (("auto", "dark"), ("day", "light"), ("night", "dark")):
+        markup = _render("next/base.html", theme=preference)
+        assert f'data-theme="{initial}" data-theme-pref="{preference}"' in markup
+        assert markup.index("root.dataset.theme = light ? 'light' : 'dark'") < markup.index(
+            '<link rel="stylesheet"'
+        )
+        assert "bookbridge-theme" not in markup
+    classic = _render("base.html")
+    assert 'data-theme-pref=' not in classic
+
+
+def test_new_theme_browser_behaviour():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("Node is required for the New theme test")
+    result = subprocess.run([node, str(PROJECT_ROOT / "tests" / "test_ui_new_theme.js")],
+                            capture_output=True, text=True, timeout=15, cwd=PROJECT_ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_rail_collapse_toggle_everywhere_but_settings():

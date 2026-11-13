@@ -4,7 +4,8 @@
 {% block title %}{{ _('Library') }} · BookBridge{% endblock %}
 
 {% block content %}
-<div id="library-page" class="library-page" data-view="covers" data-select-mode="off">
+{% set display = display_settings() %}
+<div id="library-page" class="library-page" data-view="{{ {'spines': 'spines', 'faceout': 'spines', 'list': 'list'}.get(display.UI_LIBRARY_STYLE, 'covers') }}" data-select-mode="off" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}" data-show-hero="{{ display.UI_SHOW_HERO }}">
     {% set attention = namespace(items=[]) %}
     {% set processing = namespace(items=[]) %}
     {% for book in mappings %}
@@ -69,35 +70,49 @@
 
     {% set series_options = mappings|map(attribute='series_name')|reject('none')|unique|sort(case_sensitive=false) %}
     {% set author_options = mappings|map(attribute='display_author')|reject('none')|reject('equalto','')|unique|sort(case_sensitive=false) %}
+    {% from 'next/_library_cards.html' import render_card, render_series, render_hero with context %}
+    {% if display.UI_SHOW_HERO == 'true' %}
+        {% if hero_mapping %}{{ render_hero(hero_mapping) }}{% else %}
+        <section id="library-hero" class="library-hero" hidden data-hero-content="{{ display.UI_HERO_CONTENT }}" aria-label="{{ _('Currently reading') }}">
+            <a class="library-hero-link" href="#" onclick="openBookDrawer(this.href,this);return false;">
+                <div class="hero-base"><div class="hero-cover"></div>
+                <div class="hero-copy"><span class="hero-eyebrow">{{ _('Currently reading') }}</span>
+                    <h2 class="hero-title"></h2><span class="hero-author"></span>
+                    <span class="hero-progress"><span class="hero-service" hidden></span><span class="hero-percent"></span></span>
+                    <span class="hero-mini-track" hidden><span></span></span>
+                </div></div>
+                <div class="hero-content" hidden></div>
+            </a>
+        </section>{% endif %}
+    {% endif %}
     {% if mappings %}
 
     <section class="library-toolbar" aria-label="{{ _('Library controls') }}">
         <div class="toolbar-primary">
-            <label class="toolbar-select">{{ _('Format') }}
-                <select id="filter-select" class="field" aria-label="{{ _('Format') }}">
-                    <option value="all">{{ _('All formats') }}</option>
-                    <option value="paired">{{ _('Listening and reading') }}</option>
-                    <option value="has_audio">{{ _('Has Audio') }}</option>
-                    <option value="audiobook_only">{{ _('Audio only') }}</option>
-                    <option value="ebook_only">{{ _('Ebook only') }}</option>
-                </select>
-            </label>
-            <label class="toolbar-select">{{ _('Author') }}<select id="author-filter" class="field" aria-label="{{ _('Author') }}"><option value="all">{{ _('All authors') }}</option><option value="none">{{ _('No author') }}</option>{% for name in author_options %}<option value="author:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
-            <label class="toolbar-select">{{ _('Series') }}<select id="series-filter" class="field" aria-label="{{ _('Series') }}"><option value="all">{{ _('All series') }}</option><option value="none">{{ _('No series') }}</option>{% for name in series_options %}<option value="series:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
             <div class="toolbar-search"><input id="dashboard-search" type="search" class="field" aria-label="{{ _('Filter books') }}" placeholder="{{ _('Filter books…') }}" autocomplete="off"></div>
-        </div>
-        <div class="toolbar-secondary">
-            <div class="toolbar-left">
-                <div class="sort-controls"><label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field" aria-label="{{ _('Sort') }}">
-                    <option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="status">{{ _('Status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option>
-                </select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button></div>
-                <label class="group-toggle"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
+            <div class="library-filter-host" id="library-filter-host">
+                <button type="button" id="library-filter-button" class="btn library-filter-trigger" aria-expanded="false" aria-controls="library-filter-panel"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span id="library-filter-button-label">{{ _('Filter') }}</span><span aria-hidden="true">⌄</span></button>
+                <button type="button" id="library-filter-reset" class="library-filter-reset" aria-label="{{ _('Clear library filters') }}" title="{{ _('Clear filters') }}" hidden>×</button>
+                <div id="library-filter-backdrop" class="library-filter-backdrop" hidden></div>
+                <div id="library-filter-panel" class="library-filter-panel" role="dialog" aria-label="{{ _('Filters') }}" hidden>
+                    <div class="library-filter-panel-head"><strong>{{ _('Filters') }}</strong><div class="library-filter-head-actions"><button type="button" id="library-filter-clear" class="library-filter-clear" aria-label="{{ _('Clear library filters') }}" disabled>{{ _('Clear') }}</button><button type="button" class="library-filter-close" aria-label="{{ _('Close filters') }}" data-filter-close>×</button></div></div>
+                    <div class="library-filter-panel-groups">
+                        <section class="library-filter-group" data-filter-group="status"><h3>{{ _('Status') }}</h3><div class="library-filter-options" id="filter-status-options"></div></section>
+                        <section class="library-filter-group" data-filter-group="format"><h3>{{ _('Format') }}</h3><div class="library-filter-options" id="filter-format-options"></div></section>
+                        <section class="library-filter-group" data-filter-group="author"><h3>{{ _('Author') }}</h3><input id="filter-author-search" class="field library-filter-search" type="search" aria-label="{{ _('Search authors') }}" placeholder="{{ _('Search authors…') }}" autocomplete="off"><div class="library-filter-options" id="filter-author-options"></div></section>
+                        <section class="library-filter-group" data-filter-group="series"><h3>{{ _('Series') }}</h3><input id="filter-series-search" class="field library-filter-search" type="search" aria-label="{{ _('Search series') }}" placeholder="{{ _('Search series…') }}" autocomplete="off"><div class="library-filter-options" id="filter-series-options"></div></section>
+                    </div>
+                    <label class="group-toggle library-filter-grouping"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
+                </div>
             </div>
-            <div class="toolbar-right">
-                <div class="view-switch" role="group" aria-label="{{ _('View') }}"><button type="button" id="view-covers" data-view="covers" aria-pressed="true">{{ _('Covers') }}</button><button type="button" id="view-spines" data-view="spines" aria-pressed="false">{{ _('Spines') }}</button><button type="button" id="view-list" data-view="list" aria-pressed="false">{{ _('List') }}</button></div>
-                <button type="button" id="select-mode-button" class="btn" aria-pressed="false" aria-controls="selection-bar">{{ _('Select') }}</button>
-                <span id="filter-count" role="status" aria-live="polite"></span>
+            <div class="library-filter-state" hidden>
+                <select id="status-filter" aria-label="{{ _('Status') }}"><option value="all">{{ _('All statuses') }}</option><option value="in_progress">{{ _('In progress') }}</option><option value="not_started">{{ _('Not started') }}</option><option value="finished">{{ _('Finished') }}</option></select>
+                <select id="filter-select" aria-label="{{ _('Format') }}"><option value="all">{{ _('All formats') }}</option><option value="paired">{{ _('Listening and reading') }}</option><option value="has_audio">{{ _('Has Audio') }}</option><option value="audiobook_only">{{ _('Audio only') }}</option><option value="ebook_only">{{ _('Ebook only') }}</option></select>
+                <select id="author-filter" aria-label="{{ _('Author') }}"><option value="all">{{ _('All authors') }}</option><option value="none">{{ _('No author') }}</option>{% for name in author_options %}<option value="author:{{ name }}">{{ name }}</option>{% endfor %}</select>
+                <select id="series-filter" aria-label="{{ _('Series') }}"><option value="all">{{ _('All series') }}</option><option value="none">{{ _('No series') }}</option>{% for name in series_options %}<option value="series:{{ name }}">{{ name }}</option>{% endfor %}</select>
             </div>
+            <div class="sort-controls"><label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field" aria-label="{{ _('Sort') }}"><option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="reading">{{ _('Reading status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option></select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button></div>
+            <div class="toolbar-right"><button type="button" id="select-mode-button" class="btn" aria-pressed="false" aria-controls="selection-bar">{{ _('Select') }}</button><span id="filter-count" role="status" aria-live="polite"></span></div>
         </div>
     </section>
     <div id="search-handoff" class="search-handoff hidden"><span id="search-handoff-msg"></span><a id="search-handoff-link" class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Search Discover') }}</a></div>
@@ -107,56 +122,13 @@
         <button type="button" class="selection-done" aria-label="{{ _('Exit selection') }}" title="{{ _('Exit selection') }}" onclick="exitBookSelection()" ><span aria-hidden="true">×</span></button>
     </div>
 
-    {% macro render_card(mapping) %}
-    {# Clear progress leaves 0% reset snapshots, so only a state above 0 counts as a position. #}
-    {% set has_position = mapping.states.values()|selectattr('percentage', 'defined')|selectattr('percentage', 'gt', 0)|list|length > 0 %}
-    {% set is_finished = has_position and mapping.unified_progress >= 100 %}
-    {% set title = mapping.display_title ~ ((': ' ~ mapping.display_subtitle) if mapping.display_subtitle else '') %}
-    {# Spine thickness from the book's length; audio-only books count about 30 pages an hour. #}
-    {% set spine_pages = mapping.storygraph_pages or mapping.hardcover_pages or ((mapping.duration or 0) / 120) %}
-    {% set spine_w = ([36, [64, 26 + spine_pages / 20]|min]|max|round|int) if spine_pages else 42 %}
-    {# Spine title as large as the spine's width and the title's length allow (about 0.55em a letter over 168px). #}
-    {% set spine_font = [14, [26, (spine_w - 10) / 1.1, 168 / ([mapping.display_title|length, 1]|max * 0.55)]|min]|max|round|int %}
-    <article class="book-card library-book-card{% if mapping.is_out_of_sync %} out-of-sync{% endif %}" style="{% if spine_pages %}--spine-w:{{ spine_w }}px;{% endif %}--spine-font:{{ spine_font }}px;--spine-h:{{ mapping.spine_h|default(214) }}px"{% if has_position and not is_finished %} data-reading{% endif %}{% if spine_pages and spine_w >= 44 %} data-page-top{% endif %} data-progress="{{ mapping.unified_progress }}" data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ title }}" data-author="{{ mapping.display_author }}" data-filename="{{ mapping.display_filename }}" data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}" data-added="{{ mapping.added_at_unix|default(0) }}" data-last-sync-unix="{{ mapping.last_sync_unix|default(0) }}" data-rating="{% if mapping.storygraph_rating is not none and mapping.goodreads_rating is not none %}{{ ((mapping.storygraph_rating + mapping.goodreads_rating) / 2) }}{% elif mapping.storygraph_rating is not none %}{{ mapping.storygraph_rating }}{% elif mapping.goodreads_rating is not none %}{{ mapping.goodreads_rating }}{% endif %}" data-series-name="{{ mapping.series_name or '' }}" data-series-sequence="{{ mapping.series_sequence if mapping.series_sequence is not none else '' }}" data-out-of-sync="{{ 'true' if mapping.is_out_of_sync else 'false' }}">
-        <label class="book-select-hit"><input class="book-select" type="checkbox" data-select-book value="{{ mapping.abs_id }}" aria-label="{{ _('Select %(title)s', title=title) }}"></label>
-        <a class="book-open" href="{{ url_for('book_page', abs_id=mapping.abs_id) }}" onclick="openBookDrawer(this.href,this);return false;" title="{{ title }}" aria-label="{{ _('Open %(title)s', title=title) }}">
-            <div class="cover-wrap">{% if mapping.kosync_doc_id %}<img class="cover-image" src="/covers/{{ mapping.kosync_doc_id }}.jpg" alt="" loading="lazy" decoding="async" onerror="{% if mapping.cover_url %}this.onerror=function(){this.hidden=true;};this.src={{ mapping.cover_url|tojson|forceescape }};{% else %}this.hidden=true{% endif %}">{% elif mapping.cover_url %}<img class="cover-image" src="{{ mapping.cover_url }}" alt="" loading="lazy" decoding="async" onerror="this.hidden=true">{% endif %}
-                <div class="typographic-cover"><span>{{ mapping.display_author or '' }}</span><strong>{{ mapping.display_title }}</strong></div>
-                <span class="progress-percent" {% if not has_position or is_finished %}hidden{% endif %}>{{ mapping.unified_progress|int }}%</span><span class="progress-done" role="img" aria-label="{{ _('Finished') }}" {% if not is_finished %}hidden{% endif %}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg></span><span class="progress-track" {% if not has_position or is_finished %}hidden{% endif %}><span class="progress-bar-fill" style="width:{{ mapping.unified_progress }}%"></span></span>
-                {% if mapping.format_strip %}{% set slot_labels = {'ebook': _('Ebook'), 'audio': _('Audiobook'), 'readalong': _('Read-along'), 'koreader': _('KOReader')} %}<span class="format-strip">{% for slot in mapping.format_strip %}<span class="format-slot{% if not slot.linked %} is-faint{% endif %}{% if slot.last %} is-last{% endif %}{% if slot.oos %} is-oos{% endif %}" data-slot="{{ slot.key }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#format-{{ slot.key }}"></use></svg><span class="format-tip">{{ slot_labels[slot.key] }} · {% if slot.linked %}{{ slot.service or _('generated EPUB') }}{% if slot.pct is not none %} {{ '%.0f'|format(slot.pct) }}%{% endif %}{% if slot.oos %} · {{ _('out of sync') }}{% endif %}{% else %}{{ _('not linked') }}{% endif %}<span class="format-tip-when">{% if slot.last %} · {{ _('synced {when}').replace('{when}', mapping.last_sync_leader_when) }}{% endif %}</span></span></span>{% endfor %}</span>{% endif %}
-            </div>
-            <div class="book-copy"><div class="book-heading"><h3>{{ mapping.display_title }}{% if mapping.display_subtitle %}<small>{{ mapping.display_subtitle }}</small>{% endif %}</h3><span class="book-byline"><span class="book-author">{{ mapping.display_author }}</span>{% if mapping.storygraph_rating is not none or mapping.goodreads_rating is not none %}{% set sg_rating, gr_rating = mapping.storygraph_rating, mapping.goodreads_rating %}{% set rating_breakdown %}{% if sg_rating is not none %}SG {{ '%.1f'|format(sg_rating) }}{% endif %}{% if sg_rating is not none and gr_rating is not none %} · {% endif %}{% if gr_rating is not none %}GR {{ '%.1f'|format(gr_rating) }}{% endif %}{% endset %}<span class="book-ratings" role="img" title="{{ rating_breakdown }}" aria-label="{{ _('Book ratings') }}: {{ rating_breakdown }}">★ {{ '%.1f'|format(((sg_rating + gr_rating) / 2) if sg_rating is not none and gr_rating is not none else (sg_rating if sg_rating is not none else gr_rating)) }}</span>{% endif %}</span></div>
-                {% if mapping.is_out_of_sync %}<p class="out-of-sync-line">{{ _('Out of sync') }}{% for name, state in mapping.states.items() if state.percentage is defined %} · {{ {'abs':'Audiobookshelf','kosync':'KOReader','storyteller':'Storyteller','booklore':'Grimmory','bookorbit':'BookOrbit','kavita':'Kavita','hardcover':'Hardcover','bookfusion':'BookFusion','storygraph':'StoryGraph'}.get(name, name) }} <span data-app-pct="{{ name }}">{{ '%.1f'|format(state.percentage) }}%</span>{% endfor %}</p>{% endif %}
-                {% if mapping.status in ['failed_retry_later','failed_permanent','error'] %}<span class="state-label">{{ _('Alignment failed') }}</span>{% elif mapping.status in ['processing','forging'] and mapping.job_progress is defined %}<span class="state-label">{{ _('Transcribing %(pct)s%%', pct=mapping.job_progress) }}</span>{% elif mapping.status in ['pending','manual_forge'] %}<span class="state-label">{{ _('Waiting to process') }}</span>{% endif %}
-            </div>
-        </a><span class="readalong-status" role="status" hidden></span><span class="spine-progress" {% if not is_finished %}hidden{% endif %} role="img" aria-label="{{ _('Finished') }}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
-    </article>
-    {% endmacro %}
-    {% macro render_series(group) %}
-    <section class="series-group" id="{{ group.dom_id }}" data-series-name="{{ group.series_name }}" data-title="{{ group.series_name }}" data-author="{{ group.series_author or '' }}" data-progress="{{ group.avg_progress }}" data-last-sync="{{ group.last_sync_unix }}" data-last-sync-unix="{{ group.last_sync_unix|default(0) }}" data-added="{{ group.added_at_unix|default(0) }}" data-child-count="{{ group.child_count }}">
-        {% if get_user_bool('SERIES_SHOW_CURRENT_BOOK_DETAIL') and group.lead_book %}
-        {{ render_card(group.lead_book) }}
-        <button type="button" class="series-strip series-header" aria-controls="{{ group.dom_id }}-children" aria-expanded="false" onclick="toggleSeries('{{ group.dom_id }}')"><strong>{{ group.series_name }}</strong><span>{{ _('%(done)s/%(total)s finished', done=group.finished_count, total=group.child_count) }}</span><span aria-hidden="true">▸</span></button>
-        <div class="series-children" id="{{ group.dom_id }}-children">{% for child in group.other_children %}{{ render_card(child) }}{% endfor %}</div>
-        {% else %}
-        <button class="series-header" type="button" aria-controls="{{ group.dom_id }}-children" aria-expanded="false" onclick="toggleSeries('{{ group.dom_id }}')">
-            <span class="series-stack">{% for url in group.stack_cover_urls[:3] %}<img src="{{ url }}" alt="" loading="lazy" decoding="async" onerror="this.hidden=true;">{% endfor %}{% if not group.stack_cover_urls %}<span></span><span></span><span></span>{% endif %}</span>
-            <span class="series-info"><strong>{{ group.series_name }}</strong>{% if group.series_author %}<small>{{ group.series_author }}</small>{% endif %}<small>{{ _('%(done)s/%(total)s finished', done=group.finished_count, total=group.child_count) }} · {{ _('%(pct)s%% avg', pct='%.1f'|format(group.avg_progress)) }}</small>{% if group.next_book and group.next_book.unified_progress < 100 %}<small>{{ _('Next: %(title)s', title=group.next_book.display_title) }}</small>{% endif %}</span><span aria-hidden="true">▸</span>
-        </button>
-        {% if group.preview_books %}<div class="series-preview">{% for book in group.preview_books %}<span>{{ book.label }} · {{ book.title }} · {{ '%.0f'|format(book.progress) }}%</span>{% endfor %}{% if group.preview_hidden_count %}<span>{{ ngettext('+%(num)s more in series', '+%(num)s more in series', group.preview_hidden_count) }}</span>{% endif %}</div>{% endif %}
-        <div class="series-children" id="{{ group.dom_id }}-children">{% for child in group.children %}{{ render_card(child) }}{% endfor %}</div>
-        {% endif %}
-    </section>
-    {% endmacro %}
-
-    <div class="library-sections" id="library-sections">
-        {% for bucket, dom_bucket, label in [('in_progress', 'in-progress', _('In progress')), ('not_started', 'not-started', _('Not started')), ('finished', 'finished', _('Finished'))] %}
-        <section class="dashboard-section" id="{{ dom_bucket }}-section"><header class="section-header"><h2>{{ label }}</h2>{% if bucket == 'not_started' %}<button type="button" id="not-started-header" class="section-collapse" aria-controls="{{ dom_bucket }}-grid" aria-expanded="false">{{ _('Show') }} <span id="not-started-chevron" aria-hidden="true">▸</span></button>{% endif %}</header>
-            <div class="book-grid{% if bucket == 'not_started' %} collapsible-book-grid{% endif %}" id="{{ dom_bucket }}-grid">{% for entry in grouped_mappings %}{% if entry.is_series_group %}{% if entry.section_bucket == bucket %}{{ render_series(entry) }}{% elif bucket == 'finished' %}{% for child in entry.children %}{% if child.unified_progress >= 100 %}{{ render_card(child) }}{% endif %}{% endfor %}{% endif %}{% else %}{% if (bucket == 'in_progress' and entry.unified_progress > 0 and entry.unified_progress < 100) or (bucket == 'not_started' and entry.unified_progress == 0) or (bucket == 'finished' and entry.unified_progress >= 100) %}{{ render_card(entry) }}{% endif %}{% endif %}{% endfor %}</div>
-        </section>{% endfor %}
+    <div class="book-grid" id="library-grid">
+        {% for entry in grouped_mappings %}
+            {% if entry.is_series_group %}{{ render_series(entry) }}{% else %}{{ render_card(entry) }}{% endif %}
+        {% endfor %}
     </div>
     {% else %}<section class="empty-state"><div class="empty-state-icon">◇</div><h2>{{ _('No books syncing yet') }}</h2><p>{{ _('Start by adding your first audiobook mapping') }}</p><a class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Discover books') }}</a></section>{% endif %}
     <footer class="library-footer"><span>{{ _('Build %(version)s', version=app_version) }}</span>{% if update_available %}<a href="https://github.com/cporcellijr/bookbridge/releases/latest" target="_blank" rel="noopener noreferrer">{{ _('v%(version)s Available', version=latest_version) }}</a>{% endif %}</footer>
 </div>
 {% endblock %}
-{% block scripts %}{% include 'next/_book_scripts.html' %}{% include 'next/_library_scripts.html' %}<script src="/static/js/next/masonry.js" defer></script>{% endblock %}
+{% block scripts %}{% include 'next/_book_scripts.html' %}<script src="/static/js/next/poller.js"></script>{% include 'next/_library_scripts.html' %}<script src="/static/js/next/cover-loader.js" defer></script><script src="/static/js/next/masonry.js" defer></script>{% endblock %}

@@ -15,12 +15,14 @@ from src.api.api_clients import ABSClient, KoSyncClient
 from src.api.booklore_client import BookloreClient
 from src.api.bookfusion_client import BookFusionClient
 from src.api.bookorbit_client import BookOrbitClient
+from src.api.shelfmark_client import ShelfmarkClient
 from src.api.cwa_client import CWAClient
 from src.api.cwa_sync_api import CWASyncApi
 from src.api.hardcover_client import HardcoverClient
 from src.api.llm_client import create_llm_client
 from src.api.kavita_client import KavitaClient, KavitaKoSyncClient
 from src.api.storygraph_client import StorygraphClient
+from src.api.goodreads_client import GoodreadsClient
 from src.api.storyteller_api import StorytellerAPIClient
 from src.db.database_service import DatabaseService
 from src.services.audio_repoint_service import AudioRepointService
@@ -35,6 +37,7 @@ from src.services.forge_service import ForgeService
 from src.services.koreader_device_sync_service import KOReaderDeviceSyncService
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.calibre_identifier_resolver import CalibreIdentifierResolver
+from src.services.acquisition_service import AcquisitionService
 from src.services.book_mapping_service import BookMappingService
 from src.services.shelf_watch_service import ShelfWatchService
 from src.services.user_client_registry import UserClientRegistry
@@ -51,6 +54,7 @@ from src.sync_clients.abs_ebook_sync_client import ABSEbookSyncClient
 from src.sync_clients.cwa_sync_client import CWASyncClient
 from src.sync_clients.hardcover_sync_client import HardcoverSyncClient
 from src.sync_clients.storygraph_sync_client import StorygraphSyncClient
+from src.sync_clients.goodreads_sync_client import GoodreadsSyncClient
 from src.sync_manager import SyncManager
 
 logger = logging.getLogger(__name__)
@@ -121,6 +125,8 @@ class Container(containers.DeclarativeContainer):
 
     hardcover_client = providers.Singleton(HardcoverClient)
     storygraph_client = providers.Singleton(StorygraphClient)
+    goodreads_client = providers.Singleton(GoodreadsClient, database_service=database_service)
+    shelfmark_client = providers.Singleton(ShelfmarkClient)
 
     cwa_client = providers.Singleton(CWAClient)
 
@@ -302,6 +308,18 @@ class Container(containers.DeclarativeContainer):
         kavita_client=kavita_client,
     )
 
+    goodreads_sync_client = providers.Singleton(
+        GoodreadsSyncClient,
+        goodreads_client,
+        ebook_parser,
+        abs_client,
+        database_service,
+        ollama_client=ollama_client,
+        booklore_client=booklore_client,
+        bookorbit_client=bookorbit_client,
+        kavita_client=kavita_client,
+    )
+
     abs_audio_source_adapter = providers.Singleton(
         ABSAudioSourceAdapter,
         abs_client=abs_client,
@@ -340,7 +358,8 @@ class Container(containers.DeclarativeContainer):
         BookOrbitAudio=bookorbit_audio_sync_client,
         CWA=cwa_sync_client,
         Hardcover=hardcover_sync_client,
-        StoryGraph=storygraph_sync_client
+        StoryGraph=storygraph_sync_client,
+        Goodreads=goodreads_sync_client,
     )
 
     # Constructed after the sync clients so forge completion can run the same
@@ -360,6 +379,7 @@ class Container(containers.DeclarativeContainer):
         sync_clients=providers.Dict(
             Hardcover=hardcover_sync_client,
             StoryGraph=storygraph_sync_client,
+            Goodreads=goodreads_sync_client,
         ),
     )
 
@@ -395,6 +415,7 @@ class Container(containers.DeclarativeContainer):
         sync_clients=providers.Dict(
             Hardcover=hardcover_sync_client,
             StoryGraph=storygraph_sync_client,
+            Goodreads=goodreads_sync_client,
         ),
         user_client_registry=user_client_registry,
     )
@@ -445,6 +466,14 @@ class Container(containers.DeclarativeContainer):
         Kavita=shelf_watch_service_kavita,
     )
 
+    # Follows readers' BookOrbit requests to arrival and pairs them with the book they already had.
+    acquisition_service = providers.Singleton(
+        AcquisitionService,
+        database_service=database_service,
+        book_mapping_service=book_mapping_service,
+        shelf_watch_service=shelf_watch_service_bookorbit,
+    )
+
     # Sync Manager
     sync_manager = providers.Singleton(
         SyncManager,
@@ -466,6 +495,7 @@ class Container(containers.DeclarativeContainer):
         migration_service=migration_service,
         shelf_watch_service=shelf_watch_service,
         shelf_watch_services=shelf_watch_services,
+        acquisition_service=acquisition_service,
         audio_source_adapters=audio_source_adapters,
 
         epub_cache_dir=epub_cache_dir,

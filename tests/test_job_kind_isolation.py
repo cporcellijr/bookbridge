@@ -52,6 +52,26 @@ class TestJobKindIsolation(unittest.TestCase):
         self.db.db_manager.close()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    def test_stale_alignment_worker_cannot_update_a_replacement_job(self) -> None:
+        """Only the original job generation may receive that worker's CTC progress."""
+        self.db.save_job(Job(abs_id=self.abs_id, last_attempt=100.0,
+                             progress=0.1, kind=JOB_KIND_ALIGNMENT))
+        original = self.db.get_latest_job(self.abs_id, kind=JOB_KIND_ALIGNMENT)
+        self.db.save_job(Job(abs_id=self.abs_id, last_attempt=200.0,
+                             progress=0.0, kind=JOB_KIND_ALIGNMENT))
+        replacement = self.db.get_latest_job(self.abs_id, kind=JOB_KIND_ALIGNMENT)
+
+        assert original.id != replacement.id
+        assert self.db.update_latest_job(
+            self.abs_id, kind=JOB_KIND_ALIGNMENT,
+            expected_job_id=original.id, progress=0.9,
+        ) is None
+        assert self.db.get_latest_job(self.abs_id, kind=JOB_KIND_ALIGNMENT).progress == 0.0
+
+        self.db.update_latest_job(self.abs_id, kind=JOB_KIND_ALIGNMENT,
+                                  expected_job_id=replacement.id, progress=0.5)
+        assert self.db.get_latest_job(self.abs_id, kind=JOB_KIND_ALIGNMENT).progress == 0.5
+
     def test_normal_sync_does_not_complete_in_flight_readalong_job(self) -> None:
         """A read-along job mid-generation (progress 0.0, no error yet) must
         survive a normal sync cycle untouched."""
@@ -639,7 +659,7 @@ class TestUpdateJobById(unittest.TestCase):
         )
 
         for exc in (InvalidRequestError, StaleDataError):
-            with self.subTest(exc=exc):
+            with self.subTest(exc=exc.__name__):
                 def raise_error(session, flush_context, instances):
                     raise exc("forced")
                 event.listen(Session, "before_flush", raise_error)
@@ -659,7 +679,7 @@ class TestUpdateJobById(unittest.TestCase):
         )
 
         for exc in (InvalidRequestError, StaleDataError):
-            with self.subTest(exc=exc):
+            with self.subTest(exc=exc.__name__):
                 def raise_error(session, flush_context, instances):
                     raise exc("forced")
                 event.listen(Session, "before_flush", raise_error)

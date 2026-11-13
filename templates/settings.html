@@ -1732,6 +1732,40 @@
                 </div>
             </div>
 
+            <div class="settings-section" data-svc="goodreads">
+                {% set goodreads_enabled = get_bool('GOODREADS_ENABLED') %}
+                <div class="section-header">
+                    <div class="svc-left">
+                        <span class="svc-chev">▶</span>
+                        <div class="svc-chip">GR</div>
+                        <div class="svc-title">
+                            <h3>Goodreads <span class="tracker-tag">{{ _('write-only tracker') }}</span></h3>
+                            <div class="svc-desc">{{ _('Shelf and percentage progress') }}</div>
+                        </div>
+                    </div>
+                    <div class="header-tail">
+                        <span class="pill off">{{ _('Per-user cookies') }}</span>
+                        <div class="toggle-switch-wrapper">
+                            <span class="toggle-label">{{ _('Enable') }}</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle_goodreads" name="GOODREADS_ENABLED"
+                                    onchange="toggleSection('goodreads_body', this.checked)" {% if goodreads_enabled %}checked{% endif %}>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div id="goodreads_body" class="section-body {% if not goodreads_enabled %}collapsed{% endif %}">
+                    <div class="form-group full-width">
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            {% trans trimmed settings_url=url_for('settings') %}🔒 Set each user's Goodreads browser cookie, cookie refresher, or signed-in Selenium URL in
+                            <a href="{{ settings_url }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>.
+                            Progress posts appear in the user's public Goodreads feed.{% endtrans %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             </div><!-- /integrations panel -->
 
             <div class="tab-panel" data-panel="sync">
@@ -1808,7 +1842,7 @@
                     <div class="form-group full-width">
                         <label>{{ _('Wait before posting progress (minutes)') }}</label>
                         <input type="number" name="ALL_APPS_TRACKER_COOLDOWN_MINS" min="0" value="{{ merged_values.ALL_APPS_TRACKER_COOLDOWN_MINS }}">
-                        <div class="help-text">{{ _('Hardcover and StoryGraph get your progress once you have made no new progress for this long; new progress restarts the wait. Finishing a book posts straight away. 0 posts on every sync.') }}</div>
+                        <div class="help-text">{{ _('Hardcover, StoryGraph and Goodreads get your progress once you have made no new progress for this long; new progress restarts the wait. Finishing a book posts straight away. 0 posts on every sync.') }}</div>
                     </div>
                 </div>
             </div>
@@ -2254,12 +2288,27 @@
                 </div>
             </div>
 
+            <!-- Getting missing books -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>{{ _('Getting books') }}</h3>
+                </div>
+                <div class="section-body">
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="acquisition_allow_readers"
+                            name="ACQUISITION_ALLOW_READERS" {% if get_bool('ACQUISITION_ALLOW_READERS') %}checked{% endif %}>
+                        <label for="acquisition_allow_readers">{{ _('Let readers get missing books') }}</label>
+                        <div class="help-text">{{ _('Readers can ask BookOrbit for the ebook or audiobook a search did not find, using their own BookOrbit login. Admins can always do this.') }}</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Shelfmark (Optional) -->
             <div class="settings-section">
                 {% set shelfmark_enabled = get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and
                 get_val('SHELFMARK_ENABLED') == '') %}
                 <div class="section-header">
-                    <h3>{{ _('Shelfmark View') }}</h3>
+                    <h3>{{ _('Shelfmark') }}</h3>
                     <div class="toggle-switch-wrapper">
                         <span class="toggle-label">{{ _('Enable') }}</span>
                         <label class="toggle-switch">
@@ -2274,7 +2323,8 @@
                     <div class="form-group full-width">
                         <label>{{ _('Shelfmark URL') }}</label>
                         <input type="text" name="SHELFMARK_URL" value="{{ get_val('SHELFMARK_URL') }}">
-                        <div class="help-text">{{ _('The address of your Shelfmark site. When set, a Shelfmark tab appears in BookBridge.') }}</div>
+                        <div class="help-text">{{ _('The address of your Shelfmark site. BookBridge uses it to find missing books for readers who sign in to Shelfmark.') }}</div>
+                        <div class="help-text">{{ _('Readers can choose an audiobook destination library in My Integrations. Leave it blank to use normal scheduled scanning.') }}</div>
                     </div>
                 </div>
             </div>
@@ -3090,11 +3140,11 @@
                     <div class="form-group full-width">
                         <label>{{ _('Cache Cleanup') }}</label>
                         <div class="cleanup-group">
-                            <button type="button" class="btn btn-danger" onclick="cleanInactiveCache()">
-                                {{ _('Clean Inactive Cache') }}
+                            <button type="button" class="btn btn-primary" onclick="cleanInactiveCache()">
+                                {{ _('Review Inactive Cache') }}
                             </button>
                             <p class="help-text flex-1 m-0">
-                                {{ _('Deletes audio cache and transcript files for books that are no longer active. Active books are not affected.') }}
+                                {{ _('Review potentially inactive cache files and unresolved ownership. No files are deleted.') }}
                             </p>
                         </div>
                     </div>
@@ -3349,6 +3399,7 @@
             cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
             hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
             storygraph: ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
+            goodreads: ['GOODREADS_ENABLED', 'GOODREADS_SESSION_COOKIE', 'GOODREADS_COOKIE_REFRESH_URL', 'GOODREADS_COOKIE_REFRESH_TOKEN', 'GOODREADS_BROWSER_URL'],
             telegram: ['TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN'],
             ollama: [
                 'OLLAMA_ENABLED', 'LLM_PROVIDER', 'LLM_BASE_URL', 'LLM_API_KEY',
@@ -3713,19 +3764,24 @@
         }
 
         async function cleanInactiveCache() {
-            if (!confirm({{ _('Clean all cached audio and transcript files for inactive books?\n\nActive books will not be affected.')|tojson }})) {
+            if (!confirm({{ _('Review inactive cache ownership without deleting any files?')|tojson }})) {
                 return;
             }
 
             try {
                 const response = await fetch('/api/cache/clean', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dry_run: true })
                 });
 
                 const data = await response.json();
-                if (data.success) {
-                    alert(bbFormat({{ _('Cleaned {audio} audio cache(s), {transcripts} transcript folder(s), and {epubs} cached epub(s).')|tojson }}, { audio: data.deleted_audio, transcripts: data.deleted_transcripts, epubs: data.deleted_epubs }));
+                if (data.success && data.dry_run) {
+                    alert(bbFormat({{ _('Review only: {potential} potentially inactive folders ({size} GiB), {unverified} unverified folders. No files were deleted.')|tojson }}, {
+                        potential: (data.potential_inactive_audio || []).length,
+                        size: ((data.potential_inactive_audio_bytes || 0) / (1024 ** 3)).toFixed(2),
+                        unverified: data.unverified_audio_directories || 0
+                    }));
                 } else {
                     alert(bbFormat({{ _('Failed: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
                 }
@@ -4218,8 +4274,7 @@
             });
 
             // Clear dirty flag on any form submit (settings save or user-admin action).
-            // The interface switch saves nothing here, so leaving through it still warns.
-            document.querySelectorAll('form:not(.nav-interface-form):not(.interface-switch)').forEach(function (form) {
+            document.querySelectorAll('form').forEach(function (form) {
                 form.addEventListener('submit', clearDirty);
             });
         }

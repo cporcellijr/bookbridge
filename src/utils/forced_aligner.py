@@ -26,9 +26,23 @@ import bisect
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
+
+# Called with the seconds of audio the emissions pass has covered so far.
+AudioProgressCallback = Callable[[float], None]
+
+
+def report_audio_progress(progress_callback: Optional[AudioProgressCallback], seconds: float) -> None:
+    """Hand ``seconds`` to ``progress_callback``. Progress is informational, so a
+    failing callback is logged and never fails the alignment pass."""
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(seconds)
+    except Exception:
+        logger.debug("CTC progress callback failed", exc_info=True)
 
 # MMS_FA accepts lowercase latin + apostrophe only.
 _MMS_CHARS_RE = re.compile(r"[^a-z']")
@@ -186,9 +200,12 @@ class ForcedAligner:
 
     # -- alignment ----------------------------------------------------------- #
 
-    def _emissions(self, waveform):
+    def _emissions(self, waveform, progress_callback: Optional[AudioProgressCallback] = None):
         """Model forward in batches of equal-length windows; concatenate log-prob
         frames into a single ``[1, T, C]`` tensor.
+
+        ``progress_callback``, when given, receives the seconds of audio covered
+        after each window (see `report_audio_progress`).
 
         Consecutive full-length ``_EMIT_WINDOW_SECONDS`` windows are grouped into
         batches of up to ``_EMIT_BATCH_WINDOWS`` and run as one ``[B, window]``
@@ -226,6 +243,7 @@ class ForcedAligner:
 
         def maybe_log():
             nonlocal logged
+            report_audio_progress(progress_callback, processed / self._sample_rate)
             if processed - logged >= 300 * self._sample_rate or processed >= total:
                 logger.info(
                     "⚙️ CTC: emissions %.0f/%.0fs on %s",
@@ -416,7 +434,8 @@ class ForcedAligner:
               text_range: Optional[Tuple[int, int]] = None,
               boundaries: Optional[List[Dict]] = None,
               exclude_spans: Optional[List[Tuple[int, int]]] = None,
-              precomputed: Optional[Tuple[Any, float]] = None) -> Optional[List[Dict]]:
+              precomputed: Optional[Tuple[Any, float]] = None,
+              progress_callback: Optional[AudioProgressCallback] = None) -> Optional[List[Dict]]:
         """Force-align audio (one path or a list of parts) to ``full_text``.
 
         A single forced_align pass costs ~frames x tokens and only fits short books.
@@ -429,6 +448,9 @@ class ForcedAligner:
         ``precomputed`` is ``(emission, seconds_per_frame)`` from `emissions_for`, so a
         caller that already ran the model (to build a chapter-search prior) does not
         decode and run it again.
+
+        ``progress_callback`` receives the seconds of audio the emissions pass has
+        covered (not called when ``precomputed`` skips that pass).
 
         Returns a ``{char, ts}`` map, or ``None`` on any failure (missing deps,
         decode error, empty text) so the caller can fall back to the lexical pipeline.
@@ -470,6 +492,7 @@ class ForcedAligner:
             else:
                 emission, seconds_per_frame = self._decode_and_emit(
                     audio_paths, boundaries, num_targets,
+                    progress_callback=progress_callback,
                 )
                 if emission is None:
                     return None
@@ -540,12 +563,14 @@ class ForcedAligner:
         finally:
             self._cleanup_tmp_audio()
 
-    def emissions_for(self, audio_paths) -> Optional[Tuple[Any, float]]:
+    def emissions_for(self, audio_paths,
+                      progress_callback: Optional[AudioProgressCallback] = None) -> Optional[Tuple[Any, float]]:
         """Decode ``audio_paths`` and run the model once: ``(emission, seconds_per_frame)``.
 
         ``emission`` is the ``[1, T, C]`` log-prob tensor `align` consumes; pass the
         pair back as ``align(..., precomputed=...)`` to reuse it. Returns ``None`` on
         any failure. Temp decode files are removed before returning.
+        ``progress_callback`` receives the seconds of audio covered so far.
         """
         if not self.is_available():
             return None
@@ -557,7 +582,7 @@ class ForcedAligner:
                 "⚙️ CTC: decoded %.0fs audio; computing emissions on %s",
                 self._frames(waveform) / self._sample_rate, self._device,
             )
-            emission = self._emissions(waveform)  # [1, T, C], log-probs
+            emission = self._emissions(waveform, progress_callback=progress_callback)  # [1, T, C], log-probs
             return emission, self._frames(waveform) / self._frames(emission) / self._sample_rate
         except Exception as e:
             logger.error(f"❌ CTC emissions failed: {e}", exc_info=True)
@@ -566,7 +591,8 @@ class ForcedAligner:
             self._cleanup_tmp_audio()
 
     def _decode_and_emit(self, audio_paths, boundaries: Optional[List[Dict]],
-                         num_targets: int) -> Tuple[Optional[Any], float]:
+                         num_targets: int,
+                         progress_callback: Optional[AudioProgressCallback] = None) -> Tuple[Optional[Any], float]:
         """`align`'s own decode + emissions pass, refusing before the GPU forward
         when a single pass could not fit and there is no prior to chunk against."""
         logger.info("⚙️ CTC: decoding audio at %s Hz", self._sample_rate)
@@ -597,7 +623,7 @@ class ForcedAligner:
             "⚙️ CTC: decoded %.0fs audio; computing emissions on %s",
             self._frames(waveform) / self._sample_rate, self._device,
         )
-        emission = self._emissions(waveform)  # [1, T, C], log-probs
+        emission = self._emissions(waveform, progress_callback=progress_callback)  # [1, T, C], log-probs
         return emission, self._frames(waveform) / self._frames(emission) / self._sample_rate
 
     def ctc_vocab(self) -> Tuple[int, Dict[int, str]]:

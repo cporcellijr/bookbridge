@@ -59,7 +59,6 @@ class TestP8Finish(unittest.TestCase):
         self.assertIn("<span>{{ short_name }}</span>", text)
         for name in ("Audiobookshelf", "Calibre-Web", "Grimmory", "BookOrbit", "Kavita"):
             self.assertIn(f"_('{name}')", text)
-        self.assertIn('aria-label="{{ _(\'Shelfmark Tool\') }}"', text)
 
     def test_settings_categories_keep_distinct_icons_after_p11_navigation(self):
         markup = source("templates/next/settings.html")
@@ -87,17 +86,16 @@ class TestP8Finish(unittest.TestCase):
         self.assertIn("grid-auto-rows: 4px", css)
         self.assertIn("row-gap: 0", css)
         self.assertIn('src="/static/js/next/masonry.js"', library)
-        self.assertIn('id="library-page" class="library-page" data-view="covers"', library)
-        self.assertIn("setTimeout(refreshDashboard, 30000)", source("templates/next/_library_scripts.html"))
-        self.assertIn('<label class="book-select-hit">', library)
+        self.assertIn('data-view="{{', library)
+        self.assertIn("bbPoller({ name: 'library-progress', fastMs: 30000, slowMs: 30000, immediate: false, run: refreshDashboard })", source("templates/next/_library_scripts.html"))
+        self.assertIn('<label class="book-select-hit">', source('templates/next/_library_cards.html'))
 
-    def test_view_switch_only_binds_its_own_buttons_not_the_library_page(self):
-        # #library-page carries data-view too; a bare [data-view] selector made every
-        # click in the Library clear the switch's pressed state and regroup series.
-        scripts = source("templates/next/_library_scripts.html").split("/* P3 additions:", 1)[1]
-        self.assertNotIn("querySelectorAll('[data-view]')", scripts)
-        self.assertNotIn("querySelector('[data-view=", scripts)
-        self.assertEqual(scripts.count(".view-switch [data-view"), 4)
+    def test_view_switch_is_removed_without_changing_the_server_view(self):
+        scripts = source("templates/next/_library_scripts.html")
+        markup = source("templates/next/index.html")
+        self.assertNotIn(".view-switch", scripts + markup)
+        self.assertNotIn("abs_kosync_view", scripts)
+        self.assertIn("initialLibraryView = libraryPage.dataset.view", scripts)
 
     def test_logs_checkboxes_stay_small_and_messages_get_the_room(self):
         """iPad Safari stretched the Logs checkboxes to the 44px field height and squeezed messages."""

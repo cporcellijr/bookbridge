@@ -1,4 +1,5 @@
 import glob
+import gzip
 import hashlib
 import hmac
 import html
@@ -21,6 +22,7 @@ import zipfile
 import zlib
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urljoin, urlparse
@@ -39,6 +41,7 @@ from src.utils.user_context import (
     set_current_user_credentials, reset_current_user_credentials,
     get_current_user_credentials, get_current_user_id,
 )
+from src.utils.display_settings import normalize_display_value, resolve_display_settings
 from src.utils.user_config import PER_USER_PREFERENCE_KEYS, resolve_setting, user_preference_enabled, user_setting
 from src.utils.user_config import global_fallback_allowed as _global_fallback_allowed
 from src.utils.user_config import SERVICE_ENABLE_KEYS
@@ -74,12 +77,15 @@ from src.api import reading_position_preview_routes  # noqa: E402,F401
 from src.api.admin_api import admin_api_bp, init_admin_api
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
 from src.api.storygraph_routes import storygraph_bp, init_storygraph_routes
+from src.api.goodreads_routes import goodreads_bp, init_goodreads_routes
 from src.api.bookfusion_upload_client import extract_epub_metadata, _S3_TIMEOUT_LARGE
 from src.version import APP_VERSION, get_update_status
 from src.db.models import State, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.services.audio_source_adapters import AudioResult, ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
+from src.services.audio_cache_ownership import inventory_audio_cache, remove_book_cache_dirs, remove_owned
 from src.services.current_audio_chapter import resolve_current_chapter
+from src.services.cover_thumbnail_service import cover_thumbnail_cache
 from src.utils.storyteller_transcript import StorytellerTranscript
 from src.services.readalong_delivery import (
     deliver_readalong_epub,
@@ -471,6 +477,8 @@ def setup_dependencies(app, test_container=None):
     app.register_blueprint(hardcover_bp)
     init_storygraph_routes(database_service, container)
     app.register_blueprint(storygraph_bp)
+    init_goodreads_routes(database_service, container)
+    app.register_blueprint(goodreads_bp)
 
     # Token-authenticated admin API (disabled unless ADMIN_API_TOKEN is set)
     init_admin_api(
@@ -738,6 +746,8 @@ class _GlobalClients:
     @property
     def storygraph_client(self): return container.storygraph_client()
     @property
+    def shelfmark_client(self): return container.shelfmark_client()
+    @property
     def library_service(self): return container.library_service()
     @property
     def sync_clients(self): return container.sync_clients()
@@ -855,6 +865,12 @@ def _tracker_automatch_worker():
                     storygraph._automatch_storygraph(book)
                 except Exception as e:
                     logger.warning("Deferred StoryGraph automatch failed for '%s': %s", abs_id, e, exc_info=True)
+            goodreads = sync_clients.get("Goodreads")
+            if goodreads and goodreads.is_configured():
+                try:
+                    goodreads._automatch(book)
+                except Exception as e:
+                    logger.warning("Deferred Goodreads automatch failed for '%s': %s", abs_id, e, exc_info=True)
         except Exception as e:
             logger.error("Deferred tracker automatch worker error: %s", e, exc_info=True)
         finally:
@@ -1144,6 +1160,33 @@ def inject_csrf_script(response):
         response.set_data(body[:idx] + snippet + body[idx:])
     except Exception as e:  # never let CSRF wiring break a page render
         logger.debug(f"CSRF inject skipped: {e}")
+    return response
+
+
+def gzip_html_response(response):
+    """after_request hook: compress HTML pages for browsers that accept gzip.
+
+    The Library page is about 500 KB of markup and compresses to a tenth of that in a
+    few milliseconds, which matters on a phone.
+    """
+    try:
+        if (
+            response.status_code != 200
+            or response.mimetype != 'text/html'
+            or response.direct_passthrough
+            or response.is_streamed
+            or 'Content-Encoding' in response.headers
+            or request.accept_encodings.quality('gzip') <= 0
+        ):
+            return response
+        body = response.get_data()
+        if len(body) < 1024:
+            return response
+        response.set_data(gzip.compress(body, compresslevel=6))
+        response.headers['Content-Encoding'] = 'gzip'
+        response.vary.add('Accept-Encoding')
+    except Exception as e:  # compression must never break a page
+        logger.debug(f"Gzip skipped: {e}")
     return response
 
 
@@ -1477,6 +1520,98 @@ def account_interface():
     return redirect(_safe_next_url())
 
 
+def account_display_page():
+    """New-interface display controls and a small, reader-scoped library preview."""
+    user = current_user()
+    if user is None:
+        return redirect(url_for('login'))
+    if user_setting('UI_MODE', 'classic') != 'new':
+        return redirect(url_for('account') + '#account-display')
+
+    books = _dashboard_visible_books_for_user(database_service.get_all_books(user_id=user.id), user)
+    states = database_service.get_all_states(user_id=user.id)
+    percent_by_book = {}
+    for state in states:
+        if state.percentage is not None:
+            percent_by_book[state.abs_id] = max(percent_by_book.get(state.abs_id, 0), state.percentage)
+    books.sort(key=lambda book: (
+        not (0 < percent_by_book.get(book.abs_id, 0) < 1),
+        (getattr(book, 'abs_title', None) or '').casefold(),
+        book.abs_id,
+    ))
+    selected = books[:8]
+    # If possible, show a series pair so the series-stack switch has a visible example.
+    if selected:
+        first_series = next((getattr(book, 'series_name', None) for book in selected
+                             if getattr(book, 'series_name', None)), None)
+        if first_series and not any(getattr(book, 'series_name', None) == first_series
+                                    for book in selected[1:]):
+            companion = next((book for book in books[8:]
+                              if getattr(book, 'series_name', None) == first_series), None)
+            if companion:
+                selected[-1] = companion
+    preview = []
+    if selected:
+        integrations = _build_dashboard_integrations()
+        preview, _ = _build_dashboard_mappings(
+            selected, states, integrations,
+            all_hardcover=database_service.get_all_hardcover_details(),
+            all_storygraph=database_service.get_all_storygraph_details(),
+            all_goodreads=database_service.get_all_goodreads_details(),
+            reading_stats_by_book=database_service.get_all_reading_stats(user_id=user.id),
+            cached_booklore_by_filename=_index_cached_booklore_books(database_service.get_all_booklore_books()),
+            claim_times_by_book=database_service.get_book_claim_times(user_id=user.id),
+        )
+    return render_template(
+        'next/display.html',
+        preview_mappings=preview,
+        preview_groups=_group_dashboard_mappings_by_series(preview),
+    )
+
+
+def account_display():
+    """Save some or all of the signed-in reader's display settings.
+
+    Takes a JSON object or a form. Only the keys sent are written, and nothing is
+    written unless every key and value is allowed. For a form, the last value of a
+    repeated field wins, so a hidden "false" before a checkbox records unchecked.
+    """
+    user = current_user()
+    if user is None:
+        if _request_wants_json():
+            return jsonify({"ok": False, "error": "Authentication required"}), 401
+        return redirect(url_for('login'))
+
+    payload = request.get_json(silent=True)
+    if isinstance(payload, dict):
+        submitted = dict(payload)
+    else:
+        submitted = {key: request.form.getlist(key)[-1] for key in request.form}
+    submitted.pop(_CSRF_FORM_FIELD, None)
+
+    values = {}
+    for key, raw in submitted.items():
+        value = normalize_display_value(key, raw)
+        if value is None:
+            return jsonify({"ok": False, "error": "Unsupported display setting"}), 400
+        values[key] = value
+    if not values:
+        return jsonify({"ok": False, "error": "Nothing to save"}), 400
+    database_service.set_user_credentials(user.id, values)
+    if _request_wants_json():
+        return jsonify({"ok": True, "settings": _display_settings_for(user)})
+    return redirect(_safe_next_url())
+
+
+def _display_settings_for(user) -> dict:
+    """Resolved display settings for ``user`` (server defaults when None), cached for the request."""
+    cached = g.get('display_settings')
+    if cached is None:
+        stored = database_service.get_user_credentials(user.id) if user is not None else {}
+        cached = g.display_settings = resolve_display_settings(stored or {})
+    return cached
+
+
 def account_integrations():
     """Self-service integration settings for the signed-in user."""
     user = current_user()
@@ -1485,11 +1620,14 @@ def account_integrations():
 
     from src.utils.user_config import PER_USER_FIELD_GROUPS
 
-    message = None
+    message = error = None
     if request.method == 'POST':
-        _apply_user_integrations(user.id)
-        message = "Saved your integrations."
-        user = database_service.get_user(user.id)
+        error = _apply_user_integrations(user.id)
+        if error and _request_wants_json():
+            return jsonify({"error": error}), 400
+        if not error:
+            message = "Saved your integrations."
+            user = database_service.get_user(user.id)
 
     creds = database_service.get_user_credentials(user.id)
     master = {
@@ -1504,9 +1642,10 @@ def account_integrations():
         service_enable_keys=SERVICE_ENABLE_KEYS,
         allow_master_fallback=_global_fallback_allowed(database_service, user),
         message=message,
+        error=error,
         account_user=user,
         user_test_services=_USER_TEST_SERVICES,
-    )
+    ), (400 if error else 200)
 
 
 # Library-lookup credentials the primary admin's account also lends to the
@@ -1537,8 +1676,22 @@ def _apply_user_integrations(user_id):
             else:  # text/select: blank clears => inherit master/default
                 values[key] = request.form.get(key, '')
 
+    destination = values.get('SHELFMARK_AUDIOBOOK_LIBRARY_ID', '')
+    saved_destination = str(database_service.get_user_credential(user_id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID', '') or '')
+    if destination:
+        if not destination.isdecimal() or int(destination) <= 0:
+            return 'Audiobook destination library must be a positive BookOrbit library ID.'
+    if destination and destination != saved_destination:
+        # Only a newly chosen destination needs the live check; unrelated edits must not depend on BookOrbit.
+        target = database_service.get_user(user_id)
+        libraries, error = _reader_scan_libraries(target, dict(request.form))
+        if error:
+            return error
+        if not any(str(item.get('id')) == destination for item in libraries):
+            return 'Selected audiobook destination library is not accessible for scanning.'
     database_service.set_user_credentials(user_id, values)
     _after_user_integrations_saved(user_id)
+    return None
 
 
 def _after_user_integrations_saved(user_id):
@@ -1584,11 +1737,14 @@ def admin_user_integrations(user_id):
 
     from src.utils.user_config import PER_USER_FIELD_GROUPS
 
-    message = None
+    message = error = None
     if request.method == 'POST':
-        _apply_user_integrations(user_id)
-        message = f"Saved integrations for {target.username}."
-        target = database_service.get_user(user_id)
+        error = _apply_user_integrations(user_id)
+        if error and _request_wants_json():
+            return jsonify({"error": error}), 400
+        if not error:
+            message = f"Saved integrations for {target.username}."
+            target = database_service.get_user(user_id)
 
     creds = database_service.get_user_credentials(user_id)
     # Master/global value per key, shown as the inherited fallback hint.
@@ -1604,9 +1760,10 @@ def admin_user_integrations(user_id):
         service_enable_keys=SERVICE_ENABLE_KEYS,
         allow_master_fallback=_global_fallback_allowed(database_service, target),
         message=message,
+        error=error,
         target_user=target,
         user_test_services=_USER_TEST_SERVICES,
-    )
+    ), (400 if error else 200)
 
 
 _USER_TEST_SERVICES = {
@@ -1621,6 +1778,8 @@ _USER_TEST_SERVICES = {
     "Calibre-Web Automated": "cwa",
     "Hardcover": "hardcover",
     "StoryGraph": "storygraph",
+    "Goodreads": "goodreads",
+    "Shelfmark": "shelfmark",
 }
 
 
@@ -1639,6 +1798,8 @@ _TEST_CONNECTION_FIELDS = {
     'readest': ['READEST_ANNOTATION_SYNC', 'READEST_EMAIL', 'READEST_PASSWORD', 'READEST_SUPABASE_URL'],
     'hardcover': ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
     'storygraph': ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
+    'goodreads': ['GOODREADS_ENABLED', 'GOODREADS_SESSION_COOKIE', 'GOODREADS_COOKIE_REFRESH_URL', 'GOODREADS_COOKIE_REFRESH_TOKEN', 'GOODREADS_BROWSER_URL'],
+    'shelfmark': ['SHELFMARK_URL', 'SHELFMARK_USER', 'SHELFMARK_PASSWORD'],
 }
 
 
@@ -1718,6 +1879,57 @@ def admin_user_abs_libraries(user_id):
     except Exception as e:
         logger.warning("Per-user ABS library lookup failed for user %s: %s", user_id, e, exc_info=True)
         return jsonify({"error": str(e)}), 502
+
+
+def _reader_scan_libraries(target, submitted):
+    """Read only libraries this reader may actually scan; never use an admin client."""
+    from src.api.bookorbit_client import BookOrbitClient
+    from src.utils.user_config import _ALLOW_GLOBAL_FALLBACK_KEY
+
+    if target is None:
+        return [], "Reader not found."
+    payload = _posted_user_test_credentials(target, submitted)
+    payload[_ALLOW_GLOBAL_FALLBACK_KEY] = _global_fallback_allowed(database_service, target)
+    client = BookOrbitClient(credentials=payload)
+    if not client.is_configured():
+        return [], "Configure this reader's BookOrbit credentials first."
+    libraries = client.get_libraries()
+    if not isinstance(libraries, list) or not libraries:
+        return [], "BookOrbit libraries could not be listed for this reader."
+    allowed = []
+    first_error = None
+    for library in libraries:
+        if not isinstance(library, dict) or str(library.get('id') or '').isdigit() is False:
+            continue
+        _history, error = client.get_scan_history(library['id'], limit=1)
+        if error is None:
+            allowed.append({'id': str(library['id']), 'name': str(library.get('name') or library['id'])})
+        elif first_error is None:
+            first_error = error
+    if not allowed:
+        return [], ('This BookOrbit account needs Manage libraries and library access to start scans.'
+                    if first_error == 'scan_forbidden' else
+                    'BookOrbit scan permissions or libraries could not be verified.')
+    return allowed, None
+
+
+def account_bookorbit_scan_libraries():
+    """Reader-scoped read-only picker, including unsaved account field edits."""
+    user = current_user()
+    if user is None:
+        return jsonify({'error': 'Authentication required'}), 401
+    libraries, error = _reader_scan_libraries(user, request.get_json(silent=True) or {})
+    return (jsonify({'error': error}), 403) if error else jsonify(libraries)
+
+
+@admin_required
+def admin_user_bookorbit_scan_libraries(user_id):
+    """Admin can edit a reader's destination using only that reader's credentials."""
+    target = database_service.get_user(user_id)
+    if target is None:
+        return jsonify({'error': 'User not found'}), 404
+    libraries, error = _reader_scan_libraries(target, request.get_json(silent=True) or {})
+    return (jsonify({'error': error}), 403) if error else jsonify(libraries)
 
 
 def account_abs_libraries():
@@ -2068,6 +2280,7 @@ def inject_global_vars():
         get_bool=get_bool,
         get_user_val=get_user_val,
         get_user_bool=get_user_bool,
+        display_settings=lambda: _display_settings_for(current_user()),
         match_queue_count=match_queue_count,
         current_user=current_user(),
     )
@@ -2110,6 +2323,7 @@ def _run_diagnostics_send(
         'cwa': _flag(lambda: container.cwa_client().is_configured()),
         'hardcover': _flag(lambda: container.hardcover_client().is_configured()),
         'storygraph': _flag(lambda: container.storygraph_client().is_configured()),
+        'goodreads': _flag(lambda: container.goodreads_client().is_configured()),
         'slash_books': os.path.isdir(os.environ.get('EBOOK_IMPORT_DIR', '/books')),
     }
     try:
@@ -5700,6 +5914,7 @@ def settings():
             'HARDCOVER_ENABLED',
             'HARDCOVER_ANNOTATION_SYNC',
             'STORYGRAPH_ENABLED',
+            'GOODREADS_ENABLED',
             'TELEGRAM_ENABLED',
             'SUGGESTIONS_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_ENABLED',
@@ -5732,6 +5947,7 @@ def settings():
             'KAVITA_SHELF_WATCH_ENABLED',
             'CALIBRE_USE_ABS_IDENTIFIER',
             'SHELFMARK_ENABLED',
+            'ACQUISITION_ALLOW_READERS',
             'OLLAMA_ENABLED',
             'OLLAMA_RERANK_SUGGESTIONS',
             'OLLAMA_JUDGE_SUGGESTIONS',
@@ -7043,7 +7259,16 @@ def _prefetch_bookorbit_authors(books: list, integrations: dict | None) -> dict:
         if not client or not client.is_configured():
             return {}
         authors = {}
-        for info in client.get_all_books() or []:
+        cached, stale = client.book_cache_snapshot()
+        if cached:
+            # Serve the last listing and refresh it off the request: an hourly
+            # TTL expiry must not hold the page behind paginated provider calls.
+            if stale:
+                _spawn_user_background(client.get_all_books, label="bookorbit-cache-refresh")
+            catalog = cached
+        else:
+            catalog = client.get_all_books() or []
+        for info in catalog:
             book_id = info.get("id")
             if book_id is None:
                 continue
@@ -7085,6 +7310,7 @@ def _build_dashboard_mapping(
     claim_times_by_book=None,
     bookfusion_by_book=None,
     bookorbit_authors=None,
+    goodreads_by_book=None,
 ):
     states = states_by_book.get(book.abs_id, [])
     state_by_client = {state.client_name: state for state in states}
@@ -7224,6 +7450,17 @@ def _build_dashboard_mapping(
             "storygraph_pages": None,
         })
 
+    goodreads_details = (goodreads_by_book or {}).get(book.abs_id)
+    mapping.update({
+        "goodreads_book_id": goodreads_details.goodreads_book_id if goodreads_details else None,
+        "goodreads_linked": bool(goodreads_details),
+        "goodreads_url": goodreads_details.goodreads_url if goodreads_details else None,
+        "goodreads_title": book.abs_title if goodreads_details else None,
+        "goodreads_matched_by": goodreads_details.matched_by if goodreads_details else None,
+        "goodreads_rating": _coerce_dashboard_rating(goodreads_details.goodreads_rating) if goodreads_details else None,
+        "goodreads_review_count": _coerce_dashboard_count(goodreads_details.goodreads_review_count) if goodreads_details else None,
+    })
+
     bookfusion_link = (bookfusion_by_book or {}).get(book.abs_id)
     if not isinstance(bookfusion_link, dict):
         bookfusion_link = None
@@ -7278,11 +7515,10 @@ def _build_dashboard_mapping(
         else None
     )
 
-    mapping.update({
-        "goodreads_rating": None,
-        "goodreads_review_count": None,
-    })
-    mapping.update(_get_cached_goodreads_rating(book, cached_booklore_by_filename=cached_booklore_by_filename))
+    cached_goodreads = _get_cached_goodreads_rating(book, cached_booklore_by_filename=cached_booklore_by_filename)
+    for key in ("goodreads_rating", "goodreads_review_count"):
+        if mapping[key] is None:
+            mapping[key] = cached_goodreads.get(key)
 
     if mapping.get("hardcover_slug"):
         mapping["hardcover_url"] = f"https://hardcover.app/books/{mapping['hardcover_slug']}"
@@ -7339,9 +7575,11 @@ def _build_dashboard_mappings(
     claim_times_by_book=None,
     bookfusion_by_book=None,
     bookorbit_authors=None,
+    all_goodreads=None,
 ):
     hardcover_by_book = {h.abs_id: h for h in (all_hardcover or [])}
     storygraph_by_book = {s.abs_id: s for s in (all_storygraph or [])}
+    goodreads_by_book = {g.abs_id: g for g in (all_goodreads or [])}
     states_by_book = _group_dashboard_states_by_book(all_states)
     reading_stats_by_book = reading_stats_by_book or {}
     cached_booklore_by_filename = cached_booklore_by_filename or {}
@@ -7371,6 +7609,7 @@ def _build_dashboard_mappings(
             claim_times_by_book,
             bookfusion_by_book=bookfusion_by_book,
             bookorbit_authors=bookorbit_authors,
+            goodreads_by_book=goodreads_by_book,
         )
         mapping["ctc_aligned"] = book.abs_id in ctc_aligned_book_ids
         mapping["readalong_ready"] = book.abs_id in readalong_ready_book_ids
@@ -7626,9 +7865,8 @@ def whats_new_dismiss():
 
 
 # ---------------- ROUTES ----------------
-def index():
-    """Dashboard - loads books and progress from database service"""
-    user = current_user()
+def _dashboard_mappings_for_user(user) -> tuple[list, float, dict]:
+    """Mappings, overall progress and integration flags for one user's dashboard."""
     user_id = user.id if user else None
     books = database_service.get_all_books(user_id=user_id)
     all_states = database_service.get_all_states(
@@ -7637,6 +7875,7 @@ def index():
     books = _dashboard_visible_books_for_user(books, user)
     all_hardcover = database_service.get_all_hardcover_details()
     all_storygraph = database_service.get_all_storygraph_details()
+    all_goodreads = database_service.get_all_goodreads_details()
     all_reading_stats = database_service.get_all_reading_stats(user_id=user_id)
     cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
     claim_times_by_book = database_service.get_book_claim_times(user_id=user_id)
@@ -7647,13 +7886,284 @@ def index():
         integrations,
         all_hardcover=all_hardcover,
         all_storygraph=all_storygraph,
+        all_goodreads=all_goodreads,
         reading_stats_by_book=all_reading_stats,
         cached_booklore_by_filename=cached_booklore_by_filename,
         claim_times_by_book=claim_times_by_book,
     )
+    return mappings, overall_progress, integrations
+
+
+def _warm_dashboard_sync_warnings() -> None:
+    """Build every user's dashboard mappings once at startup.
+
+    The drift memo is empty after a restart and each audio-axis book then parses its
+    whole alignment map, so the first dashboard load would pay for all of them.
+    Running the real mapping build here fills the memo for the current positions.
+    """
+    registry = container.user_client_registry()
+    for user in database_service.list_users():
+        user_token = credentials_token = None
+        try:
+            bundle = registry.get_clients(user.id)
+            user_token = set_current_user_id(user.id)
+            credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))
+            mappings, _progress, _integrations = _dashboard_mappings_for_user(user)
+            logger.info("Dashboard warm-up built %d mapping(s) for user %s", len(mappings), user.id)
+        except Exception as exc:
+            logger.warning("Dashboard warm-up failed for user %s: %s", user.id, exc, exc_info=True)
+        finally:
+            if credentials_token is not None:
+                reset_current_user_credentials(credentials_token)
+            if user_token is not None:
+                reset_current_user_id(user_token)
+
+
+def _pick_hero_mapping(mappings: list[dict]) -> dict | None:
+    """Select the most recently propagated in-progress book, deterministically."""
+    eligible = [
+        mapping for mapping in mappings
+        if 0 < float(mapping.get("unified_progress") or 0) < 100
+        and any(float(state.get("percentage") or 0) > 0
+                for state in (mapping.get("states") or {}).values())
+    ]
+    return max(
+        eligible,
+        key=lambda mapping: (
+            float(mapping.get("last_sync_leader_at") or 0),
+            float(mapping.get("last_sync_unix") or 0),
+            str(mapping.get("abs_id") or ""),
+        ),
+        default=None,
+    )
+
+
+def _hero_leader_service(leader: str | None) -> str | None:
+    """Display the exact service that led the latest propagated sync."""
+    if not leader:
+        return None
+    key = str(leader).strip().lower()
+    if key.startswith("kosync") or key == "bridgesync_plugin":
+        return "KOReader"
+    return _FORMAT_STRIP_SERVICE_NAMES.get(key)
+
+
+def _hero_leader_percent(mapping: dict, leader: str | None) -> float | None:
+    """Use the specific leader's position when it has an owned progress row."""
+    key = str(leader or "").strip().lower()
+    if key.startswith("kosync") or key == "bridgesync_plugin":
+        key = "kosync"
+    return (mapping.get("states") or {}).get(key, {}).get("percentage")
+
+
+# Striped per-book locks prevent duplicate concurrent synopsis source reads.
+_HERO_SYNOPSIS_LOCKS = tuple(threading.Lock() for _ in range(32))
+# Sources answer None on a transient failure too, so an empty result is retried.
+_HERO_SYNOPSIS_RECHECK_SECONDS = 7 * 86400
+
+
+def _hero_plain_text(value: object) -> str:
+    """Strip markup and scripts from untrusted source metadata."""
+    if not isinstance(value, str):
+        return ""
+    safe = re.sub(r"<(script|style)[^>]*>.*?</(script|style)>", " ", value, flags=re.I | re.S)
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", safe))).strip()[:12000]
+
+
+def _hero_synopsis_source(book, user) -> str | None:
+    """Use local EPUB, the reader's ABS metadata, then their BookOrbit detail."""
+    for filename in dict.fromkeys((book.original_ebook_filename, book.ebook_filename)):
+        if not filename or not str(filename).lower().endswith(".epub"):
+            continue
+        path = find_ebook_file(filename)
+        if path:
+            description = _hero_plain_text(extract_epub_metadata(str(path)).get("summary"))
+            if description:
+                return description
+    bundle = container.user_client_registry().get_clients(user.id)
+    abs_client = getattr(bundle, "abs_client", None)
+    if abs_client and abs_client.is_configured():
+        info = abs_client.get_item_details(book.abs_id)
+        if isinstance(info, dict):
+            media = info.get("media") if isinstance(info.get("media"), dict) else {}
+            metadata = media.get("metadata") if isinstance(media.get("metadata"), dict) else {}
+            description = _hero_plain_text(
+                metadata.get("description") or media.get("description") or info.get("description")
+            )
+            if description:
+                return description
+    orbit_id = None
+    if (book.ebook_source or "").lower() == "bookorbit":
+        orbit_id = book.ebook_source_id
+    elif (book.audio_source or "").lower() in ("bookorbit", "bookorbitaudio"):
+        orbit_id = book.audio_source_id
+    orbit = getattr(bundle, "bookorbit_client", None)
+    if orbit_id and orbit and orbit.is_configured():
+        detail = orbit.get_book_detail(orbit_id)
+        if isinstance(detail, dict):
+            nested = detail.get("metadata") if isinstance(detail.get("metadata"), dict) else {}
+            description = _hero_plain_text(
+                detail.get("description") or detail.get("summary")
+                or nested.get("description") or nested.get("summary")
+            )
+            if description:
+                return description
+    return None
+
+
+def _hero_cached_synopsis(book, user) -> str | None:
+    """Keep a found synopsis per reader for good; retry an empty lookup after a week."""
+    lock = _HERO_SYNOPSIS_LOCKS[hash(book.abs_id) % len(_HERO_SYNOPSIS_LOCKS)]
+    with lock:
+        checked_at, description = database_service.get_user_book_synopsis_cache(user.id, book.abs_id)
+        if description or (checked_at and time.time() - checked_at < _HERO_SYNOPSIS_RECHECK_SECONDS):
+            return description
+        description = _hero_synopsis_source(book, user)
+        database_service.set_user_book_synopsis_cache(user.id, book.abs_id, description, time.time())
+        return description
+
+
+def _hero_daily_totals(rows: list[dict], count: int, field: str, tz) -> dict:
+    """Return today/week only with a complete history, never a truncated sample."""
+    if not rows or count > len(rows):
+        return {}
+    today = datetime.now(tz).date()
+    monday = today - timedelta(days=today.weekday())
+    amounts = {"today": 0, "week": 0}
+    for row in rows:
+        try:
+            when = row.get("date")
+            date_value = (
+                datetime.fromisoformat(when).date() if when
+                else datetime.fromtimestamp(float(row["endTime"]), tz).date()
+            )
+            value = int(row.get(field) or 0)
+        except (KeyError, TypeError, ValueError, OSError):
+            return {}
+        if monday <= date_value <= today:
+            amounts["week"] += value
+        if date_value == today:
+            amounts["today"] += value
+    return amounts
+
+
+def _hero_listening_piece(book, abs_id: str) -> dict | None:
+    """Per-reader duration totals, with optional local day/week breakdown."""
+    abs_client = _stats_abs_client()
+    detail = _abs_book_listening_detail(abs_client, abs_id) if abs_client else None
+    if detail is None:
+        detail = database_service.get_book_listening_detail(abs_id)
+    if not detail or int(detail.get("totalSeconds") or 0) <= 0:
+        return None
+    payload = {"seconds": int(detail["totalSeconds"])}
+    duration = float(book.duration or book.audio_duration or 0)
+    if duration > 0:
+        payload["lengthSeconds"] = round(duration)
+        if detail.get("progressPercent") is not None:
+            progress = min(100, max(0, float(detail["progressPercent"])))
+            payload["leftSeconds"] = max(0, round(duration * (1 - progress / 100)))
+    payload.update(_hero_daily_totals(
+        detail.get("sessions") or [], int(detail.get("sessionCount") or 0),
+        "durationSeconds", _get_stats_timezone(),
+    ))
+    return payload
+
+
+def _hero_reading_piece(abs_id: str) -> dict | None:
+    """Per-reader KOReader pages, enriched with catalog page totals where known."""
+    tz = _get_stats_timezone()
+    reading = database_service.get_koreader_book_detail(
+        f"abs:{abs_id}", getattr(tz, "key", str(tz)),
+    )
+    if not reading or int(reading.get("pagesRead") or 0) <= 0:
+        return None
+    payload = {"read": int(reading["pagesRead"])}
+    storygraph = database_service.get_storygraph_details(abs_id)
+    hardcover = database_service.get_hardcover_details(abs_id)
+    total = (
+        getattr(storygraph, "storygraph_pages", None)
+        or getattr(hardcover, "hardcover_pages", None)
+    )
+    if total and int(total) > 0:
+        payload["total"] = int(total)
+        payload["left"] = max(0, int(total) - payload["read"])
+    heatmap = reading.get("heatmap") or []
+    payload.update(_hero_daily_totals(heatmap, len(heatmap), "pages", tz))
+    return payload
+
+
+def api_book_synopsis(abs_id: str):
+    """Return this reader's linked book synopsis (cached or looked up), or null."""
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Authentication required"}), 401
+    book = database_service.get_book(abs_id)
+    if book is None or not database_service.is_user_linked(user.id, abs_id):
+        return jsonify({"error": "Not found"}), 404
+    try:
+        text = _hero_cached_synopsis(book, user)
+    except Exception as exc:
+        logger.warning("Book synopsis unavailable for %s: %s", abs_id, exc, exc_info=True)
+        text = None
+    return jsonify({"text": text or None})
+
+
+def api_library_hero(abs_id: str):
+    """Load optional hero content after first paint, scoped to this reader's claims."""
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Authentication required"}), 401
+    settings = _display_settings_for(user)
+    if user_setting("UI_MODE", "classic") != "new" or settings["UI_SHOW_HERO"] != "true":
+        return jsonify({"error": "Not found"}), 404
+    if abs_id not in database_service.get_linked_abs_ids(user.id):
+        return jsonify({"error": "Not found"}), 404
+    book = database_service.get_book(abs_id)
+    if book is None:
+        return jsonify({"error": "Not found"}), 404
+
+    chosen = settings["UI_HERO_CONTENT"].split(",") if settings["UI_HERO_CONTENT"] else []
+    pieces = {}
+    if "synopsis" in chosen:
+        try:
+            description = _hero_cached_synopsis(book, user)
+            if description:
+                pieces["synopsis"] = {"text": description}
+        except Exception as exc:
+            logger.warning("Hero synopsis unavailable for %s: %s", abs_id, exc, exc_info=True)
+    if "listened" in chosen:
+        try:
+            detail = _hero_listening_piece(book, abs_id)
+            if detail:
+                pieces["listened"] = detail
+        except Exception as exc:
+            logger.warning("Hero listening unavailable for %s: %s", abs_id, exc, exc_info=True)
+    if "pages" in chosen:
+        try:
+            detail = _hero_reading_piece(abs_id)
+            if detail:
+                pieces["pages"] = detail
+        except Exception as exc:
+            logger.warning("Hero reading unavailable for %s: %s", abs_id, exc, exc_info=True)
+    return jsonify({"absId": abs_id, "pieces": pieces})
+
+
+def index():
+    """Dashboard - loads books and progress from database service"""
+    user = current_user()
+    mappings, overall_progress, integrations = _dashboard_mappings_for_user(user)
 
     suggestions = [s for s in database_service.get_all_pending_suggestions(user_id=get_current_user_id()) if len(s.matches) > 0]
     grouped_mappings = _group_dashboard_mappings_by_series(mappings)
+    library_template = ui_template('index.html')
+    hero_mapping = None
+    if library_template == 'next/index.html' and _display_settings_for(user)["UI_SHOW_HERO"] == "true":
+        hero_mapping = _pick_hero_mapping(mappings)
+        if hero_mapping:
+            hero_mapping["is_hero"] = True
+            leader = hero_mapping.get("last_sync_leader")
+            hero_mapping["hero_leader_service"] = _hero_leader_service(leader)
+            hero_mapping["hero_leader_progress"] = _hero_leader_percent(hero_mapping, leader)
 
     latest_version, update_available = get_update_status()
     whats_new_ctx = _build_whats_new_context(user)
@@ -7665,7 +8175,8 @@ def index():
     )
 
     return render_template(
-        ui_template('index.html'),
+        library_template,
+        hero_mapping=hero_mapping,
         mappings=mappings,
         grouped_mappings=grouped_mappings,
         integrations=integrations,
@@ -7755,6 +8266,7 @@ def book_page(abs_id: str) -> object:
         [book], states, integrations,
         all_hardcover=database_service.get_all_hardcover_details(),
         all_storygraph=database_service.get_all_storygraph_details(),
+        all_goodreads=database_service.get_all_goodreads_details(),
         reading_stats_by_book={abs_id: database_service.get_reading_stats(abs_id, user_id=user_id) or {}},
         cached_booklore_by_filename=_index_cached_booklore_books(database_service.get_all_booklore_books()),
         claim_times_by_book=database_service.get_book_claim_times(user_id=user_id),
@@ -7762,6 +8274,7 @@ def book_page(abs_id: str) -> object:
     return render_template(
         'next/_book_drawer.html' if request.args.get('fragment') == '1' else 'next/book.html',
         mapping=mappings[0], integrations=integrations,
+        synopsis=database_service.get_user_book_synopsis_cache(user_id, abs_id)[1],
         book_states={state.client_name: state for state in states},
         kosync_devices=database_service.get_user_kosync_progress_for_book(abs_id, user_id=user_id),
         recent_syncs=sorted(states, key=lambda state: state.last_updated or 0, reverse=True),
@@ -7806,7 +8319,25 @@ def job_queue_page():
         alignment_movable_ids=alignment_movable_ids,
         preflights=evidence,
     )
-    return render_template(ui_template('job_queue.html'), queue_view=snapshot)
+    acquisition_jobs = database_service.get_acquisition_jobs(user_id) if user_id is not None else []
+    bridge_statuses = {book.abs_id: book.status for book in books if book.abs_id}
+    for entry in snapshot["recent"]:
+        if entry.get("book_id") and entry.get("status") == "failed":
+            bridge_statuses[entry["book_id"]] = "failed"
+    for entry in snapshot["pending"]:
+        if entry.get("book_id"):
+            bridge_statuses[entry["book_id"]] = "pending"
+    for entry in snapshot["running"]:
+        if entry.get("book_id"):
+            bridge_statuses[entry["book_id"]] = "processing"
+    panel_context = {
+        "acquisition_jobs": acquisition_jobs,
+        "focused_acquisition_job_id": request.args.get("acquisition_job", ""),
+        "bridge_statuses": bridge_statuses,
+    }
+    if request.args.get("acquisition_fragment") == "1":
+        return render_template("_acquisition_jobs_panel.html", **panel_context)
+    return render_template(ui_template('job_queue.html'), queue_view=snapshot, **panel_context)
 
 
 def job_queue_reorder():
@@ -7848,7 +8379,7 @@ def job_queue_preflight_ack():
 
 
 def shelfmark() -> object:
-    """Shelfmark: a page framing SHELFMARK_URL in the New interface, a redirect to it in Classic."""
+    """Redirect to SHELFMARK_URL (library when unset)."""
     url = os.environ.get("SHELFMARK_URL")
     if not url:
         return redirect(url_for('index'))
@@ -7856,10 +8387,6 @@ def shelfmark() -> object:
     # Case-insensitive sanitization for the external destination.
     if not url.lower().startswith(('http://', 'https://')):
         url = f"http://{url}"
-
-    template = ui_template('shelfmark.html')
-    if template.startswith('next/'):
-        return render_template(template, frame_url=url)
     return redirect(url)
 
 
@@ -12012,29 +12539,24 @@ def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
                 remaining_storyteller_uuids.add(remaining_uuid)
                 remaining_cache_filenames.add(f"storyteller_{remaining_uuid}.epub")
 
-    if book.transcript_file:
-        try:
-            Path(book.transcript_file).unlink()
-        except Exception:
-            pass
+    if book.transcript_file and book.transcript_file != "DB_MANAGED":
+        remove_owned(book.transcript_file, DATA_DIR / "transcripts")
 
-    # Clean up audio cache directory (WAV files from whisper transcription)
-    audio_cache_dir = DATA_DIR / "audio_cache" / book.abs_id
-    if audio_cache_dir.exists() and not defer_audio_cache:
-        try:
-            shutil.rmtree(audio_cache_dir)
-            logger.info(f"🗑️ Deleted audio cache: {audio_cache_dir}")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to delete audio cache: {e}", exc_info=True)
+    # Clean up audio cache directories (source tracks + WAV chunks from whisper transcription)
+    other_ids = None if remaining_books is None else [b.abs_id for b in remaining_books]
+    if not defer_audio_cache:
+        errors = []
+        for removed in remove_book_cache_dirs(DATA_DIR / "audio_cache", book.abs_id, other_ids=other_ids, errors=errors):
+            logger.info(f"🗑️ Deleted audio cache: {removed}")
+        for e in errors:
+            logger.warning(f"⚠️ Failed to delete audio cache: {e}", exc_info=e)
 
     # Clean up full transcript directory (chapter JSON files + manifest)
-    transcript_dir = DATA_DIR / "transcripts" / "storyteller" / book.abs_id
-    if transcript_dir.exists():
-        try:
-            shutil.rmtree(transcript_dir)
-            logger.info(f"🗑️ Deleted transcript directory: {transcript_dir}")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to delete transcript directory: {e}", exc_info=True)
+    errors = []
+    for removed in remove_book_cache_dirs(DATA_DIR / "transcripts" / "storyteller", book.abs_id, other_ids=other_ids, errors=errors):
+        logger.info(f"🗑️ Deleted transcript directory: {removed}")
+    for e in errors:
+        logger.warning(f"⚠️ Failed to delete transcript directory: {e}", exc_info=e)
 
     cached_ebook_filename = local_ebook_filename(book)
     preserve_cached_ebook = (
@@ -12522,6 +13044,34 @@ def delete_mapping(abs_id):
         return ("Forbidden: you have not claimed this book", 403)
 
     _delete_or_unlink_book(user, abs_id, book)
+    return redirect(url_for('index'))
+
+
+def delete_selected_mappings() -> Response | tuple[str, int]:
+    """Delete selected mappings using the same ownership and cleanup rules as one delete."""
+    abs_ids = list(dict.fromkeys(request.form.getlist('abs_ids')))
+    if not abs_ids or any(not abs_id.strip() for abs_id in abs_ids):
+        return ("Select at least one book", 400)
+
+    user = current_user()
+    # Authorize the entire selection before deleting any of it.
+    if any(not _user_may_modify_book(user, abs_id) for abs_id in abs_ids):
+        return ("Forbidden: you have not claimed every selected book", 403)
+
+    removed = failed = 0
+    for abs_id in abs_ids:
+        try:
+            book = database_service.get_book(abs_id)
+            if book:
+                _delete_or_unlink_book(user, abs_id, book)
+                removed += 1
+        except Exception:
+            failed += 1
+            logger.exception("Failed to delete selected mapping '%s'", sanitize_log_data(abs_id))
+
+    flash(f"Removed {removed} book(s) from your dashboard.", "success")
+    if failed:
+        flash(f"Could not fully remove {failed} book(s). Check the logs before retrying.", "error")
     return redirect(url_for('index'))
 
 
@@ -13185,17 +13735,107 @@ def _extracted_cover_is_stale(cover_path, source_path) -> bool:
         return False
 
 
-_COVER_FRESH_TTL_SECONDS = 300
+# How long a cover is trusted before its ebook is looked at again. Looking means
+# resolve_book_path, which scans the library: measured at 0.2-8 s per book on a network
+# mount. So it never runs on a request: an existing cover is served at once and the
+# ebook is re-checked on one background thread, at most once per book per window.
+_COVER_FRESH_TTL_SECONDS = 3600
+# A book with no cover yet retries its extraction sooner: the ebook may still be arriving.
+_COVER_MISSING_RETRY_SECONDS = 300
 _cover_fresh_until: dict = {}
+_cover_recheck_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cover-fresh")
+
+
+def _schedule_cover_recheck(doc_hash: str) -> None:
+    """Queue one background ebook check for a cover, unless one ran this window."""
+    now = time.time()
+    if _cover_fresh_until.get(doc_hash, 0) > now:
+        return
+    _cover_fresh_until[doc_hash] = now + _COVER_FRESH_TTL_SECONDS
+    try:
+        _cover_recheck_pool.submit(_recheck_cover, doc_hash)
+    except RuntimeError:
+        _cover_fresh_until.pop(doc_hash, None)  # the pool is shutting down
+
+
+def _recheck_cover(doc_hash: str) -> None:
+    """Re-extract a cover whose ebook changed and retire a thumbnail that no longer matches."""
+    try:
+        cover_path = COVERS_DIR / f"{doc_hash}.jpg"
+        if not cover_path.exists():
+            return
+        book = database_service.get_book_by_kosync_id(doc_hash)
+        if book and book.ebook_filename:
+            parser = container.ebook_parser()
+            source_path = None
+            try:
+                source_path = parser.resolve_book_path(book.ebook_filename)
+            except Exception as e:
+                logger.debug(f"Cover freshness check could not resolve the ebook: {e}")
+            if source_path and _extracted_cover_is_stale(cover_path, source_path):
+                logger.info(
+                    "🖼️ Re-extracting cover for '%s': the ebook changed since it was cached",
+                    sanitize_log_data(getattr(book, "abs_title", None) or doc_hash),
+                )
+                parser.extract_cover(source_path, cover_path)
+        thumb_path = COVERS_DIR / "thumbs" / f"{doc_hash}.jpg"
+        if doc_hash in _thumb_versions and not cover_thumbnail_cache.is_current(cover_path, thumb_path):
+            # The page goes back to probing this cover until the new thumbnail is served.
+            _thumb_versions.pop(doc_hash, None)
+            cover_thumbnail_cache.enqueue(cover_path, thumb_path)
+    except Exception as e:
+        logger.warning(f"Cover freshness check failed for {doc_hash}: {e}", exc_info=True)
 
 # Browser-side cache window for extracted covers. Flask leaves `max_age` unset by
 # default, which sends `Cache-Control: no-cache` — the browser then revalidates
 # EVERY cover on EVERY dashboard load, so a large library pays hundreds of
 # conditional round trips just to be told 304. Covers are auth-gated, hence
-# `private`. The window deliberately matches _COVER_FRESH_TTL_SECONDS: a re-extracted
-# cover is already allowed to be up to that stale server-side, so the browser cache
-# adds no staleness the server does not already accept.
-_COVER_BROWSER_MAX_AGE_SECONDS = _COVER_FRESH_TTL_SECONDS
+# `private`. Kept short: an unversioned cover URL shows a re-extracted cover only
+# after this window, on top of the server's own re-check window.
+_COVER_BROWSER_MAX_AGE_SECONDS = 300
+
+# Thumbnails the New Library may render directly as `?v=<version>` URLs, which the
+# browser keeps for a year: a regenerated thumbnail gets a new version, so a new URL.
+# Versions are read from the thumbnails on disk once per process, so the page renders
+# direct URLs straight after a restart. Each render queues the background ebook check
+# (_schedule_cover_recheck), which drops a version whose thumbnail went out of date.
+_THUMB_IMMUTABLE_CACHE = 'private, max-age=31536000, immutable'
+_thumb_versions: dict = {}
+_thumb_versions_seeded_dir = None
+
+
+def _thumb_version(stat: os.stat_result) -> str:
+    return f"{stat.st_size:x}-{stat.st_mtime_ns:x}"
+
+
+def _seed_thumb_versions() -> None:
+    """Read every finished thumbnail's version from disk, once per covers folder."""
+    global _thumb_versions_seeded_dir
+    if _thumb_versions_seeded_dir == COVERS_DIR:
+        return
+    _thumb_versions_seeded_dir = COVERS_DIR
+    try:
+        with os.scandir(COVERS_DIR / "thumbs") as entries:
+            for entry in entries:
+                if not entry.name.endswith(".jpg"):
+                    continue
+                stat = entry.stat()
+                if stat.st_size:
+                    _thumb_versions.setdefault(entry.name[:-len(".jpg")], _thumb_version(stat))
+    except OSError as e:
+        logger.debug(f"Could not read the cover thumbnail folder: {e}")
+
+
+def thumb_cover_src(doc_hash: str | None) -> str | None:
+    """Versioned thumbnail URL for a cover that has a finished thumbnail, else None."""
+    if not doc_hash:
+        return None
+    _seed_thumb_versions()
+    version = _thumb_versions.get(doc_hash)
+    if not version:
+        return None
+    _schedule_cover_recheck(doc_hash)
+    return f"/covers/thumb/{doc_hash}.jpg?v={version}"
 
 
 def _send_cover_cached(filename: str):
@@ -13217,33 +13857,19 @@ def serve_cover(filename):
     # 1. Check if file exists
     cover_path = COVERS_DIR / filename
 
-    # The dashboard requests one cover per mapping, so anything on this path runs
-    # hundreds of times per page load. Confirming freshness costs a DB lookup plus
-    # resolve_book_path, which falls back to an rglob of the whole library when its
-    # 100-entry path cache misses — and a large library has far more books than
-    # that. Remember a recent "fresh" verdict so that work happens at most once per
-    # book per TTL instead of on every request; an ebook edited inside the window is
-    # picked up on the next one.
-    if cover_path.exists() and _cover_fresh_until.get(doc_hash, 0) > time.time():
+    # The dashboard requests one cover per mapping, so nothing slow may run here for a
+    # cover that already exists: serve it, and let the background check look at the ebook.
+    if cover_path.exists():
+        _schedule_cover_recheck(doc_hash)
         return _send_cover_cached(filename)
 
-    book = database_service.get_book_by_kosync_id(doc_hash)
+    # A book whose cover could not be extracted would otherwise pay the library scan on
+    # every page view, holding a browser connection ahead of the covers that do exist.
+    if _cover_fresh_until.get(doc_hash, 0) > time.time():
+        return "Cover not found", 404
+    _cover_fresh_until[doc_hash] = time.time() + _COVER_MISSING_RETRY_SECONDS
 
-    if cover_path.exists():
-        source_path = None
-        if book and book.ebook_filename:
-            try:
-                source_path = container.ebook_parser().resolve_book_path(book.ebook_filename)
-            except Exception as e:
-                logger.debug(f"Cover freshness check could not resolve the ebook: {e}")
-        if not source_path or not _extracted_cover_is_stale(cover_path, source_path):
-            _cover_fresh_until[doc_hash] = time.time() + _COVER_FRESH_TTL_SECONDS
-            return _send_cover_cached(filename)
-        _cover_fresh_until.pop(doc_hash, None)
-        logger.info(
-            "🖼️ Re-extracting cover for '%s': the ebook changed since it was cached",
-            sanitize_log_data(getattr(book, "abs_title", None) or doc_hash),
-        )
+    book = database_service.get_book_by_kosync_id(doc_hash)
 
     # 2. Try to extract
 
@@ -13273,6 +13899,45 @@ def serve_cover(filename):
             logger.debug(f"Lazy cover extraction failed: {e}")
 
     return "Cover not found", 404
+
+def serve_thumbnail_cover(filename: str):
+    """Serve a verified thumbnail, or the original while a worker prepares it."""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+\.jpg", filename):
+        abort(404)
+    original_response = serve_cover(filename)
+    if not isinstance(original_response, Response):
+        return original_response
+
+    source = COVERS_DIR / filename
+    target = COVERS_DIR / "thumbs" / filename
+    doc_hash = filename[:-len(".jpg")]
+    if cover_thumbnail_cache.is_current(source, target):
+        original_response.close()
+        version = _thumb_version(target.stat())
+        _thumb_versions[doc_hash] = version
+        response = send_from_directory(
+            target.parent, filename, max_age=_COVER_BROWSER_MAX_AGE_SECONDS
+        )
+        response.headers['Cache-Control'] = (
+            _THUMB_IMMUTABLE_CACHE if request.args.get('v') == version
+            else f'private, max-age={_COVER_BROWSER_MAX_AGE_SECONDS}'
+        )
+        return response
+
+    _thumb_versions.pop(doc_hash, None)
+    if source.is_file():
+        if cover_thumbnail_cache.failed_recently(source, target):
+            original_response.close()
+            return Response(status=503, headers={'Cache-Control': 'private, no-store'})
+        cover_thumbnail_cache.enqueue(source, target)
+        original_response.close()
+        # A cold thumbnail must not transfer the original multi-megapixel cover.
+        # The New Library checks readiness with HEAD before assigning image.src.
+        return Response(status=202, headers={
+            'Cache-Control': 'private, no-store', 'Retry-After': '1',
+        })
+    return original_response
+
 
 def api_storyteller_search():
     query = request.args.get('q', '')
@@ -14290,6 +14955,7 @@ def api_status():
     books = _dashboard_visible_books_for_user(books, user)
     all_hardcover = database_service.get_all_hardcover_details()
     all_storygraph = database_service.get_all_storygraph_details()
+    all_goodreads = database_service.get_all_goodreads_details()
     all_reading_stats = database_service.get_all_reading_stats(user_id=user_id)
     cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
     integrations = _build_dashboard_integrations()
@@ -14299,6 +14965,7 @@ def api_status():
         integrations,
         all_hardcover=all_hardcover,
         all_storygraph=all_storygraph,
+        all_goodreads=all_goodreads,
         reading_stats_by_book=all_reading_stats,
         cached_booklore_by_filename=cached_booklore_by_filename,
     )
@@ -14347,6 +15014,8 @@ def _build_dashboard_progress_rows(books, all_states):
             "last_sync": _format_dashboard_last_sync(latest_update_time),
             "last_sync_unix": latest_update_time,
             "last_slot": _format_strip_slot(last_slot_client),
+            "last_slot_client": last_slot_client,
+            "last_slot_service": _hero_leader_service(last_slot_client),
             "last_slot_unix": last_slot_unix,
             "last_slot_sync": _format_dashboard_last_sync(last_slot_unix),
             "states": states,
@@ -14603,55 +15272,47 @@ def clear_stale_suggestions():
 
 
 def clean_inactive_cache():
-    """Delete audio_cache, transcript dirs, and cached EPUBs for books that are not active."""
-    active_books = database_service.get_books_by_status('active')
-    active_ids = {b.abs_id for b in active_books}
-    active_ebook_files = {b.ebook_filename for b in active_books if b.ebook_filename}
-    active_orig_files = {b.original_ebook_filename for b in active_books if b.original_ebook_filename}
-    protected_files = active_ebook_files | active_orig_files
+    """Preview inactive cache ownership without deleting uncertain files.
 
-    deleted_audio = 0
-    deleted_transcripts = 0
-    deleted_epubs = 0
+    Previous cleanup compared raw book IDs with normalized adapter cache
+    directories, and did not protect retryable or job-held source tracks.
+    Until safe deletion can be coordinated with active workers and complete
+    ownership provenance, the endpoint must stay non-destructive.
+    """
+    payload = request.get_json(silent=True) or {}
+    if payload.get("dry_run") is False:
+        return jsonify({
+            "success": False, "dry_run": True,
+            "error": "Cache deletion is disabled until ownership and running-job safety are verified",
+        }), 409
 
-    audio_cache_root = DATA_DIR / "audio_cache"
-    if audio_cache_root.exists():
-        for entry in audio_cache_root.iterdir():
-            if entry.is_dir() and entry.name not in active_ids:
-                try:
-                    shutil.rmtree(entry)
-                    deleted_audio += 1
-                    logger.info(f"Cleaned audio cache: {entry.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean audio cache {entry.name}: {e}", exc_info=True)
+    books = database_service.get_all_books()
+    jobs = database_service.get_all_jobs()
+    inventory = inventory_audio_cache(DATA_DIR / "audio_cache", books, jobs)
+    status_by_book = {book.abs_id: getattr(book, "status", None) for book in books}
 
-    transcript_root = DATA_DIR / "transcripts" / "storyteller"
-    if transcript_root.exists():
-        for entry in transcript_root.iterdir():
-            if entry.is_dir() and entry.name not in active_ids:
-                try:
-                    shutil.rmtree(entry)
-                    deleted_transcripts += 1
-                    logger.info(f"Cleaned transcript dir: {entry.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean transcript dir {entry.name}: {e}", exc_info=True)
-
-    try:
-        epub_cache_dir = Path(container.epub_cache_dir())
-    except Exception:
-        epub_cache_dir = DATA_DIR / "epub_cache"
-    if epub_cache_dir.exists():
-        for entry in epub_cache_dir.iterdir():
-            if entry.is_file() and entry.name not in protected_files:
-                try:
-                    entry.unlink()
-                    deleted_epubs += 1
-                    logger.info(f"Cleaned cached epub: {entry.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean cached epub {entry.name}: {e}", exc_info=True)
-
-    logger.info(f"Cache cleanup complete: {deleted_audio} audio, {deleted_transcripts} transcript, {deleted_epubs} epub(s) removed")
-    return jsonify({"success": True, "deleted_audio": deleted_audio, "deleted_transcripts": deleted_transcripts, "deleted_epubs": deleted_epubs})
+    possible_inactive = [
+        entry for entry in inventory.entries
+        if entry.state == "mapped"
+        and len(entry.book_ids) == 1
+        and not entry.job_ids
+        and status_by_book.get(entry.book_ids[0]) == "inactive"
+    ]
+    unverified = [entry for entry in inventory.entries
+                  if entry.state in ("unverified", "ambiguous", "unsafe_symlink", "tombstone")]
+    return jsonify({
+        "success": True, "dry_run": True, "cleanup_disabled": True,
+        "deleted_audio": 0, "deleted_transcripts": 0, "deleted_epubs": 0,
+        "potential_inactive_audio": [
+            {"cache_name": entry.directory.name, "bytes": entry.total_bytes}
+            for entry in possible_inactive
+        ],
+        "potential_inactive_audio_bytes": sum(entry.total_bytes for entry in possible_inactive),
+        "protected_audio_directories": len(inventory.entries) - len(possible_inactive),
+        "unverified_audio_directories": len(unverified),
+        "unverified_audio_bytes": sum(entry.total_bytes for entry in unverified),
+        "note": "Preview only. No audio, transcript, EPUB or original audiobook files were deleted.",
+    })
 
 
 def _run_storyteller_backfill():
@@ -15399,6 +16060,17 @@ def _run_test_connection(service: str, payload: dict):
             _coerce_test_bool(data.get('STORYGRAPH_ENABLED')),
             _coerce_test_str(data.get('STORYGRAPH_SESSION_COOKIE')),
             _coerce_test_str(data.get('STORYGRAPH_REMEMBER_USER_TOKEN')),
+        ),
+        'goodreads': lambda data: _test_goodreads(
+            _coerce_test_bool(data.get('GOODREADS_ENABLED')),
+            _coerce_test_str(data.get('GOODREADS_SESSION_COOKIE')),
+            _coerce_test_str(data.get('GOODREADS_COOKIE_REFRESH_URL')),
+            _coerce_test_str(data.get('GOODREADS_COOKIE_REFRESH_TOKEN')),
+            _coerce_test_str(data.get('GOODREADS_BROWSER_URL')),
+        ),
+        'shelfmark': lambda data: _test_shelfmark(
+            _coerce_test_str(data.get('SHELFMARK_USER')),
+            _coerce_test_str(data.get('SHELFMARK_PASSWORD')),
         ),
         'telegram': lambda data: _test_telegram(
             _coerce_test_bool(data.get('TELEGRAM_ENABLED')),
@@ -16379,6 +17051,18 @@ def _test_bookfusion(enabled: bool, api_url: str, access_token: str) -> dict:
     return {"ok": False, "message": "BookFusion API rejected the token"}
 
 
+def _test_shelfmark(user: str, pwd: str) -> dict:
+    """Check a Shelfmark login with one sign-in, using only the posted values (no admin fallback)."""
+    from src.api.shelfmark_client import ShelfmarkClient
+    from src.utils.user_config import _ALLOW_GLOBAL_FALLBACK_KEY
+
+    if not os.environ.get("SHELFMARK_URL"):
+        return {"ok": False, "message": "Shelfmark has no URL yet (set it in Settings)"}
+    creds = {"SHELFMARK_USER": user, "SHELFMARK_PASSWORD": pwd, _ALLOW_GLOBAL_FALLBACK_KEY: False}
+    ok, message = ShelfmarkClient(credentials=creds).check_connection()
+    return {"ok": ok, "message": message}
+
+
 def _test_storygraph(enabled: bool, session_cookie: str, remember_user_token: str) -> dict:
     if not enabled:
         return {"ok": False, "message": "StoryGraph is disabled"}
@@ -16403,6 +17087,25 @@ def _test_storygraph(enabled: bool, session_cookie: str, remember_user_token: st
     if r.status_code in (302, 303) and "/users/sign_in" in location:
         return {"ok": False, "message": "Invalid StoryGraph session cookies"}
     return {"ok": False, "message": f"StoryGraph returned {r.status_code}"}
+
+
+def _test_goodreads(enabled: bool, cookie: str, refresher_url: str, token: str, browser_url: str = "") -> dict:
+    """Test a Goodreads account without saving a cookie or posting progress."""
+    from src.api.goodreads_client import GoodreadsClient
+
+    if not enabled:
+        return {"ok": False, "message": "Goodreads is disabled"}
+    credentials = {
+        "GOODREADS_ENABLED": "true",
+        "GOODREADS_SESSION_COOKIE": cookie,
+        "GOODREADS_COOKIE_REFRESH_URL": refresher_url,
+        "GOODREADS_COOKIE_REFRESH_TOKEN": token,
+        "GOODREADS_BROWSER_URL": browser_url,
+        "__allow_global_fallback__": False,
+    }
+    client = GoodreadsClient(credentials, user_id=-1, enforce_global_gate=False)
+    client.check_connection()
+    return {"ok": True, "message": "Goodreads session accepted"}
 
 
 def _test_telegram(enabled: bool, token: str) -> dict:
@@ -16626,6 +17329,7 @@ def create_app(test_container=None):
     app.before_request(require_login_guard)
     app.before_request(csrf_protect_guard)
     app.teardown_request(_release_request_user_context)
+    app.after_request(gzip_html_response)  # registered first, so it runs after the CSRF injection
     app.after_request(inject_csrf_script)
 
     # Register context processors, jinja globals, etc.
@@ -16633,6 +17337,7 @@ def create_app(test_container=None):
     app.jinja_env.globals['csrf_token'] = _ensure_csrf_token
     app.jinja_env.globals['safe_folder_name'] = safe_folder_name
     app.jinja_env.globals['suggestion_source_badge'] = suggestion_source_badge
+    app.jinja_env.globals['thumb_cover_src'] = thumb_cover_src
     app.jinja_env.globals['suggestion_bulk_block'] = _suggestion_bulk_block
 
     # i18n: gettext for the Jinja layer. The selector is passed as an argument
@@ -16687,15 +17392,19 @@ def create_app(test_container=None):
     app.add_url_rule('/account', 'account', account, methods=['GET', 'POST'])
     app.add_url_rule('/account/language', 'account_language', account_language, methods=['POST'])
     app.add_url_rule('/account/interface', 'account_interface', account_interface, methods=['POST'])
+    app.add_url_rule('/account/display', 'account_display', account_display, methods=['POST'])
+    app.add_url_rule('/account/display', 'account_display_page', account_display_page, methods=['GET'])
     app.add_url_rule('/account/integrations', 'account_integrations', account_integrations, methods=['GET', 'POST'])
     app.add_url_rule('/api/account/test-connection/<service>', 'account_test_connection', account_test_connection, methods=['POST'])
     app.add_url_rule('/api/account/abs-libraries', 'account_abs_libraries', account_abs_libraries, methods=['POST'])
     app.add_url_rule('/api/account/booklore-libraries', 'account_booklore_libraries', account_booklore_libraries, methods=['POST'])
+    app.add_url_rule('/api/account/bookorbit-scan-libraries', 'account_bookorbit_scan_libraries', account_bookorbit_scan_libraries, methods=['POST'])
     app.add_url_rule('/admin/users', 'admin_users', admin_users, methods=['GET', 'POST'])
     app.add_url_rule('/admin/users/<int:user_id>/integrations', 'admin_user_integrations', admin_user_integrations, methods=['GET', 'POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/test-connection/<service>', 'admin_user_test_connection', admin_user_test_connection, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/abs-libraries', 'admin_user_abs_libraries', admin_user_abs_libraries, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/booklore-libraries', 'admin_user_booklore_libraries', admin_user_booklore_libraries, methods=['POST'])
+    app.add_url_rule('/api/admin/users/<int:user_id>/bookorbit-scan-libraries', 'admin_user_bookorbit_scan_libraries', admin_user_bookorbit_scan_libraries, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/start', 'admin_user_bookfusion_device_start', admin_user_bookfusion_device_start, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/poll', 'admin_user_bookfusion_device_poll', admin_user_bookfusion_device_poll, methods=['POST'])
     app.add_url_rule('/', 'index', index)
@@ -16715,6 +17424,7 @@ def create_app(test_container=None):
     app.add_url_rule('/batch-match', 'batch_match', batch_match, methods=['GET', 'POST'])
     app.add_url_rule('/suggestions', 'suggestions', suggestions_page, methods=['GET', 'POST'])
     app.add_url_rule('/delete/<abs_id>', 'delete_mapping', delete_mapping, methods=['POST'])
+    app.add_url_rule('/delete-selected', 'delete_selected_mappings', delete_selected_mappings, methods=['POST'])
     app.add_url_rule('/clear-progress/<abs_id>', 'clear_progress', clear_progress, methods=['POST'])
     app.add_url_rule('/api/remap-alignment/<abs_id>', 'remap_alignment', remap_alignment, methods=['POST'])
     app.add_url_rule('/api/readalong-epub/<abs_id>', 'generate_readalong_epub', generate_readalong_epub, methods=['POST'])
@@ -16729,6 +17439,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/me/books', 'api_me_books', api_me_books, methods=['GET'])
     app.add_url_rule('/update-hash/<abs_id>', 'update_hash', update_hash, methods=['POST'])
     app.add_url_rule('/covers/<path:filename>', 'serve_cover', serve_cover)
+    app.add_url_rule('/covers/thumb/<path:filename>', 'serve_thumbnail_cover', serve_thumbnail_cover)
     app.add_url_rule('/api/health', 'api_health', api_health)
     app.add_url_rule('/api/restart', 'api_restart', api_restart, methods=['POST'])
     app.add_url_rule('/api/status', 'api_status', api_status)
@@ -16737,6 +17448,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/stats', 'api_stats', api_stats)
     app.add_url_rule('/api/stats/reading-day', 'api_stats_reading_day', api_stats_reading_day)
     app.add_url_rule('/api/stats/reading-calendar', 'api_stats_reading_calendar', api_stats_reading_calendar)
+    app.add_url_rule('/api/library/hero/<abs_id>', 'api_library_hero', api_library_hero)
+    app.add_url_rule('/api/book/<abs_id>/synopsis', 'api_book_synopsis', api_book_synopsis)
     app.add_url_rule('/api/stats/book-detail', 'api_stats_book_detail', api_stats_book_detail)
     app.add_url_rule('/api/stats/yearly-recap', 'api_stats_yearly_recap', api_stats_yearly_recap)
     app.add_url_rule('/logs', 'logs_view', logs_view)
@@ -16750,6 +17463,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/suggestions/scan-status', 'suggestions_scan_status', suggestions_scan_status, methods=['GET'])
     from src.api.suggestions_redesign import init_suggestions_redesign_routes
     init_suggestions_redesign_routes(app, sys.modules[__name__])
+    from src.api.acquisition_routes import init_acquisition_routes
+    init_acquisition_routes(app, sys.modules[__name__])
     app.add_url_rule('/api/suggestions/<source_id>/dismiss', 'dismiss_suggestion', dismiss_suggestion, methods=['POST'])
     app.add_url_rule('/api/suggestions/<source_id>/ignore', 'ignore_suggestion', ignore_suggestion, methods=['POST'])
     app.add_url_rule('/api/suggestions/clear_stale', 'clear_stale_suggestions', clear_stale_suggestions, methods=['POST'])
@@ -16893,6 +17608,7 @@ if __name__ == '__main__':
     sync_daemon_thread = threading.Thread(target=sync_daemon, daemon=True)
     sync_daemon_thread.start()
     threading.Thread(target=get_update_status, daemon=True).start()
+    threading.Thread(target=_warm_dashboard_sync_warnings, daemon=True, name="dashboard-warmup").start()
     logger.info("🚀 Sync daemon thread started")
 
     # Start ABS Socket.IO listener for real-time / instant sync

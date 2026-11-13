@@ -23,6 +23,7 @@
                 <a href="#cwa" class="settings-tab settings-service-tab" data-tab="cwa" data-svc="cwa" onclick="showSettingsTab('cwa'); return false;"><span class="settings-tab-label">{{ _('Calibre-Web Automated') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
                 <a href="#hardcover" class="settings-tab settings-service-tab" data-tab="hardcover" data-svc="hardcover" onclick="showSettingsTab('hardcover'); return false;"><span class="settings-tab-label">{{ _('Hardcover') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
                 <a href="#storygraph" class="settings-tab settings-service-tab" data-tab="storygraph" data-svc="storygraph" onclick="showSettingsTab('storygraph'); return false;"><span class="settings-tab-label">{{ _('StoryGraph') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#goodreads" class="settings-tab settings-service-tab" data-tab="goodreads" data-svc="goodreads" onclick="showSettingsTab('goodreads'); return false;"><span class="settings-tab-label">{{ _('Goodreads') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
                 </div>
                 <div class="settings-nav-group" role="group" aria-label="{{ _('Sync & library') }}"><h3 class="settings-nav-heading">{{ _('Sync & library') }}</h3>
                 <a href="#sync" class="settings-tab" data-tab="sync" onclick="showSettingsTab('sync'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#processing"></use></svg><span class="settings-tab-label">{{ _('🔄 Reading &amp; Sync')|replace('🔄', '')|trim }}</span></a>
@@ -34,7 +35,7 @@
                 <a href="#system" class="settings-tab" data-tab="system" onclick="showSettingsTab('system'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#server"></use></svg><span class="settings-tab-label">{{ _('🛠️ Server')|replace('🛠️', '')|trim }}</span></a>
                 <a href="#maintenance" class="settings-tab" data-tab="maintenance" onclick="showSettingsTab('maintenance'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#maintenance"></use></svg><span class="settings-tab-label">{{ _('🧰 Maintenance')|replace('🧰', '')|trim }}</span></a>
                 <a href="#users" class="settings-tab" data-tab="users" onclick="showSettingsTab('users'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#account"></use></svg><span class="settings-tab-label">{{ _('👥 Users')|replace('👥', '')|trim }}</span></a>
-                <a href="#logs" class="settings-tab" data-tab="logs" onclick="showSettingsTab('logs'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logs"></use></svg><span class="settings-tab-label">{{ _('Logs') }}</span></a>
+                <a href="{{ url_for('logs_view') }}" class="settings-tab" data-tab="logs"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logs"></use></svg><span class="settings-tab-label">{{ _('Logs') }}</span></a>
                 </div></nav>
                     <p class="settings-menu-hint">{{ _('Press Ctrl K to jump to any setting') }}</p>
                 </div>
@@ -929,7 +930,7 @@
         </div>
 
         <div class="settings-layout">
-            <div id="settings-mobile-slot" class="settings-mobile-slot"></div>
+            <div id="settings-mobile-slot" class="settings-mobile-slot"><button type="button" class="settings-section-toggle" id="settings-section-toggle" aria-expanded="false" aria-controls="settings-navigation"><span class="settings-section-toggle-kicker">{{ _('Section') }}</span><span id="settings-section-current"></span><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#chevron"></use></svg></button></div>
             <div class="settings-main">
 
         <form method="POST" action="/settings" class="settings-form" id="settingsForm">
@@ -1724,6 +1725,39 @@
                 </div>
             </div>
 
+            <div class="settings-section" data-svc="goodreads" data-service-page="goodreads">
+                {% set goodreads_enabled = get_bool('GOODREADS_ENABLED') %}
+                <div class="section-header">
+                    <div class="svc-left">
+                        <div class="svc-chip">GR</div>
+                        <div class="svc-title">
+                            <h3>Goodreads <span class="tracker-tag">{{ _('write-only tracker') }}</span></h3>
+                            <div class="svc-desc">{{ _('Shelf and percentage progress') }}</div>
+                        </div>
+                    </div>
+                    <div class="header-tail">
+                        <span class="pill off">{{ _('Per-user cookies') }}</span>
+                        <div class="toggle-switch-wrapper">
+                            <span class="toggle-label">{{ _('Enable') }}</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle_goodreads" name="GOODREADS_ENABLED"
+                                    onchange="toggleSection('goodreads_body', this.checked)" {% if goodreads_enabled %}checked{% endif %}>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div id="goodreads_body" class="section-body {% if not goodreads_enabled %}collapsed{% endif %}">
+                    <div class="form-group full-width">
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            {% trans trimmed settings_url=url_for('settings') %}🔒 Set each user's Goodreads browser cookie, cookie refresher, or signed-in Selenium URL in
+                            <a href="{{ settings_url }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>.
+                            Progress posts appear in the user's public Goodreads feed.{% endtrans %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             </div><!-- /integrations panel -->
 
             <div class="tab-panel" data-panel="sync">
@@ -1800,7 +1834,7 @@
                     <div class="form-group full-width">
                         <label>{{ _('Wait before posting progress (minutes)') }}</label>
                         <input type="number" name="ALL_APPS_TRACKER_COOLDOWN_MINS" min="0" value="{{ merged_values.ALL_APPS_TRACKER_COOLDOWN_MINS }}">
-                        <div class="help-text">{{ _('Hardcover and StoryGraph get your progress once you have made no new progress for this long; new progress restarts the wait. Finishing a book posts straight away. 0 posts on every sync.') }}</div>
+                        <div class="help-text">{{ _('Hardcover, StoryGraph and Goodreads get your progress once you have made no new progress for this long; new progress restarts the wait. Finishing a book posts straight away. 0 posts on every sync.') }}</div>
                     </div>
                 </div>
             </div>
@@ -2246,12 +2280,27 @@
                 </div>
             </div>
 
+            <!-- Getting missing books -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>{{ _('Getting books') }}</h3>
+                </div>
+                <div class="section-body">
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="acquisition_allow_readers"
+                            name="ACQUISITION_ALLOW_READERS" {% if get_bool('ACQUISITION_ALLOW_READERS') %}checked{% endif %}>
+                        <label for="acquisition_allow_readers">{{ _('Let readers get missing books') }}</label>
+                        <div class="help-text">{{ _('Readers can ask BookOrbit for the ebook or audiobook a search did not find, using their own BookOrbit login. Admins can always do this.') }}</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Shelfmark (Optional) -->
             <div class="settings-section">
                 {% set shelfmark_enabled = get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and
                 get_val('SHELFMARK_ENABLED') == '') %}
                 <div class="section-header">
-                    <h3>{{ _('Shelfmark View') }}</h3>
+                    <h3>{{ _('Shelfmark') }}</h3>
                     <div class="toggle-switch-wrapper">
                         <span class="toggle-label">{{ _('Enable') }}</span>
                         <label class="toggle-switch">
@@ -2266,7 +2315,9 @@
                     <div class="form-group full-width">
                         <label>{{ _('Shelfmark URL') }}</label>
                         <input type="text" name="SHELFMARK_URL" value="{{ get_val('SHELFMARK_URL') }}">
-                        <div class="help-text">{{ _('The address of your Shelfmark site. When set, a Shelfmark tab appears in BookBridge.') }}</div>
+                        <div class="help-text">{{ _('The address of your Shelfmark site. BookBridge uses it to find missing books for readers who sign in to Shelfmark.') }}</div>
+                        <div class="help-text">{{ _('Readers can choose an audiobook destination library in My Integrations. Leave it blank to use normal scheduled scanning.') }}</div>
+                        {% if get_val('SHELFMARK_URL') %}<div class="help-text"><a href="/shelfmark" target="_blank" rel="noopener noreferrer" style="color:#aab4f5;">{{ _('Open Shelfmark') }}</a></div>{% endif %}
                     </div>
                 </div>
             </div>
@@ -3090,11 +3141,11 @@
                     <div class="form-group full-width">
                         <label>{{ _('Cache Cleanup') }}</label>
                         <div class="cleanup-group">
-                            <button type="button" class="btn btn-danger" onclick="cleanInactiveCache()">
-                                {{ _('Clean Inactive Cache') }}
+                            <button type="button" class="btn btn-primary" onclick="cleanInactiveCache()">
+                                {{ _('Review Inactive Cache') }}
                             </button>
                             <p class="help-text flex-1 m-0">
-                                {{ _('Deletes audio cache and transcript files for books that are no longer active. Active books are not affected.') }}
+                                {{ _('Review potentially inactive cache files and unresolved ownership. No files are deleted.') }}
                             </p>
                         </div>
                     </div>
@@ -3126,7 +3177,8 @@
 
         <div class="tab-panel next-logs-panel" data-panel="logs">
             <h3>{{ _('Logs') }}</h3>
-            <iframe title="{{ _('Live logs') }}" loading="lazy" src="{{ url_for('logs_view') }}?embed=1"></iframe>
+            <p>{{ _('Logs have their own page now.') }}</p>
+            <a class="btn btn-primary" href="{{ url_for('logs_view') }}">{{ _('Open Logs') }}</a>
         </div>
         <!-- Users tab (own forms — posts to /settings, not the application form above) -->
         <div class="tab-panel" data-panel="users">

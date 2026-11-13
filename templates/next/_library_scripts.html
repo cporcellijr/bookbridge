@@ -9,8 +9,8 @@
             }
         </script>
 <script>
-            function checkForgeStatus() {
-                fetch('/api/forge/active')
+            function checkForgeStatus(signal) {
+                return fetch('/api/forge/active', { signal })
                     .then(r => r.json())
                     .then(tasks => {
                         const banner = document.getElementById('forge-status-banner');
@@ -24,13 +24,21 @@
                         } else {
                             banner.style.display = 'none';
                         }
+                        return !!(tasks && tasks.length > 0);
                     })
                     .catch(e => console.debug("Forge status check failed", e));
             }
-            // Poll every 5s
-            setInterval(checkForgeStatus, 5000);
-            // Initial check
-            document.addEventListener('DOMContentLoaded', checkForgeStatus);
+            // 5s while a forge task is running or work was just started, 30s when idle
+            // (tasks started elsewhere show up within one slow tick or on tab focus).
+            window.bbForgePoll = bbPoller({ name: 'forge', fastMs: 5000, slowMs: 30000, run: checkForgeStatus });
+            ['syncNow', 'remapAlignment', 'generateReadalongEpub'].forEach(function (name) {
+                var original = window[name];
+                if (typeof original !== 'function') return;
+                window[name] = function () {
+                    window.bbForgePoll.kick();
+                    return original.apply(this, arguments);
+                };
+            });
         </script>
 <script>
                 // Make function globally available
@@ -106,12 +114,24 @@
             </script>
 {% if mappings %}
 <script>
-            const dashboardSections = Array.from(document.querySelectorAll('.dashboard-section'));
-            const dashboardGrids = Array.from(document.querySelectorAll('.dashboard-section .book-grid'));
+            const libraryGrid = document.getElementById('library-grid');
             const sortSelect = document.getElementById('sort-select');
             const filterSelect = document.getElementById('filter-select');
+            const statusFilter = document.getElementById('status-filter');
+            const filterButton = document.getElementById('library-filter-button');
+            const filterButtonLabel = document.getElementById('library-filter-button-label');
+            const filterResetButton = document.getElementById('library-filter-reset');
+            const filterClearButton = document.getElementById('library-filter-clear');
+            const filterPanel = document.getElementById('library-filter-panel');
+            const filterBackdrop = document.getElementById('library-filter-backdrop');
+            const filterHost = document.getElementById('library-filter-host');
+            const filterGroups = {status: statusFilter, format: filterSelect};
+            let filterInitialized = false;
+            let savedAttentionPreference = false;
             const seriesFilter = document.getElementById('series-filter');
             const authorFilter = document.getElementById('author-filter');
+            filterGroups.author = authorFilter;
+            filterGroups.series = seriesFilter;
             const filterCount = document.getElementById('filter-count');
             const attentionOnlyFilter = document.getElementById('attention-only-filter');
             const attentionPopover = document.getElementById('needs-attention');
@@ -147,42 +167,26 @@
             const searchHandoffMsg = document.getElementById('search-handoff-msg');
             const searchHandoffLink = document.getElementById('search-handoff-link');
             const addBookSearchUrl = '{{ url_for('suggestions', tab='search') }}&q=';
-            const notStartedSection = document.getElementById('not-started-section');
-            const notStartedHeader = document.getElementById('not-started-header');
-            const notStartedGrid = document.getElementById('not-started-grid');
-            const notStartedChevron = document.getElementById('not-started-chevron');
             const seriesGroupingToggle = document.getElementById('series-grouping-toggle');
 
-            function updateNotStartedChevron(isExpanded) {
-                if (notStartedChevron) {
-                    notStartedChevron.textContent = isExpanded ? '▼' : '▶';
-                }
-                if (notStartedHeader) {
-                    notStartedHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-                }
+            function hasVisibleGridItems() {
+                if (!libraryGrid) return false;
+                return Array.from(libraryGrid.children).some(entry =>
+                    !entry.classList.contains('hidden') &&
+                    entry.style.display !== 'none' &&
+                    (entry.classList.contains('book-card') ||
+                        (entry.classList.contains('series-group') &&
+                            !document.body.classList.contains('series-grouping-off'))));
             }
 
-            function updateDashboardSectionVisibility() {
-                dashboardSections.forEach(section => {
-                    const grid = section.querySelector('.book-grid');
-                    if (!grid) return;
-
-                    const visibleCards = grid.querySelectorAll('.book-card:not(.hidden)');
-                    const visibleGroups = grid.querySelectorAll('.series-group:not(.hidden)');
-                    if (visibleCards.length > 0 || visibleGroups.length > 0) {
-                        section.classList.remove('hidden');
-                    } else {
-                        section.classList.add('hidden');
-                    }
-                });
-            }
-            // Finished volumes can appear in their series and under Finished.
-            // Count each book once, regardless of grouping or duplicate cards.
+            // Count every book once, regardless of its series presentation.
             function distinctBookCards() {
                 const seen = new Map();
                 document.querySelectorAll('.book-card').forEach(card => {
                     const absId = card.dataset.absId;
-                    if (absId && !seen.has(absId)) seen.set(absId, card);
+                    // The hero book leaves the grid as a standalone card; inside its series stack it stays.
+                    const heroHidden = card.dataset.heroExcluded === 'true' && !card.closest?.('.series-group');
+                    if (absId && !heroHidden && !seen.has(absId)) seen.set(absId, card);
                 });
                 return Array.from(seen.values());
             }
@@ -194,7 +198,8 @@
                 const total = cards.length;
                 const shown = cards.reduce(
                     (n, card) => n + (card.classList.contains('hidden') ? 0 : 1), 0);
-                const active = (filterSelect?.value !== 'all')
+                const active = (statusFilter?.value !== 'all')
+                    || (filterSelect?.value !== 'all')
                     || (seriesFilter?.value !== 'all')
                     || (authorFilter?.value !== 'all')
                     || !!attentionOnlyFilter?.checked
@@ -257,24 +262,168 @@
             function updateFacetOptions() {
                 if (!seriesFilter && !authorFilter) return;
                 const cards = distinctBookCards();
-                const formatValue = filterSelect ? filterSelect.value : 'all';
-                const seriesValue = seriesFilter ? seriesFilter.value : 'all';
-                const authorValue = authorFilter ? authorFilter.value : 'all';
+                const reachable = cards.filter(card =>
+                    !attentionOnlyFilter?.checked || needsAttention(card));
+                applyFacetCounts(seriesFilter, reachable, matchesSeriesFilter);
+                applyFacetCounts(authorFilter, reachable, matchesAuthorFilter);
+            }
 
-                applyFacetCounts(
-                    seriesFilter,
-                    cards.filter(card => matchesFormatFilter(card, formatValue)
-                        && matchesAuthorFilter(card, authorValue)
-                        && (!attentionOnlyFilter?.checked || needsAttention(card))),
-                    matchesSeriesFilter,
-                );
-                applyFacetCounts(
-                    authorFilter,
-                    cards.filter(card => matchesFormatFilter(card, formatValue)
-                        && matchesSeriesFilter(card, seriesValue)
-                        && (!attentionOnlyFilter?.checked || needsAttention(card))),
-                    matchesAuthorFilter,
-                );
+            function hasActiveLibraryFilters() {
+                return Object.values(filterGroups).some(select => select && select.value !== 'all')
+                    || !!dashboardSearch?.value.trim()
+                    || (attentionOnlyFilter?.checked === true);
+            }
+
+            function updateFilterButtonLabel() {
+                if (!filterButtonLabel) return;
+                const defaultLabel = {{ _('Filter')|tojson }};
+                let label = defaultLabel;
+                for (const [group, select] of Object.entries(filterGroups)) {
+                    if (!select || select.value === 'all') continue;
+                    const choice = Array.from(select.options).find(option => option.value === select.value);
+                    if (choice) label += ' · ' + facetOptionBaseLabel(choice);
+                    break;
+                }
+                filterButtonLabel.textContent = label;
+                const active = hasActiveLibraryFilters();
+                filterButton?.classList.toggle('is-active', active);
+                if (filterResetButton) filterResetButton.hidden = !active;
+                if (filterClearButton) filterClearButton.disabled = !active;
+            }
+
+            // A click elsewhere keeps focus where the reader clicked (the search box, say).
+            function closeFilterPanel(restoreFocus = true) {
+                if (!filterPanel || filterPanel.hidden) return;
+                filterPanel.hidden = true;
+                if (filterBackdrop) filterBackdrop.hidden = true;
+                filterButton?.setAttribute('aria-expanded', 'false');
+                if (restoreFocus) filterButton?.focus();
+            }
+
+            function positionLibraryFilterPopover() {
+                if (!filterPanel || filterPanel.hidden || typeof window === 'undefined' || window.innerWidth <= 760) return;
+                filterPanel.style.removeProperty('--library-filter-shift');
+                const bounds = filterPanel.getBoundingClientRect();
+                const left = Math.max(14, Math.min(bounds.left, window.innerWidth - bounds.width - 14));
+                filterPanel.style.setProperty('--library-filter-shift', (left - bounds.left) + 'px');
+            }
+            if (typeof window !== 'undefined') window.addEventListener('resize', positionLibraryFilterPopover);
+
+            function openFilterPanel() {
+                if (!filterPanel) return;
+                filterPanel.hidden = false;
+                if (filterBackdrop) filterBackdrop.hidden = false;
+                filterButton?.setAttribute('aria-expanded', 'true');
+                positionLibraryFilterPopover();
+                filterPanel.querySelector('[data-filter-close]')?.focus();
+            }
+
+            function chooseLibraryFilter(group, value) {
+                const select = filterGroups[group];
+                if (!select) return;
+                for (const [key, control] of Object.entries(filterGroups)) {
+                    if (control) control.value = key === group ? value : 'all';
+                }
+                filterBooks();
+                closeFilterPanel();
+            }
+
+            function renderFilterOptions() {
+                if (!filterPanel) return;
+                for (const [group, select] of Object.entries(filterGroups)) {
+                    if (!select) continue;
+                    const holder = document.getElementById('filter-' + group + '-options');
+                    if (!holder) continue;
+                    const search = document.getElementById('filter-' + group + '-search');
+                    const query = (search?.value || '').trim().toLocaleLowerCase();
+                    holder.replaceChildren();
+                    Array.from(select.options).forEach(option => {
+                        if (option.hidden || option.disabled) return;
+                        const label = facetOptionBaseLabel(option);
+                        if (query && option.value !== 'all' && !label.toLocaleLowerCase().includes(query)) return;
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'library-filter-option';
+                        button.textContent = option.textContent;
+                        button.setAttribute('aria-pressed', option.value === select.value ? 'true' : 'false');
+                        button.addEventListener('click', () => chooseLibraryFilter(group, option.value));
+                        holder.appendChild(button);
+                    });
+                }
+            }
+
+            function isValidLibraryFilter(group, value) {
+                const select = filterGroups[group];
+                return !!select && Array.from(select.options).some(option => option.value === value);
+            }
+
+            function normalizeSavedLibraryFilters(saved, legacyFormat) {
+                const candidate = {
+                    status: saved?.status || 'all',
+                    format: saved?.format || (legacyFormat === 'audiobook' ? 'has_audio' : legacyFormat) || 'all',
+                    author: saved?.author || 'all',
+                    series: saved?.series || 'all'
+                };
+                let attention = !!saved?.attention;
+                if (candidate.format === 'needs_attention') {
+                    candidate.format = 'all';
+                    attention = true;
+                }
+                if (candidate.series === 'standalone') candidate.series = 'none';
+                else if (candidate.series === 'in_series') candidate.series = 'all';
+                for (const group of Object.keys(candidate)) {
+                    if (!isValidLibraryFilter(group, candidate[group])) candidate[group] = 'all';
+                }
+                const active = Object.keys(candidate).find(group => candidate[group] !== 'all');
+                for (const group of Object.keys(candidate)) {
+                    if (group !== active) candidate[group] = 'all';
+                }
+                return {...candidate, attention};
+            }
+
+            if (filterButton) {
+                filterButton.addEventListener('click', () => {
+                    if (filterPanel?.hidden) openFilterPanel();
+                    else closeFilterPanel();
+                });
+                filterPanel?.querySelector('[data-filter-close]')?.addEventListener('click', () => closeFilterPanel());
+                filterResetButton?.addEventListener('click', () => clearLibraryFilters(true));
+                filterClearButton?.addEventListener('click', () => {
+                    clearLibraryFilters();
+                    filterPanel?.querySelector('[data-filter-close]')?.focus();
+                });
+                filterBackdrop?.addEventListener('click', () => closeFilterPanel());
+                document.addEventListener('click', event => {
+                    if (filterPanel && !filterPanel.hidden && !filterHost.contains(event.target)) {
+                        closeFilterPanel(false);
+                    }
+                });
+                document.addEventListener('keydown', event => {
+                    if (event.key === 'Escape' && filterPanel && !filterPanel.hidden) {
+                        event.preventDefault();
+                        closeFilterPanel();
+                    }
+                });
+                ['author', 'series'].forEach(group => {
+                    document.getElementById('filter-' + group + '-search')
+                        ?.addEventListener('input', renderFilterOptions);
+                });
+            }
+
+            function clearLibraryFilters(focusTrigger = false) {
+                for (const select of Object.values(filterGroups)) {
+                    if (select) select.value = 'all';
+                }
+                if (dashboardSearch) dashboardSearch.value = '';
+                if (attentionOnlyFilter) attentionOnlyFilter.checked = false;
+                savedAttentionPreference = false;
+                for (const group of ['author', 'series']) {
+                    const search = document.getElementById('filter-' + group + '-search');
+                    if (search) search.value = '';
+                }
+                filterBooks();
+                positionLibraryFilterPopover();
+                if (focusTrigger) filterButton?.focus();
             }
 
             // Offers a route into the Search tab's library search for a title the dashboard
@@ -287,7 +436,7 @@
                     return;
                 }
 
-                const noResults = document.querySelectorAll('.dashboard-section:not(.hidden)').length === 0;
+                const noResults = !hasVisibleGridItems();
                 searchHandoffMsg.textContent = noResults
                     ? bbFormat({{ _('No synced book matches “{query}”.')|tojson }}, { query: rawQuery })
                     : '';
@@ -297,26 +446,15 @@
                 searchHandoff.classList.remove('hidden');
             }
 
-            window.toggleNotStarted = function () {
-                if (!notStartedGrid || !notStartedSection || !notStartedHeader) return;
-
-                const isShowing = notStartedGrid.classList.toggle('show');
-                notStartedSection.classList.toggle('active');
-                notStartedHeader.classList.toggle('active');
-                updateNotStartedChevron(isShowing);
-
-                try {
-                    localStorage.setItem('not_started_expanded', isShowing);
-                } catch (e) {
-                    console.debug('LocalStorage error:', e);
-                }
-            };
-
-            // Format and series are orthogonal axes, so each is its own predicate over
-            // one card rather than a branch in a single mutually-exclusive filter.
             function needsAttention(card) {
                 return card.classList.contains('out-of-sync')
                     || ['error', 'failed', 'failed_retry_later', 'failed_permanent'].includes(card.dataset.status);
+            }
+
+            function matchesStatusFilter(entry, statusValue) {
+                if (!statusValue || statusValue === 'all') return true;
+                const rank = readingSortDetails(entry).rank;
+                return rank === ({in_progress: 0, not_started: 1, finished: 2})[statusValue];
             }
 
             function matchesFormatFilter(card, formatValue) {
@@ -364,6 +502,15 @@
 
             function filterBooks() {
                 const filterValue = filterSelect.value;
+                const statusValue = statusFilter ? statusFilter.value : 'all';
+                const groupedStatus = new Map();
+                if (!document.body.classList.contains('series-grouping-off')) {
+                    document.querySelectorAll('.series-group').forEach(group => {
+                        const matches = matchesStatusFilter(group, statusValue);
+                        group.querySelectorAll('.book-card').forEach(card =>
+                            groupedStatus.set(card, matches));
+                    });
+                }
                 const seriesValue = seriesFilter ? seriesFilter.value : 'all';
                 const authorValue = authorFilter ? authorFilter.value : 'all';
                 const searchString = dashboardSearch ? dashboardSearch.value.toLowerCase() : '';
@@ -375,12 +522,19 @@
                 // Filter flat book cards
                 const cards = document.querySelectorAll('.book-card');
                 cards.forEach(card => {
+                    if (card.dataset.heroExcluded === 'true' && !card.closest?.('.series-group')) {
+                        card.classList.add('hidden');
+                        card.style.display = 'none';
+                        return;
+                    }
                     const title = (card.dataset.title || '').toLowerCase();
                     const author = (card.dataset.author || '').toLowerCase();
                     const filename = (card.dataset.filename || '').toLowerCase();
                     const seriesName = (card.dataset.seriesName || '').toLowerCase();
 
-                    let isVisible = matchesFormatFilter(card, filterValue)
+                    let isVisible = (groupedStatus.has(card)
+                            ? groupedStatus.get(card) : matchesStatusFilter(card, statusValue))
+                        && matchesFormatFilter(card, filterValue)
                         && matchesSeriesFilter(card, seriesValue)
                         && matchesAuthorFilter(card, authorValue)
                         && (!attentionOnlyFilter?.checked || needsAttention(card));
@@ -428,21 +582,25 @@
                     }
                 });
 
-                updateDashboardSectionVisibility();
                 updateFacetOptions();
+                renderFilterOptions();
+                updateFilterButtonLabel();
                 updateFilteredCount();
                 updateSearchHandoff(dashboardSearch ? dashboardSearch.value.trim() : '');
 
-                // Persist choice
-                try {
-                    localStorage.setItem('abs_kosync_filters', JSON.stringify({
-                        format: filterValue,
-                        series: seriesValue,
-                        author: authorValue,
-                        attention: !!attentionOnlyFilter?.checked
-                    }));
-                } catch (e) {
-                    console.debug('LocalStorage error:', e);
+                // The first grouping pass must not overwrite saved filters before restore.
+                if (filterInitialized) {
+                    try {
+                        localStorage.setItem('abs_kosync_filters', JSON.stringify({
+                            format: filterValue,
+                            series: seriesValue,
+                            author: authorValue,
+                            attention: attentionOnlyFilter ? attentionOnlyFilter.checked : savedAttentionPreference,
+                            status: statusValue
+                        }));
+                    } catch (e) {
+                        console.debug('LocalStorage error:', e);
+                    }
                 }
             }
 
@@ -467,7 +625,7 @@
                 author: 'asc',     // A-Z default
                 series: 'asc',     // Series A-Z, then reading order
                 progress: 'desc',  // Highest progress first
-                status: 'asc',
+                reading: 'asc', // In progress, Not started, Finished; newest sync first
                 last_sync: 'desc', // Newest sync first
                 added: 'desc',     // Newest addition first
                 rating: 'desc'     // Highest rating first
@@ -478,8 +636,9 @@
             let lastSort = null;
 
             // Load saved preferences
-            let savedSort = 'title';
-            try { savedSort = localStorage.getItem('abs_kosync_sort') || 'title'; } catch (e) { /* storage unavailable */ }
+            let savedSort = 'reading';
+            try { savedSort = localStorage.getItem('abs_kosync_sort') || 'reading'; } catch (e) { /* storage unavailable */ }
+            if (savedSort === 'status' || !Object.prototype.hasOwnProperty.call(sortState, savedSort)) savedSort = 'reading';
             let savedSortState;
             try { savedSortState = localStorage.getItem('abs_kosync_sort_state'); } catch (e) { /* storage unavailable */ }
 
@@ -490,7 +649,12 @@
             if (savedSortState) {
                 try {
                     // Merge saved state with defaults
-                    sortState = { ...sortState, ...JSON.parse(savedSortState) };
+                    const storedDirections = JSON.parse(savedSortState);
+                    if (storedDirections.status && !storedDirections.reading) {
+                        storedDirections.reading = storedDirections.status;
+                    }
+                    delete storedDirections.status;
+                    sortState = { ...sortState, ...storedDirections };
                 } catch (e) {
                     console.error("Error parsing saved sort state", e);
                 }
@@ -535,15 +699,36 @@
                 return (el.dataset.title || el.dataset.seriesName || '').toLowerCase();
             }
 
+            function readingSortDetails(el) {
+                const cards = el.classList.contains('series-group')
+                    ? Array.from(el.querySelectorAll('.book-card')) : [el];
+                const members = cards.length ? cards : [el];
+                const rank = Math.min(...members.map(card => {
+                    const progress = parseFloat(card.dataset.progress || '0') || 0;
+                    if (progress > 0 && progress < 100) return 0;
+                    return progress >= 100 ? 2 : 1;
+                }));
+                return {
+                    rank,
+                    syncAge: Math.min(getLastSyncAge(el), ...members.map(getLastSyncAge))
+                };
+            }
+
             // Returns the comparator for one sort key so both sortCards and the author
             // view order entries identically.
             function makeSortComparator(sortBy, direction) {
                 return (a, b) => {
                     let comparison = 0;
-                    const isSeries = (el) => el.classList.contains('series-group');
-
                     let valA, valB;
-                    if (sortBy === 'last_sync') {
+                    if (sortBy === 'reading') {
+                        const statusA = readingSortDetails(a);
+                        const statusB = readingSortDetails(b);
+                        comparison = statusA.rank - statusB.rank;
+                        if (comparison === 0 && statusA.syncAge !== statusB.syncAge) {
+                            comparison = statusA.syncAge < statusB.syncAge ? -1 : 1;
+                        }
+                        if (comparison === 0) comparison = sortTitleOf(a).localeCompare(sortTitleOf(b));
+                    } else if (sortBy === 'last_sync') {
                         comparison = getLastSyncAge(a) - getLastSyncAge(b);
                     } else if (sortBy === 'title') {
                         valA = (a.dataset.title || a.dataset.seriesName || '').toLowerCase();
@@ -601,10 +786,6 @@
                             // block reads A-Z whichever way the date is pointing.
                             return titleA.localeCompare(titleB);
                         }
-                    } else if (sortBy === 'status') {
-                        valA = a.dataset.status || '';
-                        valB = b.dataset.status || '';
-                        comparison = valA.localeCompare(valB);
                     } else if (sortBy === 'rating') {
                         const rawA = a.dataset.rating;
                         const rawB = b.dataset.rating;
@@ -631,7 +812,7 @@
             }
 
             function sortBooks(sortBy, direction) {
-                dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));
+                sortCards(libraryGrid, sortBy, direction);
             }
 
             function applySorting(sortBy) {
@@ -684,8 +865,7 @@
 
             // The single-card series design (issue #449) renders the lead book as a
             // full .book-card directly inside .series-group, a sibling of
-            // .series-children rather than a child of it -- it is a duplicate of a
-            // flat card just like the others, so it needs the same tag-and-restore
+            // .series-children rather than a child of it -- it needs the same tag-and-restore
             // treatment. Its "container" is the series-group itself, and restore
             // must put it back in front of .series-children rather than appending.
             document.querySelectorAll('.series-group').forEach(group => {
@@ -697,39 +877,13 @@
             });
 
             function flattenSeriesGroups() {
-                const inProgressGrid = document.getElementById('in-progress-grid');
-                const notStartedGridEl = document.getElementById('not-started-grid');
-                const finishedGrid = document.getElementById('finished-grid');
-
-                // Track abs-ids already rendered flat so series children don't duplicate.
-                const flatAbsIds = new Set();
-                document.querySelectorAll('.book-grid > .book-card').forEach(c => {
-                    if (c.dataset.absId) flatAbsIds.add(c.dataset.absId);
-                });
-
+                if (!libraryGrid) return;
                 document.querySelectorAll('.series-group .book-card').forEach(card => {
-                    const absId = card.dataset.absId || '';
-                    if (absId && flatAbsIds.has(absId)) {
-                        card.classList.add('flatten-duplicate');
-                        return;
-                    }
-                    const progress = parseFloat(card.dataset.progress || '0') || 0;
-                    let target;
-                    if (progress > 0 && progress < 100) target = inProgressGrid;
-                    else if (progress >= 100) target = finishedGrid;
-                    else target = notStartedGridEl;
-                    if (target) {
-                        target.appendChild(card);
-                        if (absId) flatAbsIds.add(absId);
-                    }
+                    libraryGrid.appendChild(card);
                 });
             }
 
             function restoreSeriesGroups() {
-                // Clear duplicate flags first.
-                document.querySelectorAll('.book-card.flatten-duplicate').forEach(card => {
-                    card.classList.remove('flatten-duplicate');
-                });
                 // Reparent any card that was moved out of its series-children -- or,
                 // for a lead card, out of its series-group. A lead card must land
                 // back in front of .series-children, not after it.
@@ -757,7 +911,6 @@
 
                 if (sortSelect) sortBooks(sortSelect.value, sortState[sortSelect.value]);
                 if (typeof filterBooks === 'function') filterBooks();
-                updateDashboardSectionVisibility();
                 if (typeof window.bookbridgeSyncPreviewLayout === 'function') {
                     window.bookbridgeSyncPreviewLayout();
                 }
@@ -789,31 +942,6 @@
             }
 
             document.addEventListener('DOMContentLoaded', () => {
-                if (notStartedHeader) {
-                    notStartedHeader.addEventListener('click', window.toggleNotStarted);
-                    notStartedHeader.addEventListener('keydown', (event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            window.toggleNotStarted();
-                        }
-                    });
-                }
-
-                try {
-                    const shouldExpand = localStorage.getItem('not_started_expanded') === 'true';
-                    if (shouldExpand && notStartedGrid && notStartedSection && notStartedHeader) {
-                        notStartedGrid.classList.add('show');
-                        notStartedSection.classList.add('active');
-                        notStartedHeader.classList.add('active');
-                        updateNotStartedChevron(true);
-                    } else {
-                        updateNotStartedChevron(false);
-                    }
-                } catch (e) {
-                    console.debug('LocalStorage error:', e);
-                    updateNotStartedChevron(false);
-                }
-
                 // Restore per-series expansion state
                 document.querySelectorAll('.series-group').forEach(function (group) {
                     try {
@@ -829,7 +957,7 @@
             // --- Initialization ---
 
             // Apply initial sort on load (if content exists)
-            if (dashboardGrids.length > 0) {
+            if (libraryGrid) {
                 applySorting(savedSort);
             }
 
@@ -845,63 +973,33 @@
                 if (!enabled) applySeriesGrouping(false);
             }
 
-            // Filter Logic initialization
+            // One active facet at a time; keep the hidden selects as canonical state.
             if (filterSelect) {
-                filterSelect.addEventListener('change', filterBooks);
-                if (seriesFilter) seriesFilter.addEventListener('change', filterBooks);
-                if (authorFilter) authorFilter.addEventListener('change', filterBooks);
-                if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', filterBooks);
+                for (const [group, select] of Object.entries(filterGroups)) {
+                    if (select) select.addEventListener('change', () =>
+                        chooseLibraryFilter(group, select.value));
+                }
+                if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', () => {
+                    savedAttentionPreference = attentionOnlyFilter.checked;
+                    filterBooks();
+                });
 
-                let savedFormat = 'all';
-                let savedSeries = 'all';
-                let savedAuthor = 'all';
-                let savedAttention = false;
+                let savedFilters = null;
+                let legacyFormat = null;
                 try {
-                    const savedFilters = localStorage.getItem('abs_kosync_filters');
-                    if (savedFilters) {
-                        const parsed = JSON.parse(savedFilters);
-                        savedFormat = parsed.format || 'all';
-                        savedSeries = parsed.series || 'all';
-                        // An earlier iteration of this control was a yes/no pair, and
-                        // those values can still be sitting in a reader's localStorage.
-                        // 'standalone' has a direct equivalent; 'in a series' no longer
-                        // does, so widen to all rather than silently hiding books.
-                        if (savedSeries === 'standalone') savedSeries = 'none';
-                        else if (savedSeries === 'in_series') savedSeries = 'all';
-                        savedAuthor = parsed.author || 'all';
-                        savedAttention = !!parsed.attention;
-                    } else {
-                        // Migrate the pre-multi-filter scalar key. Its "audiobook" meant
-                        // sync_mode 'audiobook' alone, which silently hid audiobook-only
-                        // books; "Has Audio" is the option that now covers both.
-                        const legacy = localStorage.getItem('abs_kosync_filter');
-                        if (legacy) savedFormat = legacy === 'audiobook' ? 'has_audio' : legacy;
-                    }
+                    const raw = localStorage.getItem('abs_kosync_filters');
+                    if (raw) savedFilters = JSON.parse(raw);
+                    else legacyFormat = localStorage.getItem('abs_kosync_filter');
                 } catch (e) {
                     console.debug('LocalStorage error:', e);
                 }
-
-                // Older Library preferences stored attention as a format.
-                // It is now an independent filter, so keep the user's intent.
-                if (savedFormat === 'needs_attention') {
-                    savedFormat = 'all';
-                    savedAttention = true;
+                const restored = normalizeSavedLibraryFilters(savedFilters, legacyFormat);
+                for (const [group, select] of Object.entries(filterGroups)) {
+                    if (select) select.value = restored[group];
                 }
-                filterSelect.value = savedFormat;
-                if (!filterSelect.value) filterSelect.value = 'all';
-                if (attentionOnlyFilter) attentionOnlyFilter.checked = savedAttention;
-                if (seriesFilter) {
-                    seriesFilter.value = savedSeries;
-                    // A remembered series that is no longer in the library matches no
-                    // option, which leaves the select with no selection at all. Show
-                    // everything rather than stranding the reader on a blank filter.
-                    if (!seriesFilter.value) seriesFilter.value = 'all';
-                }
-                if (authorFilter) {
-                    authorFilter.value = savedAuthor;
-                    if (!authorFilter.value) authorFilter.value = 'all';
-                }
-                // Apply filter initially
+                savedAttentionPreference = restored.attention;
+                if (attentionOnlyFilter) attentionOnlyFilter.checked = restored.attention;
+                filterInitialized = true;
                 filterBooks();
             }
 
@@ -909,24 +1007,345 @@
                 dashboardSearch.addEventListener('input', filterBooks);
             }
 
-            let refreshPaused = false;
+            const heroRoot = document.getElementById('library-hero');
 
-            function refreshDashboard() {
-                // A hidden tab redraws nothing, so skip the round trip entirely.
-                if (refreshPaused || document.hidden) {
-                    setTimeout(refreshDashboard, 30000);
+            // P16d: content is client-only and never participates in the dashboard build.
+            const heroContent = heroRoot?.querySelector('.hero-content');
+            const heroOrder = ['synopsis', 'bars', 'listened', 'pages'];
+            const heroChosen = heroOrder.filter(key =>
+                (heroRoot?.dataset.heroContent || '').split(',').includes(key));
+            const heroServiceNames = {
+                abs: 'Audiobookshelf', absebook: 'Audiobookshelf',
+                bookorbit: 'BookOrbit', bookorbitaudio: 'BookOrbit',
+                booklore: 'Grimmory', bookloreaudio: 'Grimmory',
+                kavita: 'Kavita', cwa: 'Calibre-Web', bookfusion: 'BookFusion',
+                kosync: 'KOReader', storyteller: 'Storyteller'
+            };
+            let heroSlots = [];
+            try { heroSlots = JSON.parse(heroRoot?.dataset.heroSlots || '[]'); } catch (_) { /* no slots */ }
+            let heroPieces = {};
+            let heroSequence = 0;
+            let heroController = null;
+
+            function heroTime(seconds) {
+                const minutes = Math.max(0, Math.round(Number(seconds || 0) / 60));
+                const hours = Math.floor(minutes / 60);
+                return hours ? hours + 'h ' + (minutes % 60) + 'm' : minutes + 'm';
+            }
+
+            function heroSlotRows(row, card) {
+                const states = row.states || {};
+                const groups = [
+                    ['audio', ['abs', 'bookorbitaudio', 'bookloreaudio']],
+                    ['ebook', ['bookorbit', 'booklore', 'kavita', 'cwa', 'bookfusion', 'absebook']],
+                    ['koreader', ['kosync']],
+                    ['readalong', ['storyteller']]
+                ];
+                return groups.map(([key, clients]) => {
+                    const candidate = clients.map(name => [name, states[name]])
+                        .filter(([, state]) => state && state.percentage != null)
+                        .sort((a, b) => Number(b[1].last_updated || 0) - Number(a[1].last_updated || 0))[0];
+                    const slotNode = card?.querySelector('.format-slot[data-slot="' + key + '"]');
+                    return {
+                        key, linked: slotNode ? !slotNode.classList.contains('is-faint') : !!candidate,
+                        service: candidate ? heroServiceNames[candidate[0]] : null,
+                        pct: candidate ? Number(candidate[1].percentage) : null,
+                        last: key === row.last_slot
+                    };
+                });
+            }
+
+            function heroElement(tag, className, value) {
+                const element = document.createElement(tag);
+                if (className) element.className = className;
+                if (value != null) element.textContent = String(value);
+                return element;
+            }
+
+            function heroMiniProgress() {
+                const mini = heroRoot?.querySelector('.hero-mini-track');
+                if (!mini) return;
+                mini.hidden = heroChosen.includes('bars');
+                const pct = parseFloat(heroRoot.querySelector('.hero-percent')?.textContent || '0');
+                const fill = mini.querySelector('span');
+                if (fill) fill.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+            }
+
+            function renderHeroPieces() {
+                if (!heroContent || !heroRoot || heroRoot.hidden) return;
+                const pieces = [];
+                heroChosen.forEach(key => {
+                    const data = key === 'bars' ? heroSlots.filter(slot =>
+                        slot.linked && slot.pct != null && Number.isFinite(Number(slot.pct))
+                    ).sort((a, b) => ['audio', 'ebook', 'koreader', 'readalong'].indexOf(a.key) -
+                        ['audio', 'ebook', 'koreader', 'readalong'].indexOf(b.key)) : heroPieces[key];
+                    if (!data || (Array.isArray(data) && !data.length)) return;
+                    const section = heroElement('section', 'hero-piece hero-piece-' + key);
+                    const names = {
+                        synopsis: {{ _('About this book')|tojson }},
+                        bars: {{ _('Where you are')|tojson }},
+                        listened: {{ _('Listening')|tojson }},
+                        pages: {{ _('Reading')|tojson }}
+                    };
+                    section.append(heroElement('span', 'hero-piece-label', names[key]));
+                    if (key === 'synopsis') {
+                        if (!data.text) return;
+                        section.append(heroElement('p', 'hero-synopsis-text', data.text));
+                    } else if (key === 'bars') {
+                        const labels = {
+                            ebook: {{ _('Ebook')|tojson }}, audio: {{ _('Audiobook')|tojson }},
+                            readalong: {{ _('Read-along')|tojson }}, koreader: 'KOReader'
+                        };
+                        data.forEach(slot => {
+                            const row = heroElement('div', 'hero-app-row' + (slot.last ? ' is-leader' : ''));
+                            const name = slot.key === 'ebook' && slot.service
+                                ? labels.ebook + ' · ' + slot.service : labels[slot.key];
+                            row.append(heroElement('span', '', name));
+                            row.append(heroElement('strong', '', Number(slot.pct).toFixed(1) + '%'));
+                            const track = heroElement('span', 'hero-app-track');
+                            const fill = heroElement('span');
+                            fill.style.width = Math.max(0, Math.min(100, Number(slot.pct))) + '%';
+                            track.append(fill);
+                            row.append(track);
+                            section.append(row);
+                        });
+                    } else if (key === 'listened') {
+                        if (!(Number(data.seconds) > 0)) return;
+                        section.append(heroElement('strong', 'hero-piece-value', heroTime(data.seconds)));
+                        if (data.lengthSeconds) {
+                            const meta = data.leftSeconds != null
+                                ? bbFormat({{ _('of {length} · {left} left')|tojson }}, {
+                                    length: heroTime(data.lengthSeconds), left: heroTime(data.leftSeconds)})
+                                : bbFormat({{ _('of {length}')|tojson }}, {length: heroTime(data.lengthSeconds)});
+                            section.append(heroElement('span', 'hero-piece-meta', meta));
+                        }
+                        if (data.week != null && data.today != null) {
+                            section.append(heroElement('span', 'hero-piece-meta',
+                                bbFormat({{ _('This week {week} · Today {today}')|tojson }}, {
+                                    week: heroTime(data.week), today: heroTime(data.today)
+                                })));
+                        }
+                    } else if (key === 'pages') {
+                        if (!(Number(data.read) > 0)) return;
+                        section.append(heroElement('strong', 'hero-piece-value', data.read));
+                        if (data.total) {
+                            section.append(heroElement('span', 'hero-piece-meta',
+                                bbFormat({{ _('of {total} · about {left} to go')|tojson }}, {
+                                    total: data.total, left: data.left
+                                })));
+                        }
+                        if (data.week != null && data.today != null) {
+                            section.append(heroElement('span', 'hero-piece-meta',
+                                bbFormat({{ _('This week {week} · Today {today}')|tojson }}, {
+                                    week: data.week, today: data.today
+                                })));
+                        }
+                    }
+                    pieces.push(section);
+                });
+                heroContent.replaceChildren(...pieces);
+                heroContent.hidden = pieces.length === 0;
+                heroContent.dataset.visibleCount = String(pieces.length);
+                heroMiniProgress();
+            }
+
+            function loadHeroContent() {
+                const sequence = ++heroSequence;
+                if (heroController) heroController.abort();
+                heroController = null;
+                heroPieces = {};
+                if (!heroRoot?.dataset.absId || heroRoot.hidden) return;
+                if (window.matchMedia?.('(max-width: 760px)').matches) {
+                    if (heroContent) heroContent.hidden = true;
                     return;
                 }
+                renderHeroPieces();
+                if (!heroChosen.some(key => key !== 'bars')) return;
+                const absId = heroRoot.dataset.absId;
+                heroController = new AbortController();
+                fetch('/api/library/hero/' + encodeURIComponent(absId), {
+                    credentials: 'same-origin', signal: heroController.signal
+                }).then(response => {
+                    if (!response.ok) throw new Error('Hero content unavailable');
+                    return response.json();
+                }).then(payload => {
+                    if (sequence !== heroSequence || heroRoot.dataset.absId !== absId ||
+                        payload.absId !== absId) return;
+                    heroPieces = payload.pieces || {};
+                    renderHeroPieces();
+                }).catch(() => { /* Missing/slow data never replaces the base hero. */ });
+            }
+
+            function heroUpdateSlots(row) {
+                if (!heroChosen.includes('bars')) {
+                    heroMiniProgress();
+                    return;
+                }
+                const existing = heroSlots;
+                const refreshed = heroSlotRows(row, null);
+                heroSlots = refreshed.map(slot => {
+                    const old = existing.find(item => item.key === slot.key);
+                    return {
+                        ...slot,
+                        linked: old ? old.linked : slot.linked,
+                        service: slot.service || old?.service,
+                        pct: slot.pct != null ? slot.pct : old?.pct,
+                    };
+                });
+                renderHeroPieces();
+            }
+
+            function heroIsInProgress(row) {
+                return Number(row.unified_progress) > 0 && Number(row.unified_progress) < 100 &&
+                    Object.values(row.states || {}).some(state => Number(state.percentage) > 0);
+            }
+
+            function heroMovementTime(row) {
+                return Number(row.last_slot_unix || row.last_sync_unix || 0);
+            }
+
+            function chooseHeroPollRow(rows, currentId, currentMarker) {
+                const eligible = rows.filter(row => heroIsInProgress(row) &&
+                    (!currentId || String(row.abs_id) !== String(currentId)) &&
+                    (currentId ? Number(row.last_slot_unix || 0) > currentMarker : true));
+                eligible.sort((a, b) =>
+                    Number(b.last_slot_unix || 0) - Number(a.last_slot_unix || 0) ||
+                    Number(b.last_sync_unix || 0) - Number(a.last_sync_unix || 0) ||
+                    String(b.abs_id).localeCompare(String(a.abs_id)));
+                return eligible[0] || null;
+            }
+
+            function excludeHeroFromGrid(absId) {
+                document.querySelectorAll('#library-grid .book-card').forEach(card => {
+                    const excluded = !!absId && card.dataset.absId === String(absId);
+                    if (excluded) card.dataset.heroExcluded = 'true';
+                    else delete card.dataset.heroExcluded;
+                    const input = card.querySelector('[data-select-book]');
+                    if (input) {
+                        if (excluded) input.checked = false;
+                        input.disabled = excluded;
+                    }
+                });
+            }
+
+            function populateHeroFromCard(card, row) {
+                if (!heroRoot || !card) return;
+                const link = heroRoot.querySelector('.library-hero-link');
+                const bookLink = card.querySelector('.book-open');
+                const cover = card.querySelector('.cover-wrap');
+                const heroCover = heroRoot.querySelector('.hero-cover');
+                if (!link || !bookLink || !heroCover) return;
+                link.href = bookLink.href;
+                const title = card.dataset.title || '';
+                const author = card.dataset.author || '';
+                link.setAttribute('aria-label', bbFormat({{ _('Open {title} by {author}')|tojson }}, {
+                    title, author: author || {{ _('Unknown author')|tojson }}
+                }));
+                heroRoot.querySelector('.hero-title').textContent = title;
+                heroRoot.querySelector('.hero-author').textContent = author;
+                const coverNodes = ['.cover-image', '.typographic-cover']
+                    .map(selector => cover?.querySelector(selector)).filter(Boolean)
+                    .map(node => node.cloneNode(true));
+                heroCover.replaceChildren(...coverNodes);
+                // The cover loader observes grid images only once at page load.
+                // A new hero clone has not been observed, so resolve its pending
+                // thumb without ever loading the full original unnecessarily.
+                const pendingThumb = heroCover.querySelector?.('img[data-thumb-url]');
+                if (pendingThumb && !pendingThumb.getAttribute('src')) {
+                    const url = pendingThumb.dataset.thumbUrl;
+                    fetch(url, {method: 'HEAD', credentials: 'same-origin', cache: 'no-store'})
+                        .then(response => {
+                            if (!pendingThumb.isConnected) return;
+                            pendingThumb.loading = 'eager';
+                            pendingThumb.addEventListener('load', () => { pendingThumb.hidden = false; }, {once: true});
+                            if (response.status === 200) pendingThumb.src = url;
+                            else if (response.status === 404) pendingThumb.dispatchEvent(new Event('error'));
+                            else pendingThumb.src = url.replace('/covers/thumb/', '/covers/');
+                        })
+                        .catch(() => {
+                            if (pendingThumb.isConnected) pendingThumb.src = url.replace('/covers/thumb/', '/covers/');
+                        });
+                }
+                heroRoot.dataset.absId = String(row.abs_id);
+                heroRoot.dataset.movementAt = String(heroMovementTime(row));
+                heroRoot.dataset.markerAt = String(Number(row.last_slot_unix || 0));
+                heroRoot.hidden = false;
+                heroSlots = heroSlotRows(row, card);
+                loadHeroContent();
+            }
+
+            function updateHeroProgress(row) {
+                if (!heroRoot || !row || heroRoot.hidden) return;
+                const service = heroRoot.querySelector('.hero-service');
+                const leader = (row.last_slot_client || '').toLowerCase();
+                const client = leader.startsWith('kosync') || leader === 'bridgesync_plugin' ? 'kosync' : leader;
+                const state = (row.states || {})[client];
+                const percentage = state && state.percentage != null
+                    ? Number(state.percentage) : Number(row.unified_progress || 0);
+                service.textContent = row.last_slot_service || '';
+                service.hidden = !row.last_slot_service;
+                heroRoot.querySelector('.hero-percent').textContent = percentage.toFixed(1) + '%';
+                heroRoot.dataset.movementAt = String(Math.max(
+                    Number(heroRoot.dataset.movementAt || 0), heroMovementTime(row)));
+                heroRoot.dataset.markerAt = String(Math.max(
+                    Number(heroRoot.dataset.markerAt || 0), Number(row.last_slot_unix || 0)));
+                heroUpdateSlots(row);
+            }
+
+            function refreshHeroFromPoll(rows, cardsById) {
+                if (!heroRoot) return;
+                const currentId = heroRoot.dataset.absId || '';
+                const currentRow = rows.find(row => String(row.abs_id) === currentId);
+                const currentMarker = Math.max(Number(heroRoot.dataset.markerAt || 0),
+                    Number(currentRow?.last_slot_unix || 0));
+                const candidate = chooseHeroPollRow(rows, currentId, currentMarker);
+                if (candidate && cardsById.has(String(candidate.abs_id))) {
+                    const card = cardsById.get(String(candidate.abs_id))[0];
+                    populateHeroFromCard(card, candidate);
+                    excludeHeroFromGrid(String(candidate.abs_id));
+                    if (sortSelect) sortBooks(sortSelect.value, sortState[sortSelect.value]);
+                    filterBooks();
+                    if (typeof updateSelectionBar === 'function') updateSelectionBar();
+                }
+                const active = rows.find(row => String(row.abs_id) === heroRoot.dataset.absId);
+                if (active) updateHeroProgress(active);
+            }
+
+            if (heroRoot?.dataset.absId) {
+                excludeHeroFromGrid(heroRoot.dataset.absId);
+                filterBooks();
+                // Two turns after layout, so the initial Library paint is never blocked.
+                const afterPaint = () => window.setTimeout(loadHeroContent, 0);
+                if (window.requestAnimationFrame) window.requestAnimationFrame(afterPaint);
+                else window.setTimeout(afterPaint, 0);
+            }
+            let heroPhone = window.matchMedia?.('(max-width: 760px)').matches;
+            window.addEventListener('resize', () => {
+                const phone = window.matchMedia?.('(max-width: 760px)').matches;
+                if (phone === heroPhone) return;
+                heroPhone = phone;
+                loadHeroContent();
+            });
+
+            let refreshPaused = false;
+
+            function refreshDashboard(signal) {
+                if (refreshPaused) return;
 
                 // Compact position feed, not the full dashboard payload: this
                 // handler redraws progress, the synced line and CTC status.
-                fetch('/api/status/progress')
+                return fetch('/api/status/progress', { signal })
                     .then(r => r.json())
                     .then(data => {
                         if (!data || !data.mappings) return;
+                        const cardsById = new Map();
+                        document.querySelectorAll('.book-card').forEach(card => {
+                            const list = cardsById.get(card.dataset.absId);
+                            if (list) list.push(card); else cardsById.set(card.dataset.absId, [card]);
+                        });
                         data.mappings.forEach(book => {
-                            const cards = document.querySelectorAll(`.book-card[data-abs-id="${book.abs_id}"]`);
-                            if (!cards.length) return;
+                            const cards = cardsById.get(String(book.abs_id));
+                            if (!cards) return;
                             cards.forEach(card => {
                                 updateCtcAlignmentStatus(card, book.ctc_aligned === true);
                                 updateReadalongStatus(card, book.readalong_ready === true);
@@ -984,9 +1403,9 @@
                             if (book.last_slot !== undefined) updateFormatStrip(card, book.last_slot, book.last_slot_sync);
                             });
                         });
+                        refreshHeroFromPoll(data.mappings, cardsById);
                     })
-                    .catch(() => { })
-                    .finally(() => setTimeout(refreshDashboard, 30000));
+                    .catch(() => { });
             }
 
             // Pause on modal open
@@ -1005,7 +1424,7 @@
                 refreshPaused = false;
             };
 
-            setTimeout(refreshDashboard, 30000);
+            bbPoller({ name: 'library-progress', fastMs: 30000, slowMs: 30000, immediate: false, run: refreshDashboard });
         </script>
 
 <script>
@@ -1096,22 +1515,15 @@
             if (eager) img.loading = 'eager';
         });
     }
-    document.querySelectorAll('.view-switch [data-view]').forEach(button => button.addEventListener('click', () => {
-        const view = button.dataset.view;
-        libraryPage.dataset.view = view;
-        if (view === 'spines') setBookSelectMode(false);
-        if (view === 'spines') paintSpines(true);
-        if (selectModeButton) selectModeButton.hidden = view === 'spines';
-        applySeriesGrouping(view === 'covers' && seriesGroupingToggle.checked);
-        seriesGroupingToggle.disabled = view !== 'covers';
-        document.querySelectorAll('.view-switch [data-view]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-        try { localStorage.setItem('abs_kosync_view', view); } catch (e) { console.debug('LocalStorage error:', e); }
-    }));
-    try {
-        const savedView = localStorage.getItem('abs_kosync_view');
-        if (savedView && document.querySelector('.view-switch [data-view="' + savedView + '"]')) document.querySelector('.view-switch [data-view="' + savedView + '"]').click();
-    } catch (e) { console.debug('LocalStorage error:', e); }
-    paintSpines(false);
+    // The server chooses the view before paint; initialize its dependent controls once.
+    if (libraryPage) {
+        const initialLibraryView = libraryPage.dataset.view;
+        if (initialLibraryView === 'spines') setBookSelectMode(false);
+        if (selectModeButton) selectModeButton.hidden = initialLibraryView === 'spines';
+        applySeriesGrouping(initialLibraryView === 'covers' && seriesGroupingToggle.checked);
+        seriesGroupingToggle.disabled = initialLibraryView !== 'covers';
+        paintSpines(initialLibraryView === 'spines');
+    }
     function selectedBookIds() {
         return Array.from(new Set(Array.from(document.querySelectorAll('[data-select-book]:checked'), input => input.value)));
     }
@@ -1230,6 +1642,7 @@
             count.textContent = bbFormat({{ _('{count} completed')|tojson }}, {count: ids.length});
         }
         if (failed.length) count.textContent = bbFormat({{ _('{success} completed; {failed} failed. Failed books remain selected.')|tojson }}, {success: ids.length - failed.length, failed: failed.length});
+        window.bbForgePoll?.kick();
         return {failed, total: ids.length};
     }
     window.bulkSyncNow = function () { return runSelectedBooks({{ _('Syncing')|tojson }}, async id => {

@@ -92,6 +92,9 @@
         {# Info section - always visible #}
         <div class="book-info">
             <div class="book-header">
+                <input type="checkbox" class="book-select" name="abs_ids" value="{{ mapping.abs_id }}"
+                    form="bulk-delete-form" aria-label="Select {{ full_display_title }}"
+                    onchange="selectBook(this)">
                 <div class="book-title">
                     <span class="book-title-main">{{ mapping.display_title }}</span>{% if mapping.display_subtitle %}<span
                         class="book-title-subtitle">: {{ mapping.display_subtitle }}</span>{% endif %}
@@ -370,6 +373,28 @@
                         {% else %}
                         <span class="link-icon">+</span>
                         {% endif %}
+                    </span>
+                </div>
+                {% endif %}
+
+                {% if integrations.goodreads %}
+                <div class="service-item progress-item-hc">
+                    <a href="{% if mapping.goodreads_book_id %}{{ mapping.goodreads_url }}{% else %}#{% endif %}"
+                        {% if mapping.goodreads_book_id %}target="_blank" rel="noopener noreferrer"{% endif %}
+                        title="{% if mapping.goodreads_book_id %}Open in Goodreads{% else %}Link to Goodreads{% endif %}"
+                        class="hc-link {% if not mapping.goodreads_book_id %}cursor-pointer{% endif %}"
+                        {% if not mapping.goodreads_book_id %}data-abs-id="{{ mapping.abs_id }}" onclick="linkGoodreads(event); return false;"{% endif %}>
+                        <img src="/static/goodreads.svg" alt="GR"
+                            class="service-icon {% if not mapping.goodreads_book_id %}grayscale-muted{% endif %}">
+                    </a>
+                    <span class="service-name">Goodreads</span>
+                    <span class="service-value cursor-pointer color-inherit" title="Click to edit Goodreads link"
+                        data-abs-id="{{ mapping.abs_id }}" onclick="linkGoodreads(event)">
+                        {% if mapping.goodreads_book_id %}
+                        {% if mapping.states.goodreads is defined %}
+                        {{ '%.0f' | format(mapping.states.goodreads.percentage|default(0)) }}%
+                        {% else %}0%{% endif %}
+                        {% else %}<span class="link-icon">+</span>{% endif %}
                     </span>
                 </div>
                 {% endif %}
@@ -2528,6 +2553,14 @@
             </div>
         </div>
 
+        <form id="bulk-delete-form" method="POST" action="{{ url_for('delete_selected_mappings') }}"
+            class="controls-bar" onsubmit="return confirmBulkDelete(this)">
+            <button type="button" class="btn btn-secondary" onclick="selectFilteredBooks()">Select all filtered</button>
+            <button type="button" class="btn btn-secondary" onclick="clearBookSelection()">Clear selection</button>
+            <span id="selected-count" role="status" aria-live="polite">0 selected</span>
+            <button type="submit" id="bulk-delete-button" class="btn btn-danger" disabled>Delete selected</button>
+        </form>
+
         <div class="search-handoff hidden" id="search-handoff">
             <span class="search-handoff-msg" id="search-handoff-msg"></span>
             <a class="btn btn-secondary" id="search-handoff-link" href="{{ url_for('suggestions', tab='search') }}"></a>
@@ -2823,6 +2856,52 @@
                 return true;
             }
 
+            function filteredBookIds() {
+                return new Set(Array.from(document.querySelectorAll('.book-card:not(.hidden):not(.flatten-duplicate)'))
+                    .map(card => card.dataset.absId));
+            }
+
+            function updateBookSelection() {
+                const allowed = filteredBookIds();
+                const selected = new Set(Array.from(document.querySelectorAll('.book-select:checked'))
+                    .map(input => input.value).filter(id => allowed.has(id)));
+                document.querySelectorAll('.book-select').forEach(input => {
+                    input.checked = selected.has(input.value);
+                });
+                const count = document.getElementById('selected-count');
+                const button = document.getElementById('bulk-delete-button');
+                if (count) count.textContent = `${selected.size} selected`;
+                if (button) button.disabled = selected.size === 0;
+                return selected.size;
+            }
+
+            function selectBook(input) {
+                document.querySelectorAll('.book-select').forEach(other => {
+                    if (other.value === input.value) other.checked = input.checked;
+                });
+                updateBookSelection();
+            }
+
+            function selectFilteredBooks() {
+                const allowed = filteredBookIds();
+                document.querySelectorAll('.book-select').forEach(input => {
+                    input.checked = allowed.has(input.value);
+                });
+                updateBookSelection();
+            }
+
+            function clearBookSelection() {
+                document.querySelectorAll('.book-select').forEach(input => { input.checked = false; });
+                updateBookSelection();
+            }
+
+            function confirmBulkDelete(form) {
+                const count = updateBookSelection();
+                if (!count || !confirm(`Delete ${count} selected book(s) from your dashboard? This uses the same cleanup as deleting each mapping individually, including cached files and sync data. Shared books remain available to other users.`)) return false;
+                form.querySelector('button[type="submit"]').disabled = true;
+                return true;
+            }
+
             function filterBooks() {
                 const filterValue = filterSelect.value;
                 const seriesValue = seriesFilter ? seriesFilter.value : 'all';
@@ -2890,6 +2969,7 @@
                 updateDashboardSectionVisibility();
                 updateFacetOptions();
                 updateFilteredCount();
+                updateBookSelection();
                 updateSearchHandoff(dashboardSearch ? dashboardSearch.value.trim() : '');
 
                 // Persist choice
@@ -3660,6 +3740,43 @@
             </div>
         </div>
         <script src="/static/js/storygraph-modal.js"></script>
+        <div id="goodreads-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="closeGoodreadsModal()"></div>
+            <div class="hc-modal-content">
+                <div class="hc-modal-header">
+                    <h3>Link to Goodreads</h3>
+                    <button class="hc-modal-close" onclick="closeGoodreadsModal()" aria-label="Close">×</button>
+                </div>
+                <div class="hc-modal-body">
+                    <div id="gr-loading" class="hc-loading" style="display:none;">
+                        <div class="hc-loading-spinner"></div>
+                        <div class="hc-loading-text">Searching Goodreads...</div>
+                    </div>
+                    <div id="gr-found" style="display:none;">
+                        <div class="hc-book-info">
+                            <div class="hc-book-title" id="gr-title"></div>
+                            <div class="hc-book-author" id="gr-author"></div>
+                        </div>
+                        <p class="hc-text-muted"><a id="gr-found-url" href="#" target="_blank" rel="noopener noreferrer">Open in Goodreads</a></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showGoodreadsManualInput(); return false;">Wrong book? Enter a URL, ID, or search text</a></p>
+                    </div>
+                    <div id="gr-manual" style="display:none;">
+                        <p>Enter a Goodreads URL, book ID, or search text:</p>
+                        <input type="text" id="gr-input" placeholder="https://www.goodreads.com/book/show/...">
+                        <button onclick="resolveGoodreadsManualInput()">Resolve</button>
+                    </div>
+                    <div id="gr-error" style="display:none;">
+                        <p id="gr-error-msg" class="hc-text-error"></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showGoodreadsManualInput(); return false;">Try a URL or search text</a></p>
+                    </div>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="closeGoodreadsModal()">Cancel</button>
+                    <button id="gr-link-btn" class="hc-btn-link" onclick="linkSelectedGoodreadsBook()" disabled>Link Book</button>
+                </div>
+            </div>
+        </div>
+        <script src="/static/js/goodreads-modal.js"></script>
         <!-- Storyteller Link Modal -->
         <div id="st-modal" class="hidden">
             <div class="st-modal-content">

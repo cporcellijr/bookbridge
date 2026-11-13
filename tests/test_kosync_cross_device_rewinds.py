@@ -61,7 +61,39 @@ class _FakeDatabase:
         return []
 
 
+class _LinkedFakeDatabase(_FakeDatabase):
+    """A copy linked to a book, with the reader's KoSync State for that book.
+
+    ``get_state`` is explicit: a bare mock State reads as 100% and would hold every push.
+    """
+
+    def __init__(self, *, own_percentage, state_percentage, device_id):
+        super().__init__(percentage=own_percentage, device_id=device_id)
+        self.doc.linked_abs_id = "linked-book"
+        self.book = SimpleNamespace(
+            abs_id="linked-book", abs_title="Linked", status="active",
+            ebook_filename="linked.epub", original_ebook_filename=None, kosync_doc_id="b" * 32,
+        )
+        self.state = SimpleNamespace(
+            percentage=state_percentage, xpath="/body/DocFragment[5]/body/p[1].0", cfi=None,
+            timestamp=None, last_updated=1,
+        )
+
+    def get_book(self, abs_id):
+        return self.book if abs_id == self.book.abs_id else None
+
+    def get_state(self, abs_id, client_name, user_id=None):
+        return self.state if abs_id == self.book.abs_id and client_name == "kosync" else None
+
+
 class TestKoSyncCrossDeviceRewinds:
+    @pytest.fixture(autouse=True)
+    def _no_sent_positions(self):
+        # Another file's GET for the same hash leaves a "sent" position that changes the hold path.
+        kosync_server._book_positions_sent.clear()
+        yield
+        kosync_server._book_positions_sent.clear()
+
     @staticmethod
     def _put(db, *, percentage, device_id, furthest_wins):
         app = Flask(__name__)
@@ -199,6 +231,22 @@ class TestKoSyncCrossDeviceRewinds:
         assert float(db.doc.percentage) == 0.30
         assert db.saved == [(0.30, "reader-b")]
         assert db.user_progress_updates[0][1] == 0.30
+
+    def test_a_linked_copy_behind_the_book_cannot_rewind_it_with_one_push(self):
+        """The reader's KoSync State is the baseline once it is ahead of the copy's own row."""
+        db = _LinkedFakeDatabase(own_percentage=0.10, state_percentage=0.29, device_id="reader-a")
+
+        _response, status = self._put(
+            db,
+            percentage=0.101,
+            device_id="reader-a",
+            furthest_wins="true",
+        )
+
+        assert status == 200
+        # The copy keeps its own position; the shared row and the book don't move.
+        assert [update[1] for update in db.user_progress_updates] == [0.101]
+        assert db.saved == []
 
     def test_ui_renders_safe_default_and_explicit_opt_in(self):
         template_source = self._settings_template_source()

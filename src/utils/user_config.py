@@ -40,7 +40,7 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "CWA_SYNC_TOKEN", "CWA_SYNC_ENABLED",
     # BookOrbit (account + the user's own destination collection)
     "BOOKORBIT_USER", "BOOKORBIT_PASSWORD", "BOOKORBIT_API_KEY", "BOOKORBIT_ENABLED",
-    "BOOKORBIT_SHELF_NAME",
+    "BOOKORBIT_SHELF_NAME", "BOOKORBIT_ADOPT_REQUESTS",
     # BookOrbit KOReader-sync account (annotation hub spoke; kosync-style creds)
     "BOOKORBIT_KOSYNC_USER", "BOOKORBIT_KOSYNC_KEY", "BOOKORBIT_KOSYNC_OWNER",
     # Kavita (auth key identifies the Kavita user; collection/library are user choices)
@@ -62,6 +62,10 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "HARDCOVER_GRIMMORY_LIST_SYNC", "HARDCOVER_GRIMMORY_LIST_PREFIX",
     "HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES",
     "STORYGRAPH_SESSION_COOKIE", "STORYGRAPH_REMEMBER_USER_TOKEN", "STORYGRAPH_ENABLED",
+    "GOODREADS_ENABLED", "GOODREADS_SESSION_COOKIE",
+    "GOODREADS_COOKIE_REFRESH_URL", "GOODREADS_COOKIE_REFRESH_TOKEN", "GOODREADS_BROWSER_URL",
+    # Shelfmark (the server URL stays global; each reader signs in as themselves)
+    "SHELFMARK_USER", "SHELFMARK_PASSWORD", "SHELFMARK_AUDIOBOOK_LIBRARY_ID",
 })
 
 
@@ -79,10 +83,10 @@ ENGINE_MIRROR_KEYS = (
 
 
 # Reading preferences: how each reader wants their own books handled. The admin's
-# Settings value is the server default; a reader's own On/Off on My Integrations
-# overrides it, and a blank choice keeps following the default. Deliberately NOT
-# in PER_USER_CREDENTIAL_KEYS, so every reader, regular users included, falls back
-# to the global value.
+# Settings value is the server default; a reader's saved choice overrides it,
+# and an unset choice follows the default. Most controls live on My Integrations;
+# the series Library option is now on Account -> Display. Deliberately NOT in
+# PER_USER_CREDENTIAL_KEYS, so regular readers also fall back to the global value.
 PER_USER_PREFERENCE_KEYS = frozenset({
     "KOREADER_ANNOTATION_SYNC",
     "KOREADER_STATUS_SYNC_ENABLED",
@@ -126,7 +130,6 @@ PER_USER_FIELD_GROUPS = [
         ("SYNC_COMPLETION_PROPAGATION", N_("When I finish a book in one app, mark it finished in all of them"), "pref"),
         ("ABS_READING_CHECKPOINTS", N_("Save my ebook reading as entries in my Audiobookshelf listening history"), "pref"),
         ("STORYTELLER_LISTENING_SESSIONS", N_("Count reading along in Storyteller as Audiobookshelf listening time"), "pref"),
-        ("SERIES_SHOW_CURRENT_BOOK_DETAIL", N_("Show each series on my Library as the book I'm on"), "pref"),
     ]),
     (N_("Audiobookshelf"), [
         ("ABS_ENABLED", N_("Enabled"), "bool"),
@@ -209,6 +212,7 @@ PER_USER_FIELD_GROUPS = [
         ("BOOKORBIT_PASSWORD", N_("Password"), "secret"),
         ("BOOKORBIT_API_KEY", N_("API key (BookOrbit 3.8+; replaces the password, keep the username for highlight sync)"), "secret"),
         ("BOOKORBIT_SHELF_NAME", N_("Collection name (synced books moved here)"), "text"),
+        ("BOOKORBIT_ADOPT_REQUESTS", N_("Follow audiobook requests I make in BookOrbit and pair them with my ebook"), "bool"),
         ("BOOKORBIT_KOSYNC_USER", N_("KOReader sync username (highlight sync)"), "text"),
         ("BOOKORBIT_KOSYNC_KEY", N_("KOReader sync password (highlight sync)"), "secret"),
         ("BOOKORBIT_KOSYNC_OWNER", N_("KOReader sync owner (must match BookOrbit username)"), "text"),
@@ -256,6 +260,18 @@ PER_USER_FIELD_GROUPS = [
         ("STORYGRAPH_SESSION_COOKIE", N_("Session cookie"), "secret"),
         ("STORYGRAPH_REMEMBER_USER_TOKEN", N_("Remember-user token"), "secret"),
     ]),
+    (N_("Goodreads"), [
+        ("GOODREADS_ENABLED", N_("Enabled"), "bool"),
+        ("GOODREADS_SESSION_COOKIE", N_("Browser Cookie header"), "secret"),
+        ("GOODREADS_COOKIE_REFRESH_URL", N_("Cookie refresher URL"), "text"),
+        ("GOODREADS_COOKIE_REFRESH_TOKEN", N_("Cookie refresher token"), "secret"),
+        ("GOODREADS_BROWSER_URL", N_("Signed-in Selenium URL (optional)"), "text"),
+    ]),
+    (N_("Shelfmark"), [
+        ("SHELFMARK_USER", N_("Username"), "text"),
+        ("SHELFMARK_PASSWORD", N_("Password"), "secret"),
+        ("SHELFMARK_AUDIOBOOK_LIBRARY_ID", N_("Audiobook destination library"), "text"),
+    ]),
 ]
 
 
@@ -284,6 +300,7 @@ SERVICE_ENABLE_KEYS = frozenset({
     "CWA_ENABLED",
     "HARDCOVER_ENABLED",
     "STORYGRAPH_ENABLED",
+    "GOODREADS_ENABLED",
 })
 
 _FALSEY_SETTING_VALUES = frozenset({"false", "0", "no", "off"})

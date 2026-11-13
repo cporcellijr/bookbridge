@@ -37,6 +37,8 @@
     .account-wrap code { color: #d7dcff; background: rgba(255, 255, 255, .06); padding: 1px 4px; border-radius: 4px; }
     .account-wrap .nav { max-width: 520px; margin: 0 auto 16px; }
     .account-wrap .nav a { color: var(--accent); text-decoration: none; font-size: 13px; }
+    .account-wrap .display-checkbox { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; cursor: pointer; }
+    .view .account-wrap .display-checkbox input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; padding: 0; margin: 0; flex: none; }
 </style>
 <link rel="stylesheet" href="/static/css/next-p6.css">
 {% endblock %}
@@ -85,6 +87,7 @@
             <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save changes') }}</button>
         </form>
     </div>
+    <p class="account-display-link"><a href="{{ url_for('account_display_page') }}">{{ _('Display settings') }}</a></p>
     <div class="card plugin-card">
         <h2>{{ _('My Integrations') }}</h2>
         <p>

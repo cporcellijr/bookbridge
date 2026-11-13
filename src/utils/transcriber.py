@@ -34,6 +34,7 @@ from src.utils.file_transfers import (
     stream_response_to_path,
 )
 from src.utils.transcription_cancel import CancellationToken, is_cancelled
+from src.services.audio_cache_ownership import book_cache_in_use, prune_cache_children, remove_owned
 # We keep the import for type hinting, but we don't instantiate it directly anymore
 
 logger = logging.getLogger(__name__)
@@ -73,8 +74,7 @@ class AudioTranscriber:
         """
         progress_file = self.cache_root / str(abs_id) / "_progress.json"
         try:
-            removed = progress_file.exists()
-            progress_file.unlink(missing_ok=True)
+            removed = progress_file.exists() and remove_owned(progress_file, self.cache_root, book_id=abs_id)
             if removed:
                 logger.info(f"🗑️ Invalidated cached transcript for {abs_id} (Remap)")
             return removed
@@ -606,24 +606,55 @@ class AudioTranscriber:
         return new_files if new_files else [file_path]
 
     @staticmethod
-    def _prune_audio_cache(book_cache_dir: Path, remove_directories: bool = False) -> None:
+    def _prune_audio_cache(book_cache_dir: Path, remove_directories: bool = False,
+                           cache_root: Optional[Path] = None,
+                           own_token: Optional[CancellationToken] = None) -> bool:
         """Remove heavy audio but retain `_progress.json` for later re-alignment.
 
         Source-track directories remain reusable after success; permanent failure
-        can remove them too without discarding the transcript.
+        can remove them too without discarding the transcript. The directory must
+        be a direct, link-free child of ``cache_root`` (default: its parent) and
+        outside every mounted source library, and no live worker other than
+        ``own_token`` may own it, or nothing is touched. Returns True if it ran.
         """
         if not book_cache_dir.exists():
-            return
-        for artifact in book_cache_dir.iterdir():
-            if artifact.name == "_progress.json" or (artifact.is_dir() and not remove_directories):
-                continue
+            return False
+        return prune_cache_children(book_cache_dir, cache_root or book_cache_dir.parent,
+                                    remove_directories=remove_directories, own_token=own_token)
+
+    def _discard_progress(self, abs_id, progress_file: Path, token: Optional[CancellationToken]) -> bool:
+        """Delete a book's progress marker unless another live worker owns the cache."""
+        return remove_owned(progress_file, self.cache_root, book_id=abs_id, own_token=token)
+
+    def _discard_progress_from_other_audio(
+        self, abs_id: str, book_cache_dir: Path, progress_file: Path,
+        source_fingerprints: dict, token: Optional[CancellationToken] = None,
+    ) -> None:
+        """Drop saved progress and derived audio parts not made from these mounted sources.
+
+        Progress records the fingerprints of the mounted originals it was built from.
+        Progress with no record (downloaded-copy books, written before this existed)
+        keeps resuming. Recorded progress that differs from the freshly acquired
+        sources is discarded together with the cached parts decoded from the old audio.
+        With no progress file at all, parts of unknown origin are dropped for mounted
+        sources.
+        """
+        if progress_file.exists():
             try:
-                if artifact.is_dir():
-                    shutil.rmtree(artifact)
-                else:
-                    artifact.unlink()
-            except OSError as cleanup_err:
-                logger.debug(f"Transcript cache cleanup skipped {artifact.name}: {cleanup_err}")
+                recorded = json.loads(progress_file.read_text()).get('source_fingerprints')
+            except (OSError, ValueError):
+                return
+            if recorded is None or recorded == source_fingerprints:
+                return
+        elif not source_fingerprints:
+            return
+        logger.info(
+            f"♻️ Cached transcription for {abs_id} was not made from the current source audio; "
+            f"discarding it and re-transcribing"
+        )
+        # Files only: source_tracks may hold tracks downloaded for this very run.
+        self._prune_audio_cache(book_cache_dir, cache_root=self.cache_root, own_token=token)
+        self._discard_progress(abs_id, progress_file, token)
 
     _CHUNK_NAME = re.compile(r"part_(\d+)(?:_normalized)?(?:_split_(\d+))?\.wav")
 
@@ -675,12 +706,20 @@ class AudioTranscriber:
                 raise TranscriptionCancelled(abs_id)
 
         raise_if_cancelled()
+        if book_cache_in_use(abs_id, cancellation_token):
+            raise RuntimeError(f"Audio cache for {abs_id} is in use by another live worker; refusing to share it")
         book_cache_dir = self.cache_root / str(abs_id)
         # Clean up if not resuming? For now, we assume if we are called, we need to run.
         book_cache_dir.mkdir(parents=True, exist_ok=True)
 
         progress_file = book_cache_dir / "_progress.json"
-        
+        source_fingerprints = {
+            f["local_path"]: list(f["source_fingerprint"])
+            for f in audio_urls if isinstance(f, dict) and f.get("local_path") and f.get("source_fingerprint")
+        }
+        self._discard_progress_from_other_audio(
+            abs_id, book_cache_dir, progress_file, source_fingerprints, cancellation_token)
+
         # If we have a fully completed progress file, we can just return the result!
         if progress_file.exists():
              try:
@@ -699,7 +738,7 @@ class AudioTranscriber:
                                  else self._transcript_extent(cached_transcript)), expected_duration
                             )
                         except ValueError as coverage_err:
-                            progress_file.unlink(missing_ok=True)
+                            self._discard_progress(abs_id, progress_file, cancellation_token)
                             logger.warning(
                                 f"⚠️ {coverage_err} — discarding cached transcript for {abs_id} "
                                 f"and re-transcribing",
@@ -708,7 +747,7 @@ class AudioTranscriber:
                             logger.info(f"⚡ Resuming from completed local cache for {abs_id}")
                             return cached_transcript
                     else:
-                        progress_file.unlink()
+                        self._discard_progress(abs_id, progress_file, cancellation_token)
                         logger.info(f"Invalidated empty completed transcript cache for {abs_id}")
              except (json.JSONDecodeError, OSError) as e:
                  logger.debug(f"Failed to read progress cache file: {e}")
@@ -745,7 +784,11 @@ class AudioTranscriber:
                         logger.info(f"♻️ Resuming transcription: {chunks_completed} chunks previously done")
                 except Exception as e:
                     logger.warning(f"⚠️ Could not resume (will start fresh): {e}", exc_info=True)
-                    if book_cache_dir.exists(): shutil.rmtree(book_cache_dir)
+                    if book_cache_dir.exists() and not remove_owned(
+                            book_cache_dir, self.cache_root, direct_child=True,
+                            book_id=abs_id, own_token=cancellation_token):
+                        raise RuntimeError(
+                            f"Audio cache for {abs_id} could not be reset safely (in use or protected); failing this run")
                     book_cache_dir.mkdir(parents=True, exist_ok=True)
                     resuming = False
 
@@ -763,7 +806,8 @@ class AudioTranscriber:
                         logger.warning(f"⚠️ Found {len(stale_files)} cached files but some parts are missing. Wiping cache to start fresh")
                         # Keep `_progress.json`: its chunks were transcribed from complete
                         # audio, and the re-download reproduces the same chunks.
-                        self._prune_audio_cache(book_cache_dir, remove_directories=True)
+                        self._prune_audio_cache(book_cache_dir, remove_directories=True, cache_root=self.cache_root,
+                                                own_token=cancellation_token)
 
                     # Original logic: Wipe and Start Fresh
                     book_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -906,7 +950,8 @@ class AudioTranscriber:
                 # `_progress.json` stays: chunks are transcribed only after this check
                 # passes, so a resume misreading the cache costs a download, not hours.
                 if not raw_audio:
-                    self._prune_audio_cache(book_cache_dir, remove_directories=True)
+                    self._prune_audio_cache(book_cache_dir, remove_directories=True, cache_root=self.cache_root,
+                                                own_token=cancellation_token)
                 logger.error(
                     f"❌ '{abs_id}' {coverage_err} — the audio BookBridge fetched is shorter "
                     f"than the runtime the library reports. Cleared the audio cache; the job "
@@ -973,7 +1018,8 @@ class AudioTranscriber:
                             'cumulative_duration': cumulative_duration,
                             'transcript': full_transcript,
                             'vad_filter': vad_used,
-                            'done': (chunks_completed == total_chunks)
+                            'done': (chunks_completed == total_chunks),
+                            **({'source_fingerprints': source_fingerprints} if source_fingerprints else {}),
                         }, f)
                 except (FileNotFoundError, NotADirectoryError):
                     logger.info(f"🛑 Progress cache for {abs_id} vanished (mapping deleted); stopping cleanly")
@@ -986,7 +1032,7 @@ class AudioTranscriber:
                 gc.collect()
 
             if not full_transcript:
-                progress_file.unlink(missing_ok=True)
+                self._discard_progress(abs_id, progress_file, cancellation_token)
                 raise ValueError("Transcription completed without any segments")
 
             # Belt-and-braces: chunks can individually fail to decode, so the
@@ -997,14 +1043,14 @@ class AudioTranscriber:
                     cumulative_duration if vad_used else self._transcript_extent(full_transcript), expected_duration
                 )
             except ValueError as coverage_err:
-                progress_file.unlink(missing_ok=True)
+                self._discard_progress(abs_id, progress_file, cancellation_token)
                 logger.error(f"❌ '{abs_id}' {coverage_err}", exc_info=True)
                 raise
 
             # Clean up cache only on success. Keep `_progress.json` (it holds the finished
             # transcript) so a later re-align can reuse it via the resume check above and
             # skip re-downloading/re-running Whisper — only the heavy audio is removed.
-            self._prune_audio_cache(book_cache_dir)
+            self._prune_audio_cache(book_cache_dir, cache_root=self.cache_root, own_token=cancellation_token)
 
             return full_transcript
 

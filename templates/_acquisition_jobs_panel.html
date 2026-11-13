@@ -1,0 +1,269 @@
+{% set submission_labels = {
+    'not_started': _('Not submitted'), 'needs_release': _('Waiting for a release choice'),
+    'uncertain': _('Checking whether the provider accepted the request'),
+    'accepted': _('Submitted'), 'failed': _('Needs attention'),
+    'needs_identification': _('Needs an edition check'), 'already_owned': _('Already in your library')
+} %}
+{% set library_labels = {
+    'waiting_import': _('Waiting for library import'), 'indexed': _('Found in your library'),
+    'needs_review': _('Edition review needed'), 'catalog_unavailable': _('Library check unavailable')
+} %}
+{% macro source_label(source) -%}
+    {%- if source == 'BookLore' -%}{{ _('Grimmory') }}
+    {%- elif source in ('ABS', 'BookOrbit', 'CWA', 'Kavita', 'Shelfmark') -%}{{ source }}
+    {%- else -%}{{ _('Library') }}{%- endif -%}
+{%- endmacro %}
+{% macro receipt_label(receipt) -%}
+    {%- if receipt.status in ('arrived', 'paired') -%}{{ _('Delivered') }}
+    {%- elif receipt.remote_status == 'approved' -%}{{ _('Approved by provider') }}
+    {%- elif receipt.remote_status == 'searching' -%}{{ _('Provider is searching') }}
+    {%- elif receipt.remote_status in ('downloading', 'importing') -%}{{ _('Downloading') }}
+    {%- elif receipt.remote_status in ('complete', 'available', 'downloaded', 'grabbed') -%}{{ _('Delivered') }}
+    {%- elif receipt.status == 'waiting' -%}{{ _('Requested') }}
+    {%- elif receipt.status == 'in_progress' -%}{{ _('In progress') }}
+    {%- elif receipt.status == 'needs_look' -%}{{ _('Needs review') }}
+    {%- elif receipt.status in ('failed', 'declined', 'cancelled') -%}{{ _('Provider request ended') }}
+    {%- else -%}{{ _('Request saved') }}{%- endif -%}
+{%- endmacro %}
+<script type="application/json" id="acquisition-job-i18n">{{ {
+    'loading': _('Loading current choices…'), 'close': _('Close choices'),
+    'noShelfmark': _('No matching copies are available right now.'),
+    'noBookOrbit': _('No matching releases are available right now.'),
+    'shelfmarkChoicesFailed': _('Current Shelfmark choices could not be loaded. Try again later.'),
+    'bookorbitChoicesFailed': _('Current BookOrbit choices could not be loaded. Check the request status.'),
+    'availableCopy': _('Available copy'), 'cancelled': _('Cancellation was confirmed.'),
+    'hidden': _('The request was hidden. It was not cancelled.'), 'updated': _('The request status has been updated.'),
+    'statusUnconfirmed': _('The provider status could not be confirmed. Check the request before trying again.'),
+    'actionUnconfirmed': _('That action could not be completed. The current status has not been confirmed.'),
+    'dismissExplanation': _('Dismiss only hides this job; provider requests continue.'),
+    'providerAccountDisabled': _('Book requests are turned off for this account.'),
+    'providerUnavailable': _('Connect or configure BookOrbit or Shelfmark under My Integrations to request this format.'),
+    'providerOptionsUnavailable': _('Provider availability could not be checked right now.'),
+    'myIntegrations': _('My Integrations'),
+    'errors': {
+        'not_found': _('This request is no longer available.'), 'job_dismissed': _('This saved request was dismissed.'),
+        'format_not_requested': _('That format is not part of this saved request.'),
+        'submission_uncertain': _('The provider may have received this request. Check its status before trying again.'),
+        'submission_failed': _('The provider could not accept this request. Check its status before trying again.'),
+        'receipt_unreconciled': _('The provider may have received this request, but its status could not be saved. Check the provider before trying again.'),
+        'job_save_failed': _('The request could not be saved. No provider request was made.'),
+        'shelfmark_not_configured': _('Shelfmark is unavailable for this account.'),
+        'bookorbit_not_configured': _('BookOrbit is unavailable for this account.'),
+        'toggle_off': _('Book requests are currently unavailable.'), 'policy_blocked': _('This format is not available through Shelfmark.'),
+        'policy_unverified': _('Shelfmark’s current settings could not be confirmed.'),
+        'sources_failed': _('Shelfmark could not search for copies right now. Try again later.'),
+        'unreachable': _('Shelfmark could not be reached. Try again later.'),
+        'no_login_saved': _('Save your Shelfmark sign-in details in Integrations first.'),
+        'bad_credentials': _('Shelfmark refused the saved sign-in details. Check them in Integrations.'),
+        'locked': _('Shelfmark has temporarily locked the account. Try again later.'),
+        'password_login_disabled': _('Shelfmark does not allow password sign-in here.'),
+        'policy_refused': _('Shelfmark does not allow this request with the current settings.'),
+        'duplicate_pending_request': _('Shelfmark already has a pending request for this book.'),
+        'release_required': _('Choose a Shelfmark copy before continuing.'),
+        'release_not_allowed': _('That copy cannot be requested under the current Shelfmark settings.'),
+        'release_expired': _('That Shelfmark choice has expired. Search again for current choices.'),
+        'release_stale': _('That BookOrbit choice is no longer available. Check the current request status.'),
+        'release_wrong_book': _('That choice does not match this saved book.'), 'release_wrong_format': _('That choice is for a different format.'),
+        'already_picked': _('BookOrbit has already started this request.'),
+        'automatic_or_unknown': _('BookOrbit is handling this request. Check its status before choosing a release.'),
+        'configuration_repair_required': _('BookOrbit needs its request settings repaired before a release can be chosen.'),
+        'request_state_changed': _('The provider request changed. Its current status has been refreshed.'),
+        'request_state_unverified': _('The provider status could not be confirmed. Check again later.'),
+        'request_identity_changed': _('The provider request could not be matched safely. Check its status.'),
+        'request_media_mismatch': _('The provider request format changed. Check its status.'),
+        'no_pick_permission': _('Your BookOrbit account cannot choose releases. Ask its administrator to enable release picking.'),
+        'cancel_not_supported': _('This provider request can no longer be cancelled.'),
+        'cancel_failed': _('The provider could not confirm cancellation. Check its status before trying again.'),
+        'not_open': _('This request is no longer open.'), 'invalid_release': _('That choice is no longer available. Search for current choices.'),
+        'catalog_unavailable': _('The library could not be checked. Try again later.'),
+        'candidate_not_found': _('That library copy is no longer available. Refresh and review again.'),
+        'scan_server_scope_changed': _('The configured library changed. Restore the original library before retrying the scan.'),
+        'scan_server_scope_unavailable': _('The configured library could not be checked. Try again later.'),
+        'scan_server_scope_unverified': _('The original library could not be verified. Check its status before retrying.'),
+        'reader_bookorbit_unavailable': _('BookOrbit is unavailable for this account. Check My Integrations.'),
+        'scan_destination_changed': _('The scan destination changed. Restore the original destination before retrying.'),
+        'scan_library_missing_or_inaccessible': _('The original library is unavailable for this account.'),
+        'scan_already_running': _('A library scan is already in progress.'),
+        'scan_retry_limit_reached': _('The scan retry limit has been reached.'),
+        'scan_not_retryable': _('The scan cannot be retried safely yet. Check its status first.'),
+        'scan_not_ready': _('The provider has not confirmed delivery yet.'),
+        'scan_operation_unverified': _('The previous scan could not be verified. Check its status before retrying.'),
+        'scan_operation_not_in_history': _('The previous scan is no longer in the provider history. Check its status before retrying.'),
+        'scan_operation_not_settled': _('The previous scan is still active. Check its status before retrying.'),
+        'scan_history_unavailable': _('The provider scan history could not be checked. Try again later.'),
+        'audiobook_already_indexed': _('The audiobook is already in the library.'),
+        'invalid_scan_library_id': _('The scan destination could not be verified.'),
+        'scope_changed': _('The configured library changed. Restore the original library before retrying.'),
+        'destination_changed': _('The scan destination changed. Restore the original destination before retrying.'),
+        'scope_unverified': _('The original library could not be verified. Check its status before retrying.'),
+        'operation_unverified': _('The previous scan could not be verified. Check its status before retrying.'),
+        'exhausted': _('The scan retry limit has been reached.'),
+        'changed': _('The scan status changed. Refresh the page before retrying.'),
+        'not_ready': _('The provider has not confirmed delivery yet.'),
+        'invalid_scope_or_library': _('The scan destination could not be verified.'),
+        'authentication_required': _('Your session expired. Sign in again to continue.'),
+        'not_allowed': _('This action is not available for this account.')
+    }
+}|tojson }}</script>
+{% macro edition_details(title, authors, isbn13, series_name, series_index, filename, fallback_title, show_missing=false) -%}
+    {{ title or fallback_title }}
+    {%- if authors %} · {{ authors }}{% endif %}
+    {%- if isbn13 %} · ISBN {{ isbn13 }}{% endif %}
+    {%- if series_name %} · {{ series_name }}{% if series_index is not none %} #{{ series_index }}{% endif %}{% endif %}
+    {%- if filename %} · {{ filename }}{% endif %}
+    {%- if show_missing and (not authors or not isbn13 or not series_name or (series_name and series_index is none)) %} · {{ _('Some edition details were not available') }}{% endif %}
+{%- endmacro %}
+<section class="job-queue-section acquisition-job-section" id="acquisition-jobs"
+         aria-labelledby="acquisition-jobs-title"
+         data-fragment-url="{{ url_for('job_queue_page', acquisition_fragment=1, acquisition_job=focused_acquisition_job_id or '') }}">
+    <div class="job-queue-section-title">
+        <div><h2 id="acquisition-jobs-title">{{ _('Book requests') }}</h2></div>
+        <span class="job-queue-count">{{ acquisition_jobs|length }}</span>
+    </div>
+    {% if acquisition_jobs %}
+    <div class="acquisition-job-list">
+        {% for job in acquisition_jobs %}
+        <article class="acquisition-job-card{% if job.id == focused_acquisition_job_id %} acquisition-job-focused{% endif %}"
+                 id="acquisition-job-{{ job.id }}" tabindex="-1"
+                 data-requested-focus="{{ 'true' if job.id == focused_acquisition_job_id else 'false' }}">
+            <header class="acquisition-job-heading">
+                <h3>{{ job.title }}</h3>
+                <button type="button" class="job-queue-action" data-acquisition-action="dismiss"
+                        data-job-id="{{ job.id }}">{{ _('Dismiss job') }}</button>
+            </header>
+            <p class="job-queue-detail">{{ _('Dismiss only hides this job; provider requests continue.') }}</p>
+            <p class="job-queue-detail">
+                {{ _('Requested formats') }}:
+                {{ _('Ebook') if 'ebook' in job.formats else '' }}{% if 'ebook' in job.formats and 'audiobook' in job.formats %}, {% endif %}{{ _('Audiobook') if 'audiobook' in job.formats else '' }}
+            </p>
+            <div class="acquisition-job-halves">
+                {% for kind, prefix, heading in [('ebook', 'ebook', _('Ebook')), ('audiobook', 'audio', _('Audiobook'))] %}
+                {% if kind in job.formats or job[prefix ~ '_source_id'] %}
+                <section class="acquisition-job-half" aria-label="{{ heading }}">
+                    {% set half_receipts = job.requests|selectattr('media_kind', 'equalto', kind)|list %}
+                    {% set visible_receipts = half_receipts|rejectattr('dismissed')|list %}
+                    {% set nonterminal_receipts = namespace(value=false) %}
+                    {% for receipt in half_receipts %}
+                        {% if receipt.status not in ('failed', 'declined', 'cancelled') %}
+                            {% set nonterminal_receipts.value = true %}
+                        {% endif %}
+                    {% endfor %}
+                    {% set half_submission = job[prefix ~ '_submission_state'] %}
+                    {% set may_submit = not job[prefix ~ '_source_id'] and half_submission != 'uncertain' and (
+                        (half_submission in (none, 'not_started', 'needs_release') and not half_receipts) or
+                        (half_submission == 'failed' and not half_receipts) or
+                        (half_receipts and not nonterminal_receipts.value)
+                    ) %}
+                    <h4>{{ heading }}</h4>
+                    {% if job[prefix ~ '_source_id'] %}
+                    <p class="job-queue-detail" data-remembered-source-id="{{ job[prefix ~ '_source_id'] }}">
+                        {{ _('Remembered copy') }}: {{ source_label(job[prefix ~ '_source']) }} · {{ edition_details(job.title, job.authors, job.isbn13, job.series_name, job.series_index, job.ebook_filename if kind == 'ebook' else '', job.title) }}
+                    </p>
+                    {% endif %}
+                    <dl class="acquisition-job-statuses">
+                        <div><dt>{{ _('Submission') }}</dt><dd>{{ submission_labels.get(job[prefix ~ '_submission_state'], _('In progress') if job[prefix ~ '_submission_state'] else (_('Already in your library') if job[prefix ~ '_source_id'] else _('Not submitted'))) }}</dd></div>
+                        <div><dt>{{ _('Delivery') }}</dt><dd>
+                            {% if visible_receipts %}{% for receipt in visible_receipts %}
+                            <span class="acquisition-receipt" data-receipt-id="{{ receipt.id }}"
+                                  data-service="{{ receipt.service }}" data-remote-kind="{{ receipt.remote_kind }}"
+                                  data-remote-status="{{ receipt.remote_status or '' }}"
+                                  data-request-status="{{ receipt.status }}"
+                                  data-decision-action="{{ receipt.decision_action or '' }}">
+                                {{ source_label(receipt.service) }}: {{ receipt_label(receipt) }}
+                                {% if receipt.service == 'BookOrbit' and receipt.remote_kind == 'request' and receipt.decision_action == 'pick_release' %}
+                                <button type="button" class="job-queue-action" data-provider-action="bookorbit-picker"
+                                        data-receipt-id="{{ receipt.id }}">{{ _('Choose a release') }}</button>
+                                {% endif %}
+                                {% if receipt.status in ('waiting', 'in_progress', 'needs_look') and not (receipt.status == 'needs_look' and receipt.remote_status in ('available', 'complete')) and (receipt.service != 'Shelfmark' or receipt.remote_kind != 'request' or receipt.remote_status == 'pending') %}
+                                <button type="button" class="job-queue-action" data-provider-action="cancel-receipt"
+                                        data-receipt-id="{{ receipt.id }}">{{ _('Cancel request') }}</button>
+                                {% endif %}
+                                {% if not receipt.dismissed %}
+                                <button type="button" class="job-queue-action" data-provider-action="dismiss-receipt"
+                                        data-receipt-id="{{ receipt.id }}">{{ _('Hide request') }}</button>
+                                {% endif %}
+                            </span>
+                            {% if not loop.last %}; {% endif %}{% endfor %}
+                            {% elif job[prefix ~ '_source_id'] %}{{ _('Already in your library') }}
+                            {% elif half_receipts %}{{ _('A hidden provider request may still continue') }}
+                            {% else %}{{ _('Waiting for delivery') }}{% endif %}
+                        </dd></div>
+                        <div><dt>{{ _('Library') }}</dt><dd>{{ library_labels.get(job[prefix ~ '_library_state'], _('Not checked') if not job[prefix ~ '_library_state'] else _('Check in progress')) }}</dd></div>
+                    </dl>
+                    {% if kind in job.formats and may_submit %}
+                    <div class="acquisition-provider-controls" data-provider-controls data-job-id="{{ job.id }}"
+                         data-media-kind="{{ kind }}" data-title="{{ job.title }}"
+                         data-author="{{ (job.authors or '').split(',')[0]|trim }}">
+                        <p class="job-queue-detail acquisition-provider-help" data-provider-help hidden></p>
+                        <a class="job-queue-action acquisition-provider-settings" href="{{ url_for('account_integrations') }}" data-provider-settings hidden>{{ _('My Integrations') }}</a>
+                        <button type="button" class="job-queue-action" data-provider-action="bookorbit-submit" hidden>{{ _('Get from BookOrbit') }}</button>
+                        <button type="button" class="job-queue-action" data-provider-action="shelfmark-open" hidden>{{ _('Find in Shelfmark') }}</button>
+                        <button type="button" class="job-queue-action" data-provider-action="shelfmark-request-book" hidden>{{ _('Request from Shelfmark') }}</button>
+                        <div class="acquisition-provider-editor" data-provider-editor hidden>
+                            <label>{{ _('Choose a Shelfmark copy') }}</label>
+                            <div data-release-list></div>
+                            <button type="button" class="job-queue-action" data-provider-action="close-editor">{{ _('Close choices') }}</button>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if job[prefix ~ '_library_state'] == 'needs_review' and job.review_candidates[kind] %}
+                    <div class="acquisition-job-review" aria-label="{{ _('Choose the library copy') }}">
+                        <strong>{{ _('Choose the copy you mean') }}</strong>
+                        {% for candidate in job.review_candidates[kind] %}
+                        <button type="button" class="job-queue-action" data-acquisition-action="review"
+                                data-job-id="{{ job.id }}" data-media-kind="{{ kind }}"
+                                data-source="{{ candidate.source }}" data-source-id="{{ candidate.source_id }}"
+                                {% if kind == 'ebook' %}data-filename="{{ candidate.filename }}"{% endif %}>
+                            {{ source_label(candidate.source) }} · {{ edition_details(candidate.title, candidate.authors, candidate.isbn13, candidate.series_name, candidate.get('series_index'), candidate.filename, _('Copy title unavailable'), true) }}
+                        </button>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </section>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% if job.scan_state or job.audio_delivered_at %}
+            {% set scan_labels = {
+                'scheduled': _('Waiting for scheduled scan'), 'claimed': _('Scan status being checked'),
+                'accepted': _('Scan accepted'), 'coalesced': _('Using an existing library scan'),
+                'waiting_scope': _('Waiting for scan confirmation'), 'completed': _('Scan finished; checking the library'),
+                'failed': _('Scan needs attention'), 'refused': _('Scan needs attention'),
+                'invalid': _('Scan needs attention'), 'unavailable': _('Scan status unavailable'),
+                'uncertain': _('Scan acknowledgement is unconfirmed'), 'conflict': _('Another library operation is in progress')
+            } %}
+            <p class="acquisition-job-scan"><strong>{{ _('Library scan') }}:</strong>
+                {% if job.audio_library_state == 'indexed' or job.linked_abs_id %}{{ _('Audiobook already in your library') }}
+                {% else %}{{ scan_labels.get(job.scan_state, _('Not started')) }}{% endif %}
+            </p>
+                            {% if job.scan_state in ('failed', 'completed', 'refused', 'invalid', 'unavailable', 'conflict') and (job.scan_attempts or 0) < 2 and job.audio_library_state != 'indexed' and not job.linked_abs_id %}
+            <button type="button" class="job-queue-action" data-acquisition-action="scan-retry"
+                    data-job-id="{{ job.id }}">{{ _('Retry library scan') }}</button>
+            {% endif %}
+            {% endif %}
+            <p class="acquisition-job-pairing"><strong>{{ _('Pairing') }}:</strong>
+                {% if job.linked_abs_id %}{{ _('Paired into Bridge') }}
+                {% elif job.audio_library_state == 'needs_review' or job.ebook_library_state == 'needs_review' %}{{ _('Choose the correct edition to continue') }}
+                {% else %}{{ _('Waiting for both copies to be verified') }}{% endif %}
+            </p>
+            {% if job.linked_abs_id %}
+            {% set bridge_state = bridge_statuses.get(job.linked_abs_id) %}
+            <p class="acquisition-job-bridge"><strong>{{ _('Bridge') }}:</strong>
+                {% if bridge_state == 'pending' %}{{ _('Waiting for normal Bridge processing') }}
+                {% elif bridge_state in ('processing', 'forging') %}{{ _('Normal Bridge processing is underway') }}
+                {% elif bridge_state == 'failed' %}{{ _('Needs attention in normal Bridge processing') }}
+                {% elif bridge_state == 'active' %}{{ _('Ready for normal Bridge syncing') }}
+                {% else %}{{ _('Linked to your Bridge library') }}{% endif %}
+                <a href="/book/{{ job.linked_abs_id|urlencode }}">{{ _('Open book') }}</a>
+            </p>
+            {% else %}
+            <p class="acquisition-job-bridge"><strong>{{ _('Bridge') }}:</strong> {{ _('Normal Bridge processing starts after pairing') }}</p>
+            {% endif %}
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="job-queue-empty">{{ _('No saved book requests.') }}</p>
+    {% endif %}
+    <p class="acquisition-job-feedback" id="acquisition-job-feedback" role="status" aria-live="polite" hidden></p>
+</section>

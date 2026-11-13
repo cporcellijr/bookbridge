@@ -42,8 +42,8 @@ respects the active filters.
 ### Series
 
 Books in a series are grouped under the series name; a closed series shows each book
-as a compact row. Turn on **Show each series as the book you're reading** (**Settings ->
-Features -> Series Display**) to show each series as one card instead: the full card of
+as a compact row. In the New interface, turn on **Show the current book in series stacks**
+under **Account → Display** to show each series as one card instead: the full card of
 the book you are on — the one in progress, or the next unread one — with the series
 name, how many you have finished and the other books listed along its bottom. Click
 that strip to open the rest of the series below it. Finished series keep their usual
@@ -114,7 +114,8 @@ listening sessions, and a book finished as both ebook and audiobook counts once.
 The **Account** page is where you manage your own login and reader-specific setup.
 
 - **My Integrations** lets you save your own service usernames, passwords, tokens, API keys, and per-user sync toggles. The cards here use the same names and order as **Settings -> Services**, so it is always clear which side holds what: Settings has the server connection, your Account has your login.
-- **Reading preferences**, at the top of My Integrations, are how you want your own books handled: sharing highlights, reading status and History between your KOReader devices, protection from an out-of-date device, marking a finished book finished everywhere, Audiobookshelf reading checkpoints, counting Storyteller as listening time, and the series view on your Library. Each starts at **Server default**, which follows Settings; choose On or Off to decide for yourself.
+- **Display** lets you switch between the Classic and New interfaces. In New, it also lets you choose **Show the current book in series stacks**. The series preference saves for your reader profile, and your existing choice is kept when you switch interfaces.
+- **Reading preferences**, at the top of My Integrations, are how you want your own books handled: sharing highlights, reading status and History between your KOReader devices, protection from an out-of-date device, marking a finished book finished everywhere, Audiobookshelf reading checkpoints, and counting Storyteller as listening time. Each starts at **Server default**, which follows Settings; choose On or Off to decide for yourself.
 - **Connect a KOReader device** walks you through pointing KOReader at the bridge (an editable sync-server address that respects public HTTPS and warns when localhost must be replaced with the server's LAN hostname/IP) and installing the optional Bridge Sync plugin.
 - Your own switch for a service applies only while that service is switched on in **Settings**. If it is switched off there, your switch is greyed out with the reason — and your saved settings come back untouched if it is switched on again.
 - Admins can still manage the same fields for any reader from **Settings -> Users -> (user) -> Integrations**.

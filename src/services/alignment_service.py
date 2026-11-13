@@ -13,7 +13,7 @@ import re
 import shutil
 from pathlib import Path
 from statistics import median
-from typing import Any, List, Dict, Optional, Tuple
+from typing import Any, Callable, List, Dict, Optional, Tuple
 
 from src.utils.time_utils import utcnow
 
@@ -400,10 +400,36 @@ class AlignmentService:
         from src.utils.quartznet_aligner import QuartzNetAligner
         return QuartzNetAligner
 
+    @staticmethod
+    def _audio_progress(progress_callback: Optional[Callable[[float], None]],
+                        audio_duration: Optional[float]) -> Optional[Callable[[float], None]]:
+        """Adapt the aligner's seconds-covered reports to a 0.0-1.0 fraction of
+        ``audio_duration``, passed on at most once per percent (plus the final 1.0).
+
+        ``None`` when there is no callback or no known duration to divide by.
+        """
+        if progress_callback is None or not audio_duration or audio_duration <= 0:
+            return None
+        last = None
+
+        def on_seconds(seconds: float) -> None:
+            nonlocal last
+            fraction = min(max(seconds / audio_duration, 0.0), 1.0)
+            if last is not None and fraction < 1.0 and fraction - last < 0.01:
+                return
+            if fraction == last:
+                return
+            last = fraction
+            progress_callback(fraction)
+
+        return on_seconds
+
     @time_execution
     def align_forced_and_store(self, abs_id: str, audio_path: str, ebook_text: str,
                                spine_chapters: Optional[List[Dict]] = None,
-                               audio_duration: Optional[float] = None) -> bool:
+                               audio_duration: Optional[float] = None,
+                               progress_callback: Optional[Callable[[float], None]] = None,
+                               source_check: Optional[Callable[[str], None]] = None) -> bool:
         """Build an alignment map by CTC forced alignment (issue #426, method 'ctc').
 
         Aligns the audio directly against ``ebook_text`` — no transcript — and stores
@@ -415,9 +441,18 @@ class AlignmentService:
         attempt is refused before the audio is ever decoded, rather than only after
         paying for a full decode inside `ForcedAligner.align`. Omit it (the default)
         to keep every existing caller's behaviour unchanged.
+
+        ``progress_callback``, when supplied with ``audio_duration``, receives the
+        model pass's progress as a 0.0-1.0 fraction of the audio, in steps of at
+        least 1%. The model pass is nearly all of a CTC run's time.
+
+        ``source_check``, when supplied, is called with a seam name before the model
+        pass and again before the map is published; it raises if a mounted source
+        track changed, so no map built from changed audio is stored.
         """
         if not ebook_text:
             return False
+        audio_progress = self._audio_progress(progress_callback, audio_duration)
 
         aligner_cls = self._ctc_aligner_class()
         if not aligner_cls.is_available():
@@ -501,6 +536,9 @@ class AlignmentService:
             logger.info("⚙️ CTC: excluding likely unnarrated interior text for %s: %s",
                         abs_id, exclude_spans)
 
+        if source_check:
+            source_check("the CTC model pass")
+
         # Chapter search (src/services/ctc_search.py): with no usable prior, run the
         # model once, locate each spine chapter in its greedy decode, and use that as
         # the prior, so a long book aligns without a Whisper transcript. The emissions
@@ -512,7 +550,7 @@ class AlignmentService:
                          and self._forced_aligner.can_single_pass(
                              audio_duration, ebook_text, text_range=text_range,
                              exclude_spans=exclude_spans))):
-            precomputed = self._forced_aligner.emissions_for(audio_path)
+            precomputed = self._forced_aligner.emissions_for(audio_path, progress_callback=audio_progress)
             if precomputed is None:
                 return False
             search_prior = self._search_prior(abs_id, precomputed, ebook_text, spine_chapters)
@@ -539,6 +577,8 @@ class AlignmentService:
                         "exclude_spans": exclude_spans}
         if precomputed is not None:
             align_kwargs["precomputed"] = precomputed
+        elif audio_progress is not None:
+            align_kwargs["progress_callback"] = audio_progress
         alignment_map = self._forced_aligner.align(audio_path, ebook_text, **align_kwargs)
         if not alignment_map or len(alignment_map) < 2:
             logger.warning(f"⚠️ CTC alignment produced no usable map for {abs_id}")
@@ -547,6 +587,8 @@ class AlignmentService:
         if not self._ctc_map_accepted(abs_id, alignment_map, exclude_spans):
             return False
 
+        if source_check:
+            source_check("publishing the CTC map")
         if not self._publish_map(abs_id, alignment_map, "ctc", total_chars=len(ebook_text),
                                  exclude_spans=exclude_spans):
             return False

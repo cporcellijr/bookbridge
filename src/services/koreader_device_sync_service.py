@@ -240,6 +240,11 @@ class KOReaderDeviceSyncService:
     def _resolve_download_artifact(self, book, link_hashes: bool = True,
                                    allow_revalidation: bool = False,
                                    device_filename: Optional[str] = None) -> Optional[dict]:
+        # Catalogue snapshots can outlive a deletion or removal of a user's claim.
+        if self.database_service.get_book(book.abs_id) is None:
+            return None
+        if self.user_id is not None and not self.database_service.is_user_linked(self.user_id, book.abs_id):
+            return None
         source_filename = self._select_source_filename(book)
         if not source_filename:
             return None
