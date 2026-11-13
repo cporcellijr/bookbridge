@@ -1,6 +1,6 @@
 # Plan: get the missing half from the search page (#585)
 
-Status: **Follow-up workflow redesign approved 2026-11-12. Phases A and B are complete. Phase C is implemented locally for independent review; Phases D–F remain unstarted.** The current plan and findings below override older design notes. The original #585 implementation is already live; its delivery history follows the current plan. Nothing pushed, posted, or deployed by this follow-up.
+Status: **Follow-up workflow redesign approved 2026-11-12. Phases A–C are complete and independently verified. Phase D is the next implementation handoff; D–F remain unimplemented.** The current plan and findings below override older design notes. The original #585 implementation is already live; its delivery history follows the current plan. Nothing pushed, posted, or deployed by this reviewer.
 
 ## Current follow-up plan (2026-11-12)
 
@@ -155,8 +155,8 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
 |---|---|---|
 | A | COMPLETE; upstream flag gap recorded | Endpoint/capability investigation above |
 | B | COMPLETE; verified 2026-11-12 | Durable jobs, linked halves, and explicit existing-edition identities; additive migration and regressions |
-| C | IMPLEMENTED LOCALLY; review pending; upstream auto flag still absent | Durable provider receipts, BookOrbit conservative release decisions, Shelfmark Both and source policy |
-| D | Planned | Supported-library arrival detection, integration picker, completion-triggered scans |
+| C | COMPLETE; independent review and regression verification passed; upstream auto flag still absent | Durable provider receipts, BookOrbit conservative release decisions, Shelfmark Both and source policy |
+| D | NEXT; [handoff prompt](PROMPT_585_PHASE_D.md) | Supported-library arrival detection, integration picker, completion-triggered scans |
 | E | Planned | Processing job UI/actions, clear-search handoff, existing-job search behavior |
 | F | Planned | Full regression/browser acceptance, docs, additive migration/deployment as needed |
 
@@ -204,7 +204,7 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
   this Phase C intentionally does not redesign UI. Phase D still owns arrivals,
   scans, destination settings, and pairing after arrival.
 
-### Phase C independent-review corrections (2026-11-12; uncommitted)
+### Phase C independent-review corrections (2026-11-12; reviewed)
 
 All five independent findings have scoped fixes in this worktree, without starting Phase D:
 
@@ -235,12 +235,16 @@ Before fixes: isolated regression selection **15 failed / 2 passed / 1 warning**
 responses must be treated as uncertain regardless of their code. After fixes: the
 acquisition-focused suite **271 passed / 31 subtests / 1 warning**, zero failures,
 including a late preflight
-race and second-release endpoint test. Full suite and integration acceptance are tracked in
-`BRANCH_STATUS.md`; no unrelated New/Classic UI files were edited for these corrections.
-Neither these tests nor the correction pass made a real provider POST, commit, merge, push,
-restart, deployment, or migration. Reviewer must reconcile the current local dev UI changes
-independently and review the security/state transitions before integration. Deployment after
-integration requires applying the additive Phase C migration and restarting the application.
+race and second-release endpoint test. Independent review confirmed the five fixes. Phase C code
+is committed as `270acd80` (+43 test functions). Reviewer verification: **271 passed / 31 subtests**;
+full combined suite on `ca983774`, including dev through `e088ff73`: **7681 passed / 15 skipped /
+1325 subtests / 12 warnings / zero failures** (422.66s). The three earlier shell failures are resolved.
+Later Library UI changes are inherited from dev without a separate UI review or UI-specific test run,
+as the user requested; acquisition implementation files did not change during that refresh.
+No unrelated UI files were authored for Phase C, and no live provider POST, deployment, restart or
+live migration was performed by this reviewer. Deployment requires **additive migration + restart**.
+The next agent should use [the Phase D prompt](PROMPT_585_PHASE_D.md) on the refreshed feature branch
+and leave its work uncommitted for independent review before the next local phase merge.
 
 Phase B branch: `codex/585-acquisition-jobs`, created from local dev `b177d362` in isolated worktree
 `C:/Server/stacks/abs-kosync-enhanced/.local-review-notes/585-acquisition-jobs-worktree`.
