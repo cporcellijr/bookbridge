@@ -82,6 +82,32 @@ def find_calibre_book_id(doc_hash: str) -> Optional[str]:
     return str(row[0])
 
 
+def _library_relative_path(path: Path, library_root: Path, library_dirs: Iterable[Path]) -> Optional[Path]:
+    """The path of a file relative to the Calibre library, or None when it is outside it.
+
+    The library can be mounted twice (CALIBRE_LIBRARY_PATH and a scanned folder), so a
+    file found under a scanned folder counts when the library holds the same file at
+    the same relative path.
+    """
+    try:
+        path = path.resolve()
+        root = library_root.resolve()
+    except OSError:
+        return None
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        pass
+    for library_dir in library_dirs:
+        try:
+            relative = path.relative_to(Path(library_dir).resolve())
+            if os.path.samefile(root / relative, path):
+                return relative
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def find_calibre_book_id_for_path(path: Path, library_dirs: Iterable[Path] = ()) -> Optional[str]:
     """Return the Calibre book id of an EPUB inside the Calibre library, or None."""
     path = Path(path)
@@ -90,9 +116,8 @@ def find_calibre_book_id_for_path(path: Path, library_dirs: Iterable[Path] = ())
     db_path = _metadata_db_path(library_dirs)
     if db_path is None:
         return None
-    try:
-        relative = path.resolve().relative_to(db_path.parent.resolve())
-    except (OSError, ValueError):
+    relative = _library_relative_path(path, db_path.parent, library_dirs)
+    if relative is None:
         return None
     try:
         with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)) as conn:

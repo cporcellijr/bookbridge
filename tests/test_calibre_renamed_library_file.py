@@ -6,7 +6,9 @@ becomes "The Shards - Author.epub"), so every later lookup by the stored name
 failed, and the book never synced again.
 """
 
+import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -43,7 +45,7 @@ def _no_extra_library_settings(monkeypatch):
 def _write_metadata_db(library: Path, books: list[tuple[int, str, str]]) -> None:
     db = library / "metadata.db"
     db.unlink(missing_ok=True)
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, path TEXT)")
         conn.execute("CREATE TABLE data (id INTEGER PRIMARY KEY, book INTEGER, format TEXT, name TEXT)")
         for book_id, path, name in books:
@@ -190,3 +192,31 @@ class TestRecordedCalibreIds:
 
     def test_an_unknown_name_has_no_id(self, db):
         assert db.get_calibre_book_id("Other - Author.epub") is None
+
+
+def test_a_library_mounted_twice_still_records_its_calibre_id(tmp_path, library, monkeypatch):
+    """CALIBRE_LIBRARY_PATH and the scanned folder can be two mounts of one library.
+
+    A hard link stands in for the second mount: two paths, one file, which
+    resolve() cannot fold together the way it folds a symlink.
+    """
+    mirror = tmp_path / "mirror"
+    (mirror / OLD_DIR).mkdir(parents=True)
+    os.link(library / OLD_DIR / f"{OLD_NAME}.epub", mirror / OLD_DIR / f"{OLD_NAME}.epub")
+    monkeypatch.setenv("CALIBRE_LIBRARY_PATH", str(library))
+    store = _Store()
+
+    _parser(tmp_path, mirror, store).resolve_book_path(f"{OLD_NAME}.epub")
+
+    assert store.ids == {f"{OLD_NAME}.epub": "494"}
+
+
+def test_a_scanned_file_that_only_shares_a_relative_path_is_not_recorded(tmp_path, library, monkeypatch):
+    """A different file at the same relative path is a different library, not a second mount."""
+    _place_epub(tmp_path / "other", OLD_DIR, OLD_NAME)
+    monkeypatch.setenv("CALIBRE_LIBRARY_PATH", str(library))
+    store = _Store()
+
+    _parser(tmp_path, tmp_path / "other", store).resolve_book_path(f"{OLD_NAME}.epub")
+
+    assert store.ids == {}
