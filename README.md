@@ -99,6 +99,25 @@ For full installation instructions, checking logs, and advanced configuration, p
 
 ---
 
+## Development tests
+
+With the project virtual environment active and runtime dependencies installed:
+
+```bash
+python -m pip install -e ".[dev]"
+python tests/run_all_tests.py
+```
+
+The full runner uses four workers and keeps each test file together. Pass `-n 0`
+for a serial run. Run focused checks directly, for example
+`python -m pytest tests/test_abs_socket_listener.py -q`.
+
+Updated checkouts and worktrees share a lock for all pytest commands. A second
+run exits before collection with a message to wait for the active run. On Windows,
+put `C:/Program Files/Git/bin` first on `PATH` for the backup-script tests.
+Older worktrees need this coordinator change before their runs participate in the lock.
+See [the performance measurements](docs/test-suite-performance.md) for details.
+
 ## Credits
 
 BookBridge began as a fork of

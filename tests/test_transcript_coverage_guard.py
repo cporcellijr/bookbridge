@@ -38,6 +38,10 @@ class TranscriptCoverageTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.transcriber = AudioTranscriber(self.tmp, MagicMock(), Polisher())
+        # Avoid per-chunk collection without changing pytest's process-wide GC.
+        gc_patch = patch("src.utils.transcriber.gc")
+        gc_patch.start()
+        self.addCleanup(gc_patch.stop)
         self._saved_env = os.environ.get("TRANSCRIPT_MIN_COVERAGE")
         os.environ.pop("TRANSCRIPT_MIN_COVERAGE", None)
 
