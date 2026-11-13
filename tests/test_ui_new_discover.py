@@ -187,3 +187,19 @@ class TestReadalongAskedOnceAtMatchAll(unittest.TestCase):
         for panel in ('_match_queue_panel.html', 'next/_match_queue_panel.html'):
             with self.subTest(panel=panel):
                 self.assertIn('id="queueReadalongCheckbox"', (root / panel).read_text(encoding='utf-8'))
+
+
+class TestNewDialogStyling(unittest.TestCase):
+    """The New view supplies its own dialog visuals without overriding visibility."""
+
+    def test_new_interface_styles_its_own_dialogs(self):
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('.view .modal-overlay {', css)
+        self.assertIn('.view .modal {', css)
+        self.assertIn('.view #acqModal .modal:has(#acqReleases:not([hidden]))', css)
+
+    def test_overlay_rule_never_forces_display(self):
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        for line in css.splitlines():
+            if line.strip().startswith('.view .modal-overlay'):
+                self.assertNotIn('display', line)

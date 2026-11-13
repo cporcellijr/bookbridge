@@ -315,3 +315,16 @@
   }
   .discover-page .sugg-row .row-title-text { overflow-wrap: break-word; word-break: normal; }
 }
+
+/* Dialogs: Classic gets these visuals from app.css, which New does not load. */
+.view .modal-overlay { position: fixed; inset: 0; z-index: 300; align-items: center; justify-content: center; padding: 20px; background: rgba(6, 8, 14, .72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.view .modal { width: min(560px, 100%); max-height: min(85dvh, 860px); overflow: auto; overscroll-behavior: contain; padding: 24px; border: 1px solid var(--line-2); border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: 0 25px 70px rgba(0, 0, 0, .45); }
+.view #acqModal .modal { width: min(600px, 100%); }
+.view #acqModal .modal:has(#acqReleases:not([hidden])) { width: min(920px, 100%); }
+.view #acqModal .acq-releases { max-height: none; overflow: visible; }
+.view .modal .modal-actions { gap: 10px; flex-wrap: wrap; }
+@media (max-width: 600px) {
+    .view .modal-overlay { align-items: flex-end; padding: 0; }
+    .view .modal, .view #acqModal .modal { width: 100%; max-height: 92dvh; border-radius: 18px 18px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); }
+    .view .modal .modal-actions .btn { flex: 1 1 0; }
+}
