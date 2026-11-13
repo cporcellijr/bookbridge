@@ -272,7 +272,7 @@ class TestNewLibrary(unittest.TestCase):
             return mappings, progress
 
         self._login("ui-reader")
-        web_server._thumb_versions["coverlibrarybook"] = ("a-b", float("inf"))
+        web_server._thumb_versions["coverlibrarybook"] = "a-b"
         try:
             with patch.object(web_server, "_build_dashboard_mappings", side_effect=covers):
                 self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
