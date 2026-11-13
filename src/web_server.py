@@ -7856,6 +7856,8 @@ def _hero_leader_percent(mapping: dict, leader: str | None) -> float | None:
 
 # Striped per-book locks prevent duplicate concurrent synopsis source reads.
 _HERO_SYNOPSIS_LOCKS = tuple(threading.Lock() for _ in range(32))
+# Sources answer None on a transient failure too, so an empty result is retried.
+_HERO_SYNOPSIS_RECHECK_SECONDS = 7 * 86400
 
 
 def _hero_plain_text(value: object) -> str:
@@ -7908,14 +7910,14 @@ def _hero_synopsis_source(book, user) -> str | None:
 
 
 def _hero_cached_synopsis(book, user) -> str | None:
-    """Share positive and checked-none metadata per book, not per reader."""
+    """Share a found synopsis per book for good; retry an empty lookup after a week."""
     lock = _HERO_SYNOPSIS_LOCKS[hash(book.abs_id) % len(_HERO_SYNOPSIS_LOCKS)]
     with lock:
-        checked, description = database_service.get_book_synopsis_cache(book.abs_id)
-        if checked:
+        checked_at, description = database_service.get_book_synopsis_cache(book.abs_id)
+        if description or (checked_at and time.time() - checked_at < _HERO_SYNOPSIS_RECHECK_SECONDS):
             return description
         description = _hero_synopsis_source(book, user)
-        database_service.set_book_synopsis_cache(book.abs_id, description)
+        database_service.set_book_synopsis_cache(book.abs_id, description, time.time())
         return description
 
 

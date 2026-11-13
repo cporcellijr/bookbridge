@@ -57,9 +57,9 @@ class TestAcquisitionJobsMigration(unittest.TestCase):
         self.assertIn("ix_acquisition_jobs_user_id", {i["name"] for i in inspector.get_indexes("acquisition_jobs")})
         book_columns = {col["name"] for col in inspector.get_columns("books")}
         self.assertIn("synopsis_text", book_columns)
-        self.assertIn("synopsis_checked", book_columns)
-        self.assertFalse(next(col for col in inspector.get_columns("books")
-                              if col["name"] == "synopsis_checked")["nullable"])
+        self.assertIn("synopsis_checked_at", book_columns)
+        self.assertTrue(next(col for col in inspector.get_columns("books")
+                             if col["name"] == "synopsis_checked_at")["nullable"])
         self.assertEqual(ScriptDirectory.from_config(self.cfg).get_heads(), [HEAD])
         with self.engine.connect() as conn:
             self.assertEqual(conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar(), HEAD)

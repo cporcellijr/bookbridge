@@ -115,8 +115,9 @@ class TestHeroRoute(unittest.TestCase):
                 self.assertEqual(self.client.get("/api/library/hero/hero-owned").json[
                     "pieces"]["synopsis"]["text"], "Cached plain text")
         lookup.assert_called_once()
-        self.assertEqual(self.service.get_book_synopsis_cache("hero-owned"),
-                         (True, "Cached plain text"))
+        checked_at, text = self.service.get_book_synopsis_cache("hero-owned")
+        self.assertEqual(text, "Cached plain text")
+        self.assertIsNotNone(checked_at)
 
         self.service.save_book(Book(abs_id="hero-none", abs_title="None"))
         self.service.link_user_book(self.reader.id, "hero-none")
@@ -124,7 +125,25 @@ class TestHeroRoute(unittest.TestCase):
             for _ in range(2):
                 self.assertEqual(self.client.get("/api/library/hero/hero-none").json["pieces"], {})
         lookup.assert_called_once()
-        self.assertEqual(self.service.get_book_synopsis_cache("hero-none"), (True, None))
+        checked_at, text = self.service.get_book_synopsis_cache("hero-none")
+        self.assertIsNone(text)
+        self.assertIsNotNone(checked_at)
+
+    def test_an_empty_lookup_is_retried_after_a_week(self):
+        # Sources answer None on a transient failure too (e.g. BookOrbit's login cap),
+        # so "none" must not stick forever.
+        self._ready()
+        from src import web_server as ws
+        self.service.set_user_credential(self.reader.id, "UI_HERO_CONTENT", "synopsis")
+        week = ws._HERO_SYNOPSIS_RECHECK_SECONDS
+        self.service.set_book_synopsis_cache("hero-owned", None, ws.time.time() - week + 3600)
+        with patch.object(ws, "_hero_synopsis_source", return_value="Found later") as lookup:
+            self.assertEqual(self.client.get("/api/library/hero/hero-owned").json["pieces"], {})
+            lookup.assert_not_called()
+            self.service.set_book_synopsis_cache("hero-owned", None, ws.time.time() - week - 3600)
+            self.assertEqual(self.client.get("/api/library/hero/hero-owned").json[
+                "pieces"]["synopsis"]["text"], "Found later")
+        lookup.assert_called_once()
 
     def test_two_readers_claim_same_book_but_never_share_listening_totals(self):
         self._ready()

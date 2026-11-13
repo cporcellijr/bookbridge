@@ -191,7 +191,7 @@ class Book(Base):
     audio_provider_file_id = Column(String(255), nullable=True)
     ebook_filename = Column(String(500))
     synopsis_text = Column(Text, nullable=True)
-    synopsis_checked = Column(Boolean, nullable=False, default=False, server_default="0")
+    synopsis_checked_at = Column(Float, nullable=True)  # epoch of the last lookup; empty results are retried
     ebook_source = Column(String(32), nullable=True)
     ebook_source_id = Column(String(255), nullable=True)
     original_ebook_filename = Column(String(500))
