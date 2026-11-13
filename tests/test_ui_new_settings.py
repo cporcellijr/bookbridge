@@ -451,3 +451,19 @@ class TestSettingsPhoneSectionBar(unittest.TestCase):
     def test_phone_menu_has_no_inner_scroll(self):
         css = (ROOT / 'static/css/next-p6.css').read_text(encoding='utf-8')
         self.assertNotIn('max-height: 280px', css)
+
+
+class TestIntegrationsSaveBar(unittest.TestCase):
+    """Both New integrations forms retain one sticky Save action."""
+
+    def test_both_integrations_forms_keep_one_save_button_and_dirty_note(self):
+        for page in ('account_integrations', 'admin_user_integrations'):
+            with self.subTest(page=page):
+                template = (ROOT / 'templates/next' / f'{page}.html').read_text(encoding='utf-8')
+                self.assertIn('class="integrations-save-bar"', template)
+                self.assertIn('id="integrationsDirty"', template)
+                self.assertEqual(template.count('type="submit"'), 1)
+
+    def test_integrations_save_bar_is_sticky(self):
+        css = (ROOT / 'static/css/next-p6.css').read_text(encoding='utf-8')
+        self.assertIn('.integrations-wrap .integrations-save-bar { position: sticky;', css)

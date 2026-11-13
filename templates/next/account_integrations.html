@@ -256,9 +256,23 @@
                 </div>
             </div>
             {% endfor %}
-            <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save integrations') }}</button>
+            <div class="integrations-save-bar">
+                <span class="integrations-dirty" id="integrationsDirty" hidden>{{ _('Unsaved changes') }}</span>
+                <button type="submit" class="btn btn-primary">{{ _('Save integrations') }}</button>
+            </div>
         </form>
     </div>
 </div>
 {% endblock %}
-{% block scripts %}{% include "next/_account_integrations_scripts.html" %}{% endblock %}
+{% block scripts %}{% include "next/_account_integrations_scripts.html" %}
+<script>
+(function () {
+    const form = document.querySelector('.integrations-wrap form');
+    const note = document.getElementById('integrationsDirty');
+    if (!form || !note) return;
+    const mark = function () { note.hidden = false; };
+    form.addEventListener('input', mark);
+    form.addEventListener('change', mark);
+}());
+</script>
+{% endblock %}

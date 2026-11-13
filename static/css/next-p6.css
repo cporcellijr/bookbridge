@@ -163,3 +163,10 @@
     .settings-mobile-slot .settings-menu { max-height: none; overflow: visible; }
     .view .submit-bar .save-effect:not(.warn) { display: none; }
 }
+
+.integrations-wrap .integrations-save-bar { position: sticky; bottom: 18px; z-index: 5; display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 18px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface); box-shadow: 0 16px 42px rgba(0,0,0,.25); }
+.integrations-wrap .integrations-dirty { margin-right: auto; color: var(--text-2); font-size: 13px; font-weight: 600; }
+@media (max-width: 760px) {
+    .integrations-wrap .integrations-save-bar { bottom: calc(74px + env(safe-area-inset-bottom)); }
+    .integrations-wrap .integrations-save-bar .btn { flex: 1 1 auto; min-height: 44px; }
+}
