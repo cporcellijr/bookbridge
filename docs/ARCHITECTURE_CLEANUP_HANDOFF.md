@@ -1,6 +1,6 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Phase 2C is complete, integrated, restarted, and live-verified. No implementation is pending.**
+Updated: 2026-11-13. **Phase 2D is complete, integrated, restarted, and live-verified. Next: slice 3 (Library/Discover), starting with a behavior matrix.**
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
@@ -22,6 +22,7 @@ Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITEC
 | 2A shared Stats scripts | `81a017c2` |
 | 2B shared Logs scripts | `1fcf2c54` |
 | 2C shared Settings/account/integration scripts | `6a25f26e51858d4cca644977823a8544dde36293` |
+| 2D one shared Settings form (Claude Code) | `6ff7540b` |
 
 All are on local dev and deployed. HEAD may be a documentation-only successor; verify actual Git state before new work. Nothing was pushed.
 
@@ -40,4 +41,4 @@ Offline evidence: implementation worktree `.local-review-notes/architecture-phas
 
 ## Next action
 
-Stop here unless the owner authorizes another slice. The living plan records remaining Library/Discover, route, database, acquisition-helper, and sync work as separately scoped/unapproved. The roadmap is not blanket implementation authorization. Inspect current files before choosing the next useful change; do not recreate completed work or create another worktree.
+The owner approved working through the whole audit (2026-11-13), in roadmap order; no per-slice approval is needed, but every slice keeps its review, full-suite and live-verification gate. Next is slice 3: first write the Classic/New Library and Discover behavior matrix (selectors, storage keys, translations, phone/Safari behavior), then extract only what is proven equivalent. Phase 2D's details are in the living plan and the BRANCH_STATUS.md changelog. Do not recreate completed work or create another worktree.
