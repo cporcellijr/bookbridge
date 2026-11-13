@@ -23,14 +23,12 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 # Set test environment BEFORE importing web_server
-TEST_DIR = '/tmp/test_kosync_not_found_status'
+from tests._tmpdirs import process_test_dir
+TEST_DIR = process_test_dir('test_kosync_not_found_status')
 os.environ['DATA_DIR'] = TEST_DIR
 os.environ['KOSYNC_USER'] = 'testuser'
 os.environ['KOSYNC_KEY'] = 'testpass'
 
-if os.path.exists(TEST_DIR):
-    shutil.rmtree(TEST_DIR)
-os.makedirs(TEST_DIR, exist_ok=True)
 
 from src.db.models import KosyncDocument, Book, State, ReadingSession, Setting, HardcoverDetails, UserCredential, KosyncUserProgress
 
