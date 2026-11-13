@@ -35,7 +35,7 @@
                 <a href="#system" class="settings-tab" data-tab="system" onclick="showSettingsTab('system'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#server"></use></svg><span class="settings-tab-label">{{ _('🛠️ Server')|replace('🛠️', '')|trim }}</span></a>
                 <a href="#maintenance" class="settings-tab" data-tab="maintenance" onclick="showSettingsTab('maintenance'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#maintenance"></use></svg><span class="settings-tab-label">{{ _('🧰 Maintenance')|replace('🧰', '')|trim }}</span></a>
                 <a href="#users" class="settings-tab" data-tab="users" onclick="showSettingsTab('users'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#account"></use></svg><span class="settings-tab-label">{{ _('👥 Users')|replace('👥', '')|trim }}</span></a>
-                <a href="#logs" class="settings-tab" data-tab="logs" onclick="showSettingsTab('logs'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logs"></use></svg><span class="settings-tab-label">{{ _('Logs') }}</span></a>
+                <a href="{{ url_for('logs_view') }}" class="settings-tab" data-tab="logs"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logs"></use></svg><span class="settings-tab-label">{{ _('Logs') }}</span></a>
                 </div></nav>
                     <p class="settings-menu-hint">{{ _('Press Ctrl K to jump to any setting') }}</p>
                 </div>
@@ -3177,7 +3177,8 @@
 
         <div class="tab-panel next-logs-panel" data-panel="logs">
             <h3>{{ _('Logs') }}</h3>
-            <iframe title="{{ _('Live logs') }}" loading="lazy" src="{{ url_for('logs_view') }}?embed=1"></iframe>
+            <p>{{ _('Logs have their own page now.') }}</p>
+            <a class="btn btn-primary" href="{{ url_for('logs_view') }}">{{ _('Open Logs') }}</a>
         </div>
         <!-- Users tab (own forms — posts to /settings, not the application form above) -->
         <div class="tab-panel" data-panel="users">
