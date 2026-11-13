@@ -182,7 +182,9 @@
                 const seen = new Map();
                 document.querySelectorAll('.book-card').forEach(card => {
                     const absId = card.dataset.absId;
-                    if (absId && card.dataset.heroExcluded !== 'true' && !seen.has(absId)) seen.set(absId, card);
+                    // The hero book leaves the grid as a standalone card; inside its series stack it stays.
+                    const heroHidden = card.dataset.heroExcluded === 'true' && !card.closest?.('.series-group');
+                    if (absId && !heroHidden && !seen.has(absId)) seen.set(absId, card);
                 });
                 return Array.from(seen.values());
             }
@@ -488,7 +490,7 @@
                 // Filter flat book cards
                 const cards = document.querySelectorAll('.book-card');
                 cards.forEach(card => {
-                    if (card.dataset.heroExcluded === 'true') {
+                    if (card.dataset.heroExcluded === 'true' && !card.closest?.('.series-group')) {
                         card.classList.add('hidden');
                         card.style.display = 'none';
                         return;
@@ -539,11 +541,6 @@
                         }
                     });
 
-                    if (!anyChildVisible && group.querySelector?.('[data-hero-excluded]') &&
-                        !searchString && filterValue === 'all' && authorValue === 'all' &&
-                        seriesValue === 'all' && statusValue === 'all' && !attentionOnlyFilter?.checked) {
-                        anyChildVisible = true;
-                    }
                     if (anyChildVisible) {
                         group.classList.remove('hidden');
                         group.style.display = '';

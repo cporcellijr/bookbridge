@@ -283,7 +283,9 @@ P16C_LIBRARY_NEW_ONLY = (
      "let refreshPaused = false;"),
 )
 P16C_LIBRARY_ALLOWED_CHANGES = (
-    ("if (absId && card.dataset.heroExcluded !== 'true' && !seen.has(absId)) seen.set(absId, card);",
+    ("// The hero book leaves the grid as a standalone card; inside its series stack it stays.\n"
+     "const heroHidden = card.dataset.heroExcluded === 'true' && !card.closest?.('.series-group');\n"
+     "if (absId && !heroHidden && !seen.has(absId)) seen.set(absId, card);",
      "if (absId && !seen.has(absId)) seen.set(absId, card);"),
     ("refreshHeroFromPoll(data.mappings, cardsById);", ""),
 )

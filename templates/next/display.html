@@ -78,10 +78,6 @@
                     <button class="display-fallback-save" type="submit">{{ _('Save shelf finish') }}</button>
                 </form>
             </section>
-            <section class="display-group" data-display-group="behaviour" aria-labelledby="display-behaviour-title">
-                <header><h2 id="display-behaviour-title">{{ _('Behaviour') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
-                {{ cover_switch('UI_SHOW_HERO', _('Hero card'), display.UI_SHOW_HERO, _('Show your most recently synced in-progress book above the Library controls.')) }}
-            </section>
             <section class="display-group" data-display-group="covers" aria-labelledby="display-covers-title">
                 <header><h2 id="display-covers-title">{{ _('Book covers') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
                 {% set size = display.UI_COVER_SIZE|int %}
@@ -107,6 +103,10 @@
                     <input id="display-series-switch" class="display-switch" type="checkbox" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true" role="switch" aria-checked="{{ 'true' if display.SERIES_SHOW_CURRENT_BOOK_DETAIL == 'true' else 'false' }}" {% if display.SERIES_SHOW_CURRENT_BOOK_DETAIL == 'true' %}checked{% endif %}>
                     <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
                 </form>
+            </section>
+            <section class="display-group" data-display-group="behaviour" aria-labelledby="display-behaviour-title">
+                <header><h2 id="display-behaviour-title">{{ _('Behaviour') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
+                {{ cover_switch('UI_SHOW_HERO', _('Hero card'), display.UI_SHOW_HERO, _('Show your most recently synced in-progress book above the Library controls.')) }}
             </section>
         </div>
     </div>

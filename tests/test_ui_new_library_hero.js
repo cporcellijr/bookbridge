@@ -4,13 +4,15 @@ const vm = require('node:vm');
 
 let source = fs.readFileSync('templates/next/_library_scripts.html', 'utf8');
 const changes = {
-  swap: ["heroMovementTime(row) > currentMovement", "false"],
-  quiet: ["heroMovementTime(row) > currentMovement", "true"],
+  swap: ["Number(row.last_slot_unix || 0) > currentMarker", "false"],
+  quiet: ["Number(row.last_slot_unix || 0) > currentMarker", "true"],
+  series: ["const heroHidden = card.dataset.heroExcluded === 'true' && !card.closest?.('.series-group');",
+           "const heroHidden = card.dataset.heroExcluded === 'true';"],
   eligible: ["rows.filter(row => heroIsInProgress(row) &&", "rows.filter(row => true &&"],
   progress: ["heroRoot.querySelector('.hero-percent').textContent = percentage.toFixed(1) + '%';",
              "heroRoot.querySelector('.hero-percent').textContent = '0%';"],
   restore: ["else delete card.dataset.heroExcluded;", "else card.dataset.heroExcluded = 'true';"],
-  count: ["card.dataset.heroExcluded !== 'true'", "true"],
+  count: ["if (absId && !heroHidden && !seen.has(absId))", "if (absId && !seen.has(absId))"],
   selection: ["if (typeof updateSelectionBar === 'function') updateSelectionBar();", "void 0;"],
 };
 const key = process.env.P16C_MUTATE;
@@ -66,6 +68,9 @@ const countScope = {
 };
 vm.runInNewContext(countSource, countScope);
 assert.equal(countScope.distinctBookCards().length, 3, 'Grid count excludes hero before filtering');
+books[0].closest = selector => selector === '.series-group' ? {} : null;
+assert.equal(countScope.distinctBookCards().length, 4, 'Inside its series stack the hero book still counts');
+delete books[0].closest;
 function row(id, progress, marker, client='abs') {
   return {abs_id: id, unified_progress: progress, last_slot_unix: marker,
     last_sync_unix: marker + 1, last_slot_client: client,

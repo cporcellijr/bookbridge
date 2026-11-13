@@ -881,7 +881,7 @@ body.series-grouping-off .series-group { display: none !important; }
 .library-filter-group:is([data-filter-group="status"], [data-filter-group="format"]) .library-filter-options { max-height: none; overflow: visible; }
 
 /* P16c: one standalone hero above controls, never a selectable grid card. */
-.library-hero[hidden], .book-card[data-hero-excluded="true"] { display: none !important; }
+.library-hero[hidden], #library-grid > .book-card[data-hero-excluded="true"] { display: none !important; }
 .library-hero { margin: 0 0 14px; min-width: 0; }
 .library-hero-link { display: flex; align-items: center; gap: 20px; box-sizing: border-box; width: 100%; min-width: 0; padding: 16px; border: 1px solid var(--line-2); border-radius: 16px; background: var(--surface); color: var(--text); text-decoration: none; overflow: hidden; }
 .library-hero-link:hover { border-color: var(--info); background: var(--surface-2); }
@@ -909,7 +909,6 @@ body.series-grouping-off .series-group { display: none !important; }
 .library-filter-trigger.is-active, .library-filter-trigger[aria-expanded="true"] { border-color: var(--info); background: var(--info-bg); }
 .library-filter-panel { left: 0; right: auto; transform: translateX(var(--library-filter-shift, 0px)); }
 @media (max-width: 760px) {
- .library-hero { margin-inline: 4px; }
  .library-hero-link { gap: 14px; padding: 12px 16px; }
  .library-hero .hero-cover { flex-basis: 84px; width: 84px; height: 120px; }
  .library-hero .hero-title { font-size: 20px; }
