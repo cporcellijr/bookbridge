@@ -2316,6 +2316,7 @@
                         <label>{{ _('Shelfmark URL') }}</label>
                         <input type="text" name="SHELFMARK_URL" value="{{ get_val('SHELFMARK_URL') }}">
                         <div class="help-text">{{ _('The address of your Shelfmark site. BookBridge uses it to find missing books for readers who sign in to Shelfmark.') }}</div>
+                        <div class="help-text">{{ _('Readers can choose an audiobook destination library in My Integrations. Leave it blank to use normal scheduled scanning.') }}</div>
                         {% if get_val('SHELFMARK_URL') %}<div class="help-text"><a href="/shelfmark" target="_blank" rel="noopener noreferrer" style="color:#aab4f5;">{{ _('Open Shelfmark') }}</a></div>{% endif %}
                     </div>
                 </div>

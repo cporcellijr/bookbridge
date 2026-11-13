@@ -1,6 +1,6 @@
 # Plan: get the missing half from the search page (#585)
 
-Status: **Follow-up workflow redesign approved 2026-11-12. Phases A–C are complete and independently verified. Phase D is the next implementation handoff; D–F remain unimplemented.** The current plan and findings below override older design notes. The original #585 implementation is already live; its delivery history follows the current plan. Nothing pushed, posted, or deployed by this reviewer.
+Status: **Follow-up workflow redesign approved 2026-11-12. Phases A–D are complete and independently verified locally. Phases E–F will be completed here with Luna before one final local-dev merge and deployment/live verification.** The current plan and findings below override older design notes. The original #585 implementation is already live; its delivery history follows the current plan. Phase D has not been pushed, merged into dev, deployed or live-tested through provider writes.
 
 ## Current follow-up plan (2026-11-12)
 
@@ -42,6 +42,30 @@ acquisition, library import, pairing, and normal Bridge processing.
   applicable in-flight acquisition; refresh affected catalog results after confirmed arrival.
 - Cancellation is per provider-supported operation. Dismiss is not cancel. Do not resubmit completed
   halves or revive dismissed historical requests when adding persistence.
+
+### Flow to review
+
+```mermaid
+flowchart TD
+    search[Search once] --> intent[Remember the exact available half, or get both]
+    intent --> get[Get: save one job, clear search, open Processing]
+    get --> half[Follow each missing half in that job]
+    half --> orbit[BookOrbit: automatic search or a verified manual-choice handback]
+    half --> shelfmark[Shelfmark: release choice or approval according to policy]
+    orbit --> delivered[Provider delivery finished]
+    shelfmark --> delivered
+    delivered --> indexed{Copy verified in the reader's library?}
+    indexed -- No --> wait[Wait for import; Shelfmark audio can scan the selected library]
+    wait --> indexed
+    indexed -- Yes --> edition{Exact identity confirmed?}
+    edition -- No --> review[Choose an edition in the same job]
+    review --> indexed
+    edition -- Yes --> pair[When both halves are ready, pair their saved identities]
+    pair --> processing[Normal Bridge processing, then complete]
+```
+
+Release choices, safe retries, cancellation and edition review stay in Processing. An unknown
+BookOrbit automation mode waits for evidence; it does not enable manual release picking.
 
 ### Shelfmark audiobook scan setting
 
@@ -156,11 +180,69 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
 | A | COMPLETE; upstream flag gap recorded | Endpoint/capability investigation above |
 | B | COMPLETE; verified 2026-11-12 | Durable jobs, linked halves, and explicit existing-edition identities; additive migration and regressions |
 | C | COMPLETE; independent review and regression verification passed; upstream auto flag still absent | Durable provider receipts, BookOrbit conservative release decisions, Shelfmark Both and source policy |
-| D | NEXT; [handoff prompt](PROMPT_585_PHASE_D.md) | Supported-library arrival detection, integration picker, completion-triggered scans |
+| D | COMPLETE locally; independently reviewed; full suite 7753 passed / 15 skipped / zero failures | Supported-library arrival detection, integration picker, completion-triggered scans |
 | E | Planned | Processing job UI/actions, clear-search handoff, existing-job search behavior |
 | F | Planned | Full regression/browser acceptance, docs, additive migration/deployment as needed |
 
-### Phase C implementation handoff (2026-11-12; not committed, deployed or merged)
+### Phase D implementation and review (2026-11-12; verified locally)
+
+- Independent review corrections passed final verification: **7753 passed, 15 skipped,
+  1340 subtests, zero failures** (446.08s; 14 warnings). Final focused checks: **56 passed**.
+  Twelve regressions failed against saved pre-review source; an additional ABS detail regression
+  failed separately. Shared-scan
+  acknowledgements now reach waiting jobs even if the scan finishes before their next poll.
+  Outstanding operations retain their server/library namespace and resume safely after
+  credentials return. Present copies with insufficient edition evidence remain reviewable;
+  BookOrbit edition checks use fresh detail metadata. Acquisition catalog searches distinguish
+  failed/partial responses from verified empty results, including ABS ebook file-detail failures.
+  Legacy search defaults are preserved. **Latest user direction (2026-11-12): finish Phases
+  D–F here with Luna, then merge the completed work into local dev once and deploy/live-verify
+  dev.** This supersedes the interim merge hold and the earlier per-phase merge/prompt handoff.
+  Preserve concurrent Library UI work, coordinate every test invocation, and do not push.
+- Confirmed installed BookOrbit v3.8.0 scanner POST returns 202 with `jobId`, and
+  read-only scan history is a list with job IDs, status, timestamps and errors.
+  `manage_libraries` and library access are required for history reads. A 409
+  can mean an unrelated library operation, not necessarily another active scan.
+  Confirmed Shelfmark v1.3.3 history is **paged dismissed activity**, not an
+  unbounded activity snapshot; ordinary-reader download IDs and paths may be
+  redacted. Only installed provider source was read, never scan POSTed.
+- A reader-owned job reconciles previously saved ebook/audio identities alongside
+  current provider receipts. Each half is rechecked through the configured
+  reader's supported catalog/source adapter and retains canonical service + ID
+  (plus ebook filename). Fresh media-file evidence is required for BookOrbit;
+  ambiguous editions and source errors wait or remain available for review.
+  Paired mappings and reader authorization are rechecked before reusing/creating a
+  mapping; provider receipts remain provenance and pending work is not cleared.
+  Separate-day, reverse-order, mixed-provider and receipt-free halves are covered.
+  The same reader-scoped background sync call continues after the page closes.
+- Optional text setting `SHELFMARK_AUDIOBOOK_LIBRARY_ID`, default blank, is
+  per-reader; a blank uses scheduled scanning. The Shelfmark integration picker
+  appears in Classic/New own-account and admin per-reader pages; it populates from
+  the **target reader's** BookOrbit client using read-only library and scan-history
+  calls. A nonblank choice must pass permission and library-ID validation on save.
+  No new toggle or settings-only migration is added.
+- A Shelfmark **audiobook** completion may trigger a scan for a selected library
+  only while the audiobook is not yet indexed. A SQLite claim is persisted before
+  POST; explicit accepted job IDs, coalesced scans and outcomes persist on the job.
+  Claims coalesce by server/library (and conservatively by reader without a
+  known server identity), and repeated polls/restarts do not blindly repeat
+  ambiguous or refused calls. A completed or older active scan never proves the
+  audiobook was indexed: check the catalog, then allow at most one follow-up
+  cycle after a five-minute cooldown. Failed/409/403/missing-job-ID outcomes
+  retain reasons and require verified evidence or reader intervention.
+- Schema: new additive `d585c20261112` on `acquisition_jobs` records per-half
+  library/review state, pairing, delivered time, and scan claim/destination/scope/
+  job ID/state/attempts. Existing requests/receipts and their history are preserved.
+  The owned job API exposes all Phase D fields for the later Phase E UI.
+  Classic/New Processing layout, the search handoff and Library UI are unchanged.
+- Verification is limited to temporary SQLite migrations/concurrency and synthetic
+  provider fixtures, plus installed source inspection. No live scan, arrival,
+  cancellation, acquire, deployment, server restart, schema migration or push
+  was performed. **Independent review and an authorized local-dev merge must
+  precede deployment; migration + restart are required.** The reviewer owns the
+  local merge and Phase E handoff. Record final test counts in BRANCH_STATUS.md.
+
+### Phase C implementation handoff (2026-11-12; historical local implementation)
 
 - Current branch includes local dev `2d38196f` (including P15g). A new Get saves or
   reuses reader-owned `AcquisitionJob` before provider submissions. `formats` is

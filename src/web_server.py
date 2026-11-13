@@ -1593,7 +1593,9 @@ def account_integrations():
 
     message = None
     if request.method == 'POST':
-        _apply_user_integrations(user.id)
+        error = _apply_user_integrations(user.id)
+        if error:
+            return jsonify({"error": error}), 400
         message = "Saved your integrations."
         user = database_service.get_user(user.id)
 
@@ -1643,8 +1645,19 @@ def _apply_user_integrations(user_id):
             else:  # text/select: blank clears => inherit master/default
                 values[key] = request.form.get(key, '')
 
+    destination = values.get('SHELFMARK_AUDIOBOOK_LIBRARY_ID', '')
+    if destination:
+        if not destination.isdecimal() or int(destination) <= 0:
+            return 'Audiobook destination library must be a positive BookOrbit library ID.'
+        target = database_service.get_user(user_id)
+        libraries, error = _reader_scan_libraries(target, dict(request.form))
+        if error:
+            return error
+        if not any(str(item.get('id')) == destination for item in libraries):
+            return 'Selected audiobook destination library is not accessible for scanning.'
     database_service.set_user_credentials(user_id, values)
     _after_user_integrations_saved(user_id)
+    return None
 
 
 def _after_user_integrations_saved(user_id):
@@ -1692,7 +1705,9 @@ def admin_user_integrations(user_id):
 
     message = None
     if request.method == 'POST':
-        _apply_user_integrations(user_id)
+        error = _apply_user_integrations(user_id)
+        if error:
+            return jsonify({"error": error}), 400
         message = f"Saved integrations for {target.username}."
         target = database_service.get_user(user_id)
 
@@ -1828,6 +1843,57 @@ def admin_user_abs_libraries(user_id):
     except Exception as e:
         logger.warning("Per-user ABS library lookup failed for user %s: %s", user_id, e, exc_info=True)
         return jsonify({"error": str(e)}), 502
+
+
+def _reader_scan_libraries(target, submitted):
+    """Read only libraries this reader may actually scan; never use an admin client."""
+    from src.api.bookorbit_client import BookOrbitClient
+    from src.utils.user_config import _ALLOW_GLOBAL_FALLBACK_KEY
+
+    if target is None:
+        return [], "Reader not found."
+    payload = _posted_user_test_credentials(target, submitted)
+    payload[_ALLOW_GLOBAL_FALLBACK_KEY] = _global_fallback_allowed(database_service, target)
+    client = BookOrbitClient(credentials=payload)
+    if not client.is_configured():
+        return [], "Configure this reader's BookOrbit credentials first."
+    libraries = client.get_libraries()
+    if not isinstance(libraries, list) or not libraries:
+        return [], "BookOrbit libraries could not be listed for this reader."
+    allowed = []
+    first_error = None
+    for library in libraries:
+        if not isinstance(library, dict) or str(library.get('id') or '').isdigit() is False:
+            continue
+        _history, error = client.get_scan_history(library['id'], limit=1)
+        if error is None:
+            allowed.append({'id': str(library['id']), 'name': str(library.get('name') or library['id'])})
+        elif first_error is None:
+            first_error = error
+    if not allowed:
+        return [], ('This BookOrbit account needs Manage libraries and library access to start scans.'
+                    if first_error == 'scan_forbidden' else
+                    'BookOrbit scan permissions or libraries could not be verified.')
+    return allowed, None
+
+
+def account_bookorbit_scan_libraries():
+    """Reader-scoped read-only picker, including unsaved account field edits."""
+    user = current_user()
+    if user is None:
+        return jsonify({'error': 'Authentication required'}), 401
+    libraries, error = _reader_scan_libraries(user, request.get_json(silent=True) or {})
+    return (jsonify({'error': error}), 403) if error else jsonify(libraries)
+
+
+@admin_required
+def admin_user_bookorbit_scan_libraries(user_id):
+    """Admin can edit a reader's destination using only that reader's credentials."""
+    target = database_service.get_user(user_id)
+    if target is None:
+        return jsonify({'error': 'User not found'}), 404
+    libraries, error = _reader_scan_libraries(target, request.get_json(silent=True) or {})
+    return (jsonify({'error': error}), 403) if error else jsonify(libraries)
 
 
 def account_abs_libraries():
@@ -17026,11 +17092,13 @@ def create_app(test_container=None):
     app.add_url_rule('/api/account/test-connection/<service>', 'account_test_connection', account_test_connection, methods=['POST'])
     app.add_url_rule('/api/account/abs-libraries', 'account_abs_libraries', account_abs_libraries, methods=['POST'])
     app.add_url_rule('/api/account/booklore-libraries', 'account_booklore_libraries', account_booklore_libraries, methods=['POST'])
+    app.add_url_rule('/api/account/bookorbit-scan-libraries', 'account_bookorbit_scan_libraries', account_bookorbit_scan_libraries, methods=['POST'])
     app.add_url_rule('/admin/users', 'admin_users', admin_users, methods=['GET', 'POST'])
     app.add_url_rule('/admin/users/<int:user_id>/integrations', 'admin_user_integrations', admin_user_integrations, methods=['GET', 'POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/test-connection/<service>', 'admin_user_test_connection', admin_user_test_connection, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/abs-libraries', 'admin_user_abs_libraries', admin_user_abs_libraries, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/booklore-libraries', 'admin_user_booklore_libraries', admin_user_booklore_libraries, methods=['POST'])
+    app.add_url_rule('/api/admin/users/<int:user_id>/bookorbit-scan-libraries', 'admin_user_bookorbit_scan_libraries', admin_user_bookorbit_scan_libraries, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/start', 'admin_user_bookfusion_device_start', admin_user_bookfusion_device_start, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/poll', 'admin_user_bookfusion_device_poll', admin_user_bookfusion_device_poll, methods=['POST'])
     app.add_url_rule('/', 'index', index)

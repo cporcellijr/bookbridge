@@ -40,6 +40,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Acquisition jobs now discover and pair library arrivals across days and restarts** (#585, Phase D; local, uncommitted). Jobs persist the ebook and audiobook's exact source identities, edition-review choices, library import status and pairing state, without discarding provider receipts or outstanding submissions. Shelfmark readers can optionally choose an accessible **Audiobook destination library** in their own integrations: a completed Shelfmark audio delivery can request a tracked BookOrbit scan, with persistent claims, scan-history coalescing, bounded follow-ups and refusal reasons. A completed scan is not proof of a finished import; library files and reader-authorized mappings must be verified first. The picker and per-reader settings exist in both Classic and New. The Processing/search UI belongs to Phase E. This change requires the additive Phase D migration and a restart after review and merge; no live scan or deployment has been performed.
+
 - **Acquisition requests now keep both formats together across partial submissions** (#585,
   Phase C; local review only). BookOrbit and Shelfmark requests begin with a saved
   reader-owned job, keep each accepted ebook/audiobook receipt independently, and

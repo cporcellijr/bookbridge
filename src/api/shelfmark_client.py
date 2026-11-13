@@ -486,6 +486,23 @@ class ShelfmarkClient:
             return None, "unreachable"
         return body, None
 
+    def get_activity_history(self, limit: int = 50, offset: int = 0) -> tuple[Optional[list], Optional[str]]:
+        """Read the reader's *dismissed* activity history, paged by limit/offset.
+
+        Shelfmark 1.3.3 returns a list, not an object with a `status` bucket.
+        A missing row here says nothing about undismissed tasks outside the
+        snapshot's 200-item window; callers must not treat absence as completion.
+        """
+        if not isinstance(limit, int) or not 1 <= limit <= 200 or not isinstance(offset, int) or offset < 0:
+            return None, "invalid_pagination"
+        response, reason = self._call("GET", f"/api/activity/history?limit={limit}&offset={offset}")
+        if response is None:
+            return None, reason
+        body = self._json(response)
+        if response.status_code != 200 or not isinstance(body, list):
+            return None, "unreachable"
+        return body, None
+
     def cancel(self, kind: str, remote_id: str) -> bool:
         """Cancel a pending request (``request``) or a download in the queue (``download``)."""
         path = f"/api/requests/{remote_id}" if kind == "request" else f"/api/download/{remote_id}/cancel"

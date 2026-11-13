@@ -635,8 +635,13 @@ def acquisition_mine():
     if not _is_allowed(web):
         return _api_error("not_allowed", 403)
     shelfmark = _shelfmark_client(web)
+    try:
+        library_clients = web._scan_user_clients()
+    except PermissionError:
+        library_clients = None
     rows = web.container.acquisition_service().refresh_user(
         user_id, _bookorbit_client(web), shelfmark if shelfmark is not None and shelfmark.is_configured() else None,
+        library_clients=library_clients,
     )
     return jsonify({"requests": [_public(row) for row in rows],
                     "jobs": [_job_public(job) for job in web.database_service.get_acquisition_jobs(user_id)]})

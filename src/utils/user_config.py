@@ -65,7 +65,7 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "GOODREADS_ENABLED", "GOODREADS_SESSION_COOKIE",
     "GOODREADS_COOKIE_REFRESH_URL", "GOODREADS_COOKIE_REFRESH_TOKEN", "GOODREADS_BROWSER_URL",
     # Shelfmark (the server URL stays global; each reader signs in as themselves)
-    "SHELFMARK_USER", "SHELFMARK_PASSWORD",
+    "SHELFMARK_USER", "SHELFMARK_PASSWORD", "SHELFMARK_AUDIOBOOK_LIBRARY_ID",
 })
 
 
@@ -270,6 +270,7 @@ PER_USER_FIELD_GROUPS = [
     (N_("Shelfmark"), [
         ("SHELFMARK_USER", N_("Username"), "text"),
         ("SHELFMARK_PASSWORD", N_("Password"), "secret"),
+        ("SHELFMARK_AUDIOBOOK_LIBRARY_ID", N_("Audiobook destination library"), "text"),
     ]),
 ]
 

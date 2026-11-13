@@ -1754,11 +1754,18 @@ class BookloreClient:
                         all_books.append(book_info)
         return self._dedupe_book_results(all_books)
 
-    def search_audiobooks(self, search_term, include_info=True):
+    def search_audiobooks(self, search_term, include_info=True, *, strict=False):
         """Search Grimmory for audiobook-capable books."""
         if not self.is_configured():
+            if strict:
+                raise RuntimeError("Grimmory is not configured")
             return []
         safe_term = str(search_term or "").strip()
+
+        def complete(results):
+            if strict and not self.catalog_complete:
+                raise RuntimeError("Grimmory book catalog is incomplete")
+            return results
 
         def collect_results(books):
             collected = []
@@ -1776,10 +1783,13 @@ class BookloreClient:
                     and not self._has_audio_shape_fields(book)
                 )
                 if book.get('_needs_detail') or not self._book_supports_audiobook(book):
-                    hydrated = self._fetch_and_cache_detail(
+                    refreshed = self._fetch_and_cache_detail(
                         bid,
                         force_refresh=requires_audio_refresh,
-                    ) or book
+                    )
+                    if strict and not refreshed:
+                        raise RuntimeError("Grimmory audiobook detail could not be verified")
+                    hydrated = refreshed or book
                 if not self._book_supports_audiobook(hydrated):
                     continue
                 if include_info:
@@ -1791,17 +1801,20 @@ class BookloreClient:
                 seen_ids.add(bid)
             return collected
 
-        books = self.search_books(safe_term) if safe_term else self.get_all_books()
+        books = (
+            (self.search_books(safe_term, strict=True) if strict else self.search_books(safe_term))
+            if safe_term else self.get_all_books()
+        )
         results = collect_results(books)
         if results or not safe_term:
-            return results
+            return complete(results)
 
         if self._is_refresh_on_cooldown():
             logger.debug(
                 "Grimmory audiobook search miss: refresh skipped due to cooldown "
                 f"(term='{sanitize_log_data(safe_term)}')"
             )
-            return results
+            return complete(results)
 
         now = time.time()
         if (
@@ -1812,7 +1825,7 @@ class BookloreClient:
                 "Grimmory audiobook search miss: refresh throttled "
                 f"(term='{sanitize_log_data(safe_term)}', cooldown={self._audiobook_search_miss_refresh_cooldown}s)"
             )
-            return results
+            return complete(results)
 
         self._last_audiobook_search_miss_refresh_attempt = now
         logger.debug(
@@ -1820,10 +1833,10 @@ class BookloreClient:
             f"(term='{sanitize_log_data(safe_term)}')"
         )
         if self._refresh_book_cache(refresh_stale_details=False):
-            refreshed_books = self.search_books(safe_term)
-            return collect_results(refreshed_books)
+            refreshed_books = self.search_books(safe_term, strict=True) if strict else self.search_books(safe_term)
+            return complete(collect_results(refreshed_books))
 
-        return results
+        return complete(results)
 
     def clear_and_refresh(self):
         """Clear all Grimmory cache state (memory + DB) and run a full refresh."""
@@ -1858,8 +1871,13 @@ class BookloreClient:
 
         return self._refresh_book_cache()
 
-    def search_books(self, search_term):
+    def search_books(self, search_term, *, strict=False):
         """Search books by title, author, or filename. Returns list of matching books."""
+        def complete(results):
+            if strict and not self.catalog_complete:
+                raise RuntimeError("Grimmory book catalog is incomplete")
+            return results
+
         def search_in_cache(term):
             search_lower = term.lower()
             search_norm = self._normalize_string(term)
@@ -1925,11 +1943,15 @@ class BookloreClient:
                     continue
 
                 if detail_fetch_count >= MAX_DETAIL_FETCHES_PER_SEARCH:
+                    if strict:
+                        raise RuntimeError("Grimmory search result reached its detail limit")
                     logger.debug("Grimmory: Hit detail fetch limit for search, returning partial results")
                     break
 
                 hydrated = self._fetch_and_cache_detail(bid)
                 detail_fetch_count += 1
+                if strict and not hydrated:
+                    raise RuntimeError("Grimmory book detail could not be verified")
                 if hydrated and hydrated.get('fileName'):
                     matches.append(hydrated)
                     matched_ids.add(str(hydrated.get('id')))
@@ -1944,7 +1966,7 @@ class BookloreClient:
             self._refresh_book_cache(refresh_stale_details=False)
 
         if not search_term:
-            return self.get_all_books()
+            return complete(self.get_all_books())
 
         results = search_in_cache(search_term)
         cache_age = time.time() - self._cache_timestamp
@@ -1965,36 +1987,36 @@ class BookloreClient:
                     f"(term='{safe_term}', cache_age={cache_age:.0f}s, hits={len(results)})"
                 )
                 if self._refresh_book_cache(refresh_stale_details=False):
-                    return search_in_cache(search_term)
+                    return complete(search_in_cache(search_term))
             elif cache_age > self._search_hit_refresh_min_age and not hit_refresh_ready:
                 logger.debug(
                     f"Grimmory search hit: quick validation throttled "
                     f"(term='{safe_term}', cooldown={self._search_hit_refresh_cooldown}s)"
                 )
-            return results
+            return complete(results)
 
         if self._is_refresh_on_cooldown():
             logger.debug(
                 f"Grimmory search miss: refresh skipped due to cooldown "
                 f"(term='{safe_term}', cache_age={cache_age:.0f}s)"
             )
-            return results
+            return complete(results)
 
         if cache_age <= self._search_miss_refresh_min_age:
             logger.debug(
                 f"Grimmory search miss: refresh skipped (cache too fresh) "
                 f"(term='{safe_term}', cache_age={cache_age:.0f}s)"
             )
-            return results
+            return complete(results)
 
         logger.debug(
             f"Grimmory search miss: refreshing cache once (quick mode, no stale rotation) "
             f"(term='{safe_term}', cache_age={cache_age:.0f}s)"
         )
         if self._refresh_book_cache(refresh_stale_details=False):
-            return search_in_cache(search_term)
+            return complete(search_in_cache(search_term))
 
-        return results
+        return complete(results)
 
     def download_book(self, book_id):
         """Download book content by ID. Returns bytes or None."""
