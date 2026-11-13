@@ -8,6 +8,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Changed
 
+- **Developer test runs use four workers through `tests/run_all_tests.py`.** A shared
+  OS lock prevents overlapping pytest commands across local worktrees before collection,
+  and mocked transcription tests avoid unnecessary model loading and memory collection.
+
 - **The New Library highlights one recently synced book above its toolbar.** The hero shows the cover, title, author, latest leading service, and progress without duplicating the book in the grid or breaking up its series. It swaps only on a newer propagated sync, has no action buttons, and can be turned off per reader in Display → Behaviour. Search, Filter, Sort, and Select are grouped on one toolbar row on desktop and tablets, with a two-row phone layout; the filter popover stays in view. Classic is unchanged.
 
 - **The New Library now has one continuous grid instead of In progress, Not started, and Finished sections.** Cards, face-out shelves, spine shelves, and List share the same collection, with every series volume shown once. Reading status is the default sort: in-progress books and series first, then not started, then finished, with most recent sync first in each category. Previous Status sort preferences migrate automatically. Classic remains unchanged.

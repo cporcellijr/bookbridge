@@ -659,7 +659,7 @@ class TestUpdateJobById(unittest.TestCase):
         )
 
         for exc in (InvalidRequestError, StaleDataError):
-            with self.subTest(exc=exc):
+            with self.subTest(exc=exc.__name__):
                 def raise_error(session, flush_context, instances):
                     raise exc("forced")
                 event.listen(Session, "before_flush", raise_error)
@@ -679,7 +679,7 @@ class TestUpdateJobById(unittest.TestCase):
         )
 
         for exc in (InvalidRequestError, StaleDataError):
-            with self.subTest(exc=exc):
+            with self.subTest(exc=exc.__name__):
                 def raise_error(session, flush_context, instances):
                     raise exc("forced")
                 event.listen(Session, "before_flush", raise_error)
