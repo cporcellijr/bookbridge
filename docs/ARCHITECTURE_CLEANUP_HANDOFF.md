@@ -1,12 +1,12 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Slice 4 steps 1–2 (Stats, Logs, What's New, Diagnostics, Forge, Alignments, Read-along EPUB → `src/web/routes/`) are complete, integrated, restarted, and live-verified. Next: slice 4 step 3 (Storyteller API, cover/proxy GETs, health/status API).**
+Updated: 2026-11-13. **Slice 4 steps 1–3 (Stats, Logs, What's New, Diagnostics, Forge, Alignments, Read-along EPUB, Status, Covers, Integration Lookups, Storyteller → `src/web/routes/`) are complete, integrated, restarted, and live-verified. `web_server.py` 16,126 lines. Next: step 4 (Library metadata GETs, BookFusion, admin series-backfill/debug — cohesive groups only).**
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
 ## Workspace and owner instructions
 
-- Persistent implementation worktree: `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-d6452ed1`. Reuse it; one editing agent at a time.
+- Implementation worktree: DevSpace could not open `abs-kosync-enhanced-d6452ed1` for step 3 and used `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-a34f913b`; use whichever DevSpace can open, fast-forwarded to dev first. One editing agent at a time. Review scripts (`move_check.py`, `name_check.py`) live untracked in `.local-review-notes/architecture-phase4/` of both.
 - Live checkout: `C:/Server/stacks/abs-kosync-enhanced`, branch `dev`. Never switch its branch.
 - Handle small mechanical cleanup directly and batch related changes. Delegations get a goal, acceptance criteria, and essential constraints; the receiving agent investigates and implements.
 - Implementation agents run focused checks; the primary reviewer runs the full suite. Coordinate sequentially through the existing lock; never delete/bypass it.
@@ -25,6 +25,7 @@ Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITEC
 | 2D one shared Settings form (Claude Code) | `6ff7540b` |
 | 4.1 Stats + Logs routes to `src/web/routes/` (DevSpace; Claude review) | `090a5509` |
 | 4.2 What's New, Diagnostics, Forge, Alignments, Read-along EPUB (+ `src/web/auth.py`) | `a889cb08`..`0c9f3283`; flake fix `726d8b4e` |
+| 4.3 Status, Covers, Integration Lookups, Storyteller | `c6c47cd5`..`046fcad8` |
 
 All are on local dev and deployed. HEAD may be a documentation-only successor; verify actual Git state before new work. Nothing was pushed.
 
