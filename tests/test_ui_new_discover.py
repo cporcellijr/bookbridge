@@ -203,3 +203,17 @@ class TestNewDialogStyling(unittest.TestCase):
         for line in css.splitlines():
             if line.strip().startswith('.view .modal-overlay'):
                 self.assertNotIn('display', line)
+
+
+class TestDiscoverPhoneFilters(unittest.TestCase):
+    """Discover keeps phone filters collapsed behind a visible control."""
+
+    def test_filters_fold_behind_a_button_on_phones(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/next/suggestions.html').read_text(encoding='utf-8')
+        css = (root / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('id="discoverFiltersToggle"', template)
+        self.assertLess(template.index('id="searchInput"'), template.index('id="discoverFiltersToggle"'))
+        self.assertLess(template.index('id="discoverFiltersToggle"'), template.index('id="seriesFilter"'))
+        self.assertIn('.discover-page #filterBar:not(.open) > .filter-field:not(.grow)', css)
+        self.assertIn('.discover-page .discover-filters-toggle { display: none; }', css)

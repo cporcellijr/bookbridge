@@ -328,3 +328,17 @@
     .view .modal, .view #acqModal .modal { width: 100%; max-height: 92dvh; border-radius: 18px 18px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); }
     .view .modal .modal-actions .btn { flex: 1 1 0; }
 }
+
+.discover-page .discover-filters-toggle { display: none; }
+@media (max-width: 760px) {
+    .discover-page .page-header { margin-bottom: 12px; }
+    .discover-page .page-header .subtitle, .discover-page .discover-note { display: none; }
+    .discover-page .sugg-tabs { margin-top: 0; }
+    .discover-page .sugg-tabs .tab { flex-wrap: nowrap; justify-content: center; align-items: center; white-space: nowrap; padding-inline: 6px; font-size: 14px; }
+    .discover-page .toolbar { margin-top: 12px; }
+    .discover-page .discover-filters-toggle { display: inline-flex; flex: none; align-self: flex-end; }
+    .discover-page #filterBar .filter-field.grow { flex: 1 1 0; }
+    .discover-page #filterBar:not(.open) > .filter-field:not(.grow),
+    .discover-page #filterBar:not(.open) > .series-grouping-label { display: none; }
+    .discover-page #filterBar.open > .filter-field:not(.grow) { flex: 1 1 calc(50% - 5px); }
+}
