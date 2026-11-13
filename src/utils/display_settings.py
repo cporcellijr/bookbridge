@@ -12,6 +12,12 @@ from src.utils.config_loader import DEFAULT_CONFIG
 _BOOL = ("true", "false")
 _TRUE_SPELLINGS = frozenset({"true", "on", "1", "yes"})
 _FALSE_SPELLINGS = frozenset({"false", "off", "0", "no"})
+_HERO_ORDER = ("synopsis", "bars", "listened", "pages")
+# Every valid stored value (including base-only) is an allowed configuration.
+_HERO_CHOICES = ("",) + _HERO_ORDER + (
+    "synopsis,bars", "synopsis,listened", "synopsis,pages",
+    "bars,listened", "bars,pages", "listened,pages",
+)
 
 DISPLAY_SETTINGS: dict[str, tuple[str, ...]] = {
     "UI_THEME": ("auto", "day", "night"),
@@ -24,6 +30,7 @@ DISPLAY_SETTINGS: dict[str, tuple[str, ...]] = {
     "UI_SHOW_RATINGS": _BOOL,
     "UI_SHOW_TITLES": _BOOL,
     "UI_SHOW_HERO": _BOOL,
+    "UI_HERO_CONTENT": _HERO_CHOICES,
     "SERIES_SHOW_CURRENT_BOOK_DETAIL": _BOOL,
 }
 
@@ -34,6 +41,10 @@ def normalize_display_value(key: str, raw: object) -> Optional[str]:
     if allowed is None or raw is None:
         return None
     value = str(raw).strip().lower()
+    if key == "UI_HERO_CONTENT":
+        # Empty is intentional: only the P16c base. Unknown/duplicate entries disappear.
+        choices = set(part.strip() for part in value.split(","))
+        return ",".join([piece for piece in _HERO_ORDER if piece in choices][:2])
     if allowed is _BOOL:
         if value in _TRUE_SPELLINGS:
             return "true"

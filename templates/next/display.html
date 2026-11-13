@@ -104,6 +104,20 @@
                     <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
                 </form>
             </section>
+            <section class="display-group" data-display-group="layout" aria-labelledby="display-layout-title">
+                <header><h2 id="display-layout-title">{{ _('Layout') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
+                <form class="display-row display-hero-choices" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_HERO_CONTENT">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_HERO_CONTENT" value="{{ display.UI_HERO_CONTENT }}">
+                    <div class="display-label"><strong>{{ _('Hero content') }}</strong><small>{{ _('Choose up to two for wider screens. Phones keep the simple hero.') }}</small></div>
+                    <div class="display-hero-checks" role="group" aria-label="{{ _('Hero content') }}">
+                        {% for key, label in [('synopsis', _('Synopsis')), ('bars', _('Progress per app')), ('listened', _('Time listened')), ('pages', _('Pages read'))] %}
+                        <label><input type="checkbox" data-hero-piece value="{{ key }}" {% if key in display.UI_HERO_CONTENT.split(',') %}checked{% endif %}><span>{{ label }}</span></label>
+                        {% endfor %}
+                    </div>
+                    <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
+                </form>
+            </section>
             <section class="display-group" data-display-group="behaviour" aria-labelledby="display-behaviour-title">
                 <header><h2 id="display-behaviour-title">{{ _('Behaviour') }}</h2><span class="display-save-status" role="status" aria-live="polite"></span></header>
                 {{ cover_switch('UI_SHOW_HERO', _('Hero card'), display.UI_SHOW_HERO, _('Show your most recently synced in-progress book above the Library controls.')) }}

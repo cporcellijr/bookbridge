@@ -812,6 +812,22 @@ class DatabaseService:
                 session.expunge(book)  # Detach from session
             return book
 
+    def get_book_synopsis_cache(self, abs_id: str) -> tuple[Optional[float], Optional[str]]:
+        """Read the shared catalog synopsis and when it was last looked up (None = never)."""
+        with self.get_session() as session:
+            row = session.query(Book.synopsis_checked_at, Book.synopsis_text).filter(
+                Book.abs_id == abs_id
+            ).first()
+            return (row[0], row[1]) if row else (None, None)
+
+    def set_book_synopsis_cache(self, abs_id: str, text: Optional[str], checked_at: float) -> None:
+        """Store a lookup result without changing progress or ownership."""
+        with self.get_session() as session:
+            session.query(Book).filter(Book.abs_id == abs_id).update(
+                {"synopsis_checked_at": checked_at, "synopsis_text": text},
+                synchronize_session=False,
+            )
+
     def get_book_by_audio_source(self, audio_source: str, audio_source_id: str) -> Optional[Book]:
         """Get a book by its primary audio source identity."""
         if not audio_source or not audio_source_id:

@@ -7854,6 +7854,182 @@ def _hero_leader_percent(mapping: dict, leader: str | None) -> float | None:
     return (mapping.get("states") or {}).get(key, {}).get("percentage")
 
 
+# Striped per-book locks prevent duplicate concurrent synopsis source reads.
+_HERO_SYNOPSIS_LOCKS = tuple(threading.Lock() for _ in range(32))
+# Sources answer None on a transient failure too, so an empty result is retried.
+_HERO_SYNOPSIS_RECHECK_SECONDS = 7 * 86400
+
+
+def _hero_plain_text(value: object) -> str:
+    """Strip markup and scripts from untrusted source metadata."""
+    if not isinstance(value, str):
+        return ""
+    safe = re.sub(r"<(script|style)[^>]*>.*?</(script|style)>", " ", value, flags=re.I | re.S)
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", safe))).strip()[:12000]
+
+
+def _hero_synopsis_source(book, user) -> str | None:
+    """Use local EPUB, the reader's ABS metadata, then their BookOrbit detail."""
+    for filename in dict.fromkeys((book.original_ebook_filename, book.ebook_filename)):
+        if not filename or not str(filename).lower().endswith(".epub"):
+            continue
+        path = find_ebook_file(filename)
+        if path:
+            description = _hero_plain_text(extract_epub_metadata(str(path)).get("summary"))
+            if description:
+                return description
+    bundle = container.user_client_registry().get_clients(user.id)
+    abs_client = getattr(bundle, "abs_client", None)
+    if abs_client and abs_client.is_configured():
+        info = abs_client.get_item_details(book.abs_id)
+        if isinstance(info, dict):
+            media = info.get("media") if isinstance(info.get("media"), dict) else {}
+            metadata = media.get("metadata") if isinstance(media.get("metadata"), dict) else {}
+            description = _hero_plain_text(
+                metadata.get("description") or media.get("description") or info.get("description")
+            )
+            if description:
+                return description
+    orbit_id = None
+    if (book.ebook_source or "").lower() == "bookorbit":
+        orbit_id = book.ebook_source_id
+    elif (book.audio_source or "").lower() in ("bookorbit", "bookorbitaudio"):
+        orbit_id = book.audio_source_id
+    orbit = getattr(bundle, "bookorbit_client", None)
+    if orbit_id and orbit and orbit.is_configured():
+        detail = orbit.get_book_detail(orbit_id)
+        if isinstance(detail, dict):
+            nested = detail.get("metadata") if isinstance(detail.get("metadata"), dict) else {}
+            description = _hero_plain_text(
+                detail.get("description") or detail.get("summary")
+                or nested.get("description") or nested.get("summary")
+            )
+            if description:
+                return description
+    return None
+
+
+def _hero_cached_synopsis(book, user) -> str | None:
+    """Share a found synopsis per book for good; retry an empty lookup after a week."""
+    lock = _HERO_SYNOPSIS_LOCKS[hash(book.abs_id) % len(_HERO_SYNOPSIS_LOCKS)]
+    with lock:
+        checked_at, description = database_service.get_book_synopsis_cache(book.abs_id)
+        if description or (checked_at and time.time() - checked_at < _HERO_SYNOPSIS_RECHECK_SECONDS):
+            return description
+        description = _hero_synopsis_source(book, user)
+        database_service.set_book_synopsis_cache(book.abs_id, description, time.time())
+        return description
+
+
+def _hero_daily_totals(rows: list[dict], count: int, field: str, tz) -> dict:
+    """Return today/week only with a complete history, never a truncated sample."""
+    if not rows or count > len(rows):
+        return {}
+    today = datetime.now(tz).date()
+    monday = today - timedelta(days=today.weekday())
+    amounts = {"today": 0, "week": 0}
+    for row in rows:
+        try:
+            when = row.get("date")
+            date_value = (
+                datetime.fromisoformat(when).date() if when
+                else datetime.fromtimestamp(float(row["endTime"]), tz).date()
+            )
+            value = int(row.get(field) or 0)
+        except (KeyError, TypeError, ValueError, OSError):
+            return {}
+        if monday <= date_value <= today:
+            amounts["week"] += value
+        if date_value == today:
+            amounts["today"] += value
+    return amounts
+
+
+def _hero_listening_piece(book, abs_id: str) -> dict | None:
+    """Per-reader duration totals, with optional local day/week breakdown."""
+    abs_client = _stats_abs_client()
+    detail = _abs_book_listening_detail(abs_client, abs_id) if abs_client else None
+    if detail is None:
+        detail = database_service.get_book_listening_detail(abs_id)
+    if not detail or int(detail.get("totalSeconds") or 0) <= 0:
+        return None
+    payload = {"seconds": int(detail["totalSeconds"])}
+    duration = float(book.duration or book.audio_duration or 0)
+    if duration > 0:
+        payload["lengthSeconds"] = round(duration)
+        if detail.get("progressPercent") is not None:
+            progress = min(100, max(0, float(detail["progressPercent"])))
+            payload["leftSeconds"] = max(0, round(duration * (1 - progress / 100)))
+    payload.update(_hero_daily_totals(
+        detail.get("sessions") or [], int(detail.get("sessionCount") or 0),
+        "durationSeconds", _get_stats_timezone(),
+    ))
+    return payload
+
+
+def _hero_reading_piece(abs_id: str) -> dict | None:
+    """Per-reader KOReader pages, enriched with catalog page totals where known."""
+    tz = _get_stats_timezone()
+    reading = database_service.get_koreader_book_detail(
+        f"abs:{abs_id}", getattr(tz, "key", str(tz)),
+    )
+    if not reading or int(reading.get("pagesRead") or 0) <= 0:
+        return None
+    payload = {"read": int(reading["pagesRead"])}
+    storygraph = database_service.get_storygraph_details(abs_id)
+    hardcover = database_service.get_hardcover_details(abs_id)
+    total = (
+        getattr(storygraph, "storygraph_pages", None)
+        or getattr(hardcover, "hardcover_pages", None)
+    )
+    if total and int(total) > 0:
+        payload["total"] = int(total)
+        payload["left"] = max(0, int(total) - payload["read"])
+    heatmap = reading.get("heatmap") or []
+    payload.update(_hero_daily_totals(heatmap, len(heatmap), "pages", tz))
+    return payload
+
+
+def api_library_hero(abs_id: str):
+    """Load optional hero content after first paint, scoped to this reader's claims."""
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Authentication required"}), 401
+    settings = _display_settings_for(user)
+    if user_setting("UI_MODE", "classic") != "new" or settings["UI_SHOW_HERO"] != "true":
+        return jsonify({"error": "Not found"}), 404
+    if abs_id not in database_service.get_linked_abs_ids(user.id):
+        return jsonify({"error": "Not found"}), 404
+    book = database_service.get_book(abs_id)
+    if book is None:
+        return jsonify({"error": "Not found"}), 404
+
+    chosen = settings["UI_HERO_CONTENT"].split(",") if settings["UI_HERO_CONTENT"] else []
+    pieces = {}
+    if "synopsis" in chosen:
+        try:
+            description = _hero_cached_synopsis(book, user)
+            if description:
+                pieces["synopsis"] = {"text": description}
+        except Exception as exc:
+            logger.warning("Hero synopsis unavailable for %s: %s", abs_id, exc, exc_info=True)
+    if "listened" in chosen:
+        try:
+            detail = _hero_listening_piece(book, abs_id)
+            if detail:
+                pieces["listened"] = detail
+        except Exception as exc:
+            logger.warning("Hero listening unavailable for %s: %s", abs_id, exc, exc_info=True)
+    if "pages" in chosen:
+        try:
+            detail = _hero_reading_piece(abs_id)
+            if detail:
+                pieces["pages"] = detail
+        except Exception as exc:
+            logger.warning("Hero reading unavailable for %s: %s", abs_id, exc, exc_info=True)
+    return jsonify({"absId": abs_id, "pieces": pieces})
+
+
 def index():
     """Dashboard - loads books and progress from database service"""
     user = current_user()
@@ -17074,6 +17250,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/stats', 'api_stats', api_stats)
     app.add_url_rule('/api/stats/reading-day', 'api_stats_reading_day', api_stats_reading_day)
     app.add_url_rule('/api/stats/reading-calendar', 'api_stats_reading_calendar', api_stats_reading_calendar)
+    app.add_url_rule('/api/library/hero/<abs_id>', 'api_library_hero', api_library_hero)
     app.add_url_rule('/api/stats/book-detail', 'api_stats_book_detail', api_stats_book_detail)
     app.add_url_rule('/api/stats/yearly-recap', 'api_stats_yearly_recap', api_stats_yearly_recap)
     app.add_url_rule('/logs', 'logs_view', logs_view)

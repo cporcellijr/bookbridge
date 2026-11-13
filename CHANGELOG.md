@@ -40,6 +40,16 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **New Library hero details can show up to two reader-selected pieces on desktop and tablet** (P16d).
+  Display → Layout offers Progress per app, Time listened, Pages read, and Synopsis, always
+  in the same order and with missing information omitted. The pieces fetch only after the
+  Library opens; the progress bar for the leading service stays on the base when app bars
+  are off. Phones retain the compact hero. Reader-owned listening/reading details and a
+  durable shared-catalog synopsis cache (EPUB → Audiobookshelf → BookOrbit, including
+  checked-but-empty results) keep requests scoped and avoid repeated metadata reads.
+  Classic and synchronization are unchanged. Applying the new additive migration and
+  restarting the container are required before release.
+
 - **Acquisition requests now keep both formats together across partial submissions** (#585,
   Phase C; local review only). BookOrbit and Shelfmark requests begin with a saved
   reader-owned job, keep each accepted ebook/audiobook receipt independently, and

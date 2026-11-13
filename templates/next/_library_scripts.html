@@ -977,6 +977,192 @@
 
             const heroRoot = document.getElementById('library-hero');
 
+            // P16d: content is client-only and never participates in the dashboard build.
+            const heroContent = heroRoot?.querySelector('.hero-content');
+            const heroOrder = ['synopsis', 'bars', 'listened', 'pages'];
+            const heroChosen = heroOrder.filter(key =>
+                (heroRoot?.dataset.heroContent || '').split(',').includes(key));
+            const heroServiceNames = {
+                abs: 'Audiobookshelf', absebook: 'Audiobookshelf',
+                bookorbit: 'BookOrbit', bookorbitaudio: 'BookOrbit',
+                booklore: 'Grimmory', bookloreaudio: 'Grimmory',
+                kavita: 'Kavita', cwa: 'Calibre-Web', bookfusion: 'BookFusion',
+                kosync: 'KOReader', storyteller: 'Storyteller'
+            };
+            let heroSlots = [];
+            try { heroSlots = JSON.parse(heroRoot?.dataset.heroSlots || '[]'); } catch (_) { /* no slots */ }
+            let heroPieces = {};
+            let heroSequence = 0;
+            let heroController = null;
+
+            function heroTime(seconds) {
+                const minutes = Math.max(0, Math.round(Number(seconds || 0) / 60));
+                const hours = Math.floor(minutes / 60);
+                return hours ? hours + 'h ' + (minutes % 60) + 'm' : minutes + 'm';
+            }
+
+            function heroSlotRows(row, card) {
+                const states = row.states || {};
+                const groups = [
+                    ['audio', ['abs', 'bookorbitaudio', 'bookloreaudio']],
+                    ['ebook', ['bookorbit', 'booklore', 'kavita', 'cwa', 'bookfusion', 'absebook']],
+                    ['koreader', ['kosync']],
+                    ['readalong', ['storyteller']]
+                ];
+                return groups.map(([key, clients]) => {
+                    const candidate = clients.map(name => [name, states[name]])
+                        .filter(([, state]) => state && state.percentage != null)
+                        .sort((a, b) => Number(b[1].last_updated || 0) - Number(a[1].last_updated || 0))[0];
+                    const slotNode = card?.querySelector('.format-slot[data-slot="' + key + '"]');
+                    return {
+                        key, linked: slotNode ? !slotNode.classList.contains('is-faint') : !!candidate,
+                        service: candidate ? heroServiceNames[candidate[0]] : null,
+                        pct: candidate ? Number(candidate[1].percentage) : null,
+                        last: key === row.last_slot
+                    };
+                });
+            }
+
+            function heroElement(tag, className, value) {
+                const element = document.createElement(tag);
+                if (className) element.className = className;
+                if (value != null) element.textContent = String(value);
+                return element;
+            }
+
+            function heroMiniProgress() {
+                const mini = heroRoot?.querySelector('.hero-mini-track');
+                if (!mini) return;
+                mini.hidden = heroChosen.includes('bars');
+                const pct = parseFloat(heroRoot.querySelector('.hero-percent')?.textContent || '0');
+                const fill = mini.querySelector('span');
+                if (fill) fill.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+            }
+
+            function renderHeroPieces() {
+                if (!heroContent || !heroRoot || heroRoot.hidden) return;
+                const pieces = [];
+                heroChosen.forEach(key => {
+                    const data = key === 'bars' ? heroSlots.filter(slot =>
+                        slot.linked && slot.pct != null && Number.isFinite(Number(slot.pct))
+                    ).sort((a, b) => ['audio', 'ebook', 'koreader', 'readalong'].indexOf(a.key) -
+                        ['audio', 'ebook', 'koreader', 'readalong'].indexOf(b.key)) : heroPieces[key];
+                    if (!data || (Array.isArray(data) && !data.length)) return;
+                    const section = heroElement('section', 'hero-piece hero-piece-' + key);
+                    const names = {
+                        synopsis: {{ _('About this book')|tojson }},
+                        bars: {{ _('Where you are')|tojson }},
+                        listened: {{ _('Listening')|tojson }},
+                        pages: {{ _('Reading')|tojson }}
+                    };
+                    section.append(heroElement('span', 'hero-piece-label', names[key]));
+                    if (key === 'synopsis') {
+                        if (!data.text) return;
+                        section.append(heroElement('p', 'hero-synopsis-text', data.text));
+                    } else if (key === 'bars') {
+                        const labels = {
+                            ebook: {{ _('Ebook')|tojson }}, audio: {{ _('Audiobook')|tojson }},
+                            readalong: {{ _('Read-along')|tojson }}, koreader: 'KOReader'
+                        };
+                        data.forEach(slot => {
+                            const row = heroElement('div', 'hero-app-row' + (slot.last ? ' is-leader' : ''));
+                            const name = slot.key === 'ebook' && slot.service
+                                ? labels.ebook + ' · ' + slot.service : labels[slot.key];
+                            row.append(heroElement('span', '', name));
+                            row.append(heroElement('strong', '', Number(slot.pct).toFixed(1) + '%'));
+                            const track = heroElement('span', 'hero-app-track');
+                            const fill = heroElement('span');
+                            fill.style.width = Math.max(0, Math.min(100, Number(slot.pct))) + '%';
+                            track.append(fill);
+                            row.append(track);
+                            section.append(row);
+                        });
+                    } else if (key === 'listened') {
+                        if (!(Number(data.seconds) > 0)) return;
+                        section.append(heroElement('strong', 'hero-piece-value', heroTime(data.seconds)));
+                        if (data.lengthSeconds) {
+                            const meta = data.leftSeconds != null
+                                ? bbFormat({{ _('of {length} · {left} left')|tojson }}, {
+                                    length: heroTime(data.lengthSeconds), left: heroTime(data.leftSeconds)})
+                                : bbFormat({{ _('of {length}')|tojson }}, {length: heroTime(data.lengthSeconds)});
+                            section.append(heroElement('span', 'hero-piece-meta', meta));
+                        }
+                        if (data.week != null && data.today != null) {
+                            section.append(heroElement('span', 'hero-piece-meta',
+                                bbFormat({{ _('This week {week} · Today {today}')|tojson }}, {
+                                    week: heroTime(data.week), today: heroTime(data.today)
+                                })));
+                        }
+                    } else if (key === 'pages') {
+                        if (!(Number(data.read) > 0)) return;
+                        section.append(heroElement('strong', 'hero-piece-value', data.read));
+                        if (data.total) {
+                            section.append(heroElement('span', 'hero-piece-meta',
+                                bbFormat({{ _('of {total} · about {left} to go')|tojson }}, {
+                                    total: data.total, left: data.left
+                                })));
+                        }
+                        if (data.week != null && data.today != null) {
+                            section.append(heroElement('span', 'hero-piece-meta',
+                                bbFormat({{ _('This week {week} · Today {today}')|tojson }}, {
+                                    week: data.week, today: data.today
+                                })));
+                        }
+                    }
+                    pieces.push(section);
+                });
+                heroContent.replaceChildren(...pieces);
+                heroContent.hidden = pieces.length === 0;
+                heroContent.dataset.visibleCount = String(pieces.length);
+                heroMiniProgress();
+            }
+
+            function loadHeroContent() {
+                const sequence = ++heroSequence;
+                if (heroController) heroController.abort();
+                heroController = null;
+                heroPieces = {};
+                if (!heroRoot?.dataset.absId || heroRoot.hidden) return;
+                if (window.matchMedia?.('(max-width: 760px)').matches) {
+                    if (heroContent) heroContent.hidden = true;
+                    return;
+                }
+                renderHeroPieces();
+                if (!heroChosen.some(key => key !== 'bars')) return;
+                const absId = heroRoot.dataset.absId;
+                heroController = new AbortController();
+                fetch('/api/library/hero/' + encodeURIComponent(absId), {
+                    credentials: 'same-origin', signal: heroController.signal
+                }).then(response => {
+                    if (!response.ok) throw new Error('Hero content unavailable');
+                    return response.json();
+                }).then(payload => {
+                    if (sequence !== heroSequence || heroRoot.dataset.absId !== absId ||
+                        payload.absId !== absId) return;
+                    heroPieces = payload.pieces || {};
+                    renderHeroPieces();
+                }).catch(() => { /* Missing/slow data never replaces the base hero. */ });
+            }
+
+            function heroUpdateSlots(row) {
+                if (!heroChosen.includes('bars')) {
+                    heroMiniProgress();
+                    return;
+                }
+                const existing = heroSlots;
+                const refreshed = heroSlotRows(row, null);
+                heroSlots = refreshed.map(slot => {
+                    const old = existing.find(item => item.key === slot.key);
+                    return {
+                        ...slot,
+                        linked: old ? old.linked : slot.linked,
+                        service: slot.service || old?.service,
+                        pct: slot.pct != null ? slot.pct : old?.pct,
+                    };
+                });
+                renderHeroPieces();
+            }
+
             function heroIsInProgress(row) {
                 return Number(row.unified_progress) > 0 && Number(row.unified_progress) < 100 &&
                     Object.values(row.states || {}).some(state => Number(state.percentage) > 0);
@@ -1052,6 +1238,8 @@
                 heroRoot.dataset.movementAt = String(heroMovementTime(row));
                 heroRoot.dataset.markerAt = String(Number(row.last_slot_unix || 0));
                 heroRoot.hidden = false;
+                heroSlots = heroSlotRows(row, card);
+                loadHeroContent();
             }
 
             function updateHeroProgress(row) {
@@ -1069,6 +1257,7 @@
                     Number(heroRoot.dataset.movementAt || 0), heroMovementTime(row)));
                 heroRoot.dataset.markerAt = String(Math.max(
                     Number(heroRoot.dataset.markerAt || 0), Number(row.last_slot_unix || 0)));
+                heroUpdateSlots(row);
             }
 
             function refreshHeroFromPoll(rows, cardsById) {
@@ -1093,7 +1282,18 @@
             if (heroRoot?.dataset.absId) {
                 excludeHeroFromGrid(heroRoot.dataset.absId);
                 filterBooks();
+                // Two turns after layout, so the initial Library paint is never blocked.
+                const afterPaint = () => window.setTimeout(loadHeroContent, 0);
+                if (window.requestAnimationFrame) window.requestAnimationFrame(afterPaint);
+                else window.setTimeout(afterPaint, 0);
             }
+            let heroPhone = window.matchMedia?.('(max-width: 760px)').matches;
+            window.addEventListener('resize', () => {
+                const phone = window.matchMedia?.('(max-width: 760px)').matches;
+                if (phone === heroPhone) return;
+                heroPhone = phone;
+                loadHeroContent();
+            });
 
             let refreshPaused = false;
 
