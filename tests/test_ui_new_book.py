@@ -235,7 +235,7 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
         library = library[:start] + library[end:]
         # P16b's one-filter panel and P16c's hero lifecycle are New-only.
         # Preserve exact Classic parity for the surrounding shared drawer/poll blocks.
-        for first, last in P16B_LIBRARY_NEW_ONLY + P16C_LIBRARY_NEW_ONLY:
+        for first, last in P16B_LIBRARY_NEW_ONLY + P16C_LIBRARY_NEW_ONLY + P16E_LIBRARY_NEW_ONLY:
             start = library.index(first)
             end = library.index(last, start)
             library = library[:start] + '</script><script>' + library[end:]
@@ -269,10 +269,18 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
 P16B_LIBRARY_NEW_ONLY = (
     ("const statusFilter = document.getElementById('status-filter');", "const seriesFilter = document.getElementById('series-filter');"),
     ('filterGroups.author = authorFilter;', "const filterCount = document.getElementById('filter-count');"),
-    ('function updateFacetOptions() {', "// Offers a route into the Search tab's"),
+    ('function updateFacetOptions() {', 'function clearLibraryFilters(focusTrigger = false) {'),
     ('function matchesStatusFilter(', 'function matchesFormatFilter('),
     ('function filterBooks() {', 'window.toggleSeries = function'),
     ('// One active facet at a time', 'if (dashboardSearch) {'),
+)
+
+
+# P16e: the reset references and its helper are New-only. Keep the shared
+# Classic filter/search blocks outside these exact slices.
+P16E_LIBRARY_NEW_ONLY = (
+    ('function clearLibraryFilters(focusTrigger = false) {',
+     "// Offers a route into the Search tab's"),
 )
 
 
