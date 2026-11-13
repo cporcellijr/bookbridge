@@ -170,3 +170,6 @@
     .integrations-wrap .integrations-save-bar { bottom: calc(74px + env(safe-area-inset-bottom)); }
     .integrations-wrap .integrations-save-bar .btn { flex: 1 1 auto; min-height: 44px; }
 }
+
+.integrations-wrap .group--off { display: none; }
+.integrations-wrap .integrations-off-summary { margin: 18px 0 0; color: var(--text-2); font-size: 13px; line-height: 1.5; }
