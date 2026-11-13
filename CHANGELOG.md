@@ -14,8 +14,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
-- **Acquisition submission safety and receipt reconciliation** (#585, Phase C review corrections;
-  not deployed). An uncertain Shelfmark POST now stays blocked through concurrent policy and
+- **Acquisition submission safety and receipt reconciliation** (#585, Phase C review corrections).
+  An uncertain Shelfmark POST now stays blocked through concurrent policy and
   release-choice checks and ambiguous server failures, preventing blind duplicate downloads.
   Shelfmark search results retain the original query author, options report usable source-level
   permissions, and invalid format arrays return a validation error. Verified BookOrbit request
@@ -40,6 +40,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Acquisition jobs now discover and pair library arrivals across days and restarts** (#585, Phase D). Jobs persist the ebook and audiobook's exact source identities, edition-review choices, library import status and pairing state without discarding provider receipts or outstanding submissions. Shelfmark readers can choose an accessible **Audiobook destination library** in their own integrations: a completed Shelfmark audio delivery can request a tracked BookOrbit scan, with persistent claims, scan-history coalescing, bounded follow-ups and refusal reasons. A completed scan is not proof of a finished import; library files and reader-authorized mappings must be verified first. The picker and per-reader settings exist in both Classic and New. The additive Phase D migration and an application restart are required.
 - **New Library hero details can show up to two reader-selected pieces on desktop and tablet** (P16d).
   Display → Layout offers Progress per app, Time listened, Pages read, and Synopsis, always
   in the same order and with missing information omitted. The pieces fetch only after the
@@ -50,17 +51,7 @@ All notable changes to BookBridge will be documented in this file.
   Classic and synchronization are unchanged. Applying the new additive migration and
   restarting the container are required before release.
 
-- **Acquisition requests now keep both formats together across partial submissions** (#585,
-  Phase C; local review only). BookOrbit and Shelfmark requests begin with a saved
-  reader-owned job, keep each accepted ebook/audiobook receipt independently, and
-  resume unfinished work without re-requesting an accepted half. Shelfmark can
-  request both formats sequentially and follows the chosen source's download or
-  approval policy. Already-owned copies remain attached for later pairing.
-  BookOrbit's manual release choice now requires positive evidence that automatic
-  grabbing handed control back; unverified automation stays pending rather than
-  competing with the provider. An uncertain network response is retained instead
-  of blindly submitting the same request again. The Processing UI and library
-  arrival handling remain future work; this feature has not been deployed.
+- **Search and Processing now follow one saved acquisition job from Get through pairing** (#585, Phases C–E). Get remembers the exact existing edition and saves one parent job before submitting either or both missing halves. BookOrbit, Shelfmark, or a mixed provider choice retains each format's receipt separately; partial and uncertain submissions stay with that job and do not trigger duplicate requests. Shelfmark's sequential Both flow respects each format/source policy. Processing shows release/approval, delivery, import, review and pairing separately, keeps provider actions attached to their owned job, and distinguishes pairing from normal Bridge processing. Manual BookOrbit release picking requires positive handback evidence; unknown automation remains pending. Both Classic and New Search surfaces clear and open the saved job after a saved response, preserve the form when no job was saved, and offer existing matching jobs. Confirmed arrivals refresh the affected search results. The Phase D migration and an application restart are required.
 
 - **Choose a shelf finish in the New interface, and find Display from Classic's account menu.** Face-out and Spine shelves can match the Day/Night theme or use Wood, Dark, or a quiet neutral Plain finish. The selection saves per reader and updates the live preview immediately. Classic readers can open their existing Account → Display card directly from the user menu to switch interfaces without losing their series setting.
 
@@ -80,9 +71,6 @@ All notable changes to BookBridge will be documented in this file.
 - **Remove several books at once from the Classic library.** Select books and delete them
   together, with the same ownership checks as removing one.
 - **Get the missing ebook or audiobook from Discover, and have it paired with the book you already have** (#585).
-  - Foundation for the acquisition workflow redesign: a reader-owned job can retain both requested
-    formats, exact existing-edition identities, and partial provider receipts across restarts.
-    Existing request history is preserved; the new provider and Processing UI handoff follows later.
   When a search on Discover's Search tab finds only one half of a book, or neither, a "Get it"
   action files a request with BookOrbit or finds a release in Shelfmark, using your own login on
   each service. BookBridge remembers which book you asked for and, when the file arrives, pairs

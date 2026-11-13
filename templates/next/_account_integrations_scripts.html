@@ -2,6 +2,37 @@
         const TEST_URL_BASE = {{ url_for('account_test_connection', service='__service__')|tojson }};
         const ABS_LIB_URL = {{ url_for('account_abs_libraries')|tojson }};
         const BOOKLORE_LIB_URL = {{ url_for('account_booklore_libraries')|tojson }};
+        const SCAN_LIB_URL = {{ url_for('account_bookorbit_scan_libraries')|tojson }};
+
+        function loadScanLibraries(button) {
+            const picker = document.querySelector('[data-scan-library-picker]');
+            if (!picker) return;
+            const original = button ? button.textContent : '';
+            if (button) { button.disabled = true; button.textContent = '...'; }
+            const selected = picker.value;
+            fetch(SCAN_LIB_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectIntegrationPayload())
+            })
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok || !Array.isArray(data)) throw new Error(data.error || 'Library lookup unavailable');
+                    picker.replaceChildren(new Option({{ _('Normal scheduled scanning')|tojson }}, ''));
+                    data.forEach(lib => {
+                        picker.add(new Option((lib.name || lib.id) + ' (' + lib.id + ')', String(lib.id)));
+                    });
+                    if (selected && !data.some(lib => String(lib.id) === selected)) {
+                        picker.add(new Option({{ _('Saved library no longer accessible')|tojson }} + ' (' + selected + ')', selected));
+                    }
+                    picker.value = selected;
+                })
+                .catch(err => { if (button) alert(err.message); })
+                .finally(() => {
+                    if (button) { button.disabled = false; button.textContent = original; }
+                });
+        }
+        document.addEventListener('DOMContentLoaded', () => loadScanLibraries(null));
 
         function toggleIntegrationGroup(toggle) {
             const body = document.getElementById(toggle.dataset.bodyId || '');

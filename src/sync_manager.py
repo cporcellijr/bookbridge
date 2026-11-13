@@ -5337,7 +5337,9 @@ class SyncManager:
         for user in users:
             try:
                 bundle = registry.get_clients(user.id)
-                if any(c.is_configured() for c in bundle.sync_clients.values()):
+                has_sync = any(c.is_configured() for c in bundle.sync_clients.values())
+                acquisition = getattr(self, 'acquisition_service', None)
+                if has_sync or (acquisition is not None and acquisition.has_work(user.id)):
                     eligible.append(user)
             except Exception as e:
                 logger.warning("Skipping user %s (client build failed): %s", getattr(user, "id", None), e, exc_info=True)
@@ -5378,11 +5380,13 @@ class SyncManager:
                 found if found is not None and found.is_configured() else None
                 for found in (getattr(bundle, 'bookorbit_client', None), getattr(bundle, 'shelfmark_client', None))
             )
-            if client is None and shelfmark is None:
+            # Durable jobs with already-owned halves can pair without either
+            # acquisition provider, using the reader's ordinary library clients.
+            if client is None and shelfmark is None and not acquisition.has_work(user_id):
                 return
             user_token = set_current_user_id(user_id)
             credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))
-            acquisition.refresh_user(user_id, client, shelfmark)
+            acquisition.refresh_user(user_id, client, shelfmark, library_clients=bundle)
         except Exception:
             logger.warning("Acquisition check failed for user %s", user_id, exc_info=True)
         finally:

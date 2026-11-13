@@ -4,6 +4,7 @@
 {% block title %}{{ _('Discover') }} · BookBridge{% endblock %}
 
 {% block head %}
+<link rel="stylesheet" href="/static/css/acquisition-intake.css">
 <style>
     .suggestions-wrap { max-width: 1800px; margin: 0 auto; padding: 28px 24px 36px; }
     .page-header h2 { font-size: 32px; margin-bottom: 8px; }
@@ -322,6 +323,7 @@
         </div>
         <button type="submit" class="btn btn-primary" id="searchTabBtn">{{ _('Search') }}</button>
     </form>
+    {% include "_acquisition_intake.html" %}
 
     <div class="layout" id="layout">
         <div class="panel" id="suggestionsPanel" role="tabpanel">
@@ -1411,11 +1413,13 @@
 
     // Live provider search for the Search tab (GET /api/suggestions/search). Runs on submit
     // only, never per keystroke: each search hits every configured library.
+    let searchEpoch = 0;
     async function runSearch() {
         const st = tabState.search;
         const handoff = searchHandoff;
         searchHandoff = null;
         if (inflight.search) inflight.search.abort();
+        const epoch = ++searchEpoch;
         if (!st.q && !handoff) {
             views.search = null;
             loadErrors.search = null;
@@ -1436,6 +1440,7 @@
                 headers: { Accept: 'application/json' },
             });
             const body = await response.json().catch((err) => { if (err.name === 'AbortError') throw err; return null; });
+            if (epoch !== searchEpoch || inflight.search !== controller) return;
             if (!response.ok || !body || !Array.isArray(body.audiobooks)) {
                 throw new Error((body && body.error) || `http_${response.status}`);
             }
@@ -1884,7 +1889,8 @@
             if (view.ebooks.length) rows.unshift(searchGhostRowHtml());
             const empty = view.audiobooks.length ? ''
                 : `<div class="empty"><p>${esc(view.ebooks.length ? T.noAudioFound : T.noResults)}</p></div>`;
-            list.innerHTML = (rows.length ? `<div class="flat-list" role="list">${rows.join('')}</div>` : '') + empty;
+            list.innerHTML = (rows.length ? `<div class="flat-list" role="list">${rows.join('')}</div>` : '') + empty
+                + (typeof acqActionsHtml === 'function' ? acqActionsHtml(view) : '');
         }
         list.scrollTop = scrollPos.search || 0;
         scrollPos.search = 0;
@@ -2247,5 +2253,28 @@
         startFakeScanProgress();
         pollScanStatus();
     }
+</script>
+{% include 'next/_acquisition_scripts.html' %}
+<script>
+    window.clearSuggestionsSearch = function clearSuggestionsSearch() {
+        searchEpoch += 1;
+        if (inflight.search) inflight.search.abort();
+        inflight.search = null;
+        views.search = null;
+        loadErrors.search = null;
+        tabState.search.q = '';
+        $('searchTabInput').value = '';
+        if (typeof clearSelection === 'function') clearSelection();
+        saveState();
+        if (activeTab === 'search') renderList();
+    };
+    window.refreshSuggestionSearch = function refreshSuggestionSearch() {
+        if (inflight.search) inflight.search.abort();
+        inflight.search = null;
+        searchEpoch += 1;
+        views.search = null;
+        if (activeTab === 'search' && tabState.search.q) runSearch();
+    };
+    initAcquisition();
 </script>
 {% endblock %}

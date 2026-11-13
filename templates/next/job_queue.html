@@ -30,6 +30,8 @@
     {% endif %}
     {% endwith %}
 
+    {% include '_acquisition_jobs_panel.html' %}
+
     {% set sections = [
         ('running', _('Processing now')),
         ('pending', _('Waiting')),

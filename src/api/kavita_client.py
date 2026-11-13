@@ -238,9 +238,11 @@ class KavitaClient:
                 "/api/Search/search",
                 params={"queryString": query, "includeChapterAndFiles": "true"},
             )
-            data = self._json(response, {})
-            series = data.get("series") if isinstance(data, dict) else []
-            return series if isinstance(series, list) else []
+            data = self._json(response, None if require_complete else {})
+            series = data.get("series") if isinstance(data, dict) else None
+            if not isinstance(series, list):
+                return None if require_complete else []
+            return series
 
         results = []
         page = 1
@@ -339,14 +341,27 @@ class KavitaClient:
         self.get_all_books(force_refresh=True)
         return True
 
-    def search_ebooks(self, query: str, limit: int = 20) -> list[dict]:
+    def search_ebooks(self, query: str, limit: int = 20, *, require_complete: bool = False) -> list[dict]:
         safe_query = str(query or "").strip()
         if not safe_query:
-            return self.get_all_books()
+            books = self.get_all_books(require_complete=True) if require_complete else self.get_all_books()
+            if require_complete and not self.catalog_complete:
+                raise RuntimeError("Kavita catalog is incomplete")
+            return books
         books = []
-        for series in self._filtered_series(self._series_for_query(safe_query)):
-            books.extend(self._expand_series(series))
+        series_rows = (self._series_for_query(safe_query, require_complete=True) if require_complete
+                       else self._series_for_query(safe_query))
+        if series_rows is None:
+            raise RuntimeError("Kavita search results are incomplete")
+        for series in self._filtered_series(series_rows):
+            expanded = (self._expand_series(series, require_complete=True) if require_complete
+                        else self._expand_series(series))
+            if expanded is None:
+                raise RuntimeError("Kavita series contents are incomplete")
+            books.extend(expanded)
             if len(books) >= limit:
+                if require_complete:
+                    raise RuntimeError("Kavita search result reached its limit")
                 break
         books = books[:limit]
         self._index_books(books, replace=False)

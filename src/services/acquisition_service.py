@@ -6,10 +6,12 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePath
+from types import SimpleNamespace
 from threading import Lock
 from typing import Any, Optional
 
 from src.api.bookorbit_client import BookOrbitClient
+from src.services.acquisition_library_catalog import search_reader_library
 from src.utils.config_loader import env_truthy
 from src.utils.time_utils import utcnow
 from src.utils.user_config import (
@@ -121,18 +123,26 @@ class AcquisitionService:
         self._adoption_claim_lock = Lock()
 
     def has_work(self, user_id: int) -> bool:
-        """Whether the user has any request to check or an adoption scan due (database reads only, no HTTP)."""
-        return bool(self._refreshable(user_id)) or self._adoption_due(user_id)
+        """Work can exist without any provider receipt (both halves already owned)."""
+        pending = getattr(self.database_service, "get_unpaired_acquisition_jobs", None)
+        return bool(self._refreshable(user_id)) or (bool(pending(user_id)) if pending else False) or self._adoption_due(user_id)
 
     def _refreshable(self, user_id: int) -> list[dict]:
         return self.database_service.get_refreshable_acquisition_requests(user_id, utcnow() - GIVE_UP_AFTER)
 
-    def refresh_user(self, user_id: int, client: Any, shelfmark: Any = None) -> list[dict]:
+    def refresh_user(self, user_id: int, client: Any, shelfmark: Any = None,
+                     library_clients: Any = None) -> list[dict]:
         """Refresh the user's due requests (each at most once per 30 s) and return all their rows.
 
-        ``client`` is the reader's BookOrbit client (it also finds Shelfmark arrivals in the
-        library); ``shelfmark`` is their Shelfmark client.
+        ``library_clients`` is the same reader's authenticated client bundle used
+        by Discover. No global fallback is used when the bundle is unavailable.
         """
+        # The caller may pass only the reader-scoped library bundle. Use that
+        # bundle's own provider client for receipt polling too; never globalize.
+        if client is None and library_clients is not None:
+            client = getattr(library_clients, "bookorbit_client", None)
+            if client is not None and not client.is_configured():
+                client = None
         now = utcnow()
         claimed = client is not None and self._claim_adoption(user_id)
         try:
@@ -162,11 +172,578 @@ class AcquisitionService:
                     self._pair_groups(user_id, due, resolved, client)
                 except Exception:
                     logger.warning("📥 Acquisition: user %s could not pair a Both request", user_id, exc_info=True)
+            if library_clients is None and client is not None:
+                library_clients = SimpleNamespace(bookorbit_client=client)
+            try:
+                self._reconcile_jobs(user_id, library_clients)
+            except Exception:
+                logger.warning("📥 Acquisition: user %s job reconciliation failed", user_id, exc_info=True)
             return self.database_service.get_acquisition_requests(user_id)
         finally:
             if claimed:
                 with self._adoption_claim_lock:
                     self._adoption_active.pop(user_id, None)
+
+    def _is_job_receipt(self, user_id: int, row: dict) -> bool:
+        """Distinguish durable job receipts from older group-key-only requests."""
+        group_key = row.get("group_key")
+        return bool(group_key and hasattr(self.database_service, "get_acquisition_job")
+                    and self.database_service.get_acquisition_job(user_id, group_key))
+
+    @staticmethod
+    def _candidate_matches(job: dict, candidate: dict, *, explicit: bool = False) -> bool:
+        """Require positive edition identity, not just a filename or similar title."""
+        norm = BookOrbitClient._normalize_string
+        if not candidate.get("source_id") or not candidate.get("source"):
+            return False
+        if norm(str(candidate.get("title") or "")) != norm(str(job.get("title") or "")):
+            return False
+        authors = _author_set(job.get("authors"))
+        found = _author_set(candidate.get("authors"))
+        if authors and ((not found and not explicit) or (found and authors != found)):
+            return False
+        isbn = str(job.get("isbn13") or "").replace("-", "")
+        found_isbn = str(candidate.get("isbn13") or "").replace("-", "")
+        if isbn and (found_isbn != isbn and (found_isbn or not explicit)):
+            # An unknown catalog ISBN cannot prove which newly found edition
+            # fulfils a request with a specific ISBN. A reader-selected stable
+            # service+ID is still authoritative when its metadata omits ISBN.
+            return False
+        if not authors and (not isbn or found_isbn != isbn) and not explicit:
+            return False
+        return AcquisitionService._series_matches(job, candidate, explicit=explicit)
+
+    @staticmethod
+    def _series_matches(job: dict, candidate: dict, *, explicit: bool) -> bool:
+        """Match known series parts; an explicit choice may fill missing metadata only."""
+        expected_name = BookOrbitClient._normalize_string(str(job.get("series_name") or ""))
+        found_name = BookOrbitClient._normalize_string(str(candidate.get("series_name") or ""))
+        expected_index = job.get("series_index")
+        found_index = candidate.get("series_index")
+        expected_has_index = expected_index not in (None, "")
+        found_has_index = found_index not in (None, "")
+
+        if not explicit:
+            if not expected_name and not expected_has_index:
+                return True
+            expected = _series_key(job.get("series_name"), expected_index)
+            actual = _series_key(candidate.get("series_name"), found_index)
+            return expected is not None and expected == actual
+
+        if found_name and expected_name and found_name != expected_name:
+            return False
+        expected_number = None
+        if expected_has_index:
+            if isinstance(expected_index, bool):
+                return False
+            try:
+                expected_number = float(expected_index)
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(expected_number):
+                return False
+        if found_has_index:
+            if isinstance(found_index, bool):
+                return False
+            try:
+                found_number = float(found_index)
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(found_number):
+                return False
+            if expected_number is not None and expected_number != found_number:
+                return False
+        return True
+
+    def choose_review_candidate(
+        self, user_id: int, job_id: str, media_kind: str, selection: dict, clients: Any,
+    ) -> tuple[Optional[dict], Optional[str]]:
+        """Confirm one persisted review choice after checking the reader's live catalog."""
+        if media_kind not in ("ebook", "audiobook") or not isinstance(selection, dict):
+            return None, "invalid_candidate"
+        job = self.database_service.get_acquisition_job(user_id, job_id)
+        if job is None:
+            return None, "not_found"
+        if job.get("dismissed") or media_kind not in job.get("formats", []):
+            return None, "not_allowed"
+        prefix = "ebook" if media_kind == "ebook" else "audio"
+        if job.get(f"{prefix}_library_state") != "needs_review":
+            return None, "review_not_pending"
+
+        source = str(selection.get("source") or "")
+        source_id = str(selection.get("source_id") or "")
+        filename = str(selection.get("filename") or "") if media_kind == "ebook" else ""
+        persisted = job.get("review_candidates", {}).get(media_kind, [])
+        offered = any(
+            candidate.get("source") == source
+            and str(candidate.get("source_id")) == source_id
+            and (media_kind != "ebook" or candidate.get("filename") == filename)
+            for candidate in persisted if isinstance(candidate, dict)
+        )
+        if not offered or not source or not source_id or (media_kind == "ebook" and not filename):
+            return None, "candidate_not_offered"
+
+        candidates, errors = search_reader_library(clients, media_kind, job["title"])
+        if source in errors:
+            return None, "catalog_unavailable"
+        matches = [candidate for candidate in candidates if (
+            candidate.get("source") == source
+            and str(candidate.get("source_id")) == source_id
+            and (media_kind != "ebook" or candidate.get("filename") == filename)
+        )]
+        if len(matches) != 1:
+            return None, "candidate_not_current"
+        selected = matches[0]
+        if not self._candidate_matches(job, selected, explicit=True):
+            return None, "candidate_metadata_conflict"
+
+        identity = {"source": selected["source"], "source_id": str(selected["source_id"])}
+        if media_kind == "ebook":
+            identity["filename"] = selected["filename"]
+        try:
+            saved = self.database_service.confirm_acquisition_arrival(
+                user_id, job_id, media_kind, identity,
+            )
+        except ValueError:
+            return None, "identity_conflict"
+        return (saved, None) if saved else (None, "not_found")
+
+    def retry_acquisition_scan(self, user_id: int, job_id: str, clients: Any) -> tuple[dict, Optional[str]]:
+        """Retry only a settled/refused scan after validating its reader scope and history."""
+        job = self.database_service.get_acquisition_job(user_id, job_id)
+        if job is None:
+            return {}, "not_found"
+        if job.get("dismissed"):
+            return {}, "job_dismissed"
+        if not job.get("audio_delivered_at") or not any(
+            row.get("service") == "Shelfmark" and row.get("media_kind") == "audiobook"
+            and row.get("remote_status") == "complete" for row in job.get("requests", [])
+        ):
+            return job, "scan_not_ready"
+        if job.get("audio_library_state") == "indexed" or job.get("linked_abs_id"):
+            return job, "audiobook_already_indexed"
+
+        state = job.get("scan_state")
+        if state not in ("failed", "completed", "refused", "invalid", "unavailable", "conflict"):
+            return job, "scan_not_retryable"
+        if (job.get("scan_attempts") or 0) >= 2:
+            return job, "scan_retry_limit_reached"
+        if state in ("failed", "completed") and not job.get("scan_job_id"):
+            return job, "scan_operation_unverified"
+        if state in ("refused", "invalid", "unavailable", "conflict") and job.get("scan_job_id"):
+            return job, "scan_operation_unverified"
+
+        bookorbit = getattr(clients, "bookorbit_client", None) if clients is not None else None
+        if bookorbit is None or not bookorbit.is_configured():
+            return job, "reader_bookorbit_unavailable"
+        scope_reader = getattr(bookorbit, "get_scan_scope", None)
+        scope_value = scope_reader() if callable(scope_reader) else ""
+        scope = scope_value if isinstance(scope_value, str) and scope_value else None
+        if not scope:
+            return job, "scan_server_scope_unavailable"
+        if job.get("scan_scope") and job["scan_scope"] != scope:
+            return job, "scan_server_scope_changed"
+        if job.get("scan_job_id") and not job.get("scan_scope"):
+            return job, "scan_server_scope_unverified"
+
+        configured_destination = self._scan_target(user_id)
+        destination = job.get("scan_library_id") or configured_destination
+        if not destination or not str(destination).isdigit() or int(destination) <= 0:
+            return job, "invalid_scan_library_id"
+        destination = str(destination)
+        if job.get("scan_library_id") and configured_destination != destination:
+            return job, "scan_destination_changed"
+        try:
+            libraries = bookorbit.get_libraries()
+            if not any(isinstance(item, dict) and str(item.get("id")) == destination for item in libraries):
+                return job, "scan_library_missing_or_inaccessible"
+            history, error = bookorbit.get_scan_history(destination)
+        except Exception:
+            logger.warning("📥 Acquisition: could not verify scan retry for job %s", job_id, exc_info=True)
+            return job, "scan_history_unavailable"
+        if history is None:
+            return job, error or "scan_history_unavailable"
+
+        history_entry = None
+        if job.get("scan_job_id"):
+            history_entry = next((entry for entry in history if (
+                isinstance(entry, dict) and str(entry.get("id")) == str(job["scan_job_id"])
+            )), None)
+            if history_entry is None:
+                return job, "scan_operation_not_in_history"
+            status = str(history_entry.get("status") or "").lower()
+            settled = ({"failed", "error", "cancelled"} if state == "failed"
+                       else {"completed", "complete", "success"})
+            if status not in settled:
+                return job, "scan_operation_not_settled"
+        if any(str(entry.get("status") or "").lower() in ("running", "queued")
+               for entry in history if isinstance(entry, dict)):
+            return job, "scan_already_running"
+
+        claim = self.database_service.claim_acquisition_scan_retry(
+            user_id, job_id, destination, scope,
+            expected_state=state,
+            expected_job_id=job.get("scan_job_id"),
+            expected_library_id=job.get("scan_library_id"),
+            expected_scan_scope=job.get("scan_scope"),
+        )
+        if claim.get("state") != "claimed":
+            return job, claim.get("state", "scan_not_retryable")
+        try:
+            result = bookorbit.start_library_scan_tracked(destination)
+        except Exception:
+            logger.warning("📥 Acquisition scan retry acknowledgement is uncertain for job %s", job_id, exc_info=True)
+            result = {"state": "uncertain", "reason": "scan_acknowledgement_missing", "job_id": None}
+        self.database_service.update_acquisition_scan(
+            user_id, job_id, result["state"],
+            provider_job_id=result.get("job_id"), reason=result.get("reason"),
+        )
+        updated = self.database_service.get_acquisition_job(user_id, job_id) or job
+        return updated, (None if result.get("state") == "accepted" else result.get("reason") or result.get("state"))
+
+    @staticmethod
+    def _candidate_reviewable(job: dict, candidate: dict) -> bool:
+        """Keep plausible same-title editions for reader review when proof is incomplete."""
+        norm = BookOrbitClient._normalize_string
+        if (not candidate.get("source") or not candidate.get("source_id")
+                or norm(str(candidate.get("title") or "")) != norm(str(job.get("title") or ""))):
+            return False
+        expected_authors, found_authors = _author_set(job.get("authors")), _author_set(candidate.get("authors"))
+        if expected_authors and found_authors and expected_authors != found_authors:
+            return False
+        expected_isbn = str(job.get("isbn13") or "").replace("-", "")
+        found_isbn = str(candidate.get("isbn13") or "").replace("-", "")
+        if expected_isbn and found_isbn and expected_isbn != found_isbn:
+            return False
+        return AcquisitionService._series_matches(job, candidate, explicit=True)
+
+    def _reconcile_jobs(self, user_id: int, clients: Any) -> None:
+        """Reconcile each saved half independent of receipt timing and page lifetime.
+
+        The authenticated per-reader catalog is queried again before pairing;
+        a saved arrival is never sufficient evidence if its library disappears.
+        """
+        getter = getattr(self.database_service, "get_unpaired_acquisition_jobs", None)
+        if getter is None:
+            return
+        for job in getter(user_id):
+            try:
+                self._reconcile_job(user_id, job, clients)
+            except Exception:
+                logger.warning("📥 Acquisition: user %s job %s could not reconcile", user_id, job["id"], exc_info=True)
+
+    def _reconcile_linked_receipts(self, user_id: int, job: dict, clients: Any) -> None:
+        """Retain late provider arrivals without inventing their library provenance.
+
+        A title/author/edition match against an existing library item proves
+        that item exists, not that the provider's newly completed download
+        produced that item. Keep the receipt unpaired until its actual library
+        identity is confirmed independently or the reader reviews it.
+        """
+        if not self.database_service.is_user_linked(user_id, job["linked_abs_id"]):
+            return
+        for kind in ("ebook", "audiobook"):
+            late = [r for r in job["requests"] if (
+                r["media_kind"] == kind and r["status"] == "arrived"
+                and r["remote_status"] in _ARRIVED_REMOTE
+                and not r.get("arrived_source_id")
+            )]
+            if not late:
+                continue
+            review_reason = "Late provider completion does not identify which library copy arrived"
+            prefix = "ebook" if kind == "ebook" else "audio"
+            if (job.get(f"{prefix}_library_state") == "needs_review"
+                    and job.get(f"{prefix}_library_reason") == review_reason):
+                # The same unattributed receipt remains pending reader review;
+                # don't rescan all catalogs on every background tick.
+                continue
+            candidates, _errors = search_reader_library(clients, kind, job["title"])
+            eligible = [
+                hit for hit in candidates
+                if self._candidate_matches(job, hit, explicit=True)
+            ]
+            self.database_service.set_acquisition_library_state(
+                user_id, job["id"], kind, "needs_review",
+                review_reason,
+                candidates=eligible,
+            )
+
+    def _reconcile_job(self, user_id: int, job: dict, clients: Any) -> None:
+        if job.get("linked_abs_id"):
+            # A finished mapping can still have an in-flight provider request.
+            self._reconcile_linked_receipts(user_id, job, clients)
+            self._reconcile_audio_scan(user_id, job, clients, already_indexed=True)
+            return
+        verified: dict[str, dict] = {}
+        for kind in ("ebook", "audiobook"):
+            prefix = "ebook" if kind == "ebook" else "audio"
+            known_source = job.get(f"{prefix}_source")
+            known_id = job.get(f"{prefix}_source_id")
+            receipts = [r for r in job["requests"] if r["media_kind"] == kind]
+            confirmed = [r for r in receipts if r["remote_status"] in _ARRIVED_REMOTE
+                         and r["status"] in ("arrived", "paired", "needs_look")]
+            # A reader-selected half needs revalidation just like a provider arrival.
+            candidates, errors = search_reader_library(clients, kind, job["title"])
+            eligible = []
+            for hit in candidates:
+                exact_saved = bool(known_source and known_id
+                                   and hit.get("source") == known_source
+                                   and hit.get("source_id") == str(known_id))
+                exact_receipt = any(
+                    receipt.get("arrived_source") == hit.get("source")
+                    and receipt.get("arrived_source_id") == hit.get("source_id")
+                    and (kind != "ebook" or receipt.get("arrived_filename") == hit.get("filename"))
+                    for receipt in confirmed
+                )
+                if self._candidate_matches(job, hit, explicit=exact_saved or exact_receipt):
+                    eligible.append(hit)
+            reviewable = [hit for hit in candidates if self._candidate_reviewable(job, hit)]
+            if known_source and known_id:
+                matching = [
+                    hit for hit in eligible
+                    if hit["source"] == known_source and hit["source_id"] == str(known_id)
+                    and (kind != "ebook" or hit.get("filename") == job.get("ebook_filename"))
+                ]
+                if len(matching) != 1:
+                    reviewable_saved = [hit for hit in reviewable if (
+                        hit.get("source") == known_source and hit.get("source_id") == str(known_id)
+                    )]
+                    if reviewable_saved:
+                        self.database_service.set_acquisition_library_state(
+                            user_id, job["id"], kind, "needs_review",
+                            "Saved edition is present but current metadata needs review",
+                            candidates=reviewable_saved,
+                        )
+                        continue
+                    state = "catalog_unavailable" if known_source in errors or clients is None else "waiting_import"
+                    self.database_service.set_acquisition_library_state(
+                        user_id, job["id"], kind, state, "Saved edition not currently verified in its library",
+                    )
+                    continue
+                selected = matching[0]
+            else:
+                if errors:
+                    if not eligible and reviewable:
+                        self.database_service.set_acquisition_library_state(
+                            user_id, job["id"], kind, "needs_review",
+                            "Matching library copy lacks enough current metadata for automatic confirmation",
+                            candidates=reviewable,
+                        )
+                        continue
+                    self.database_service.set_acquisition_library_state(
+                        user_id, job["id"], kind, "catalog_unavailable",
+                        "A configured library could not be checked; edition uniqueness is unverified",
+                    )
+                    continue
+                if len(eligible) != 1:
+                    needs_review = bool(eligible) or bool(reviewable)
+                    state = "needs_review" if needs_review else "waiting_import"
+                    reason = (
+                        f"{len(eligible)} matching editions; a reader must choose" if eligible
+                        else "Matching library copy lacks enough edition metadata for automatic confirmation"
+                        if reviewable else "Waiting for library import"
+                    )
+                    self.database_service.set_acquisition_library_state(
+                        user_id, job["id"], kind, state, reason,
+                        candidates=eligible or reviewable,
+                    )
+                    continue
+                selected = eligible[0]
+            identity = {
+                "source": selected["source"], "source_id": selected["source_id"],
+            }
+            if kind == "ebook":
+                identity["filename"] = selected["filename"]
+            # Receipt provenance survives. A request may still be in progress
+            # even when a library already contains the reader's requested copy.
+            # A provider's completion alone does not prove that its delivered
+            # file is this already-owned library copy. Only attach positive
+            # service+ID evidence recorded from the provider's direct handle.
+            receipt = next((r for r in confirmed if (
+                r["arrived_source_id"] == selected["source_id"]
+                and r["arrived_source"] == selected["source"]
+                and (kind != "ebook" or r["arrived_filename"] == selected["filename"])
+            )), None)
+            try:
+                self.database_service.confirm_acquisition_arrival(
+                    user_id, job["id"], kind, identity,
+                    receipt_id=receipt["id"] if receipt else None,
+                )
+            except ValueError:
+                self.database_service.set_acquisition_library_state(
+                    user_id, job["id"], kind, "needs_review",
+                    "The arrival conflicts with a previously selected edition",
+                    candidates=eligible,
+                )
+                continue
+            verified[kind] = selected
+
+        # Scans are for confirmed Shelfmark AUDIOBOOK deliveries only, never ebooks.
+        self._reconcile_audio_scan(user_id, job, clients, already_indexed="audiobook" in verified)
+        if "ebook" not in verified or "audiobook" not in verified:
+            return
+        audio = verified["audiobook"]
+        ebook = verified["ebook"]
+        client = getattr(clients, "bookorbit_client", None) if clients is not None else None
+        abs_id, reason = self._pair_books(
+            user_id,
+            (audio["source"], audio["source_id"]),
+            (ebook["source"], ebook["source_id"], ebook["filename"]),
+            job["title"], client,
+        )
+        if abs_id and not self.database_service.is_user_linked(user_id, abs_id):
+            # A successful mapping is not complete for this reader until linked.
+            self.database_service.link_user_book(user_id, abs_id)
+        self.database_service.set_acquisition_pairing_result(
+            user_id, job["id"], abs_id=abs_id,
+            reason=reason if not abs_id else None,
+        )
+
+    def _scan_target(self, user_id: int) -> str:
+        """A live per-reader setting; blank is never borrowed from an admin."""
+        return str(self.database_service.get_user_credential(
+            user_id, "SHELFMARK_AUDIOBOOK_LIBRARY_ID", "",
+        ) or "").strip()
+
+    def _reconcile_audio_scan(self, user_id: int, job: dict, clients: Any, *,
+                              already_indexed: bool) -> None:
+        """Track scans through job-history verification, not through POST acceptance."""
+        receipts = [r for r in job["requests"] if (
+            r["service"] == "Shelfmark" and r["media_kind"] == "audiobook"
+            and r["remote_status"] == "complete"
+        )]
+        if not receipts:
+            return
+        if job.get("audio_delivered_at") is None:
+            self.database_service.set_acquisition_delivery_seen(user_id, job["id"])
+            job = self.database_service.get_acquisition_job(user_id, job["id"])
+        state = job.get("scan_state")
+        if already_indexed and state not in ("claimed", "accepted", "coalesced", "waiting_scope", "uncertain"):
+            if state == "completed" and job.get("scan_reason") != "audiobook_indexed":
+                self.database_service.update_acquisition_scan(
+                    user_id, job["id"], "completed", reason="audiobook_indexed",
+                )
+            elif not state:
+                self.database_service.record_acquisition_scan_wait(
+                    user_id, job["id"], "scheduled", "audiobook_already_indexed",
+                )
+            return
+        destination = job.get("scan_library_id") if state in (
+            "claimed", "accepted", "coalesced", "waiting_scope", "uncertain",
+        ) else self._scan_target(user_id)
+        if not destination:
+            self.database_service.record_acquisition_scan_wait(
+                user_id, job["id"], "scheduled", "waiting_for_scheduled_scan",
+            )
+            return
+        if not destination.isdigit() or int(destination) <= 0:
+            self.database_service.record_acquisition_scan_wait(
+                user_id, job["id"], "invalid", "invalid_scan_library_id",
+            )
+            return
+        bookorbit = getattr(clients, "bookorbit_client", None) if clients is not None else None
+        if bookorbit is None or not bookorbit.is_configured():
+            if state in ("claimed", "accepted", "coalesced", "waiting_scope", "uncertain"):
+                self.database_service.update_acquisition_scan(
+                    user_id, job["id"], state, reason="reader_bookorbit_unavailable",
+                )
+            else:
+                self.database_service.record_acquisition_scan_wait(
+                    user_id, job["id"], "unavailable", "reader_bookorbit_unavailable",
+                )
+            return
+        scope_reader = getattr(bookorbit, "get_scan_scope", None)
+        scope_value = scope_reader() if callable(scope_reader) else ""
+        scan_scope = scope_value if isinstance(scope_value, str) and scope_value else None
+        if state in ("claimed", "accepted", "coalesced", "waiting_scope", "uncertain") and job.get("scan_scope"):
+            if scan_scope != job["scan_scope"]:
+                self.database_service.update_acquisition_scan(
+                    user_id, job["id"], state,
+                    reason="scan_server_scope_changed" if scan_scope else "scan_server_scope_unavailable",
+                )
+                return
+        history, error = bookorbit.get_scan_history(destination)
+        if history is None:
+            self.database_service.record_acquisition_scan_wait(
+                user_id, job["id"], "refused" if error in ("scan_forbidden", "library_unavailable") else "unavailable",
+                error or "scan_history_unavailable",
+            )
+            if state in ("accepted", "coalesced"):
+                self.database_service.update_acquisition_scan(
+                    user_id, job["id"], state, reason=error or "scan_tracking_unavailable",
+                )
+            return
+        if state in ("claimed", "accepted", "coalesced", "waiting_scope", "uncertain"):
+            job_id = str(job.get("scan_job_id") or "")
+            entry = next((r for r in history if str(r.get("id")) == job_id), None) if job_id else None
+            if state == "waiting_scope" and not job_id:
+                running = [r for r in history if r.get("status") in ("running", "queued")]
+                if len(running) == 1:
+                    self.database_service.update_acquisition_scan(
+                        user_id, job["id"], "coalesced", provider_job_id=str(running[0]["id"]),
+                        reason="sharing_existing_scan",
+                    )
+                return
+            if state in ("claimed", "uncertain") and not job_id:
+                # A crash or malformed POST answer may have started a scan.
+                # Never manufacture a job ID from an unrelated history entry.
+                return
+            if entry is None:
+                self.database_service.update_acquisition_scan(
+                    user_id, job["id"], state, reason="scan_job_not_in_recent_history",
+                )
+                return
+            status = str(entry.get("status") or "").lower()
+            if status in ("completed", "complete", "success"):
+                self.database_service.update_acquisition_scan(
+                    user_id, job["id"], "completed", reason="scan_finished_catalog_not_yet_indexed",
+                )
+            elif status in ("failed", "error", "cancelled"):
+                self.database_service.update_acquisition_scan(
+                    user_id, job["id"], "failed", reason="scan_failed_or_cancelled",
+                )
+            return
+        if state in ("failed", "uncertain", "conflict"):
+            # Ambiguous acknowledgement or provider operation: never auto retry.
+            return
+        if state in ("refused", "invalid") and job.get("scan_library_id") == destination:
+            # Same failed configuration needs a user action, not another POST.
+            return
+        if state == "completed" and (job.get("scan_attempts") or 0) >= 2:
+            return
+        libraries = bookorbit.get_libraries()
+        if not any(isinstance(entry, dict) and str(entry.get("id")) == destination for entry in libraries):
+            self.database_service.record_acquisition_scan_wait(
+                user_id, job["id"], "refused", "scan_library_missing_or_inaccessible",
+            )
+            return
+        running = [r for r in history if str(r.get("status") or "").lower() in ("running", "queued")]
+        if len(running) == 1:
+            claim = self.database_service.claim_acquisition_scan(
+                user_id, job["id"], destination, scan_scope=scan_scope,
+                coalesce_job_id=str(running[0]["id"]),
+            )
+            logger.info("📥 Acquisition scan %s coalesced as %s", job["id"], claim.get("state"))
+            return
+        claim = self.database_service.claim_acquisition_scan(
+            user_id, job["id"], destination, scan_scope=scan_scope,
+        )
+        if claim.get("state") != "claimed":
+            return
+        result = bookorbit.start_library_scan_tracked(destination)
+        if result["state"] == "conflict":
+            latest, history_error = bookorbit.get_scan_history(destination)
+            active = [r for r in (latest or []) if str(r.get("status") or "").lower() in ("running", "queued")]
+            if not history_error and len(active) == 1:
+                self.database_service.update_acquisition_scan(
+                    user_id, job["id"], "coalesced", provider_job_id=str(active[0]["id"]),
+                    reason="scan_started_by_another_operation",
+                )
+                return
+        self.database_service.update_acquisition_scan(
+            user_id, job["id"], result["state"],
+            provider_job_id=result.get("job_id"), reason=result.get("reason"),
+        )
 
     # ---- adoption ------------------------------------------------------------
 
@@ -361,7 +938,7 @@ class AcquisitionService:
         status = remote.get("status")
         if status:
             changes.update(self.remote_changes(row, remote))
-            if status == "available":
+            if status == "available" and not self._is_job_receipt(user_id, row):
                 changes.update(self._on_available(user_id, row, remote, client, resolved))
             if changes["status"] != row["status"]:
                 logger.info(
@@ -369,6 +946,62 @@ class AcquisitionService:
                     user_id, row["id"], row["status"], changes["status"], status,
                 )
         self._update(user_id, row, **changes)
+        if status == "available" and self._is_job_receipt(user_id, row):
+            self._record_bookorbit_job_arrival(user_id, row, remote, client)
+
+    def _record_bookorbit_job_arrival(
+        self, user_id: int, receipt: dict, remote: dict, client: Any,
+    ) -> None:
+        """Only an authoritative BookOrbit matchedBookId with fresh format and
+        edition evidence may become a provider-linked library identity.
+        """
+        matched = remote.get("matchedBookId")
+        if matched is None or isinstance(matched, bool):
+            return
+        job = self.database_service.get_acquisition_job(user_id, receipt["group_key"])
+        if job is None:
+            return
+        kind = receipt["media_kind"]
+        detail = client.get_book_detail(matched, force=True, fresh_only=True)
+        book_file = (BookOrbitClient._primary_file(detail, kind=kind)
+                     if isinstance(detail, dict) else None)
+        if not isinstance(book_file, dict) or not (
+            book_file.get("id") is not None or book_file.get("filename")
+        ):
+            return
+        if kind == "ebook" and not book_file.get("filename"):
+            return
+        from src.utils.series_metadata import extract_series_from_library_detail
+
+        series_name, series_index = extract_series_from_library_detail(detail)
+        identity = {"source": "BookOrbit", "source_id": str(matched)}
+        if kind == "ebook":
+            identity["filename"] = str(book_file["filename"])
+        candidate = {
+            **identity,
+            "title": detail.get("title") or "",
+            "authors": BookOrbitClient._format_authors(detail.get("authors")),
+            "series_name": series_name,
+            "series_index": series_index,
+            "isbn13": detail.get("isbn13") or detail.get("isbn"),
+        }
+        prefix = "ebook" if kind == "ebook" else "audio"
+        explicit = (job.get(f"{prefix}_source") == "BookOrbit"
+                    and str(job.get(f"{prefix}_source_id")) == str(matched))
+        if not self._candidate_matches(job, candidate, explicit=explicit):
+            return
+        if not self.database_service.record_acquisition_provider_arrival(
+            user_id, job["id"], receipt["id"], kind, identity,
+        ):
+            return
+        # A separately completed job can still receive its later provider
+        # provenance, but only when the provider proves it is the same edition.
+        if job.get("linked_abs_id") and explicit and (
+            kind != "ebook" or job.get("ebook_filename") == identity["filename"]
+        ) and self.database_service.is_user_linked(user_id, job["linked_abs_id"]):
+            self.database_service.set_acquisition_pairing_result(
+                user_id, job["id"], abs_id=job["linked_abs_id"],
+            )
 
     @staticmethod
     def bookorbit_decision(remote: dict) -> tuple[str, str]:
@@ -444,6 +1077,19 @@ class AcquisitionService:
             for row in rows:
                 self._update(user_id, row, last_checked_at=utcnow())
             return
+        missing = [row for row in rows if self._shelfmark_remote(row, activity) is None]
+        if missing and hasattr(shelfmark, "get_activity_history"):
+            history = []
+            for offset in (0, 50, 100, 150):
+                page, error = shelfmark.get_activity_history(limit=50, offset=offset)
+                if page is None:
+                    logger.debug("📥 Acquisition: Shelfmark history unavailable (%s)", error)
+                    break
+                history.extend(page)
+                if len(page) < 50:
+                    break
+            if history:
+                activity = {**activity, "_dismissed_history": history}
         for row in rows:
             try:
                 if not self._gave_up(user_id, row):
@@ -464,11 +1110,24 @@ class AcquisitionService:
         remote_id = row["remote_id"]
         if row["remote_kind"] != "request":
             for state, key, payload in tasks:
-                if key == remote_id or str(payload.get("id")) == remote_id:
+                if str(key) == remote_id or str(payload.get("id")) == remote_id:
                     return state, payload, {}
+            for entry in activity.get("_dismissed_history") or []:
+                if not isinstance(entry, dict) or entry.get("item_type") != "download":
+                    continue
+                if remote_id in (str(entry.get("source_id")), str(entry.get("item_key", "")).partition(":")[2]):
+                    state = str(entry.get("final_status") or "").lower()
+                    payload = (entry.get("snapshot") or {}).get("download") or {}
+                    if state in _SHELFMARK_TASK_PRECEDENCE and isinstance(payload, dict):
+                        return state, payload, {}
             return None
-        request = next((r for r in activity.get("requests") or [] if str(r.get("id")) == remote_id), None)
+        request = next((r for r in activity.get("requests") or [] if isinstance(r, dict) and str(r.get("id")) == remote_id), None)
         if request is None:
+            for entry in activity.get("_dismissed_history") or []:
+                if isinstance(entry, dict) and entry.get("item_type") == "request" and str(entry.get("request_id")) == remote_id:
+                    request = (entry.get("snapshot") or {}).get("request")
+                    break
+        if not isinstance(request, dict):
             return None
         if request.get("status") != "fulfilled":
             return str(request.get("status")), {}, request
@@ -492,7 +1151,15 @@ class AcquisitionService:
             mark = str(progress) if status == "downloading" and isinstance(progress, (int, float)) and not isinstance(progress, bool) else None
             changes.update(status=mapped, remote_status=status, status_detail=detail, **self._progress_changes(row, mark))
             if status == "complete":
-                changes.update(self._on_downloaded(user_id, row, task, bookorbit))
+                if self._is_job_receipt(user_id, row):
+                    filename = PurePath(str(task.get("download_path") or "")).name
+                    if filename:
+                        changes["arrived_filename"] = filename
+                    changes["status_detail"] = _DOWNLOADED
+                    if row["media_kind"] == "audiobook":
+                        self.database_service.set_acquisition_delivery_seen(user_id, row["group_key"])
+                else:
+                    changes.update(self._on_downloaded(user_id, row, task, bookorbit))
             if changes["status"] != row["status"]:
                 logger.info(
                     "📥 Acquisition: user %s request %s moved %s -> %s (Shelfmark status %s)",
@@ -715,8 +1382,10 @@ class AcquisitionService:
         return book or (self.database_service.get_book(source_id) if source == "ABS" else None)
 
     def _ebook_book(self, source: Optional[str], source_id: Optional[str], filename: Optional[str]):
-        book = self.database_service.get_book_by_ebook_source(source, source_id) if source and source_id else None
-        return book or (self.database_service.get_book_by_ebook_filename(filename) if filename else None)
+        if source and source_id:
+            # Never resolve a different service/ID merely because its filename matches.
+            return self.database_service.get_book_by_ebook_source(source, source_id)
+        return self.database_service.get_book_by_ebook_filename(filename) if filename else None
 
     def _partner_book(self, row: dict):
         """The mapping the reader's existing book (the row's partner) already belongs to, if any."""
@@ -782,12 +1451,19 @@ class AcquisitionService:
         audio_book = self._audio_book(audio_source, audio_id)
         ebook_book = self._ebook_book(ebook_source, ebook_id, ebook_filename)
         if audio_book and ebook_book and audio_book.abs_id == ebook_book.abs_id:
+            if (audio_book.audio_source != audio_source or str(audio_book.audio_source_id) != str(audio_id)
+                    or ebook_book.ebook_source != ebook_source
+                    or str(ebook_book.ebook_source_id) != str(ebook_id)
+                    or ebook_book.ebook_filename != ebook_filename):
+                return None, "The existing mapping has a conflicting library identity."
+            if not self.database_service.is_user_linked(user_id, audio_book.abs_id):
+                self.database_service.link_user_book(user_id, audio_book.abs_id)
             return audio_book.abs_id, ""
         if audio_book and audio_book.ebook_filename:
             return None, _AUDIO_PAIRED
         if ebook_book and ebook_book.audio_source_id:
             return None, "That ebook is already paired with another audiobook."
-        info = client.get_audiobook_info(audio_id) if audio_source == "BookOrbit" else None
+        info = client.get_audiobook_info(audio_id) if audio_source == "BookOrbit" and client is not None else None
         saved = self.book_mapping_service.create_audio_mapping_from_match(
             audio_source=audio_source, audio_source_id=str(audio_id), audio_title=title,
             audio_duration=(info or {}).get("duration_seconds"),

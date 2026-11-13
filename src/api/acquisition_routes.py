@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from typing import Any, Optional
 
@@ -46,6 +47,9 @@ def init_acquisition_routes(app: Any, web_module: Any = None) -> None:
         ("/api/acquisition/mine", "acquisition_mine", acquisition_mine, ["GET"]),
         ("/api/acquisition/jobs", "acquisition_jobs", acquisition_jobs, ["GET"]),
         ("/api/acquisition/jobs/<string:job_id>", "acquisition_job", acquisition_job, ["GET"]),
+        ("/api/acquisition/jobs/<string:job_id>/dismiss", "acquisition_job_dismiss", acquisition_job_dismiss, ["POST"]),
+        ("/api/acquisition/jobs/<string:job_id>/<string:media_kind>/review", "acquisition_job_review", acquisition_job_review, ["POST"]),
+        ("/api/acquisition/jobs/<string:job_id>/scan/retry", "acquisition_job_scan_retry", acquisition_job_scan_retry, ["POST"]),
         ("/api/acquisition/<int:request_id>/releases", "acquisition_releases", acquisition_releases, ["GET"]),
         ("/api/acquisition/<int:request_id>/grab", "acquisition_grab", acquisition_grab, ["POST"]),
         ("/api/acquisition/<int:request_id>/cancel", "acquisition_cancel", acquisition_cancel, ["POST"]),
@@ -125,7 +129,7 @@ def acquisition_options():
 
 def _shelfmark_service(web) -> dict:
     """Whether Shelfmark is usable for this reader and in which mode per format (one policy call)."""
-    service = {"usable": False, "reason": None, "formats": {}}
+    service = {"usable": False, "reason": None, "formats": {}, "find_formats": []}
     client = _shelfmark_client(web)
     if not _is_allowed(web):
         service["reason"] = "toggle_off"
@@ -140,7 +144,10 @@ def _shelfmark_service(web) -> dict:
         elif not formats:
             service["reason"] = "policy_blocked"
         else:
-            service.update(usable=True, formats=formats)
+            find_formats = [kind for kind in _MEDIA_KINDS
+                            if kind in formats and hasattr(client, "can_find_releases")
+                            and client.can_find_releases(kind)]
+            service.update(usable=True, formats=formats, find_formats=find_formats)
     return service
 
 
@@ -168,9 +175,15 @@ def _parse_create_body(payload: dict) -> tuple[Optional[dict], Optional[str]]:
     if series_index in (None, ""):
         series_index = None
     else:
+        if isinstance(series_index, bool):
+            return None, "invalid_series_index"
+        if isinstance(series_index, float) and (
+            not math.isfinite(series_index) or not series_index.is_integer()
+        ):
+            return None, "invalid_series_index"
         try:
             series_index = int(series_index)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None, "invalid_series_index"
     partner = payload.get("partner")
     partner = partner if isinstance(partner, dict) else {}
@@ -635,11 +648,33 @@ def acquisition_mine():
     if not _is_allowed(web):
         return _api_error("not_allowed", 403)
     shelfmark = _shelfmark_client(web)
+    try:
+        library_clients = web._scan_user_clients()
+    except PermissionError:
+        library_clients = None
     rows = web.container.acquisition_service().refresh_user(
         user_id, _bookorbit_client(web), shelfmark if shelfmark is not None and shelfmark.is_configured() else None,
+        library_clients=library_clients,
     )
-    return jsonify({"requests": [_public(row) for row in rows],
-                    "jobs": [_job_public(job) for job in web.database_service.get_acquisition_jobs(user_id)]})
+    jobs = web.database_service.get_acquisition_jobs(user_id)
+    tracked = {job["id"]: job for job in jobs}
+    for job_id in dict.fromkeys(row.get("group_key") for row in rows if row.get("group_key")):
+        if job_id not in tracked:
+            job = web.database_service.get_acquisition_job(user_id, str(job_id))
+            if job is not None:
+                tracked[str(job_id)] = job
+    public_rows = []
+    for row in rows:
+        public = _public(row)
+        parent_id = str(row.get("group_key") or "")
+        if parent_id in tracked:
+            public["parent_job_id"] = parent_id
+        public_rows.append(public)
+    return jsonify({
+        "requests": public_rows,
+        "jobs": [_job_public(job) for job in jobs],
+        "tracked_jobs": [_job_public(job) for job in tracked.values()],
+    })
 
 
 def acquisition_jobs():
@@ -859,3 +894,86 @@ def acquisition_dismiss(request_id: int):
         return error
     web.database_service.update_acquisition_request(user_id, request_id, dismissed=True)
     return jsonify({"ok": True})
+
+
+def _owned_job(web: Any, user_id: int, job_id: str) -> tuple[Optional[dict], Optional[Any]]:
+    """Return a reader-owned saved job, including dismissed history, or a 404 response."""
+    job = web.database_service.get_acquisition_job(user_id, job_id)
+    return (job, None) if job else (None, _api_error("not_found", 404))
+
+
+def acquisition_job_dismiss(job_id: str) -> Any:
+    """Hide one owned acquisition job without cancelling or deleting its receipts."""
+    web = _web_server()
+    user_id = web.get_current_user_id()
+    if user_id is None:
+        return _api_error("authentication_required", 401)
+    if not _is_allowed(web):
+        return _api_error("not_allowed", 403)
+    job, error = _owned_job(web, user_id, job_id)
+    if error:
+        return error
+    if job["dismissed"]:
+        return jsonify({"ok": True, "job": _job_public(job)})
+    if not web.database_service.dismiss_acquisition_job(user_id, job_id):
+        return _api_error("not_found", 404)
+    return jsonify({"ok": True, "job": _job_public(web.database_service.get_acquisition_job(user_id, job_id))})
+
+
+def acquisition_job_review(job_id: str, media_kind: str) -> Any:
+    """Confirm one offered library candidate only after a fresh reader-scoped lookup."""
+    web = _web_server()
+    user_id = web.get_current_user_id()
+    if user_id is None:
+        return _api_error("authentication_required", 401)
+    if not _is_allowed(web):
+        return _api_error("not_allowed", 403)
+    if media_kind not in _MEDIA_KINDS:
+        return _api_error("invalid_format", 400)
+    _, error = _owned_job(web, user_id, job_id)
+    if error:
+        return error
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _api_error("invalid_json", 400)
+    selection = {
+        "source": payload.get("source"),
+        "source_id": payload.get("source_id"),
+    }
+    if media_kind == "ebook":
+        selection["filename"] = payload.get("filename")
+    try:
+        clients = web._scan_user_clients()
+    except PermissionError:
+        return _api_error("reader_library_unavailable", 409)
+    saved, failure = web.container.acquisition_service().choose_review_candidate(
+        user_id, job_id, media_kind, selection, clients,
+    )
+    if failure:
+        code = 503 if failure == "catalog_unavailable" else 409
+        return _api_error(failure, code)
+    return jsonify({"job": _job_public(saved)})
+
+
+def acquisition_job_scan_retry(job_id: str) -> Any:
+    """Retry a settled Shelfmark audio scan only after live operation verification."""
+    web = _web_server()
+    user_id = web.get_current_user_id()
+    if user_id is None:
+        return _api_error("authentication_required", 401)
+    if not _is_allowed(web):
+        return _api_error("not_allowed", 403)
+    _, error = _owned_job(web, user_id, job_id)
+    if error:
+        return error
+    try:
+        clients = web._scan_user_clients()
+    except PermissionError:
+        return _api_error("reader_library_unavailable", 409)
+    job, failure = web.container.acquisition_service().retry_acquisition_scan(
+        user_id, job_id, clients,
+    )
+    if failure:
+        status = 502 if failure in ("scan_history_unavailable", "unreachable", "invalid_scan_history") else 409
+        return jsonify({"error": failure, "job": _job_public(job) if job else None}), status
+    return jsonify({"job": _job_public(job)})

@@ -3,7 +3,7 @@
 {% set active_page = 'suggestions' %}
 {% set tabs_shown = available_tabs|default(['pairs', 'ebook_only', 'search']) %}
 {% block title %}{{ _('Discover') }} · BookBridge{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/css/next-discover.css">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/next-discover.css"><link rel="stylesheet" href="/static/css/acquisition-intake.css">{% endblock %}
 {% block content %}
 
 <div class="suggestions-wrap discover-page">
@@ -119,12 +119,7 @@
         <button type="submit" class="btn btn-primary" id="searchTabBtn">{{ _('Search') }}</button>
     </form>
 
-    <div data-only-tab="search">
-        <section class="acq-strip" id="acqStrip" aria-labelledby="acqStripTitle" hidden>
-            <h3 id="acqStripTitle">{{ _('My requests') }}</h3>
-            <div class="acq-list" id="acqList" role="list"></div>
-        </section>
-    </div>
+    {% include "_acquisition_intake.html" %}
 
     <div class="layout" id="layout">
         <div class="panel" id="suggestionsPanel" role="tabpanel">
@@ -250,33 +245,6 @@
 </div>
 {% endif %}
 
-
-<div class="modal-overlay" id="acqModal" aria-hidden="true">
-    <div class="modal modal-card" role="dialog" aria-modal="true" aria-labelledby="acqModalTitle">
-        <h3 id="acqModalTitle">{{ _('Get a book') }}</h3>
-        <form id="acqForm">
-            <label class="field-label" for="acqTitle">{{ _('Title') }}</label>
-            <input type="text" class="form-input" id="acqTitle" maxlength="500" required>
-            <label class="field-label" for="acqAuthor">{{ _('Author') }}</label>
-            <input type="text" class="form-input" id="acqAuthor" maxlength="500">
-            <fieldset class="acq-formats">
-                <legend class="field-label">{{ _('Format') }}</legend>
-                <label><input type="radio" name="acqFormat" value="ebook" checked> {{ _('Ebook') }}</label>
-                <label><input type="radio" name="acqFormat" value="audiobook"> {{ _('Audiobook') }}</label>
-                <label id="acqBothLabel"><input type="radio" name="acqFormat" value="both"> {{ _('Both') }}</label>
-            </fieldset>
-            <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" id="acqCancelBtn">{{ _('Close') }}</button>
-                <a class="btn btn-secondary" id="acqShelfmarkLink" href="/shelfmark" hidden>{{ _('Open Shelfmark') }}</a>
-                <button type="button" class="btn btn-primary" id="acqShelfmarkBtn" hidden>{{ _('Find in Shelfmark') }}</button>
-                <button type="submit" class="btn btn-primary" id="acqSubmitBtn" hidden>{{ _('Request from BookOrbit') }}</button>
-            </div>
-            <div class="tabs acq-release-tabs" id="acqReleaseTabs" role="tablist" aria-label="{{ _('Release sources') }}" hidden></div>
-            <div class="acq-releases" id="acqReleases" role="list" aria-label="{{ _('Search results') }}" hidden></div>
-            <div class="acq-result" id="acqResult" role="status" aria-live="polite"></div>
-        </form>
-    </div>
-</div>
 
 {% endblock %}
 {% block scripts %}{% include 'next/_acquisition_scripts.html' %}{% include 'next/_discover_scripts.html' %}{% endblock %}

@@ -18,7 +18,7 @@ from src.db.models import AcquisitionJob, AcquisitionRequest
 
 pytestmark = pytest.mark.real_database_migrations
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "h16d20261112"
+HEAD = "d585c20261112"
 PREVIOUS = "e3b7c1a9d2f4"
 
 
@@ -110,6 +110,44 @@ class TestAcquisitionJobsMigration(unittest.TestCase):
             with Operations.context(MigrationContext.configure(conn)):
                 migration.downgrade()
         self.assertNotIn("decision_action", {c["name"] for c in sa.inspect(self.engine).get_columns("acquisition_requests")})
+        self.assertEqual(self.history(), before)
+
+    def test_phase_d_columns_upgrade_twice_and_downgrade_without_history_loss(self):
+        self.seed_previous()
+        before = self.history()
+        command.upgrade(self.cfg, "c585c20261112")
+        with self.engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO acquisition_jobs (id, user_id, title, requested_audiobook, "
+                "audio_submission_state) VALUES (:id, 1, 'Saved intent', 1, 'uncertain')"
+            ), {"id": "a" * 32})
+        path = ROOT / "alembic" / "versions" / "d585c20261112_acquisition_library_scan_state.py"
+        spec = importlib.util.spec_from_file_location("acquisition_phase_d_migration", path)
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        for _ in range(2):
+            with self.engine.begin() as conn:
+                with Operations.context(MigrationContext.configure(conn)):
+                    migration.upgrade()
+        self.assertEqual(
+            {c["name"] for c in sa.inspect(self.engine).get_columns("acquisition_jobs")},
+            set(AcquisitionJob.__table__.columns.keys()),
+        )
+        with self.engine.begin() as conn:
+            conn.execute(sa.text(
+                "UPDATE acquisition_jobs SET scan_state='accepted', scan_library_id='7', "
+                "scan_job_id='42', scan_attempts=1 WHERE id=:id"
+            ), {"id": "a" * 32})
+        self.assertEqual(self.history(), before)
+        with self.engine.begin() as conn:
+            with Operations.context(MigrationContext.configure(conn)):
+                migration.downgrade()
+        cols = {c["name"] for c in sa.inspect(self.engine).get_columns("acquisition_jobs")}
+        self.assertNotIn("scan_job_id", cols)
+        with self.engine.connect() as conn:
+            self.assertEqual(conn.execute(sa.text(
+                "SELECT audio_submission_state FROM acquisition_jobs WHERE id=:id"
+            ), {"id": "a" * 32}).scalar(), "uncertain")
         self.assertEqual(self.history(), before)
 
     def test_downgrade_removes_only_the_new_table(self):

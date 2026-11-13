@@ -770,7 +770,7 @@ class TestSettingAndMigration(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         cfg = Config(str(root / "alembic.ini"))
         cfg.set_main_option("script_location", str(root / "alembic"))
-        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["h16d20261112"])
+        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["d585c20261112"])
 
 
 if __name__ == "__main__":

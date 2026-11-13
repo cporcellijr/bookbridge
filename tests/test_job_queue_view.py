@@ -166,6 +166,128 @@ class JobQueueRouteTests(unittest.TestCase):
         self.assertNotIn("Private Bob", html)
         self.assertNotIn("Bob Staged", html)
 
+    def test_acquisition_jobs_are_owned_focused_and_separate_from_alignment_queues(self):
+        paired = self.db.create_acquisition_job(
+            self.alice.id, "Paired Acquisition", ["ebook", "audiobook"],
+            ebook={"source": "BookOrbit", "source_id": "ebook-42", "filename": "Title.epub"},
+            audiobook={"source": "ABS", "source_id": "audio-42"},
+        )
+        self.db.set_acquisition_library_state(self.alice.id, paired["id"], "ebook", "indexed")
+        self.db.set_acquisition_library_state(self.alice.id, paired["id"], "audiobook", "indexed")
+        self.db.save_book(Book(
+            abs_id="paired-bridge-book", abs_title="Paired Acquisition",
+            status="active", user_id=self.alice.id,
+        ))
+        self.db.link_user_book(self.alice.id, "paired-bridge-book")
+        self.assertTrue(self.db.set_acquisition_pairing_result(
+            self.alice.id, paired["id"], abs_id="paired-bridge-book",
+        ))
+
+        review = self.db.create_acquisition_job(
+            self.alice.id, "Review Acquisition", ["audiobook"], authors="Requested Writer",
+            isbn13="9780000000000", series_name="Requested Series", series_index=1,
+        )
+        self.db.set_acquisition_library_state(
+            self.alice.id, review["id"], "audiobook", "needs_review",
+            "RAW_INTERNAL_REASON_SENTINEL",
+            candidates=[{
+                "source": "BookLore", "source_id": "grimmory-copy", "title": "Review Acquisition",
+            }],
+        )
+        self.db.record_acquisition_scan_wait(
+            self.alice.id, review["id"], "refused", "RAW_SCAN_REASON_SENTINEL",
+        )
+        self.db.add_acquisition_request_to_job(self.alice.id, review["id"], {
+            "service": "BookOrbit", "media_kind": "audiobook", "remote_kind": "request",
+            "remote_id": "request-review-1", "status": "waiting", "remote_status": "searching",
+            "decision_action": "pick_release",
+        })
+        retryable = self.db.create_acquisition_job(self.alice.id, "One failed half", ["ebook", "audiobook"])
+        self.db.set_acquisition_submission_state(self.alice.id, retryable["id"], "ebook", "accepted")
+        self.db.set_acquisition_submission_state(self.alice.id, retryable["id"], "audiobook", "accepted")
+        self.db.add_acquisition_request_to_job(self.alice.id, retryable["id"], {
+            "service": "BookOrbit", "media_kind": "ebook", "remote_kind": "request",
+            "remote_id": "request-open-ebook", "status": "in_progress", "remote_status": "downloading",
+        })
+        self.db.add_acquisition_request_to_job(self.alice.id, retryable["id"], {
+            "service": "BookOrbit", "media_kind": "audiobook", "remote_kind": "request",
+            "remote_id": "request-failed-audio", "status": "failed", "remote_status": "failed",
+        })
+        failed_receipt = next(
+            row for row in self.db.get_acquisition_job(self.alice.id, retryable["id"])["requests"]
+            if row["remote_id"] == "request-failed-audio"
+        )
+        self.db.update_acquisition_request(self.alice.id, failed_receipt["id"], dismissed=True)
+        retained_failed_half = self.db.get_acquisition_job(self.alice.id, retryable["id"])
+        self.assertTrue(next(row for row in retained_failed_half["requests"]
+                             if row["id"] == failed_receipt["id"])["dismissed"])
+        self.db.create_acquisition_job(self.bob.id, "Private Acquisition", ["ebook"])
+        self.db.set_user_credential(self.alice.id, "UI_MODE", "classic")
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+
+        for mode in ("classic", "new"):
+            with self.subTest(mode=mode):
+                self.db.set_user_credential(self.alice.id, "UI_MODE", mode)
+                page = self.client.get(f"/job-queue?acquisition_job={review['id']}")
+                self.assertEqual(page.status_code, 200)
+                markup = page.get_data(as_text=True)
+                self.assertIn('id="acquisition-jobs"', markup)
+                self.assertIn(f'id="acquisition-job-{review["id"]}"', markup)
+                self.assertIn('data-requested-focus="true"', markup)
+                self.assertIn("Paired Acquisition", markup)
+                self.assertIn("Ready for normal Bridge syncing", markup)
+                self.assertIn("BookOrbit · Paired Acquisition · Title.epub", markup)
+                self.assertIn('data-remembered-source-id="ebook-42"', markup)
+                self.assertIn("Grimmory · Review Acquisition · Some edition details were not available", markup)
+                self.assertIn('data-source-id="grimmory-copy"', markup)
+                self.assertNotIn("Requested Writer", markup)
+                self.assertNotIn("9780000000000", markup)
+                self.assertNotIn("Requested Series", markup)
+                from html.parser import HTMLParser
+                class ProviderControlsParser(HTMLParser):
+                    def __init__(self):
+                        super().__init__()
+                        self.controls = []
+
+                    def handle_starttag(self, tag, attrs):
+                        values = dict(attrs)
+                        if "data-provider-controls" in values:
+                            self.controls.append(values)
+
+                provider_parser = ProviderControlsParser()
+                provider_parser.feed(markup)
+                self.assertIn({
+                    "data-provider-controls": None, "data-job-id": retryable["id"],
+                    "data-media-kind": "audiobook",
+                }, [{key: value for key, value in item.items() if key in (
+                    "data-provider-controls", "data-job-id", "data-media-kind",
+                )} for item in provider_parser.controls])
+                self.assertNotIn({
+                    "data-provider-controls": None, "data-job-id": retryable["id"],
+                    "data-media-kind": "ebook",
+                }, [{key: value for key, value in item.items() if key in (
+                    "data-provider-controls", "data-job-id", "data-media-kind",
+                )} for item in provider_parser.controls])
+                self.assertNotIn("request-failed-audio", markup)
+                self.assertIn("A hidden provider request may still continue", markup)
+                self.assertIn('data-provider-action="bookorbit-submit"', markup)
+                self.assertIn('data-provider-action="shelfmark-open"', markup)
+                self.assertIn('data-provider-action="bookorbit-picker"', markup)
+                self.assertIn('data-provider-action="cancel-receipt"', markup)
+                self.assertIn('data-provider-action="dismiss-receipt"', markup)
+                self.assertIn('data-provider-help', markup)
+                self.assertIn('data-provider-settings', markup)
+                self.assertIn("Dismiss only hides this job; provider requests continue.", markup)
+                self.assertNotIn("Private Acquisition", markup)
+                self.assertNotIn("RAW_INTERNAL_REASON_SENTINEL", markup)
+                self.assertNotIn("RAW_SCAN_REASON_SENTINEL", markup)
+                self.assertIn("acquisition_jobs.js", markup)
+
+        fragment = self.client.get(f"/job-queue?acquisition_fragment=1&acquisition_job={review['id']}")
+        self.assertEqual(fragment.status_code, 200)
+        self.assertIn('id="acquisition-jobs"', fragment.get_data(as_text=True))
+        self.assertNotIn("job-queue-page", fragment.get_data(as_text=True))
+
     def test_preflight_ui_is_scoped_and_ack_is_only_for_current_pair(self):
         from src.services.transcription_preflight import (
             evidence_identity, pair_key, evaluate_preflight,
@@ -354,6 +476,10 @@ class JobQueueRouteTests(unittest.TestCase):
         self.assertIn("20000", page)
         self.assertIn("document.hidden", page)
         self.assertIn("reorderSubmitting", page)
+        self.assertIn("active.tagName", page)
+        self.assertIn("window.acquisitionJobActionActive", page)
+        self.assertIn("window.acquisitionJobEditorActive", page)
+        self.assertIn("data-acquisition-editor", page)
         self.assertIn("window.location.reload()", page)
 
     def test_waiting_only_job_queue_page_has_no_auto_refresh(self):
@@ -370,6 +496,16 @@ class JobQueueRouteTests(unittest.TestCase):
         self.assertNotIn("Updates every 20 seconds while books are processing.", page)
         self.assertNotIn("window.setInterval", page)
         self.assertNotIn("window.location.reload()", page)
+
+    def test_acquisition_client_refreshes_status_before_preserving_or_replacing_choices(self):
+        script = (Path(__file__).parents[1] / "static/js/acquisition_jobs.js").read_text(encoding="utf-8")
+        self.assertLess(script.index("'/api/acquisition/mine'"), script.index("root.dataset.fragmentUrl"))
+        self.assertIn("activeEditor() && !force", script)
+        self.assertIn("focusedInsidePanel() && !closedStalePicker", script)
+        self.assertIn("fresh.decision_action !== 'pick_release'", script)
+        self.assertIn("/api/acquisition/shelfmark/releases?", script)
+        self.assertIn("/api/acquisition/${encodeURIComponent(button.dataset.receiptId)}/grab", script)
+        self.assertIn("window.acquisitionJobEditorActive", script)
 
     def test_in_process_batch_is_visible_and_cleaned_up(self):
         import src.web_server as ws

@@ -362,6 +362,50 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_USER'), 'alice-ko')
         self.mock_container.mock_user_client_registry.invalidate.assert_called_with(alice.id)
 
+    def test_shelfmark_audio_destination_is_reader_scoped_and_blank_clears(self):
+        alice = self.svc.create_user("alice-scan", "pw", role="user")
+        bob = self.svc.create_user("bob-scan", "pw", role="user")
+        self.client.post('/login', data={'username': 'alice-scan', 'password': 'pw'})
+        with patch('src.web_server._reader_scan_libraries',
+                   return_value=([{'id': '7', 'name': 'Audiobooks'}], None)) as lookup:
+            response = self.client.post('/account/integrations', data={
+                'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7',
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.svc.get_user_credential(alice.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID'), '7')
+        self.assertNotEqual(self.svc.get_user_credential(bob.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID'), '7')
+        self.assertEqual(lookup.call_count, 1)
+        response = self.client.post('/account/integrations', data={'SHELFMARK_AUDIOBOOK_LIBRARY_ID': ''})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.svc.get_user_credential(alice.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID'), '')
+
+    def test_shelfmark_scan_target_refuses_invalid_or_inaccessible_library(self):
+        alice = self.svc.create_user("alice-scan-deny", "pw", role="user")
+        self.client.post('/login', data={'username': 'alice-scan-deny', 'password': 'pw'})
+        bad = self.client.post('/account/integrations', data={
+            'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '../7',
+        })
+        self.assertEqual(bad.status_code, 400)
+        with patch('src.web_server._reader_scan_libraries',
+                   return_value=([], 'This BookOrbit account needs Manage libraries.')):
+            denied = self.client.post('/account/integrations', data={
+                'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7',
+            })
+        self.assertEqual(denied.status_code, 400)
+        self.assertIsNone(self.svc.get_user_credential(alice.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID'))
+
+    def test_shelfmark_scan_picker_reads_only_own_libraries(self):
+        alice = self.svc.create_user("alice-scan-picker", "pw", role="user")
+        self.client.post('/login', data={'username': 'alice-scan-picker', 'password': 'pw'})
+        with patch('src.web_server._reader_scan_libraries',
+                   return_value=([{'id': '7', 'name': 'Audiobooks'}], None)) as lookup:
+            response = self.client.post('/api/account/bookorbit-scan-libraries', json={
+                'BOOKORBIT_API_KEY': 'test-only', 'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7',
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), [{'id': '7', 'name': 'Audiobooks'}])
+        self.assertEqual(lookup.call_args.args[0].id, alice.id)
+
     def test_regular_user_links_bookfusion_book_to_own_mapping(self):
         alice = self.svc.create_user("alice-bf", "pw", role="user")
         bob = self.svc.create_user("bob-bf", "pw", role="user")

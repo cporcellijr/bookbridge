@@ -80,7 +80,7 @@ def _series_label(series_name: str | None, series_index: str | int | float | Non
 class AudioSourceAdapter:
     source_name = ""
 
-    def search(self, query: str) -> list[AudioResult]:
+    def search(self, query: str, *, strict: bool = False) -> list[AudioResult]:
         raise NotImplementedError
 
     def get_metadata(self, source_id: str) -> Optional[dict]:
@@ -207,14 +207,15 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
                 return text
         return ""
 
-    def search(self, query: str) -> list[AudioResult]:
+    def search(self, query: str, *, strict: bool = False) -> list[AudioResult]:
         library_scope = self._parse_library_scope()
         query_mode = bool(query)
-        pool = (
-            self._get_search_pool()
-            if self.catalog_items is not None or not query_mode
-            else self.abs_client.search_audiobooks(query, library_id=library_scope)
-        )
+        if self.catalog_items is not None or not query_mode:
+            pool = self._get_search_pool()
+        elif strict:
+            pool = self.abs_client.search_audiobooks(query, library_id=library_scope, strict=True)
+        else:
+            pool = self.abs_client.search_audiobooks(query, library_id=library_scope)
         results: list[AudioResult] = []
         self.catalog_incomplete = False
         for item in pool:
@@ -423,10 +424,15 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                 return text
         return ""
 
-    def search(self, query: str) -> list[AudioResult]:
+    def search(self, query: str, *, strict: bool = False) -> list[AudioResult]:
         results: list[AudioResult] = []
         include_info = bool(query and query.strip())
-        books = self.catalog_items if self.catalog_items is not None else self.booklore_client.search_audiobooks(query, include_info=include_info)
+        if self.catalog_items is not None:
+            books = self.catalog_items
+        elif strict:
+            books = self.booklore_client.search_audiobooks(query, include_info=include_info, strict=True)
+        else:
+            books = self.booklore_client.search_audiobooks(query, include_info=include_info)
         for book in books:
             if self.catalog_items is not None:
                 if not self.booklore_client._book_supports_audiobook(book):
@@ -816,9 +822,11 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
         self.bookorbit_client = bookorbit_client
         self.data_dir = Path(data_dir)
 
-    def search(self, query: str) -> list[AudioResult]:
+    def search(self, query: str, *, strict: bool = False) -> list[AudioResult]:
         results: list[AudioResult] = []
-        for book in self.bookorbit_client.search_audiobooks(query):
+        books = (self.bookorbit_client.search_audiobooks(query, strict=True) if strict
+                 else self.bookorbit_client.search_audiobooks(query))
+        for book in books:
             book_id = book.get("id")
             if book_id is None:
                 continue

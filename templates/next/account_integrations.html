@@ -222,6 +222,16 @@
                             <option value="{{ opt_value }}" {% if selected_value == opt_value %}selected{% endif %}>{{ _(opt_label) }}</option>
                         {% endfor %}
                     </select>
+                    {% elif key == 'SHELFMARK_AUDIOBOOK_LIBRARY_ID' %}
+                    <label for="{{ key }}">{{ _(label) }}</label>
+                    <select id="{{ key }}" name="{{ key }}" data-scan-library-picker>
+                        <option value="">{{ _('Normal scheduled scanning') }}</option>
+                        {% if creds.get(key) %}
+                        <option value="{{ creds.get(key) }}" selected>{{ _('Saved library ID: %(id)s', id=creds.get(key)) }}</option>
+                        {% endif %}
+                    </select>
+                    <button type="button" class="test-btn" onclick="loadScanLibraries(this)">{{ _('Find accessible BookOrbit libraries') }}</button>
+                    <div class="help-text">{{ _('Select the BookOrbit library that already receives Shelfmark audiobooks. Bridge will scan it after delivery completes.') }}</div>
                     {% elif key in ['ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'] %}
                     <label for="{{ key }}">{{ _(label) }}</label>
                     <div style="display:flex; gap:8px; margin-bottom:14px;">

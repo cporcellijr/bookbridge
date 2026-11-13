@@ -440,11 +440,13 @@ LIBRARY_HEADER_ALLOWED_CHANGES = (
 )
 
 
-# P4 Discover: every deviation from the copied Classic script is intentional.
+# P4/P5 Discover: every deviation from the copied Classic script is intentional.
 # (Original anchor, New anchor, fingerprint of the complete New hunk, rationale.)
 DISCOVER_ALLOWED_CHANGES = (
     ('', 'const ebookSelectedKeys = new Set();', '9311ccb1db68b3ca',
      'Separate ebook-only checkbox state and generation'),
+    ('', 'window.clearSuggestionsSearch = function clearSuggestionsSearch() {', '97349fd8a915d21c',
+     'Expose the shared acquisition handoff reset to Classic and New'),
     ('', "if (tab === 'ebook_only') {", 'adf84095df1bdf79',
      'Reset ebook-only selection when its scan changes'),
     ("$('layout').classList.toggle('no-queue', tab === 'ebook_only');",
@@ -648,7 +650,7 @@ class TestOpsPages(unittest.TestCase):
 
 
 class TestOpsScriptDrift(unittest.TestCase):
-    """The four P5 copied scripts have zero behavioral changes from Classic.
+    """Copied P5 scripts stay shared with Classic, except explicit page differences.
 
     Deliberate template-only differences:
     * next/base.html and an operations stylesheet, never changes in Classic;
@@ -670,7 +672,13 @@ class TestOpsScriptDrift(unittest.TestCase):
                 original = (root / f'{page}.html').read_text(encoding='utf-8')
                 partial = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
                 if page == 'job_queue':
-                    expected = original[original.index(start) + 1:original.rindex('\n{% endblock %}')]
+                    shared_include = "{% include 'next/_job_queue_scripts.html' %}"
+                    new_page = (root / 'next' / 'job_queue.html').read_text(encoding='utf-8')
+                    self.assertIn(shared_include, original)
+                    self.assertIn(shared_include, new_page)
+                    self.assertIn("acquisition_jobs.js", partial)
+                    self.assertIn("setInterval", partial)
+                    continue
                 elif page == 'logs':
                     expected = original[original.index(start) + 1:original.rindex(end)]
                 else:
