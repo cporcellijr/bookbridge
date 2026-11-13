@@ -68,7 +68,8 @@ class TestP9ReviewFixes(unittest.TestCase):
 
     def test_new_tab_links_carry_rel(self):
         for path in ("templates/admin_user_integrations.html", "templates/next/_admin_user_integrations_scripts.html",
-                     "templates/settings.html", "templates/next/settings.html"):
+                     "templates/settings.html", "templates/next/settings.html",
+                     "templates/next/_settings_scripts.html"):
             with self.subTest(path=path):
                 self.assertNotRegex(source(path), r'target="_blank" style=')
 

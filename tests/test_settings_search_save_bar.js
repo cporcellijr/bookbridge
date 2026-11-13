@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const html = fs.readFileSync(path.join(__dirname, '../templates/settings.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../templates/next/_settings_scripts.html'), 'utf8');
 const slice = (from, to) => {
     const start = html.indexOf(from);
     const end = html.indexOf(to, start);

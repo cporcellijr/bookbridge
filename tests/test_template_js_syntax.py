@@ -171,6 +171,10 @@ class TestShippedTemplatesParse(unittest.TestCase):
             *sorted(TEMPLATE_DIR.glob("*.html")),
             TEMPLATE_DIR / "next" / "_stats_scripts.html",
             TEMPLATE_DIR / "next" / "_logs_scripts.html",
+            TEMPLATE_DIR / "next" / "_settings_scripts.html",
+            TEMPLATE_DIR / "next" / "_account_scripts.html",
+            TEMPLATE_DIR / "next" / "_account_integrations_scripts.html",
+            TEMPLATE_DIR / "next" / "_admin_user_integrations_scripts.html",
         ]
         for path in paths:
             for index, block in enumerate(script_blocks(path)):
@@ -186,9 +190,10 @@ class TestShippedTemplatesParse(unittest.TestCase):
     def test_settings_series_handlers_are_defined(self):
         """The two series buttons must reference functions that exist."""
         source = (TEMPLATE_DIR / "settings.html").read_text(encoding="utf-8")
+        script = (TEMPLATE_DIR / "next" / "_settings_scripts.html").read_text(encoding="utf-8")
         for handler in ("backfillSeriesMetadata", "refreshSeriesMetadata"):
             self.assertIn(f'onclick="{handler}(this)"', source)
-            self.assertIn(f"async function {handler}(", source)
+            self.assertIn(f"async function {handler}(", script)
 
 
 if __name__ == "__main__":

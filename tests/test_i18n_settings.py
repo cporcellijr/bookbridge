@@ -110,8 +110,9 @@ class SettingsPageTests(I18nTestBase):
     def test_extraction_finds_the_settings_strings(self):
         ids = {
             msg if isinstance(msg, str) else msg[0]
+            for path in (_SETTINGS, _SETTINGS.parent / 'next' / '_settings_scripts.html')
             for _, msg, _, _ in extract_from_file(
-                "jinja2", str(_SETTINGS), options={"extensions": "jinja2.ext.i18n"})
+                "jinja2", str(path), options={"extensions": "jinja2.ext.i18n"})
         }
         for msgid in ("🔄 Reading &amp; Sync", _KOSYNC_NOTE, _SESSION_GAP, "admin", "user"):
             self.assertIn(msgid, ids)

@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const html = fs.readFileSync(path.join(__dirname, '../templates/settings.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../templates/next/_settings_scripts.html'), 'utf8');
 // The i18n helpers (bbFormat/bbPlural) live in base.html's first <script>.
 const base = fs.readFileSync(path.join(__dirname, '../templates/base.html'), 'utf8');
 const helpers = base.slice(base.indexOf('<script>') + '<script>'.length, base.indexOf('</script>'));

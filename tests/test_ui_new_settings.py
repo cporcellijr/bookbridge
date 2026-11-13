@@ -62,9 +62,14 @@ class TestP6Sources(unittest.TestCase):
             with self.subTest(page=page):
                 original = (ROOT / "templates" / f"{page}.html").read_text(encoding="utf-8")
                 partial = (ROOT / "templates" / "next" / f"_{page}_scripts.html").read_text(encoding="utf-8")
-                expected = (original[original.index("<script>"):original.rfind("{% endblock %}")].strip()
-                            if "<script>" in original else "")
-                self.assertEqual(partial.strip(), expected)
+                if not partial.strip():
+                    self.assertNotIn('<script', original)
+                    continue
+                include = '{% include "next/_' + page + '_scripts.html" %}'
+                new = (ROOT / "templates" / "next" / f"{page}.html").read_text(encoding="utf-8")
+                self.assertEqual(original.count(include), 1)
+                self.assertEqual(new.count(include), 1)
+                self.assertNotIn('<script', original)
 
     def test_new_templates_preserve_classic_targets_and_forms(self):
         import re
@@ -73,6 +78,7 @@ class TestP6Sources(unittest.TestCase):
                 old = (ROOT / "templates" / f"{page}.html").read_text(encoding="utf-8")
                 new = (ROOT / "templates" / "next" / f"{page}.html").read_text(encoding="utf-8")
                 script = (ROOT / "templates" / "next" / f"_{page}_scripts.html").read_text(encoding="utf-8")
+                old += '\n' + script
                 self.assertIn('{% extends "next/base.html" %}', new)
                 if page == "account":
                     # P15h intentionally moved New's Display forms to /account/display.

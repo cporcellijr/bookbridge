@@ -246,9 +246,11 @@ class TestTemplates(unittest.TestCase):
         self.assertIn('aria-live="polite"', content)
         self.assertNotIn('warning_count || 0', content)
 
-        start = content.index('function _renderDiagnosticsSubmissions')
-        end = content.index('function togglePollSeconds')
-        history_script = content[start:end]
+        script = (self.templates / 'next' / '_settings_scripts.html').read_text(encoding='utf-8')
+        self.assertNotIn('warning_count || 0', script)
+        start = script.index('function _renderDiagnosticsSubmissions')
+        end = script.index('function togglePollSeconds')
+        history_script = script[start:end]
         self.assertIn('textContent', history_script)
         self.assertNotIn('innerHTML', history_script)
 

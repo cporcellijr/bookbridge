@@ -49,7 +49,7 @@ class BookFusionHtmlTests(unittest.TestCase):
     """Authorization details must be escaped before translated HTML insertion."""
 
     def test_authorization_link_escapes_dynamic_values(self):
-        source = (TEMPLATES / "admin_user_integrations.html").read_text(encoding="utf-8")
+        source = (TEMPLATES / "next" / "_admin_user_integrations_scripts.html").read_text(encoding="utf-8")
         self.assertIn("url: escapeBookFusionHtml(data.verification_uri)", source)
         self.assertIn("code: escapeBookFusionHtml(data.user_code)", source)
         node = shutil.which("node")

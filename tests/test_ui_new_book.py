@@ -773,7 +773,7 @@ class TestOpsScriptDrift(unittest.TestCase):
             self.assertNotIn(old_emoji, new_logs)
 
     def test_p6_classic_settings_and_account_scripts_remain_verbatim(self):
-        """Copied P6 scripts must change alongside Classic rather than drift."""
+        """Classic and New share each nonempty P6 script partial once."""
         from pathlib import Path
         root = Path(__file__).resolve().parent.parent / 'templates'
         for page in ('settings', 'account', 'account_integrations',
@@ -781,9 +781,16 @@ class TestOpsScriptDrift(unittest.TestCase):
             with self.subTest(page=page):
                 classic = (root / f'{page}.html').read_text(encoding='utf-8')
                 partial = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
-                script = (classic[classic.index('<script>'):classic.rfind('{% endblock %}')]
-                          if '<script>' in classic else '')
-                self.assertEqual(partial.strip(), script.strip())
+                if not partial.strip():
+                    self.assertNotIn('<script', classic)
+                    continue
+                shared_include = '{% include "next/_' + page + '_scripts.html" %}'
+                new_page = (root / 'next' / f'{page}.html').read_text(encoding='utf-8')
+                self.assertEqual(classic.count(shared_include), 1)
+                self.assertEqual(new_page.count(shared_include), 1)
+                self.assertNotIn('<script', classic)
+                self.assertLess(classic.index('{% block content %}'), classic.index(shared_include))
+                self.assertLess(classic.index(shared_include), classic.rfind('{% endblock %}'))
 
     def test_all_classic_ops_targets_exist_in_new(self):
         import re
