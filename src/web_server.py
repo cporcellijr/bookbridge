@@ -13199,89 +13199,9 @@ from src.web.routes.covers import serve_cover, serve_thumbnail_cover, proxy_cove
 
 
 
-def api_storyteller_search():
-    query = request.args.get('q', '')
-    if not query:
-        return jsonify({"error": "Query parameter 'q' is required"}), 400
-    results = uc().storyteller_client.search_books(query)
-    if results is None:
-        return jsonify({"error": "Storyteller didn't respond in time or returned an error. If your library is large, raise Settings → Storyteller → Library Timeout."}), 502
-    return jsonify(results)
+from src.web.routes.storyteller import api_storyteller_search, api_storyteller_link, api_storyteller_backfill
 
 
-def api_storyteller_link(abs_id):
-    data = request.get_json()
-    if not data or 'uuid' not in data:
-        return jsonify({"error": "Missing 'uuid' in JSON payload"}), 400
-
-    storyteller_uuid = (data['uuid'] or '').strip()
-    book = database_service.get_book(abs_id)
-    if not book:
-        return jsonify({"error": "Book not found"}), 404
-
-    user = current_user()
-    if not _user_may_modify_book(user, abs_id):
-        return _forbidden_book_response(json_response=True)
-
-    # Handle explicit unlinking.
-    if storyteller_uuid == "none" or not storyteller_uuid:
-        logger.info(f"🔄 Unlinking Storyteller for '{book.abs_title}'")
-        previous_storyteller_uuid = book.storyteller_uuid
-        if not previous_storyteller_uuid and getattr(book, 'ebook_filename', None):
-            match = re.match(r"^storyteller_([0-9a-fA-F-]+)\.epub$", book.ebook_filename)
-            if match:
-                previous_storyteller_uuid = match.group(1)
-                logger.info(f"Inferred Storyteller UUID for unlink: '{previous_storyteller_uuid[:8]}...'")
-        book.storyteller_uuid = None
-        book.transcript_source = None
-        book.transcript_file = None
-
-        if previous_storyteller_uuid:
-            try:
-                st_client = uc().storyteller_client
-                if hasattr(st_client, 'remove_from_collection_by_uuid'):
-                    storyteller_collection_name = os.environ.get('STORYTELLER_COLLECTION_NAME', 'Synced with KOReader')
-                    removed = st_client.remove_from_collection_by_uuid(previous_storyteller_uuid, storyteller_collection_name)
-                    if not removed:
-                        logger.warning(f"Storyteller unlink removal returned no success for '{previous_storyteller_uuid[:8]}...'")
-                else:
-                    logger.warning("Storyteller client has no remove_from_collection_by_uuid method")
-            except Exception as e:
-                logger.warning(f"Failed to remove Storyteller UUID from collection: {e}", exc_info=True)
-        
-        # Revert to original filename if it exists
-        if book.original_ebook_filename:
-            book.ebook_filename = book.original_ebook_filename
-        if getattr(book, 'sync_mode', 'audiobook') == 'ebook_only':
-            book.sync_mode = 'ebook_only'
-
-        book.status = 'pending'
-        database_service.save_book(book)
-        
-        return jsonify({"message": "Storyteller unlinked successfully", "filename": book.ebook_filename}), 200
-
-    try:
-        source_filename = book.original_ebook_filename
-        if not source_filename and book.ebook_filename and not _is_storyteller_artifact_filename(book.ebook_filename):
-            source_filename = book.ebook_filename
-
-        saved_book, err_msg, err_code = _upsert_storyteller_mapping(
-            mode_hint="existing",
-            abs_id=abs_id,
-            abs_title=book.abs_title or '',
-            storyteller_uuid=storyteller_uuid,
-            ebook_filename=source_filename,
-            existing_book=book,
-            duration=book.duration,
-        )
-        if err_msg:
-            return jsonify({"error": err_msg}), err_code
-
-        _shelve_saved_ebook(saved_book)
-        return jsonify({"message": "Book linked successfully", "filename": saved_book.ebook_filename}), 200
-    except Exception as e:
-        logger.error(f"❌ Error linking Storyteller book for '{abs_id}': {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
 
 
 def _get_stats_timezone():
@@ -14250,9 +14170,6 @@ def _run_storyteller_backfill():
     return summary, 200
 
 
-def api_storyteller_backfill():
-    summary, status_code = _run_storyteller_backfill()
-    return jsonify(summary), status_code
 
 
 def _extract_series_from_title(title: str) -> tuple:
@@ -15985,9 +15902,8 @@ def create_app(test_container=None):
     diagnostics_routes.register(app, sys.modules[__name__])
 
     # Storyteller API routes
-    app.add_url_rule('/api/storyteller/search', 'api_storyteller_search', api_storyteller_search, methods=['GET'])
-    app.add_url_rule('/api/storyteller/link/<abs_id>', 'api_storyteller_link', api_storyteller_link, methods=['POST'])
-    app.add_url_rule('/api/storyteller/backfill', 'api_storyteller_backfill', api_storyteller_backfill, methods=['POST'])
+    from src.web.routes import storyteller as storyteller_routes
+    storyteller_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/api/admin/backfill-series', 'api_series_backfill', api_series_backfill, methods=['POST'])
     app.add_url_rule('/api/admin/audio-repoint/plan', 'api_audio_repoint_plan', api_audio_repoint_plan, methods=['GET', 'POST'])
     app.add_url_rule('/api/admin/audio-repoint/apply', 'api_audio_repoint_apply', api_audio_repoint_apply, methods=['POST'])
