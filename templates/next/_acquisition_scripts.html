@@ -2,12 +2,17 @@
     // ===== Get the missing half (BookOrbit and Shelfmark requests) =====
     // Each service is offered only once GET /api/acquisition/options says it is usable for this reader.
     const ACQ = {
-        noAudio: {{ _('No audiobook in your libraries.')|tojson }},
-        noEbook: {{ _('No ebook in your libraries.')|tojson }},
         getAudiobook: {{ _('Get the audiobook')|tojson }},
         getEbook: {{ _('Get the ebook')|tojson }},
-        getBook: {{ _('Get this book')|tojson }},
         quietLink: {{ _("Can't find it? Get a book")|tojson }},
+        missingTitle: {{ _('Not in your library yet')|tojson }},
+        missingText: {{ _('Nothing in your libraries matches “{query}”. You can request it here.')|tojson }},
+        missingAudioTitle: {{ _('Audiobook missing')|tojson }},
+        missingAudioText: {{ _('You have the ebook. Get the audiobook and BookBridge will pair the two.')|tojson }},
+        missingEbookTitle: {{ _('Ebook missing')|tojson }},
+        missingEbookText: {{ _('You have the audiobook. Get the ebook and BookBridge will pair the two.')|tojson }},
+        getBoth: {{ _('Get both')|tojson }},
+        missingVia: {{ _('Requests go through {providers}.')|tojson }},
         requested: {{ _('Requested from BookOrbit.')|tojson }},
         requesting: {{ _('Requesting...')|tojson }},
         alreadyOwned: {{ _('BookOrbit already has this book.')|tojson }},
@@ -110,14 +115,25 @@
         if (!view) return '';
         const hasAudio = view.audiobooks.length > 0;
         const hasEbook = view.ebooks.length > 0;
-        let primary = '';
-        if (acqUsable && hasEbook && !hasAudio) primary = `<span class="acq-note">${esc(ACQ.noAudio)}</span> <button type="button" class="btn btn-small btn-muted" data-acq="open" data-acq-kind="audiobook">${esc(ACQ.getAudiobook)}</button>`;
-        else if (acqUsable && hasAudio && !hasEbook) primary = `<span class="acq-note">${esc(ACQ.noEbook)}</span> <button type="button" class="btn btn-small btn-muted" data-acq="open" data-acq-kind="ebook">${esc(ACQ.getEbook)}</button>`;
-        else if (acqUsable && !hasAudio && !hasEbook) primary = `<button type="button" class="btn btn-small btn-muted" data-acq="open" data-acq-kind="any">${esc(ACQ.getBook)}</button>`;
-        const quiet = acqUsable && (hasAudio || hasEbook) ? `<button type="button" class="btn-link" data-acq="open" data-acq-kind="any">${esc(ACQ.quietLink)}</button>` : '';
         const matching = matchingAcqJobs(view);
         const existing = matching.map((job) => `<a class="btn btn-small btn-muted" data-acq-existing="${esc(job.id)}" href="/job-queue?acquisition_job=${encodeURIComponent(job.id)}">${esc(acqExistingLabel(job, view))}</a>`).join('');
-        return `<div class="acq-actions">${primary}${quiet}${existing}</div>`;
+        const quiet = acqUsable ? `<button type="button" class="btn-link" data-acq="open" data-acq-kind="any">${esc(ACQ.quietLink)}</button>` : '';
+        const can = (kind) => providerOptions(kind).length > 0;
+        const missing = hasEbook && !hasAudio ? 'audiobook' : (hasAudio && !hasEbook ? 'ebook' : (!hasAudio && !hasEbook ? 'any' : ''));
+        if (!acqUsable || !missing || (missing !== 'any' && !can(missing)) || (missing === 'any' && !can('ebook') && !can('audiobook'))) {
+            return `<div class="acq-actions">${quiet}${existing}</div>`;
+        }
+        const open = (kind, label, primary) => `<button type="button" class="btn ${primary ? 'btn-primary' : 'btn-muted'}" data-acq="open" data-acq-kind="${kind}">${esc(label)}</button>`;
+        let title, text, buttons;
+        if (missing === 'audiobook') { title = ACQ.missingAudioTitle; text = ACQ.missingAudioText; buttons = open('audiobook', ACQ.getAudiobook, true); }
+        else if (missing === 'ebook') { title = ACQ.missingEbookTitle; text = ACQ.missingEbookText; buttons = open('ebook', ACQ.getEbook, true); }
+        else {
+            title = ACQ.missingTitle; text = bbFormat(ACQ.missingText, { query: tabState.search.q || '' });
+            const both = can('ebook') && can('audiobook');
+            buttons = (both ? open('any', ACQ.getBoth, true) : '') + (can('ebook') ? open('ebook', ACQ.getEbook, !both) : '') + (can('audiobook') ? open('audiobook', ACQ.getAudiobook, !both) : '');
+        }
+        const providers = [...new Set(['ebook', 'audiobook'].flatMap((kind) => providerOptions(kind).map((option) => option[1])))];
+        return `<section class="acq-missing${missing === 'any' ? ' acq-missing--none' : ''}" aria-label="${esc(title)}"><h4 class="acq-missing-title">${esc(title)}</h4><p class="acq-missing-text">${esc(text)}</p><div class="acq-missing-actions">${buttons}${existing}</div>${missing === 'any' ? '' : `<div class="acq-actions">${quiet}</div>`}<p class="acq-note acq-missing-via">${esc(bbFormat(ACQ.missingVia, { providers: providers.join(' / ') }))}</p></section>`;
     }
 
     // Search results usually carry authors as one display string; a list is cut to its first author.
@@ -296,6 +312,7 @@
         $('acqIsbn').value = '';
         $('acqSeries').value = prefill.partner && prefill.partner.item ? (prefill.partner.item.series_name || '') : '';
         $('acqSeriesIndex').value = prefill.partner && prefill.partner.item ? (prefill.partner.item.series_index ?? '') : '';
+        $('acqMore').open = !!($('acqSeries').value || $('acqSeriesIndex').value);
         const bothNeeds = ['ebook', 'audiobook'].filter((format) => !acqPartner || format !== acqPartner.kind);
         $('acqBothLabel').hidden = bothNeeds.some((format) => !providerOptions(format).length);
         $('acqSubmitBtn').hidden = false;

@@ -389,5 +389,78 @@ class AcquisitionJobUiScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class TestMissingBookSection(unittest.TestCase):
+    """Shared acquisition controls show the right actions for each inventory state."""
+
+    def test_actions_function_renders_each_state(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js not installed")
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "templates/next/_acquisition_scripts.html").read_text(encoding="utf-8")
+        start = source.index("    function acqActionsHtml(view) {")
+        end = source.index("    // Search results usually carry authors", start)
+        function_code = source[start:end]
+        runner = r"""
+const assert = require('node:assert/strict');
+let acqUsable = true;
+let available = ['ebook', 'audiobook'];
+const ACQ = {
+  quietLink: 'Get a book', missingTitle: 'Not in your library yet',
+  missingText: 'Nothing matches {query}', missingAudioTitle: 'Audiobook missing',
+  missingAudioText: 'Get audio', missingEbookTitle: 'Ebook missing',
+  missingEbookText: 'Get ebook', getBoth: 'Get both',
+  getEbook: 'Get the ebook', getAudiobook: 'Get the audiobook',
+  missingVia: 'Requests go through {providers}.'
+};
+const tabState = {search: {q: 'Missing title'}};
+const esc = (value) => String(value);
+const bbFormat = (value, fields) => value.replace(/\{(\w+)\}/g, (_, key) => fields[key] || '');
+const providerOptions = (kind) => available.includes(kind) ? [[kind, kind + ' source']] : [];
+const matchingAcqJobs = () => [];
+const acqExistingLabel = () => 'Existing';
+""" + function_code + r"""
+const render = (audio, ebook) => acqActionsHtml({
+  audiobooks: Array(audio).fill({}), ebooks: Array(ebook).fill({})
+});
+let html = render(0, 0);
+assert.ok(html.includes('acq-missing--none'), html);
+assert.deepEqual([...html.matchAll(/data-acq-kind="([^"]+)"/g)].map(m => m[1]),
+                 ['any', 'ebook', 'audiobook']);
+html = render(0, 1);
+assert.ok(html.includes('data-acq-kind="audiobook"'), html);
+assert.match(html, /btn-primary" data-acq="open" data-acq-kind="audiobook"/);
+assert.ok(!html.includes('acq-missing--none'));
+html = render(1, 0);
+assert.match(html, /btn-primary" data-acq="open" data-acq-kind="ebook"/);
+html = render(1, 1);
+assert.ok(!html.includes('acq-missing'), html);
+available = ['ebook'];
+html = render(0, 1);
+assert.ok(!html.includes('acq-missing'), html);
+acqUsable = false;
+html = render(0, 0);
+assert.ok(!html.includes('data-acq="open"'), html);
+"""
+        result = subprocess.run(
+            [node, "-e", runner], cwd=root, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_more_details_wraps_isbn_and_series(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "templates/_acquisition_intake.html").read_text(encoding="utf-8")
+        details = source.index('<details class="acq-more" id="acqMore">')
+        self.assertLess(details, source.index('id="acqIsbn"'))
+        self.assertLess(source.index('id="acqSeriesIndex" step="any"'), source.index('</details>', details))
+        self.assertLess(source.index('</details>', details), source.index('id="acqPartnerWrap"'))
+
+    def test_missing_section_is_styled_for_both_interfaces(self):
+        root = Path(__file__).resolve().parents[1]
+        css = (root / "static/css/acquisition-intake.css").read_text(encoding="utf-8")
+        self.assertIn('.acq-missing {', css)
+        self.assertIn('.empty:has(+ .acq-missing--none)', css)
+
+
 if __name__ == "__main__":
     unittest.main()
