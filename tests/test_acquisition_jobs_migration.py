@@ -13,12 +13,12 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 
-from src.db.models import AcquisitionJob
+from src.db.models import AcquisitionJob, AcquisitionRequest
 
 
 pytestmark = pytest.mark.real_database_migrations
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "f6b585a12c34"
+HEAD = "c585c20261112"
 PREVIOUS = "e3b7c1a9d2f4"
 
 
@@ -45,13 +45,15 @@ class TestAcquisitionJobsMigration(unittest.TestCase):
 
     def history(self):
         with self.engine.connect() as conn:
-            return conn.execute(sa.text("SELECT * FROM acquisition_requests ORDER BY id")).all()
+            return conn.execute(sa.text("SELECT id, user_id, service, media_kind, remote_id, title, status, group_key, dismissed FROM acquisition_requests ORDER BY id")).all()
 
     def test_fresh_base_to_head_matches_the_model_and_has_one_head(self):
         command.upgrade(self.cfg, "head")
         inspector = sa.inspect(self.engine)
         self.assertEqual({c["name"] for c in inspector.get_columns("acquisition_jobs")},
                          set(AcquisitionJob.__table__.columns.keys()))
+        self.assertEqual({c["name"] for c in inspector.get_columns("acquisition_requests")},
+                         set(AcquisitionRequest.__table__.columns.keys()))
         self.assertIn("ix_acquisition_jobs_user_id", {i["name"] for i in inspector.get_indexes("acquisition_jobs")})
         self.assertEqual(ScriptDirectory.from_config(self.cfg).get_heads(), [HEAD])
         with self.engine.connect() as conn:
@@ -83,6 +85,27 @@ class TestAcquisitionJobsMigration(unittest.TestCase):
         with self.engine.connect() as conn:
             self.assertEqual(conn.execute(sa.text("SELECT title FROM acquisition_jobs")).scalar(), "Saved intent")
         self.assertEqual(len(self.history()), 1)
+
+    def test_phase_c_additive_migration_can_upgrade_twice_and_downgrade_without_erasing_history(self):
+        self.seed_previous()
+        before = self.history()
+        command.upgrade(self.cfg, "f6b585a12c34")
+        path = ROOT / "alembic" / "versions" / "c585c20261112_acquisition_submission_decisions.py"
+        spec = importlib.util.spec_from_file_location("acquisition_phase_c_migration", path)
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        for _ in range(2):
+            with self.engine.begin() as conn:
+                with Operations.context(MigrationContext.configure(conn)):
+                    migration.upgrade()
+        inspector = sa.inspect(self.engine)
+        self.assertIn("decision_action", {c["name"] for c in inspector.get_columns("acquisition_requests")})
+        self.assertIn("audio_submission_state", {c["name"] for c in inspector.get_columns("acquisition_jobs")})
+        with self.engine.begin() as conn:
+            with Operations.context(MigrationContext.configure(conn)):
+                migration.downgrade()
+        self.assertNotIn("decision_action", {c["name"] for c in sa.inspect(self.engine).get_columns("acquisition_requests")})
+        self.assertEqual(self.history(), before)
 
     def test_downgrade_removes_only_the_new_table(self):
         self.seed_previous()

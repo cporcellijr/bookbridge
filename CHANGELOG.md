@@ -14,6 +14,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Acquisition submission safety and receipt reconciliation** (#585, Phase C review corrections;
+  not deployed). An uncertain Shelfmark POST now stays blocked through concurrent policy and
+  release-choice checks and ambiguous server failures, preventing blind duplicate downloads.
+  Shelfmark search results retain the original query author, options report usable source-level
+  permissions, and invalid format arrays return a validation error. Verified BookOrbit request
+  updates can also recover a saved failed receipt without erasing identity or paired history.
+
 - **A book downloaded in KOReader from CWA's or Storyteller's catalog now finds its progress in
   filename mode** (#590). KOReader names a catalog download "Author - Title", but books matched
   from a CWA or Storyteller search are stored under a generated name, so the copy found no
@@ -32,6 +39,18 @@ All notable changes to BookBridge will be documented in this file.
   disabled until running-job ownership and retention guarantees are complete.
 
 ### Added
+
+- **Acquisition requests now keep both formats together across partial submissions** (#585,
+  Phase C; local review only). BookOrbit and Shelfmark requests begin with a saved
+  reader-owned job, keep each accepted ebook/audiobook receipt independently, and
+  resume unfinished work without re-requesting an accepted half. Shelfmark can
+  request both formats sequentially and follows the chosen source's download or
+  approval policy. Already-owned copies remain attached for later pairing.
+  BookOrbit's manual release choice now requires positive evidence that automatic
+  grabbing handed control back; unverified automation stays pending rather than
+  competing with the provider. An uncertain network response is retained instead
+  of blindly submitting the same request again. The Processing UI and library
+  arrival handling remain future work; this feature has not been deployed.
 
 - **Choose a shelf finish in the New interface, and find Display from Classic's account menu.** Face-out and Spine shelves can match the Day/Night theme or use Wood, Dark, or a quiet neutral Plain finish. The selection saves per reader and updates the live preview immediately. Classic readers can open their existing Account → Display card directly from the user menu to switch interfaces without losing their series setting.
 

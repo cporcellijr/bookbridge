@@ -89,8 +89,9 @@ class ShelfmarkClient:
         self._cookie_fingerprint: Optional[str] = None
         self._refused: Optional[tuple[str, str]] = None  # (credentials fingerprint, reason)
         self._open_access: Optional[tuple[float, bool]] = None  # (checked at, no sign-in needed)
-        self._releases: dict[str, tuple[float, dict, str]] = {}
+        self._releases: dict[str, tuple[float, dict, str, str, str]] = {}
         self._policy: Optional[tuple[float, tuple[Optional[dict], Optional[str]]]] = None
+        self._policy_detail: Optional[dict] = None
 
     # ---- configuration (read per call) ---------------------------------------
 
@@ -233,19 +234,122 @@ class ShelfmarkClient:
             return None, reason
         body = self._json(response)
         if response.status_code == 403 and isinstance(body, dict) and body.get("code") == "requests_unavailable":
+            self._policy_detail = {"requests_enabled": False, "defaults": {"ebook": "download", "audiobook": "download"}}
             return {"ebook": "download", "audiobook": "download"}, None
         if response.status_code != 200 or not isinstance(body, dict):
             return None, "unreachable"
+        self._policy_detail = body
         if not body.get("requests_enabled"):
             return {"ebook": "download", "audiobook": "download"}, None
         defaults = body.get("defaults") or {}
         return {kind: str(defaults.get(kind) or "blocked") for kind in ("ebook", "audiobook")}, None
+
+    def mode_for(self, content_type: str, source: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+        """Resolve the current reader's format/source policy conservatively.
+
+        Prefer a source-specific rule over the default. Unknown policy fields or
+        invalid modes are not permission to download.
+        """
+        defaults, error = self.get_policy()
+        if error or defaults is None:
+            return None, error or "policy_unverified"
+        mode = defaults.get(content_type)
+        raw = self._policy_detail or {}
+        if source:
+            entries = []
+            for key in ("rules", "source_modes"):
+                values = raw.get(key) or []
+                if isinstance(values, list):
+                    entries.extend(v for v in values if isinstance(v, dict))
+                elif isinstance(values, dict):
+                    values = values.get(source)
+                    if isinstance(values, dict):
+                        entries.append({**values, "source": source})
+                    elif isinstance(values, str):
+                        entries.append({"source": source, "mode": values})
+            for entry in entries:
+                name = entry.get("source") or entry.get("source_name") or entry.get("name") or entry.get("id")
+                if str(name) != str(source):
+                    continue
+                kind = entry.get("content_type") or entry.get("media_kind") or entry.get("format")
+                if kind not in (None, content_type):
+                    continue
+                candidate = (entry.get("modes") or {}).get(content_type) if isinstance(entry.get("modes"), dict) else None
+                candidate = candidate or entry.get(content_type) or entry.get("mode")
+                if candidate is not None:
+                    mode = candidate
+        return (mode, None) if mode in ("download", "request_release", "request_book", "blocked") else (None, "policy_unverified")
+
+    def available_modes(self) -> tuple[Optional[dict], Optional[str]]:
+        """Advertise usable format modes including explicit source overrides.
+
+        A source-only book-level request cannot be submitted without a release,
+        so only release-choice modes can override a blocked format default.
+        The source-specific mode is still rechecked on every submission.
+        """
+        defaults, error = self.get_policy()
+        if error or defaults is None:
+            return None, error or "policy_unverified"
+        modes = {kind: mode for kind, mode in defaults.items()
+                 if kind in ("ebook", "audiobook") and mode in (
+                     "download", "request_release", "request_book",
+                 )}
+        raw = self._policy_detail or {}
+        sources = set()
+        for field in ("rules", "source_modes"):
+            entries = raw.get(field) or []
+            if isinstance(entries, dict):
+                sources.update(str(name) for name in entries)
+            elif isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        source = entry.get("source") or entry.get("source_name") or entry.get("name") or entry.get("id")
+                        if source:
+                            sources.add(str(source))
+        for kind in ("ebook", "audiobook"):
+            if kind not in modes:
+                for source in sorted(sources):
+                    mode, mode_error = self.mode_for(kind, source)
+                    if not mode_error and mode in ("download", "request_release"):
+                        modes[kind] = mode
+                        break
+        return modes, None
+
+    def can_find_releases(self, content_type: str) -> bool:
+        """Only query release sources when some reader-allowed source permits a pick."""
+        mode, error = self.mode_for(content_type)
+        if error:
+            return False
+        if mode in ("download", "request_release"):
+            return True
+        raw = self._policy_detail or {}
+        sources = set()
+        for field in ("rules", "source_modes"):
+            entries = raw.get(field) or []
+            if isinstance(entries, dict):
+                sources.update(str(name) for name in entries)
+            elif isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        source = entry.get("source") or entry.get("source_name") or entry.get("name")
+                        if source:
+                            sources.add(str(source))
+        return any(self.mode_for(content_type, source)[0] in ("download", "request_release") for source in sources)
+
+    def release_context_for(self, key: str) -> Optional[tuple[str, str]]:
+        """Return the query identity of an unexpired reader-owned release selection."""
+        entry = self._releases.get(key)
+        if not entry or time.time() - entry[0] >= _RELEASE_TTL:
+            return None
+        return (entry[3], entry[4])
 
     def find_releases(self, title: str, author: str, content_type: str) -> tuple[Optional[list], Optional[str]]:
         """Search Shelfmark's sources (slow: up to two minutes) and return normalized releases.
 
         The raw releases are kept for ``release_for`` so a pick can be submitted by key.
         """
+        if not self.can_find_releases(content_type):
+            return None, "release_not_allowed"
         response, reason = self._call(
             "GET", "/api/releases", timeout=_RELEASE_TIMEOUT,
             params={
@@ -264,19 +368,26 @@ class ShelfmarkClient:
             return None, "unreachable"
         found = [item for item in body.get("releases") or [] if isinstance(item, dict) and item.get("source_id")]
         raw = [item for item in found if release_media_kind(item) in (None, content_type)]
+        permitted = []
+        for item in raw:
+            mode, error = self.mode_for(content_type, str(item.get("source") or ""))
+            if not error and mode in ("download", "request_release"):
+                permitted.append(item)
+        raw = permitted
         if len(raw) < len(found):
             logger.info("📥 Acquisition: Shelfmark search for a %s dropped %d release(s) of the other format", content_type, len(found) - len(raw))
         now = time.time()
         self._releases = {k: v for k, v in self._releases.items() if now - v[0] < _RELEASE_TTL}
         labels = self._source_labels()
         releases = []
+        query_author = author
         for item in raw:
             key = _digest(item.get("source"), item.get("source_id"))
-            self._releases[key] = (now, item, content_type)
+            self._releases[key] = (now, item, content_type, title, query_author)
             seeders = item.get("seeders")
-            author = (item.get("extra") or {}).get("author") if isinstance(item.get("extra"), dict) else None
-            if isinstance(author, list):
-                author = ", ".join(str(a) for a in author if a)
+            display_author = (item.get("extra") or {}).get("author") if isinstance(item.get("extra"), dict) else None
+            if isinstance(display_author, list):
+                display_author = ", ".join(str(a) for a in display_author if a)
             extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
             flags = [str(f) for f in extra.get("indexer_flags") or [] if f] if isinstance(extra.get("indexer_flags"), list) else []
             formats = extra.get("formats")
@@ -288,7 +399,7 @@ class ShelfmarkClient:
                 "key": key, "title": item.get("title") or "", "format": item.get("format") or "",
                 "size": item.get("size") or "", "source": item.get("indexer") or item.get("source") or "",
                 "language": item.get("language") or "",
-                "author": author or "", "kind": _release_kind(item),
+                "author": display_author or "", "kind": _release_kind(item),
                 "detail": f"{seeders} seeders" if isinstance(seeders, int) and seeders > 0 else "",
             })
         return releases, None
@@ -317,6 +428,16 @@ class ShelfmarkClient:
         """
         title = str(book.get("title") or "").strip()
         author = ", ".join(book.get("authors") or []) or "Unknown"
+        source = str(release.get("source") or "") if release else None
+        mode, policy_error = self.mode_for(content_type, source)
+        if policy_error:
+            return None, policy_error
+        if mode == "blocked":
+            return None, "policy_refused"
+        if mode in ("download", "request_release") and not release:
+            return None, "release_required"
+        if mode == "request_book" and release:
+            return None, "release_not_allowed"
         body: dict[str, Any] = {
             "book_data": {
                 "title": title, "author": author, "provider": "manual",
@@ -332,12 +453,15 @@ class ShelfmarkClient:
             return None, reason
         answer = self._json(response)
         answer = answer if isinstance(answer, dict) else {}
-        if response.status_code == 403 and answer.get("code") == "requests_unavailable" and release:
+        if response.status_code == 403 and answer.get("code") == "requests_unavailable" and release and mode == "download":
             return self._download(release, content_type)
         if response.status_code == 200 and answer.get("kind") == "download" and answer.get("source_id"):
             return {"kind": "download", "remote_id": str(answer["source_id"]), "status": "queued"}, None
         if response.status_code == 201 and answer.get("id") is not None:
             return {"kind": "request", "remote_id": str(answer["id"]), "status": answer.get("status") or "pending"}, None
+        if response.status_code >= 500 or response.status_code in (408, 425):
+            # Server errors/timeouts are not proof that the POST was rejected.
+            return None, "submit_failed"
         return None, str(answer.get("code") or "submit_failed")
 
     def _download(self, release: dict, content_type: str) -> tuple[Optional[dict], Optional[str]]:

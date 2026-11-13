@@ -95,6 +95,8 @@ class PickerBase(AcquisitionBase):
         os.environ["ACQUISITION_ALLOW_READERS"] = "true"
         self.bo.list_request_releases = MagicMock(return_value=(_result(), None))
         self.bo.grab_request_release = MagicMock(return_value=({"id": 11, "status": "grabbed"}, None))
+        self.bo.get_request.return_value = {"id": 11, "mediaKind": "ebook", "status": "approved",
+                                            "failureCode": "AUTOMATION_DISABLED"}
         self.login()
 
     def add(self, user=None, **extra):
@@ -123,6 +125,45 @@ class TestOptions(PickerBase):
 
 
 class TestReleaseList(PickerBase):
+    def test_unknown_automation_does_not_offer_a_manual_picker(self):
+        row = self.add()
+        for status in ("approved", "searching", "failed"):
+            self.bo.get_request.return_value = {"id": 11, "status": status}
+            resp = self.releases(row["id"])
+            self.assertEqual((resp.status_code, resp.get_json()),
+                             (409, {"error": "automatic_or_unknown"}))
+        self.bo.list_request_releases.assert_not_called()
+        self.assertEqual(self.svc.get_acquisition_request(self.reg.id, row["id"])["decision_code"],
+                         "automation_unknown")
+
+    def test_verified_handbacks_and_self_serve_allow_release_choices(self):
+        for remote in ({"failureCode": "AUTOMATION_DISABLED"},
+                       {"failureCode": "BELOW_SCORE_FLOOR"},
+                       {"selfServe": True},
+                       {"failureCode": "ALL_TRIED"}):
+            self.bo.get_request.return_value = {"id": 11, "status": "approved", **remote}
+            row = self.add(remote_id="11") if not self.svc.get_acquisition_requests(self.reg.id) else self.svc.get_acquisition_requests(self.reg.id)[0]
+            self.assertEqual(self.releases(row["id"]).status_code, 200, remote)
+            self.assertEqual(self.svc.get_acquisition_request(self.reg.id, row["id"])["decision_action"],
+                             "pick_release")
+
+    def test_configuration_repair_is_not_a_release_choice(self):
+        row = self.add()
+        self.bo.get_request.return_value = {"id": 11, "status": "approved", "failureCode": "NO_DESTINATION"}
+        self.assertEqual(self.releases(row["id"]).get_json(), {"error": "configuration_repair_required"})
+        saved = self.svc.get_acquisition_request(self.reg.id, row["id"])
+        self.assertEqual((saved["decision_code"], saved["decision_action"]),
+                         ("NO_DESTINATION", "repair_configuration"))
+        self.bo.list_request_releases.assert_not_called()
+
+    def test_stale_remote_download_state_blocks_list_and_grab(self):
+        row = self.add()
+        self.bo.get_request.return_value = {"id": 11, "status": "grabbed"}
+        self.assertEqual(self.releases(row["id"]).get_json(), {"error": "already_picked"})
+        self.assertEqual(self.grab(row["id"]).get_json(), {"error": "already_picked"})
+        self.bo.grab_request_release.assert_not_called()
+        self.bo.list_request_releases.assert_not_called()
+
     def test_release_is_mapped_to_the_picker_shape(self):
         row = self.add()
         data = self.releases(row["id"]).get_json()
@@ -206,6 +247,7 @@ class TestReleaseList(PickerBase):
 class TestGrab(PickerBase):
     def test_success_updates_the_existing_row_in_place(self):
         row = self.add(progress_mark="x", progress_changed_at=utcnow())
+        self.bo.list_request_releases.return_value = (_result([_release(guid="https://t.example/dl?id=1:2")]), None)
         resp = self.grab(row["id"], key="3:https://t.example/dl?id=1:2")
         self.assertEqual(resp.status_code, 200)
         self.bo.grab_request_release.assert_called_once_with("11", 3, "https://t.example/dl?id=1:2")
@@ -216,6 +258,12 @@ class TestGrab(PickerBase):
             self.assertEqual(after[field], row[field], field)
         self.assertEqual((after["progress_mark"], after["progress_changed_at"]), (None, None))
         self.assertEqual(resp.get_json()["request"]["remote_status"], "grabbed")
+
+    def test_grab_rechecks_live_candidate_and_refuses_a_stale_key(self):
+        row = self.add()
+        self.bo.list_request_releases.return_value = (_result([_release(guid="new-guid")]), None)
+        self.assertEqual(self.grab(row["id"]).get_json(), {"error": "release_stale"})
+        self.bo.grab_request_release.assert_not_called()
 
     def test_invalid_keys_are_400_and_never_reach_bookorbit(self):
         row = self.add()

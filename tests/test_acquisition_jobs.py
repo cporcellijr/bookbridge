@@ -128,6 +128,65 @@ class TestAcquisitionJobs(unittest.TestCase):
         self.assertEqual(self.db.get_acquisition_requests(self.user.id), [])
         self.assertEqual(self.db.get_acquisition_job(self.other.id, other["id"])["title"], "Other book")
 
+    def test_reservation_is_durable_and_prevents_blind_repeat_after_restart(self):
+        job = self.job()
+        self.assertEqual(self.db.reserve_acquisition_submission(self.user.id, job["id"], "ebook"), "reserved")
+        self.assertEqual(self.db.get_acquisition_job(self.user.id, job["id"])["ebook_submission_state"], "uncertain")
+        self.db.db_manager.close()
+        self.db = DatabaseService(self.path)
+        self.assertEqual(self.db.reserve_acquisition_submission(self.user.id, job["id"], "ebook"),
+                         "submission_uncertain")
+        self.assertEqual(self.db.reserve_acquisition_submission(self.other.id, job["id"], "ebook"), "not_found")
+        receipt = self.add(job)
+        self.assertEqual(self.db.get_acquisition_job(self.user.id, job["id"])["ebook_submission_state"], "accepted")
+        self.assertEqual(self.db.reserve_acquisition_submission(self.user.id, job["id"], "ebook"),
+                         "already_submitted")
+        self.assertEqual(self.db.reserve_acquisition_submission(self.user.id, job["id"], "audiobook"), "reserved")
+        self.assertEqual(self.db.get_acquisition_job(self.user.id, job["id"])["requests"][0]["id"], receipt["id"])
+
+    def test_definitive_failure_can_be_retried_without_reusing_accepted_half(self):
+        job = self.job()
+        self.db.reserve_acquisition_submission(self.user.id, job["id"], "ebook")
+        self.db.set_acquisition_submission_state(self.user.id, job["id"], "ebook", "failed", "policy_refused",
+                                                 confirmed_rejection=True)
+        self.assertEqual(self.db.reserve_acquisition_submission(self.user.id, job["id"], "ebook"), "reserved")
+        self.add(job)
+        self.assertEqual(self.db.reserve_acquisition_submission(self.user.id, job["id"], "ebook"), "already_submitted")
+
+    def test_concurrent_preflight_state_update_cannot_erase_uncertain_reservation(self):
+        job = self.job()
+        other_db = DatabaseService(self.path)
+        self.addCleanup(other_db.db_manager.close)
+        self.assertEqual(self.db.reserve_acquisition_submission(self.user.id, job["id"], "ebook"), "reserved")
+        for state in ("needs_release", "failed", "needs_identification"):
+            other_db.set_acquisition_submission_state(self.user.id, job["id"], "ebook", state, "preflight")
+            saved = self.db.get_acquisition_job(self.user.id, job["id"])
+            self.assertEqual(saved["ebook_submission_state"], "uncertain")
+            self.assertEqual(self.db.reserve_acquisition_submission(self.user.id, job["id"], "ebook"),
+                             "submission_uncertain")
+
+    def test_active_half_cannot_receive_a_second_remote_receipt(self):
+        job = self.job()
+        first = self.add(job)
+        with self.assertRaises(ValueError):
+            self.add(job, remote_id="new-id")
+        self.assertEqual(self.db.get_acquisition_job(self.user.id, job["id"])["requests"][0]["id"], first["id"])
+
+    def test_racing_reservations_allow_only_one_network_submitter(self):
+        job = self.job()
+        second_db = DatabaseService(self.path)
+        self.addCleanup(second_db.db_manager.close)
+        results = []
+        def reserve(db):
+            results.append(db.reserve_acquisition_submission(self.user.id, job["id"], "ebook"))
+        threads = [threading.Thread(target=reserve, args=(db,)) for db in (self.db, second_db)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(sorted(results), ["reserved", "submission_uncertain"])
+
     def test_receipt_deduplication_keeps_saved_progress(self):
         job = self.job()
         first = self.add(job, remote_id=11)
@@ -136,6 +195,15 @@ class TestAcquisitionJobs(unittest.TestCase):
         self.assertEqual(repeated["id"], first["id"])
         self.assertEqual(repeated["status"], "arrived")
         self.assertEqual(len(self.db.get_acquisition_requests(self.user.id)), 1)
+
+    def test_reconciliation_does_not_downgrade_paired_history(self):
+        job = self.job()
+        first = self.add(job, status="paired", remote_status="available", remote_id="11")
+        self.db.update_acquisition_request(self.user.id, first["id"], linked_abs_id="book-42")
+        repeated = self.add(job, remote_id="11", status="in_progress", remote_status="downloading")
+        self.assertEqual(repeated["id"], first["id"])
+        self.assertEqual((repeated["status"], repeated["remote_status"], repeated["linked_abs_id"]),
+                         ("paired", "available", "book-42"))
 
     def test_ungrouped_receipt_can_be_attached_without_resetting_it(self):
         fields = {**self.receipt(), "title": "Original metadata", "status": "arrived"}
@@ -165,6 +233,14 @@ class TestAcquisitionJobs(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.add(self.job(), remote_id=remote_id)
                 self.assertEqual(self.db.get_acquisition_request(self.user.id, row["id"]), before)
+
+    def test_adopted_external_history_cannot_be_claimed_into_a_new_submission_job(self):
+        legacy = self.db.add_acquisition_requests(self.user.id, [{
+            **self.receipt(), "title": "Adopted externally", "adopted": True,
+        }])[0]
+        with self.assertRaises(ValueError):
+            self.add(self.job())
+        self.assertEqual(self.db.get_acquisition_request(self.user.id, legacy["id"])["group_key"], None)
 
     def test_ambiguous_legacy_receipts_are_refused(self):
         for _ in range(2):

@@ -35,7 +35,9 @@ def _bookorbit(**overrides):
     client = SimpleNamespace(
         is_configured=lambda: True,
         request_sources=MagicMock(return_value={"configured": 1, "enabled": 1}),
-        check_request_availability=MagicMock(return_value=[]),
+        check_request_availability=MagicMock(side_effect=lambda items: [{} for _ in items]),
+        get_book_detail=MagicMock(return_value={"title": "Example Book", "authors": ["A. Writer"],
+                                                "files": [{"format": "epub", "filename": "Example Book.epub"}]}),
         create_request=MagicMock(return_value={"request": {"id": 11, "status": "pending"}, "subscribed": True}),
         create_request_pair=MagicMock(return_value={
             "ebook": {"request": {"id": 21, "status": "pending"}},
@@ -199,18 +201,87 @@ class TestCreate(AcquisitionBase):
         os.environ["ACQUISITION_ALLOW_READERS"] = "true"
         self.login()
 
+    def test_database_failure_prevents_any_provider_submission(self):
+        with patch.object(self.svc, "create_acquisition_job", side_effect=OSError("disk full")):
+            resp = self.create()
+        self.assertEqual((resp.status_code, resp.get_json()), (503, {"error": "job_save_failed"}))
+        self.bo.check_request_availability.assert_not_called()
+        self.bo.create_request.assert_not_called()
+        self.assertEqual(self.svc.get_acquisition_jobs(self.reg.id), [])
+
+    def test_uncertain_response_reconciles_positive_existing_request_without_resubmit(self):
+        self.bo.create_request.return_value = None
+        first = self.create(authors="A. Writer").get_json()
+        self.bo.check_request_availability.side_effect = None
+        self.bo.check_request_availability.return_value = [{"existingRequestId": 11}]
+        self.bo.get_request.return_value = {"id": 11, "title": "Example Book", "authors": ["A. Writer"], "mediaKind": "ebook", "status": "pending"}
+        second = self.create(job_id=first["job_id"]).get_json()
+        self.assertEqual(second["job_id"], first["job_id"])
+        self.assertEqual(len(second["requests"]), 1)
+        self.assertEqual(second["job"]["ebook_submission_state"], "accepted")
+        self.bo.create_request.assert_called_once()
+
+    def test_conflicting_existing_request_title_is_not_adopted(self):
+        self.bo.create_request.return_value = None
+        first = self.create(authors="A. Writer").get_json()
+        self.bo.check_request_availability.side_effect = None
+        self.bo.check_request_availability.return_value = [{"existingRequestId": 11}]
+        self.bo.get_request.return_value = {
+            "id": 11, "title": "Wrong Volume", "authors": ["A. Writer"], "mediaKind": "ebook", "status": "pending",
+        }
+        retry = self.create(job_id=first["job_id"])
+        self.assertEqual(retry.get_json()["failures"], {"ebook": "existing_request_unverified"})
+        self.assertEqual(self.svc.get_acquisition_job(self.reg.id, first["job_id"])["requests"], [])
+        self.bo.create_request.assert_called_once()
+
+    def test_title_only_owned_result_needs_edition_confirmation(self):
+        self.bo.check_request_availability.side_effect = None
+        self.bo.check_request_availability.return_value = [{"ownedBookId": 99}]
+        data = self.create().get_json()
+        self.assertEqual(data["failures"], {"ebook": "owned_edition_unverified"})
+        self.assertIsNone(data["job"]["ebook_source_id"])
+        self.bo.create_request.assert_not_called()
+
+    def test_already_owned_same_title_different_isbn_requires_review(self):
+        self.bo.check_request_availability.side_effect = None
+        self.bo.check_request_availability.return_value = [{"ownedBookId": 99}]
+        self.bo.get_book_detail.return_value = {
+            "title": "Example Book", "isbn13": "9780000000002",
+            "files": [{"format": "epub", "filename": "Example Book.epub"}],
+        }
+        data = self.create(isbn13="9780000000001").get_json()
+        self.assertEqual(data["failures"], {"ebook": "owned_edition_unverified"})
+        self.assertIsNone(data["job"]["ebook_source_id"])
+        self.bo.create_request.assert_not_called()
+
+    def test_ambiguous_already_owned_edition_waits_for_identification(self):
+        self.bo.check_request_availability.side_effect = None
+        self.bo.check_request_availability.return_value = [{"ownedBookId": 99}]
+        self.bo.get_book_detail.return_value = {"title": "Unrelated Edition", "files": [
+            {"format": "epub", "filename": "wrong.epub"},
+        ]}
+        response = self.create()
+        self.assertEqual(response.status_code, 502)
+        data = response.get_json()
+        self.assertEqual(data["failures"], {"ebook": "owned_edition_unverified"})
+        self.assertEqual(data["job"]["ebook_submission_state"], "needs_identification")
+        self.assertIsNone(data["job"]["ebook_source_id"])
+        self.bo.create_request.assert_not_called()
+
     def test_single_format_uses_create_request(self):
         data = self.create(authors="A. Writer", series_index="2").get_json()
         self.bo.create_request.assert_called_once_with(
             "Example Book", "ebook", authors=["A. Writer"], isbn13=None, series_name=None, series_index=2)
         self.bo.create_request_pair.assert_not_called()
         self.assertEqual([r["media_kind"] for r in data["requests"]], ["ebook"])
-        self.assertIsNone(data["requests"][0]["group_key"])
+        self.assertEqual(data["requests"][0]["group_key"], data["job_id"])
+        self.assertEqual(data["job"]["formats"], ["ebook"])
 
-    def test_both_uses_pairs_route_with_shared_group_key(self):
+    def test_both_uses_two_separate_receipts_on_one_saved_job(self):
+        self.bo.create_request.side_effect = lambda title, kind, **work: {"request": {"id": 21 if kind == "ebook" else 22, "status": "pending"}}
         data = self.create(formats=["audiobook", "ebook"]).get_json()
-        self.bo.create_request_pair.assert_called_once()
-        self.bo.create_request.assert_not_called()
+        self.assertEqual(self.bo.create_request.call_count, 2)
+        self.bo.create_request_pair.assert_not_called()
         rows = {r["media_kind"]: r for r in data["requests"]}
         self.assertEqual(set(rows), {"ebook", "audiobook"})
         self.assertTrue(rows["ebook"]["group_key"])
@@ -221,20 +292,21 @@ class TestCreate(AcquisitionBase):
         row = self.svc.get_acquisition_requests(self.reg.id)[0]
         self.assertEqual(
             (row["partner_source"], row["partner_source_id"], row["partner_filename"]),
-            ("BookOrbit", "42", "Example Book.epub"))
+            ("BookOrbit", "42", None), "an audiobook partner must not carry an ebook filename")
         self.assertEqual((row["service"], row["remote_id"], row["status"]), ("BookOrbit", "11", "waiting"))
 
-    def test_repeat_submission_returns_the_existing_row(self):
-        first = self.create().get_json()["requests"][0]
-        again = self.create(partner={"source": "BookOrbit", "source_id": "42", "filename": "b.epub"}).get_json()
-        rows = self.svc.get_acquisition_requests(self.reg.id)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(again["requests"][0]["id"], first["id"])
-        self.assertEqual((rows[0]["partner_source_id"], rows[0]["partner_filename"]), ("42", "b.epub"))
+    def test_repeat_submission_reuses_saved_job_without_second_provider_call(self):
+        first = self.create().get_json()
+        again = self.create(job_id=first["job_id"]).get_json()
+        self.assertEqual(again["job_id"], first["job_id"])
+        self.assertEqual(again["requests"][0]["id"], first["requests"][0]["id"])
+        self.bo.create_request.assert_called_once()
+        self.bo.check_request_availability.assert_called_once()
 
-    def test_repeat_submission_keeps_an_existing_partner(self):
-        self.create(partner={"source": "BookOrbit", "source_id": "42", "filename": "a.epub"})
-        self.create(partner={"source": "ABS", "source_id": "99", "filename": "z.epub"})
+    def test_existing_partner_cannot_be_silently_changed_on_same_job(self):
+        first = self.create(partner={"source": "BookOrbit", "source_id": "42", "filename": "a.epub"}).get_json()
+        resp = self.create(job_id=first["job_id"], partner={"source": "ABS", "source_id": "99", "filename": "z.epub"})
+        self.assertEqual((resp.status_code, resp.get_json()), (409, {"error": "job_identity_changed"}))
         rows = self.svc.get_acquisition_requests(self.reg.id)
         self.assertEqual((len(rows), rows[0]["partner_source_id"]), (1, "42"))
 
@@ -248,15 +320,18 @@ class TestCreate(AcquisitionBase):
         self.assertEqual(len(self.svc.get_acquisition_requests(self.reg.id)), 1)
 
     def test_already_owned_format_is_not_requested(self):
+        self.bo.check_request_availability.side_effect = None
         self.bo.check_request_availability.return_value = [{"ownedBookId": 99}]
-        data = self.create().get_json()
-        self.assertEqual(data, {"requests": [], "already_owned": [{"format": "ebook", "book_id": 99}]})
+        data = self.create(authors="A. Writer").get_json()
+        self.assertEqual(data["already_owned"], [{"format": "ebook", "book_id": 99}])
+        self.assertEqual(data["job"]["ebook_source_id"], "99")
         self.bo.create_request.assert_not_called()
         self.assertEqual(self.svc.get_acquisition_requests(self.reg.id), [])
 
     def test_owned_half_is_skipped_in_a_both_request(self):
+        self.bo.check_request_availability.side_effect = None
         self.bo.check_request_availability.return_value = [{"ownedBookId": 99}, {"ownedBookId": None}]
-        data = self.create(formats=["ebook", "audiobook"]).get_json()
+        data = self.create(formats=["ebook", "audiobook"], authors="A. Writer").get_json()
         self.bo.create_request.assert_called_once()
         self.assertEqual(self.bo.create_request.call_args.args[:2], ("Example Book", "audiobook"))
         self.assertEqual(data["already_owned"], [{"format": "ebook", "book_id": 99}])
@@ -267,11 +342,56 @@ class TestCreate(AcquisitionBase):
         self.assertEqual(self.create(series_index="x").get_json(), {"error": "invalid_series_index"})
         self.assertEqual(self.client.post("/api/acquisition/bookorbit", data="nope").status_code, 400)
 
-    def test_refused_request_saves_nothing(self):
+    def test_existing_failed_receipt_reconciles_to_verified_downloading(self):
+        job = self.svc.create_acquisition_job(self.reg.id, "Example Book", ["ebook"], authors="A. Writer")
+        prior = self.svc.add_acquisition_requests(self.reg.id, [dict(
+            service="BookOrbit", media_kind="ebook", remote_kind="request", remote_id="11",
+            title="Example Book", authors="A. Writer", group_key=job["id"],
+            status="failed", remote_status="failed", status_detail="Old transient failure",
+        )])[0]
+        mark_at = utcnow()
+        self.svc.update_acquisition_request(self.reg.id, prior["id"],
+                                            progress_mark="tracked-before", progress_changed_at=mark_at)
+        self.bo.check_request_availability.side_effect = None
+        self.bo.check_request_availability.return_value = [{"existingRequestId": 11}]
+        self.bo.get_request.return_value = {
+            "id": 11, "title": "Example Book", "authors": ["A. Writer"],
+            "mediaKind": "ebook", "status": "downloading",
+            "download": {"id": 5, "grabbedAt": "now", "progressPercent": 25},
+        }
+        response = self.create(job_id=job["id"])
+        self.assertEqual(response.status_code, 200)
+        requests = response.get_json()["requests"]
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["id"], prior["id"])
+        self.assertEqual((requests[0]["status"], requests[0]["remote_status"]),
+                         ("in_progress", "downloading"))
+        saved = self.svc.get_acquisition_request(self.reg.id, prior["id"])
+        self.assertEqual((saved["progress_mark"], saved["progress_changed_at"]), ("tracked-before", mark_at))
+        self.assertIn(prior["id"], [row["id"] for row in self.svc.get_refreshable_acquisition_requests(
+            self.reg.id, utcnow())])
+        self.bo.create_request.assert_not_called()
+
+    def test_invalid_unhashable_formats_return_400_without_provider_calls(self):
+        for body in ({"formats": [{}]}, {"formats": ["ebook", {}]},
+                     {"submit_formats": [{}]}, {"submit_formats": ["ebook", {}]}):
+            with self.subTest(body=body):
+                response = self.create(**body)
+                self.assertEqual((response.status_code, response.get_json()),
+                                 (400, {"error": "invalid_formats"}))
+        self.assertEqual(self.svc.get_acquisition_jobs(self.reg.id), [])
+        self.bo.check_request_availability.assert_not_called()
+        self.bo.create_request.assert_not_called()
+
+    def test_lost_request_response_saves_uncertainty_and_blocks_blind_retry(self):
         self.bo.create_request.return_value = None
         resp = self.create()
-        self.assertEqual((resp.status_code, resp.get_json()), (502, {"error": "request_failed"}))
+        self.assertEqual(resp.status_code, 502)
+        job_id = resp.get_json()["job_id"]
+        self.assertEqual(resp.get_json()["job"]["ebook_submission_state"], "uncertain")
         self.assertEqual(self.svc.get_acquisition_requests(self.reg.id), [])
+        self.assertEqual(self.create(job_id=job_id).get_json()["failures"], {"ebook": "submission_uncertain"})
+        self.bo.create_request.assert_called_once()
 
 
 class TestMineCancelDismiss(AcquisitionBase):
@@ -286,6 +406,16 @@ class TestMineCancelDismiss(AcquisitionBase):
         fields.update(extra)
         return self.svc.add_acquisition_requests(user.id, [fields])[0]
 
+    def test_job_endpoints_are_reader_owned(self):
+        job = self.svc.create_acquisition_job(self.reg.id, "Reader Book", ["ebook"])
+        admin = self.svc.get_user_by_username("admin")
+        other_job = self.svc.create_acquisition_job(admin.id, "Admin Book", ["audiobook"])
+        self.login()
+        jobs = self.client.get("/api/acquisition/jobs").get_json()["jobs"]
+        self.assertEqual([j["id"] for j in jobs], [job["id"]])
+        self.assertEqual(self.client.get(f"/api/acquisition/jobs/{job['id']}").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/acquisition/jobs/{other_job['id']}").status_code, 404)
+
     def test_mine_returns_only_the_callers_rows(self):
         mine = self._row(self.reg, title="Reader Book")
         self._row(self.svc.get_user_by_username("admin"), title="Admin Book")
@@ -298,7 +428,7 @@ class TestMineCancelDismiss(AcquisitionBase):
         row = self._row(self.reg)
         self.login()
         self.assertEqual(self.client.post(f"/api/acquisition/{row['id']}/dismiss").status_code, 200)
-        self.assertEqual(self.client.get("/api/acquisition/mine").get_json(), {"requests": []})
+        self.assertEqual(self.client.get("/api/acquisition/mine").get_json(), {"requests": [], "jobs": []})
 
     def test_mine_maps_bookorbit_status_and_keeps_arrival_hint(self):
         row = self._row(self.reg)
@@ -426,7 +556,7 @@ class TestAcquisitionMigration(unittest.TestCase):
             self._run(engine, module, module.upgrade)
             inspector = sa.inspect(engine)
             columns = {c["name"] for c in inspector.get_columns("acquisition_requests")}
-            self.assertEqual(columns, {c.name for c in AcquisitionRequest.__table__.columns} - {"progress_mark", "progress_changed_at", "adopted"})
+            self.assertEqual(columns, {c.name for c in AcquisitionRequest.__table__.columns} - {"progress_mark", "progress_changed_at", "adopted", "decision_code", "decision_action"})
             self.assertIn("ix_acquisition_requests_user_id", {i["name"] for i in inspector.get_indexes("acquisition_requests")})
             self._run(engine, module, module.downgrade)
             self.assertNotIn("acquisition_requests", sa.inspect(engine).get_table_names())
@@ -450,7 +580,7 @@ class TestAcquisitionMigration(unittest.TestCase):
 
         cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
         cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["f6b585a12c34"])
+        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["c585c20261112"])
 
 
 class TestSettingRegistration(unittest.TestCase):

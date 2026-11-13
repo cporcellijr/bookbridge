@@ -1,6 +1,6 @@
 # Plan: get the missing half from the search page (#585)
 
-Status: **Follow-up workflow redesign approved 2026-11-12. Phases A and B are complete; Phase C is the next implementation handoff.** The current plan and findings below override older design notes. The original #585 implementation is already live; its delivery history follows the current plan. Nothing pushed, posted, or deployed by this follow-up.
+Status: **Follow-up workflow redesign approved 2026-11-12. Phases A–C are complete and independently verified. Phase D is the next implementation handoff; D–F remain unimplemented.** The current plan and findings below override older design notes. The original #585 implementation is already live; its delivery history follows the current plan. Nothing pushed, posted, or deployed by this reviewer.
 
 ## Current follow-up plan (2026-11-12)
 
@@ -155,10 +155,96 @@ These are inspected source contracts; write behavior is NOT live-tested in this 
 |---|---|---|
 | A | COMPLETE; upstream flag gap recorded | Endpoint/capability investigation above |
 | B | COMPLETE; verified 2026-11-12 | Durable jobs, linked halves, and explicit existing-edition identities; additive migration and regressions |
-| C | Planned; auto-picker depends on A gap | BookOrbit decision handling; Shelfmark Both and source-policy support |
-| D | Planned | Supported-library arrival detection, integration picker, completion-triggered scans |
+| C | COMPLETE; independent review and regression verification passed; upstream auto flag still absent | Durable provider receipts, BookOrbit conservative release decisions, Shelfmark Both and source policy |
+| D | NEXT; [handoff prompt](PROMPT_585_PHASE_D.md) | Supported-library arrival detection, integration picker, completion-triggered scans |
 | E | Planned | Processing job UI/actions, clear-search handoff, existing-job search behavior |
 | F | Planned | Full regression/browser acceptance, docs, additive migration/deployment as needed |
+
+### Phase C implementation handoff (2026-11-12; not committed, deployed or merged)
+
+- Current branch includes local dev `2d38196f` (including P15g). A new Get saves or
+  reuses reader-owned `AcquisitionJob` before provider submissions. `formats` is
+  intent; optional `submit_formats` chooses the provider's portion. `job_id` resumes
+  the same job. `existing.ebook/audiobook` and the legacy single-format `partner`
+  record exact owned identities. Both formats share the job UUID as receipt group key.
+- Each missing format reserves a durable uncertain attempt before network submission.
+  Sequential receipt attachment marks it accepted. Refusals mark failed or needs release.
+  An interrupted or timed-out POST cannot be assumed rejected: the attempt stays
+  uncertain across restart and prevents blind retries. A positively verified BookOrbit
+  `existingRequestId` can reconcile to an accepted receipt; otherwise intervention
+  or upstream evidence is required. Exactly-once delivery is not claimed.
+- BookOrbit uses independent single-format create operations to retain partial
+  success and accepted receipts immediately, rather than one paired call with two
+  accepted handles. Already-owned results are kept on the job only when current
+  BookOrbit detail confirms the requested format and edition metadata. Unverified
+  editions wait for later identification/review; they are never selected silently.
+- BookOrbit's picker endpoints re-read each request before listing and grabbing.
+  `AUTOMATION_DISABLED`, supported explicit handbacks or `selfServe` allow a pick;
+  approved/searching status and missing failure codes do not. Configuration failures
+  lead to repair, not release selection. Each receipt retains a concise
+  `decision_code` and `decision_action` rather than the provider's full payload.
+  A grab also checks that its release still appears in a current read.
+- Shelfmark Both performs two ordered, independent single submissions, persisting each
+  receipt before the next. Release keys are per format (`release_keys`) and bound to
+  a reader's cached search, expiry, title, author and format. Its defaults,
+  `rules` and `source_modes` determine actual selected-source modes: download,
+  request_release, request_book or blocked; server refusals remain authoritative.
+- `GET /api/acquisition/jobs`, `GET /api/acquisition/jobs/<job_id>` and
+  additive `jobs` in `mine` expose reader-owned job states for later Processing
+  UI. Existing per-request endpoints remain available. Additive migration
+  `c585c20261112` stores per-half submission states/reasons and structured
+  BookOrbit decisions. Live provider writes and migration were not performed.
+- **Known provider gap:** BookOrbit v3.8.0 still has no reader-safe automatic-grab
+  setting. The integration's admin settings endpoint is 403. Absence of
+  `AUTOMATION_DISABLED` is inconclusive; unspecified automation remains unknown
+  and manual grabbing is blocked, even if this means no manual picker for some
+  legitimately disabled configurations. Source/provider timeouts also cannot be
+  proven rejected without an authoritative receipt. Phase E must update the
+  existing visible picker affordance to consume the structured decision flags;
+  this Phase C intentionally does not redesign UI. Phase D still owns arrivals,
+  scans, destination settings, and pairing after arrival.
+
+### Phase C independent-review corrections (2026-11-12; reviewed)
+
+All five independent findings have scoped fixes in this worktree, without starting Phase D:
+
+1. **Uncertain submissions:** a SQLite `BEGIN IMMEDIATE` state transition refuses to downgrade
+   `uncertain` or `accepted` during preflight, including a competing request that races between
+   the initial job read and release/policy decisions. Only an explicitly confirmed provider
+   rejection can release a reserved attempt. A missing Shelfmark release choice does not turn
+   uncertainty into `needs_release`; ambiguous `submit_failed`, unknown codes, 5xx and missing
+   responses remain uncertain and cannot trigger a second POST. No provider idempotency key exists;
+   ambiguous attempts still need an authoritative receipt or manual reconciliation.
+2. **Release query identity:** the cached title/author of each Shelfmark release remains the
+   original search query. Each result's separate display author no longer poisons subsequent
+   entries. Endpoint tests select the second result and submit it with the original author.
+3. **Existing BookOrbit receipt:** a verified current request updates an existing failed receipt's
+   status, remote status, reason and structured decision while retaining its ID, owner, partner,
+   progress timestamps, paired/arrived protections and dismissed history. Confirmed active
+   requests re-enter ordinary refresh tracking.
+4. **Shelfmark options:** advertise release-choosable source overrides when defaults block a
+   format. Keep `formats` as the existing format-to-mode object; submission still rechecks the
+   specific source's authoritative current policy. Source-only `request_book` overrides are
+   not advertised as usable without a selectable source.
+5. **Malformed formats:** both provider endpoints validate element types and membership before
+   deduplication, returning `400 invalid_formats` for unhashable values without provider I/O.
+
+Before fixes: isolated regression selection **15 failed / 2 passed / 1 warning** (includes
+8 expected failing subtests for malformed formats). A separate HTTP 503 with a deceptive
+`policy_refused` payload also failed before the final fix, demonstrating why all 5xx
+responses must be treated as uncertain regardless of their code. After fixes: the
+acquisition-focused suite **271 passed / 31 subtests / 1 warning**, zero failures,
+including a late preflight
+race and second-release endpoint test. Independent review confirmed the five fixes. Phase C code
+is committed as `270acd80` (+43 test functions). Reviewer verification: **271 passed / 31 subtests**;
+full combined suite on `ca983774`, including dev through `e088ff73`: **7681 passed / 15 skipped /
+1325 subtests / 12 warnings / zero failures** (422.66s). The three earlier shell failures are resolved.
+Later Library UI changes are inherited from dev without a separate UI review or UI-specific test run,
+as the user requested; acquisition implementation files did not change during that refresh.
+No unrelated UI files were authored for Phase C, and no live provider POST, deployment, restart or
+live migration was performed by this reviewer. Deployment requires **additive migration + restart**.
+The next agent should use [the Phase D prompt](PROMPT_585_PHASE_D.md) on the refreshed feature branch
+and leave its work uncommitted for independent review before the next local phase merge.
 
 Phase B branch: `codex/585-acquisition-jobs`, created from local dev `b177d362` in isolated worktree
 `C:/Server/stacks/abs-kosync-enhanced/.local-review-notes/585-acquisition-jobs-worktree`.
