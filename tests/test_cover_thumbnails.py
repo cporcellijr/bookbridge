@@ -228,7 +228,6 @@ class TestThumbnailCoverRoute(unittest.TestCase):
     def test_served_thumb_gets_versioned_url_cached_for_a_year(self):
         (self.covers / "thumbs").mkdir()
         (self.covers / "thumbs" / "abc.jpg").write_bytes(b"small image")
-        self.assertIsNone(self.web.thumb_cover_src("abc"))
         self._hot_get("/covers/thumb/abc.jpg")
         src = self.web.thumb_cover_src("abc")
         self.assertRegex(src, r"^/covers/thumb/abc\.jpg\?v=[0-9a-f]+-[0-9a-f]+$")
@@ -248,12 +247,11 @@ class TestThumbnailCoverRoute(unittest.TestCase):
         self._hot_get("/covers/thumb/abc.jpg")
         self.assertNotEqual(self.web.thumb_cover_src("abc"), before)
 
-    def test_cold_or_expired_thumb_is_not_rendered_directly(self):
+    def test_cold_thumb_is_not_rendered_directly(self):
         from flask import Flask
         app = Flask(__name__)
-        self.web._thumb_versions["abc"] = ("1-2", 0)
         self.assertIsNone(self.web.thumb_cover_src("abc"))
-        self.web._thumb_versions["abc"] = ("1-2", float("inf"))
+        self.web._thumb_versions["abc"] = "1-2"
         with patch.object(self.web.cover_thumbnail_cache, "is_current", return_value=False), \
                 patch.object(self.web.cover_thumbnail_cache, "enqueue", return_value=True):
             with app.test_request_context("/covers/thumb/abc.jpg", method="HEAD"):
