@@ -1,5 +1,38 @@
 (function () {
     'use strict';
+    // About this book: render cached text, or fetch it after first paint; stay hidden without text.
+    function initBookAbout(section) {
+        const text = section.querySelector('[data-about-text]');
+        const toggle = section.querySelector('[data-about-toggle]');
+        function show() {
+            section.hidden = false;
+            text.classList.add('is-clamped');
+            if (text.scrollHeight > text.clientHeight + 1) {
+                toggle.hidden = false;
+            } else {
+                text.classList.remove('is-clamped');
+            }
+        }
+        toggle.addEventListener('click', function () {
+            const open = toggle.getAttribute('aria-expanded') !== 'true';
+            toggle.setAttribute('aria-expanded', String(open));
+            text.classList.toggle('is-clamped', !open);
+            toggle.textContent = open ? toggle.dataset.less : toggle.dataset.more;
+        });
+        if (!section.dataset.synopsisUrl) {
+            if (text.textContent.trim()) show();
+            return;
+        }
+        fetch(section.dataset.synopsisUrl).then(function (response) {
+            return response.ok ? response.json() : null;
+        }).then(function (data) {
+            if (!data || !data.text) return;
+            text.textContent = data.text;
+            show();
+        }).catch(function () {});
+    }
+    const about = document.querySelector('[data-book-about]');
+    if (about) initBookAbout(about);
     document.querySelectorAll('[data-bookfusion-unlink]').forEach(function (button) {
         button.addEventListener('click', async function () {
             if (!confirm(bbT('Unlink BookFusion?'))) return;
