@@ -24,7 +24,7 @@ const mutations = {
   popoverReposition: ["positionLibraryFilterPopover();" + String.fromCharCode(10) + "                if (focusTrigger)", "void positionLibraryFilterPopover;" + String.fromCharCode(10) + "                if (focusTrigger)"],
   activeFacet: ["Object.values(filterGroups).some(select => select && select.value !== 'all')", "false"],
   activeSearch: ["|| !!dashboardSearch?.value.trim()" + String.fromCharCode(10) + "                    || (attentionOnlyFilter", "|| false" + String.fromCharCode(10) + "                    || (attentionOnlyFilter"],
-  activeAttention: ["(attentionOnlyFilter ? !!attentionOnlyFilter.checked : savedAttentionPreference);", "false;"],
+  activeAttention: ["(attentionOnlyFilter?.checked === true);", "false;"],
   disableClear: ["if (filterClearButton) filterClearButton.disabled = !active;", "if (filterClearButton) filterClearButton.disabled = true;"],
   hideReset: ["if (filterResetButton) filterResetButton.hidden = !active;", "if (filterResetButton) filterResetButton.hidden = true;"],
   preserveSort: ["if (dashboardSearch) dashboardSearch.value = '';", "if (dashboardSearch) dashboardSearch.value = ''; sortSelect.value = 'title';"],
@@ -202,7 +202,7 @@ for (const [kind, turnOn, turnOff] of [
 labels.attentionOnlyFilter = null;
 labels.savedAttentionPreference = true;
 labels.updateFilterButtonLabel();
-assert.equal(labelReset.hidden, false, 'Missing attention box must expose stale saved preference');
+assert.equal(labelReset.hidden, true, 'A saved preference with no attention box filters nothing, so no ×');
 labels.savedAttentionPreference = false;
 labels.updateFilterButtonLabel();
 assert.equal(labelReset.hidden, true);

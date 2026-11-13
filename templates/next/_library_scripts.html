@@ -271,7 +271,7 @@
             function hasActiveLibraryFilters() {
                 return Object.values(filterGroups).some(select => select && select.value !== 'all')
                     || !!dashboardSearch?.value.trim()
-                    || (attentionOnlyFilter ? !!attentionOnlyFilter.checked : savedAttentionPreference);
+                    || (attentionOnlyFilter?.checked === true);
             }
 
             function updateFilterButtonLabel() {
