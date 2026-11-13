@@ -233,11 +233,20 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
         start = library.index('/* P3 additions:')
         end = library.index('</script>', start)
         library = library[:start] + library[end:]
+        # P16b's one-filter panel is New-only and exercised by test_ui_new_library_filter.js.
+        for first, last in P16B_LIBRARY_NEW_ONLY:
+            start = library.index(first)
+            end = library.index(last, start)
+            library = library[:start] + '</script><script>' + library[end:]
         normalize = lambda text: '\n'.join(' '.join(line.split()) for line in text.splitlines() if line.strip())
         self.assertNotIn('function updateKoSyncHash(', library)
         self.assertNotIn('function linkBookFusion(', library)
         library = normalize(library)
         library = library.replace('// Initial Sort Defaults', '</script><script>// Initial Sort Defaults')
+        for updated, previous in reversed(P16A_LIBRARY_ALLOWED_CHANGES):
+            self.assertEqual(library.count(updated), 1, 'P16a allowed change drifted')
+            library = library.replace(updated, previous, 1)
+        library = normalize(library)
         # Exact allowed changes: new paired/attention predicates; localized counts;
         # storage denial handling; duplicate-card/spine updates and live sort values.
         changes = LIBRARY_HEADER_ALLOWED_CHANGES + LIBRARY_ALLOWED_CHANGES
@@ -255,9 +264,45 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
                 self.assertIn(block, classic, 'Classic changed: update the Library copy or document the exact deliberate change')
 
 
+# P16b: (first line, line that ends the New-only region) for the one-filter panel.
+P16B_LIBRARY_NEW_ONLY = (
+    ("const statusFilter = document.getElementById('status-filter');", "const seriesFilter = document.getElementById('series-filter');"),
+    ('filterGroups.author = authorFilter;', "const filterCount = document.getElementById('filter-count');"),
+    ('function updateFacetOptions() {', "// Offers a route into the Search tab's"),
+    ('function matchesStatusFilter(', 'function matchesFormatFilter('),
+    ('function filterBooks() {', 'window.toggleSeries = function'),
+    ('// One active facet at a time', 'if (dashboardSearch) {'),
+)
+
+
+# P16a's intentional New-only changes, reversed exactly for the copied-Classic check.
+P16A_LIBRARY_ALLOWED_CHANGES = (
+    ("const libraryGrid = document.getElementById('library-grid');", "const dashboardSections = Array.from(document.querySelectorAll('.dashboard-section'));\nconst dashboardGrids = Array.from(document.querySelectorAll('.dashboard-section .book-grid'));"),
+    ("const addBookSearchUrl = '{{ url_for('suggestions', tab='search') }}&q=';", "const addBookSearchUrl = '{{ url_for('suggestions', tab='search') }}&q=';\nconst notStartedSection = document.getElementById('not-started-section');\nconst notStartedHeader = document.getElementById('not-started-header');\nconst notStartedGrid = document.getElementById('not-started-grid');\nconst notStartedChevron = document.getElementById('not-started-chevron');"),
+    ("function hasVisibleGridItems() {\nif (!libraryGrid) return false;\nreturn Array.from(libraryGrid.children).some(entry =>\n!entry.classList.contains('hidden') &&\nentry.style.display !== 'none' &&\n(entry.classList.contains('book-card') ||\n(entry.classList.contains('series-group') &&\n!document.body.classList.contains('series-grouping-off'))));", "function updateNotStartedChevron(isExpanded) {\nif (notStartedChevron) {\nnotStartedChevron.textContent = isExpanded ? '▼' : '▶';"),
+    ('// Count every book once, regardless of its series presentation.', "if (notStartedHeader) {\nnotStartedHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');\n}\n}\nfunction updateDashboardSectionVisibility() {\ndashboardSections.forEach(section => {\nconst grid = section.querySelector('.book-grid');\nif (!grid) return;\nconst visibleCards = grid.querySelectorAll('.book-card:not(.hidden)');\nconst visibleGroups = grid.querySelectorAll('.series-group:not(.hidden)');\nif (visibleCards.length > 0 || visibleGroups.length > 0) {\nsection.classList.remove('hidden');\n} else {\nsection.classList.add('hidden');\n}\n});\n}\n// Finished volumes can appear in their series and under Finished.\n// Count each book once, regardless of grouping or duplicate cards."),
+    ('const noResults = !hasVisibleGridItems();', "const noResults = document.querySelectorAll('.dashboard-section:not(.hidden)').length === 0;"),
+    ("searchHandoff.classList.remove('hidden');\n}", "searchHandoff.classList.remove('hidden');\n}\nwindow.toggleNotStarted = function () {\nif (!notStartedGrid || !notStartedSection || !notStartedHeader) return;\nconst isShowing = notStartedGrid.classList.toggle('show');\nnotStartedSection.classList.toggle('active');\nnotStartedHeader.classList.toggle('active');\nupdateNotStartedChevron(isShowing);\ntry {\nlocalStorage.setItem('not_started_expanded', isShowing);\n} catch (e) {\nconsole.debug('LocalStorage error:', e);\n}\n};\n// Format and series are orthogonal axes, so each is its own predicate over\n// one card rather than a branch in a single mutually-exclusive filter."),
+    ("reading: 'asc', // In progress, Not started, Finished; newest sync first", "status: 'asc',"),
+    ("let savedSort = 'reading';\ntry { savedSort = localStorage.getItem('abs_kosync_sort') || 'reading'; } catch (e) { /* storage unavailable */ }\nif (savedSort === 'status' || !Object.prototype.hasOwnProperty.call(sortState, savedSort)) savedSort = 'reading';", "let savedSort = 'title';\ntry { savedSort = localStorage.getItem('abs_kosync_sort') || 'title'; } catch (e) { /* storage unavailable */ }"),
+    ('const storedDirections = JSON.parse(savedSortState);\nif (storedDirections.status && !storedDirections.reading) {\nstoredDirections.reading = storedDirections.status;\n}\ndelete storedDirections.status;\nsortState = { ...sortState, ...storedDirections };', 'sortState = { ...sortState, ...JSON.parse(savedSortState) };'),
+    ("function readingSortDetails(el) {\nconst cards = el.classList.contains('series-group')\n? Array.from(el.querySelectorAll('.book-card')) : [el];\nconst members = cards.length ? cards : [el];\nconst rank = Math.min(...members.map(card => {\nconst progress = parseFloat(card.dataset.progress || '0') || 0;\nif (progress > 0 && progress < 100) return 0;\nreturn progress >= 100 ? 2 : 1;\n}));\nreturn {\nrank,\nsyncAge: Math.min(getLastSyncAge(el), ...members.map(getLastSyncAge))\n};\n}", ''),
+    ('let comparison = 0;', "let comparison = 0;\nconst isSeries = (el) => el.classList.contains('series-group');"),
+    ("if (sortBy === 'reading') {\nconst statusA = readingSortDetails(a);\nconst statusB = readingSortDetails(b);\ncomparison = statusA.rank - statusB.rank;\nif (comparison === 0 && statusA.syncAge !== statusB.syncAge) {\ncomparison = statusA.syncAge < statusB.syncAge ? -1 : 1;\n}\nif (comparison === 0) comparison = sortTitleOf(a).localeCompare(sortTitleOf(b));\n} else if (sortBy === 'last_sync') {", "if (sortBy === 'last_sync') {"),
+    ('return titleA.localeCompare(titleB);\n}', "return titleA.localeCompare(titleB);\n}\n} else if (sortBy === 'status') {\nvalA = a.dataset.status || '';\nvalB = b.dataset.status || '';\ncomparison = valA.localeCompare(valB);"),
+    ('sortCards(libraryGrid, sortBy, direction);', 'dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));'),
+    ('// .series-children rather than a child of it -- it needs the same tag-and-restore', '// .series-children rather than a child of it -- it is a duplicate of a\n// flat card just like the others, so it needs the same tag-and-restore'),
+    ('if (!libraryGrid) return;', "const inProgressGrid = document.getElementById('in-progress-grid');\nconst notStartedGridEl = document.getElementById('not-started-grid');\nconst finishedGrid = document.getElementById('finished-grid');\n// Track abs-ids already rendered flat so series children don't duplicate.\nconst flatAbsIds = new Set();\ndocument.querySelectorAll('.book-grid > .book-card').forEach(c => {\nif (c.dataset.absId) flatAbsIds.add(c.dataset.absId);\n});"),
+    ('libraryGrid.appendChild(card);', "const absId = card.dataset.absId || '';\nif (absId && flatAbsIds.has(absId)) {\ncard.classList.add('flatten-duplicate');\nreturn;\n}\nconst progress = parseFloat(card.dataset.progress || '0') || 0;\nlet target;\nif (progress > 0 && progress < 100) target = inProgressGrid;\nelse if (progress >= 100) target = finishedGrid;\nelse target = notStartedGridEl;\nif (target) {\ntarget.appendChild(card);\nif (absId) flatAbsIds.add(absId);\n}"),
+    ('function restoreSeriesGroups() {', "function restoreSeriesGroups() {\n// Clear duplicate flags first.\ndocument.querySelectorAll('.book-card.flatten-duplicate').forEach(card => {\ncard.classList.remove('flatten-duplicate');\n});"),
+    ("if (typeof filterBooks === 'function') filterBooks();", "if (typeof filterBooks === 'function') filterBooks();\nupdateDashboardSectionVisibility();"),
+    ("}\ndocument.addEventListener('DOMContentLoaded', () => {", "}\ndocument.addEventListener('DOMContentLoaded', () => {\nif (notStartedHeader) {\nnotStartedHeader.addEventListener('click', window.toggleNotStarted);\nnotStartedHeader.addEventListener('keydown', (event) => {\nif (event.key === 'Enter' || event.key === ' ') {\nevent.preventDefault();\nwindow.toggleNotStarted();\n}\n});\n}\ntry {\nconst shouldExpand = localStorage.getItem('not_started_expanded') === 'true';\nif (shouldExpand && notStartedGrid && notStartedSection && notStartedHeader) {\nnotStartedGrid.classList.add('show');\nnotStartedSection.classList.add('active');\nnotStartedHeader.classList.add('active');\nupdateNotStartedChevron(true);\n} else {\nupdateNotStartedChevron(false);\n}\n} catch (e) {\nconsole.debug('LocalStorage error:', e);\nupdateNotStartedChevron(false);\n}"),
+    ('if (libraryGrid) {', 'if (dashboardGrids.length > 0) {'),
+)
+
 # (New lines, original Classic lines): deliberate P3 compatibility changes only.
 LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';", ''),
- ("                const active = (filterSelect?.value !== 'all')\n                    || (seriesFilter?.value !== 'all')\n                    || (authorFilter?.value !== 'all')\n                    || !!attentionOnlyFilter?.checked\n                    || !!dashboardSearch?.value.trim();\n                filterCount.textContent = active\n                    ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})\n                    : '';",
+ ("                const active = (statusFilter?.value !== 'all')\n                    || (filterSelect?.value !== 'all')\n                    || (seriesFilter?.value !== 'all')\n                    || (authorFilter?.value !== 'all')\n                    || !!attentionOnlyFilter?.checked\n                    || !!dashboardSearch?.value.trim();\n                filterCount.textContent = active\n                    ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})\n                    : '';",
   "const noun = total === 1 ? 'book' : 'books';\n"
   'filterCount.textContent = shown === total\n'
   "? total + ' ' + noun\n"
@@ -366,28 +411,7 @@ LIBRARY_HEADER_ALLOWED_CHANGES = (
      ""),
     ("            const attentionPopover = document.getElementById('needs-attention');\n            const attentionTrigger = attentionPopover?.querySelector('summary');\n            if (attentionPopover) {\n                function positionAttentionPopover() {\n                    if (!attentionPopover.open) return;\n                    const panel = attentionPopover.querySelector('.attention-list');\n                    if (!panel) return;\n                    panel.style.removeProperty('--attention-shift');\n                    const bounds = panel.getBoundingClientRect();\n                    const left = Math.max(14, Math.min(bounds.left, window.innerWidth - bounds.width - 14));\n                    panel.style.setProperty('--attention-shift', (left - bounds.left) + 'px');\n                }\n                attentionPopover.addEventListener('toggle', positionAttentionPopover);\n                window.addEventListener('resize', positionAttentionPopover);\n                document.addEventListener('click', event => {\n                    if (attentionPopover.open && !attentionPopover.contains(event.target)) {\n                        attentionPopover.open = false;\n                    }\n                });\n                document.addEventListener('keydown', event => {\n                    if (event.key === 'Escape' && attentionPopover.open) {\n                        event.preventDefault();\n                        attentionPopover.open = false;\n                        attentionTrigger?.focus();\n                    }\n                });\n            }",
      ""),
-    ("                        && matchesAuthorFilter(card, authorValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card))),",
-     "                        && matchesAuthorFilter(card, authorValue)),"),
-    ("                        && matchesSeriesFilter(card, seriesValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card))),",
-     "                        && matchesSeriesFilter(card, seriesValue)),"),
     ("            function needsAttention(card) {\n                return card.classList.contains('out-of-sync')\n                    || ['error', 'failed', 'failed_retry_later', 'failed_permanent'].includes(card.dataset.status);\n            }",
-     ""),
-    ("                        && matchesAuthorFilter(card, authorValue)\n                        && (!attentionOnlyFilter?.checked || needsAttention(card));",
-     "                        && matchesAuthorFilter(card, authorValue);"),
-    ("                    const seriesName = (card.dataset.seriesName || '').toLowerCase();", ""),
-    ("                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString) && !seriesName.includes(searchString)) {",
-     "                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString)) {"),
-    ("                        author: authorValue,\n                        attention: !!attentionOnlyFilter?.checked",
-     "                        author: authorValue"),
-    ("                if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', filterBooks);",
-     ""),
-    ("                let savedAttention = false;",
-     ""),
-    ("                        savedAttention = !!parsed.attention;",
-     ""),
-    ("                // Older Library preferences stored attention as a format.\n                // It is now an independent filter, so keep the user's intent.\n                if (savedFormat === 'needs_attention') {\n                    savedFormat = 'all';\n                    savedAttention = true;\n                }",
-     ""),
-    ("                if (!filterSelect.value) filterSelect.value = 'all';\n                if (attentionOnlyFilter) attentionOnlyFilter.checked = savedAttention;",
      ""),
 )
 

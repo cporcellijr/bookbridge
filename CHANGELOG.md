@@ -6,6 +6,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **The New Library now has one continuous grid instead of In progress, Not started, and Finished sections.** Cards, face-out shelves, spine shelves, and List share the same collection, with every series volume shown once. Reading status is the default sort: in-progress books and series first, then not started, then finished, with most recent sync first in each category. Previous Status sort preferences migrate automatically. Classic remains unchanged.
+
 ### Fixed
 
 - **Acquisition submission safety and receipt reconciliation** (#585, Phase C review corrections;
