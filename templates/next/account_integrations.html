@@ -66,6 +66,7 @@
         {% endif %}
 
         {% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
+        {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
 
         <form method="POST" action="{{ url_for('account_integrations') }}">
             {% for group, fields in groups %}

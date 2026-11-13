@@ -288,6 +288,24 @@ class JobQueueRouteTests(unittest.TestCase):
         self.assertIn('id="acquisition-jobs"', fragment.get_data(as_text=True))
         self.assertNotIn("job-queue-page", fragment.get_data(as_text=True))
 
+    def test_delivered_receipt_awaiting_review_offers_no_cancel(self):
+        import re
+        job = self.db.create_acquisition_job(self.alice.id, "Delivered Acquisition", ["ebook", "audiobook"])
+        for kind, remote_id, remote_status in (
+            ("ebook", "delivered-ebook", "available"), ("audiobook", "reviewing-audio", "needs_review"),
+        ):
+            self.db.add_acquisition_request_to_job(self.alice.id, job["id"], {
+                "service": "BookOrbit", "media_kind": kind, "remote_kind": "request",
+                "remote_id": remote_id, "status": "needs_look", "remote_status": remote_status,
+            })
+        ids = {row["remote_id"]: row["id"] for row in self.db.get_acquisition_job(self.alice.id, job["id"])["requests"]}
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        markup = self.client.get("/job-queue").get_data(as_text=True)
+        cancellable = {int(found) for found in re.findall(
+            r'data-provider-action="cancel-receipt"\s+data-receipt-id="(\d+)"', markup)}
+        self.assertIn(ids["reviewing-audio"], cancellable)
+        self.assertNotIn(ids["delivered-ebook"], cancellable)
+
     def test_preflight_ui_is_scoped_and_ack_is_only_for_current_pair(self):
         from src.services.transcription_preflight import (
             evidence_identity, pair_key, evaluate_preflight,

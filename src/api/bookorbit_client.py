@@ -919,11 +919,25 @@ class BookOrbitClient:
 
     def create_request(self, title: str, media_kind: str, authors=None, isbn13: Optional[str] = None,
                        series_name: Optional[str] = None, series_index=None) -> Optional[dict]:
-        """File one request; ``{request, subscribed}`` or None on failure."""
+        """File one request; ``{request, subscribed}``.
+
+        ``{"error": "refused", "status_code": n}`` when BookOrbit definitely rejected it
+        (nothing was created); None when the outcome is unknown (no answer, 5xx, odd reply).
+        """
         body = self._request_work_fields(title, authors, isbn13, series_name, series_index)
         body["mediaKind"] = media_kind
-        data = self._request_json("POST", "/api/v1/book-requests", body)
-        return data if isinstance(data, dict) else None
+        resp = self._make_request("POST", "/api/v1/book-requests", body)
+        if resp is not None and resp.status_code in (400, 401, 403, 404, 422):
+            logger.warning("BookOrbit: POST /api/v1/book-requests refused: status=%s", resp.status_code)
+            return {"error": "refused", "status_code": resp.status_code}
+        if resp is None or resp.status_code not in (200, 201):
+            logger.warning(
+                "BookOrbit: POST /api/v1/book-requests failed: status=%s",
+                resp.status_code if resp is not None else "no response",
+            )
+            return None
+        data = self._parse_json(resp)
+        return data if isinstance(data, dict) else ({} if data is None else None)
 
     def create_request_pair(self, title: str, authors=None, isbn13: Optional[str] = None,
                             series_name: Optional[str] = None, series_index=None) -> Optional[dict]:

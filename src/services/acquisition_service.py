@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 REFRESH_INTERVAL = timedelta(seconds=30)
 ARRIVED_REFRESH_INTERVAL = timedelta(minutes=10)
 GIVE_UP_AFTER = timedelta(days=30)
+JOB_RECONCILE_INTERVAL = REFRESH_INTERVAL
+SCAN_HISTORY_GRACE = timedelta(minutes=30)
 ADOPTION_SCAN_INTERVAL = timedelta(minutes=10)
 ADOPTION_PAGE_SIZE = 100
 ADOPTION_MAX_PAGES = 20
@@ -57,6 +59,7 @@ SHELFMARK_STATUS_MAP = {
     "cancelled": "cancelled",
 }
 _ARRIVED_REMOTE = ("available", "complete")
+_DEAD_RECEIPT = ("failed", "cancelled", "declined")
 # A task that is still running decides a Shelfmark request's state, else a finished one, else a failed one.
 _SHELFMARK_TASK_PRECEDENCE = {"queued": 3, "resolving": 3, "locating": 3, "downloading": 3, "complete": 2, "error": 1, "cancelled": 1}
 _DOWNLOADED = "Downloaded, waiting for the library"
@@ -121,11 +124,17 @@ class AcquisitionService:
         self._adoption_scanned: dict[int, datetime] = {}
         self._adoption_active: dict[int, bool] = {}
         self._adoption_claim_lock = Lock()
+        self._job_reconciled: dict[str, datetime] = {}
+        self.job_reconcile_interval = JOB_RECONCILE_INTERVAL
+
+    def _pending_jobs(self, user_id: int) -> list[dict]:
+        """Unpaired jobs and outstanding scans; jobs older than ``GIVE_UP_AFTER`` are dropped."""
+        return self.database_service.get_unpaired_acquisition_jobs(user_id, utcnow() - GIVE_UP_AFTER)
 
     def has_work(self, user_id: int) -> bool:
         """Work can exist without any provider receipt (both halves already owned)."""
         pending = getattr(self.database_service, "get_unpaired_acquisition_jobs", None)
-        return bool(self._refreshable(user_id)) or (bool(pending(user_id)) if pending else False) or self._adoption_due(user_id)
+        return bool(self._refreshable(user_id)) or (bool(self._pending_jobs(user_id)) if pending else False) or self._adoption_due(user_id)
 
     def _refreshable(self, user_id: int) -> list[dict]:
         return self.database_service.get_refreshable_acquisition_requests(user_id, utcnow() - GIVE_UP_AFTER)
@@ -300,10 +309,18 @@ class AcquisitionService:
         identity = {"source": selected["source"], "source_id": str(selected["source_id"])}
         if media_kind == "ebook":
             identity["filename"] = selected["filename"]
+        # The reader's choice is the evidence that attributes a completed receipt
+        # the provider gave no library handle for; otherwise it would be re-flagged.
+        unattributed = [r["id"] for r in job["requests"] if (
+            r["media_kind"] == media_kind and r["status"] == "arrived"
+            and r["remote_status"] in _ARRIVED_REMOTE and not r.get("arrived_source_id")
+        )]
+        saved = None
         try:
-            saved = self.database_service.confirm_acquisition_arrival(
-                user_id, job_id, media_kind, identity,
-            )
+            for receipt_id in unattributed or [None]:
+                saved = self.database_service.confirm_acquisition_arrival(
+                    user_id, job_id, media_kind, identity, receipt_id=receipt_id,
+                )
         except ValueError:
             return None, "identity_conflict"
         return (saved, None) if saved else (None, "not_found")
@@ -423,14 +440,25 @@ class AcquisitionService:
         The authenticated per-reader catalog is queried again before pairing;
         a saved arrival is never sufficient evidence if its library disappears.
         """
-        getter = getattr(self.database_service, "get_unpaired_acquisition_jobs", None)
-        if getter is None:
+        if getattr(self.database_service, "get_unpaired_acquisition_jobs", None) is None:
             return
-        for job in getter(user_id):
+        now = utcnow()
+        jobs = self._pending_jobs(user_id)
+        for job in jobs:
+            requests = job.get("requests") or []
+            if requests and all(r["status"] in _DEAD_RECEIPT for r in requests) and not job.get("scan_state"):
+                continue  # every provider request ended without a delivery; nothing can arrive
+            last = self._job_reconciled.get(job["id"])
+            if last is not None and now - last < self.job_reconcile_interval:
+                continue
+            self._job_reconciled[job["id"]] = now
             try:
                 self._reconcile_job(user_id, job, clients)
             except Exception:
                 logger.warning("📥 Acquisition: user %s job %s could not reconcile", user_id, job["id"], exc_info=True)
+        live = {job["id"] for job in jobs}
+        for job_id in [key for key in self._job_reconciled if key not in live]:
+            self._job_reconciled.pop(job_id, None)
 
     def _reconcile_linked_receipts(self, user_id: int, job: dict, clients: Any) -> None:
         """Retain late provider arrivals without inventing their library provenance.
@@ -446,7 +474,7 @@ class AcquisitionService:
             late = [r for r in job["requests"] if (
                 r["media_kind"] == kind and r["status"] == "arrived"
                 and r["remote_status"] in _ARRIVED_REMOTE
-                and not r.get("arrived_source_id")
+                and not r.get("arrived_source_id") and not r.get("linked_abs_id")
             )]
             if not late:
                 continue
@@ -689,9 +717,17 @@ class AcquisitionService:
                 # Never manufacture a job ID from an unrelated history entry.
                 return
             if entry is None:
-                self.database_service.update_acquisition_scan(
-                    user_id, job["id"], state, reason="scan_job_not_in_recent_history",
-                )
+                claimed_at = job.get("scan_claimed_at")
+                if state in ("accepted", "coalesced") and claimed_at and utcnow() - claimed_at > SCAN_HISTORY_GRACE:
+                    # Long gone from the recent-history window: it settled unseen. Treat it as
+                    # finished so the bounded automatic rescan can run instead of waiting forever.
+                    self.database_service.update_acquisition_scan(
+                        user_id, job["id"], "completed", reason="scan_aged_out_of_history",
+                    )
+                else:
+                    self.database_service.update_acquisition_scan(
+                        user_id, job["id"], state, reason="scan_job_not_in_recent_history",
+                    )
                 return
             status = str(entry.get("status") or "").lower()
             if status in ("completed", "complete", "success"):

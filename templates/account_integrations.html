@@ -65,6 +65,7 @@
         {% endif %}
 
         {% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
+        {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
 
         <form method="POST" action="{{ url_for('account_integrations') }}">
             {% for group, fields in groups %}
@@ -292,7 +293,10 @@
                     if (button) { button.disabled = false; button.textContent = original; }
                 });
         }
-        document.addEventListener('DOMContentLoaded', () => loadScanLibraries(null));
+        document.addEventListener('DOMContentLoaded', () => {
+            const picker = document.querySelector('[data-scan-library-picker]');
+            if (picker && picker.value) loadScanLibraries(null);
+        });
 
         function toggleIntegrationGroup(toggle) {
             const body = document.getElementById(toggle.dataset.bodyId || '');
