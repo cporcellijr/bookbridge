@@ -1,0 +1,34 @@
+# Architecture cleanup plan
+
+**Updated:** 2026-11-13  
+**Source audit:** [ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md)  
+**Implementation worktree:** `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-d6452ed1` (persistent)  
+**Integration target:** local `dev`; no push or release is authorized.
+
+This plan tracks the audit's actionable work. The audit is static investigation, not proof of runtime savings. Preserve its distinction between confirmed source duplication, likely waste, and unmeasured hypotheses. Make one scoped slice at a time; do not treat this roadmap as blanket authorization for the remaining work.
+
+## Status
+
+| Audit area | Status | Evidence / next step |
+|---|---|---|
+| 0. Processing page and acquisition polling waste | **Complete** | Phase 1A (`a72d7b097ae5a4fddccc87bf5d7001c456838931`) and Phase 1B plus review follow-ups (`095c8f50fa90e0bf39b087036eddba4299ecfa8c`) are integrated, restarted, and live-verified. See `.local-review-notes/architecture-phase0/`. Phase 1A narrows the acquisition fragment path; Phase 1B avoids provider-options requests when controls are absent. Benchmarks and request counts are conditional/offline evidence, not general production speed claims. |
+| 2a. Share identical Stats scripts | **Complete** | `81a017c2d174c887a10e397821d6db2a6671e442`; reviewed, integrated, restarted, and live-verified. EN/RU render sequences and Classic/New HTTP output were checked. See `.local-review-notes/architecture-phase2a/`. |
+| 2b. Share identical Logs scripts | **Complete** | `1fcf2c547fe79e21333771b835d631711ddb8cd1`; review blocker fixed, full suite passed, then integrated, restarted, and live-verified. See `.local-review-notes/architecture-phase2b/`. The full run reported 7906 passed, 15 skipped, 1473 subtests, 0 failures. |
+| 2c. Consolidate exact shared scripts in Settings, Account, and integrations | **Complete** | `6a25f26e51858d4cca644977823a8544dde36293`; four Classic pages now include unchanged existing partials. Net 1661 code/test lines removed. 28 paired EN/RU script/form comparisons passed; focused 166 tests / 215 subtests; full 7906 passed / 15 skipped / 1486 subtests / 0 failures. Integrated and restarted healthy at 2026-11-13 21:32:43Z. Ten live page cases retained exact scripts; 15 served JS blocks parsed; reader restrictions preserved; temporary admin UI preference restored. Browser/Safari interaction unverified. Evidence: `.local-review-notes/architecture-phase2c/`. |
+| 3. Library/Discover controller extraction | **Not started; separate approval required** | Audit found similar but not proven-equivalent behavior. First document the behavior/selector/storage/translation differences; extract only cohesive code with a clear parity check. |
+| 4. `web_server.py` route extraction | **Not started; separate approval required** | Preserve endpoint names, methods, URLs, auth/CSRF, startup order, request-user context, and response shapes. Prefer one feature route group at a time. |
+| 5. Database repository extraction | **Not started; separate approval required** | Keep `DatabaseService` methods as stable delegates and preserve session/transaction ownership, locks, and atomic claims. |
+| 6. Acquisition lifecycle helper consolidation | **Not started; separate approval required** | Build a behavior matrix first. Retain BookOrbit/Shelfmark differences in edition proof, uncertainty, receipts, and retry semantics. |
+| 7. Sync internals review | **Deferred; separate design and approval required** | The audit specifically excludes leader selection and correctness guards from mechanical extraction. Consider pure leaf helpers only after a distinct risk review. |
+
+## Working rules
+
+- Reuse the persistent implementation worktree above; reconcile any intervening `dev` changes before continuing. Keep the live `dev` checkout for integration and deployment.
+- Implementation work runs focused tests and frontend/syntax checks only. The primary reviewer runs the full suite after handoff and before commit/integration. Coordinate test runs sequentially through the existing controller lock.
+- After an independent review finds no blockers and required checks pass, commit the reviewed change, integrate into local `dev`, restart/rebuild as needed, and live-verify. Do not push, publish, or release without explicit authorization.
+- Record actual results and limits. No claimed speedup without suitable before/after measurement. Do not seed production test data or perform provider writes for mechanical cleanup; record and restore any temporary UI preferences used in live verification.
+- Keep changes scoped. Do not touch sync leader/freshness/locator guards, DB journal selection, migration history, identifiers, credentials, or authorization semantics as incidental cleanup.
+
+## Completion record
+
+Append brief evidence to the relevant row as each slice completes: commit, review result, final suite counts from the primary reviewer, deploy action, and live verification limits. Do not pre-fill future outcomes. The audit's untouched hypotheses (including repeated Library DOM traversal) remain hypotheses until separately measured and approved.
