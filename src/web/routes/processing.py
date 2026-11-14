@@ -15,21 +15,16 @@ def _web_server():
     return import_module("src.web_server")
 
 
-def register(app: Any, web_module: Any, phase: str) -> None:
+def register(app: Any, web_module: Any) -> None:
     """Register Processing endpoints without changing their Flask names."""
     global _WEB_MODULE
     _WEB_MODULE = web_module
-    rules_by_phase = {
-        'queue': (
-            ('/job-queue', 'job_queue_page', job_queue_page, ['GET']),
-            ('/job-queue/reorder', 'job_queue_reorder', job_queue_reorder, ['POST']),
-            ('/job-queue/preflight/ack', 'job_queue_preflight_ack', job_queue_preflight_ack, ['POST']),
-        ),
-        'shelfmark': (
-            ('/shelfmark', 'shelfmark', shelfmark, None),
-        ),
-    }
-    rules = rules_by_phase[phase]
+    rules = (
+        ('/job-queue', 'job_queue_page', job_queue_page, ['GET']),
+        ('/job-queue/reorder', 'job_queue_reorder', job_queue_reorder, ['POST']),
+        ('/job-queue/preflight/ack', 'job_queue_preflight_ack', job_queue_preflight_ack, ['POST']),
+        ('/shelfmark', 'shelfmark', shelfmark, None),
+    )
     for rule, endpoint, view, methods in rules:
         if methods is None:
             app.add_url_rule(rule, endpoint, view)

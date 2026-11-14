@@ -13247,25 +13247,21 @@ def create_app(test_container=None):
     from src.web.routes import book as book_routes
     book_routes.register(app, sys.modules[__name__])
     from src.web.routes import book_actions as book_actions_routes
-    book_actions_routes.register(app, sys.modules[__name__], phase='chapter')
+    book_actions_routes.register(app, sys.modules[__name__])
     from src.web.routes import processing as processing_routes
-    processing_routes.register(app, sys.modules[__name__], phase='queue')
+    processing_routes.register(app, sys.modules[__name__])
     from src.web.routes import whats_new as whats_new_routes
     whats_new_routes.register(app, sys.modules[__name__])
-    processing_routes.register(app, sys.modules[__name__], phase='shelfmark')
     from src.web.routes import forge as forge_routes
     forge_routes.register(app, sys.modules[__name__])
     from src.web.routes import matching as matching_routes
     matching_routes.register(app, sys.modules[__name__])
     from src.web.routes import suggestions as suggestions_routes
-    suggestions_routes.register(app, sys.modules[__name__], phase='page')
-    book_actions_routes.register(app, sys.modules[__name__], phase='book_write')
+    suggestions_routes.register(app, sys.modules[__name__])
     from src.web.routes import readalong as readalong_routes
     readalong_routes.register(app, sys.modules[__name__])
-    book_actions_routes.register(app, sys.modules[__name__], phase='sync_write')
     from src.web.routes import me as me_routes
     me_routes.register(app, sys.modules[__name__])
-    book_actions_routes.register(app, sys.modules[__name__], phase='hash')
     from src.web.routes import covers as covers_routes
     covers_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/api/health', 'api_health', api_health)
@@ -13279,12 +13275,10 @@ def create_app(test_container=None):
     app.add_url_rule('/settings', 'settings', settings, methods=['GET', 'POST'])
 
     # Suggestion routes
-    suggestions_routes.register(app, sys.modules[__name__], phase='api_read')
     from src.api.suggestions_redesign import init_suggestions_redesign_routes
     init_suggestions_redesign_routes(app, sys.modules[__name__])
     from src.api.acquisition_routes import init_acquisition_routes
     init_acquisition_routes(app, sys.modules[__name__])
-    suggestions_routes.register(app, sys.modules[__name__], phase='api_action')
     app.add_url_rule('/api/cache/clean', 'clean_cache', clean_inactive_cache, methods=['POST'])
     from src.web.routes import integration_lookups as integration_lookups_routes
     integration_lookups_routes.register(app, sys.modules[__name__])

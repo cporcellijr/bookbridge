@@ -17,29 +17,20 @@ def _web_server():
     return import_module("src.web_server")
 
 
-def register(app: Any, web_module: Any, phase: str) -> None:
+def register(app: Any, web_module: Any) -> None:
     """Register Book Actions endpoints without changing their Flask names."""
     global _WEB_MODULE
     _WEB_MODULE = web_module
-    rules_by_phase = {
-        'chapter': (
-            ('/api/books/<abs_id>/current-chapter', 'api_current_audio_chapter', api_current_audio_chapter, ['GET']),
-        ),
-        'book_write': (
-            ('/delete/<abs_id>', 'delete_mapping', delete_mapping, ['POST']),
-            ('/delete-selected', 'delete_selected_mappings', delete_selected_mappings, ['POST']),
-            ('/clear-progress/<abs_id>', 'clear_progress', clear_progress, ['POST']),
-            ('/api/remap-alignment/<abs_id>', 'remap_alignment', remap_alignment, ['POST']),
-        ),
-        'sync_write': (
-            ('/api/sync-now/<abs_id>', 'sync_now', sync_now, ['POST']),
-            ('/api/mark-complete/<abs_id>', 'mark_complete', mark_complete, ['POST']),
-        ),
-        'hash': (
-            ('/update-hash/<abs_id>', 'update_hash', update_hash, ['POST']),
-        ),
-    }
-    rules = rules_by_phase[phase]
+    rules = (
+        ('/api/books/<abs_id>/current-chapter', 'api_current_audio_chapter', api_current_audio_chapter, ['GET']),
+        ('/delete/<abs_id>', 'delete_mapping', delete_mapping, ['POST']),
+        ('/delete-selected', 'delete_selected_mappings', delete_selected_mappings, ['POST']),
+        ('/clear-progress/<abs_id>', 'clear_progress', clear_progress, ['POST']),
+        ('/api/remap-alignment/<abs_id>', 'remap_alignment', remap_alignment, ['POST']),
+        ('/api/sync-now/<abs_id>', 'sync_now', sync_now, ['POST']),
+        ('/api/mark-complete/<abs_id>', 'mark_complete', mark_complete, ['POST']),
+        ('/update-hash/<abs_id>', 'update_hash', update_hash, ['POST']),
+    )
     for rule, endpoint, view, methods in rules:
         if methods is None:
             app.add_url_rule(rule, endpoint, view)
