@@ -63,7 +63,9 @@ Offline evidence: implementation worktree `.local-review-notes/architecture-phas
 
 ## Next action
 
-**4b step 6 task 5 done.** C28 suggestions scan workflow and C40 book access moved (21/21 AST-identical, 5 patch targets repointed; `_user_may_modify_book` stays in web_server because tests assign it); web_server.py 3,846 → 3,194; suite 7906/15/0. **Next:** task 6 (C10) via DevSpace.
+**4b step 6 task 6 done.** C10 EPUB/KoSync identity moved (3/3 AST-identical; in-cluster calls go through `web.` so the 10 test assignments still intercept; 0 repoints); web_server.py 3,194 → 2,965; suite 7906/15/0. **Next:** task 7 (C02) via DevSpace.
+
+**Previous:** **4b step 6 task 5 done.** C28 suggestions scan workflow and C40 book access moved (21/21 AST-identical, 5 patch targets repointed; `_user_may_modify_book` stays in web_server because tests assign it); web_server.py 3,846 → 3,194; suite 7906/15/0. **Next:** task 6 (C10) via DevSpace.
 
 **Previous:** **4b step 6 task 4 done.** DevSpace C35 `70faddf1` → `src/web/reading_stats.py` (31), C30 `4e7a6aa7` → `src/web/suggestions_state_store.py` (11); merge `2148eede`; `web_server.py` 4,841 → 3,846. Claude review: 42/42 AST-identical, re-exports identical, name check clean except startup-set `DATA_DIR`; no repoints needed; `STATS_CACHE`/`SUGGESTIONS_STATE_STORE` and their locks stay single objects in web_server; raising-original failures for `_load_persisted_suggestions_cache` are tests that call the real function (round trips) or never patch it, every patched path reaches it via `web.`; full 7906 passed / 15 skipped / 0 failures. Restarted 10:42Z, 0 Traceback/ERROR; all live probes plus new stats probe (/stats, /api/stats, yearly recap; both users) identical before/after. **Next:** task 5 (C28, C40) via DevSpace.
 
