@@ -1,0 +1,10 @@
+<script>
+    function dismissWhatsNewBanner() {
+        fetch('/whats-new/dismiss', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        }).catch(function (e) { console.debug('whats-new dismiss failed', e); });
+        var el = document.getElementById('whats-new-banner');
+        if (el) el.remove();
+    }
+</script>
