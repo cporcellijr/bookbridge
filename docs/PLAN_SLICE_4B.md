@@ -4,9 +4,37 @@
 
 ## Step 6 ledger (2026-11-14)
 
+### Step 6 rules (every remaining task follows these)
+
+- **Pattern:** the new `src/web/<module>.py` has `_WEB_MODULE = None` and `_web_server()` (copy `src/web/suggestions_ebook_catalog.py`). Moved functions read every name that stays in web_server as `web.X`; calls inside the cluster stay bare. `web_server.py` binds `_mod._WEB_MODULE = sys.modules[__name__]`, then re-exports with `from src.web.<module> import (...)` (same objects).
+- **State stays in web_server:** module-level caches/locks/dicts/flags that tests assign, `del` or mutate in place are not moved; moved code reads them as `web.X`. Never create a second copy.
+- **`global` / `__file__`:** never move a function that `global`-assigns a name read elsewhere, or anything computing paths from `__file__`; keep it in web_server (or skip the cluster and record why).
+- **Startup-set globals** (`COVERS_DIR`, `DATA_DIR`, `EBOOK_DIR`, `SYNC_PERIOD_MINS`) are read as `web.X`; `name_check` flags them — known false positive.
+- **Test patches:** if a test patches `src.web_server.N` and a caller of `N` moved into the same new module (bare call), repoint the patch to `src.web.<module>.N`; if callers stay on both sides, patch both. Prove every patched moved name: make the moved original raise, run the patching tests (a decorator-patched test must be run by its own node id), they must pass; restore. Source-reading tests follow the moved code, same assertions.
+- **Gates per cluster:** `move_check` (AST identical modulo `web.`), `name_check` (0 except the startup globals), Flask URL map 195/195, every re-export `is` the moved object, interception proofs, focused tests, then full suite via `.venv` reading the Python exit code (exit 4 = lock busy: wait, retry, never delete the lock). Expected 7906 passed / 15 skipped / 0 failures.
+- **Tools:** copy `.local-review-notes/architecture-phase4b/tools/` (move.py, move_check.py, name_check.py, intercept.py, urlmap.py) and `step6/review.py` from the live checkout into the worktree's ignored `.local-review-notes/`; never commit them.
+- **Commits:** one per cluster, `[Refactor] Extract Cxx <name>`, code + test repoints + the ledger Progress row together; no `Co-Authored-By`, no book titles. No merge/push/restart — Claude integrates.
+
+### Step 6 task list (small DevSpace tasks; each branches off the latest local dev)
+
+| Task | Clusters | Notes |
+|---|---|---|
+| 1 | C21, C27 | no test-side state |
+| 2 | C22, C24 | no test-side state |
+| 3 | C31, C11 | C11: 2 test assignments |
+| 4 | C35, C30 | in-place state mutation by tests |
+| 5 | C28, C40 | assignments + in-place state |
+| 6 | C10 | 10 test assignments |
+| 7 | C02 | auth helpers (guards themselves stay) |
+| 8 | C03 | 19 test assignments |
+| 9 | C01 | `__file__` anchor |
+| 10 | C04 | `global` flag |
+| — | C23 | skipped on purpose |
+
+
 Worktree: `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-4b6`; branch `refactor/architecture-4b-step6`; baseline `17f11eb8` (8,566 lines). No integration, push, restart or live access; Claude integrates and writes BRANCH_STATUS. Deployment requirement: **restart**.
 
-**Checkpoint handoff:** Codex ran out of usage during CP4 (C15); Claude finished and committed CP4. Remaining clusters are split into small DevSpace tasks (see Step 6 task list).
+**Checkpoint handoff:** CP1–CP4 integrated (`783226c3`). Next: task 1 (C21, C27).
 
 CP0 reran the ignored analyzer in inventory and `--test-assignments` modes (both exit 0). Its copied legacy inventory generator now skips already-extracted spans and writes only an ignored preview. Current inventory: 20 surviving clusters (including intentionally skipped C23), 198 grouped functions, 3 classes, 19 retained functions. Assignment scan: 461 test files / 755 bindings, 140 assignments / 9 deletions / 56 in-place sites / 987 read-only uses, zero parse failures; 1,240 unresolved candidates are conservative alias/dynamic accesses requiring per-cluster manual review, not confirmed hazards.
 
