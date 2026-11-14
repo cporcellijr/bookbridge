@@ -2,6 +2,25 @@
 
 **Original inventory/planning baseline:** `6f9629018eeb7ed571e50232f3ee50292071a604` (2026-11-13), isolated DevSpace worktree. The execution record below supersedes the original sequencing and C34 destination; remaining cluster rows are historical inventory until reviewed. Authority: `AGENTS.md`, `docs/PLAN_ARCHITECTURE_CLEANUP.md`, `docs/ARCHITECTURE_CLEANUP_HANDOFF.md` and architecture audit sections D and F.
 
+## Slice 4b step 3 — implementation record (2026-11-13; review pending)
+
+**Isolated worktree:** `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-77fdec7f`, branch `refactor/architecture-4b-step3`, base local dev `83da1ba6`. Four pure-move code commits in required order:
+
+| Cluster | Destination | Code commit | Functions | AST / name gates |
+|---|---|---|---:|---|
+| C26 forge/batch match processors | `src/web/match_queue_processor.py` | `f4917611` | 3 | 3/3 identical; zero name problems |
+| C33 read-along worker | `src/web/readalong_generation_jobs.py` | `0255495f` | 2 | 2/2 identical; zero name problems |
+| C09 sync daemon / ABS reconcile | `src/web/sync_daemon.py` | `bdd28d36` | 3 | 3/3 identical; zero name problems |
+| C29 scheduled suggestions refresh | `src/web/suggestions_scan_scheduler.py` | `fbed9ffd` | 9 | 9/9 identical; zero name problems |
+
+**Ownership:** Each module has lazy `_web_server()` with `_WEB_MODULE` bound from `web_server.py` at import time. Re-exports preserve every moved name as the identical object. In-cluster function calls remain bare; references to retained state and functions use `web.X` at call time. C26 leaves shared `_LIBRARY_AUDIO_SOURCES` in web_server, and no moved C26 function stamps `sync_mode = "audiobook"`, so the mapping-merge test's SOURCES needs no edit. C33 moves `_READALONG_STAGE_LABELS` but retains both read-along generation lock helpers and the `setup_dependencies` callback wiring in web_server. C09 reads setup-set `SYNC_PERIOD_MINS` via `web.`; the ignored name checker was expanded to recognize this established startup-only global, without a source change.
+
+C29 moves five C29-only bindings: `SUGGESTIONS_AUTO_SCAN_STATE_KEY`, `SUGGESTIONS_AUTO_SCAN_MIN_MINUTES`, `_SUGGESTIONS_AUTO_SCAN_JOB` (dict mutated only in place), `_CRON_FIELDS`, `_SUGGESTIONS_WEEKDAYS`. The jobs dict/lock/slot, `_SCAN_JOB_ACTIVE`, `_BACKGROUND_TASKS_SYNCHRONOUS`, and `_active_bundle` stay in web_server. Its three **in-cluster** test patches were repointed (only patch targets; all assertions retained): `TestTick.setUp` → scheduler `_run_scheduled_suggestions_scan`; `TestScheduledRun.run_scheduled` and `TestOpenSession.test_open_session_retains_last_results_while_a_full_refresh_is_running` → scheduler `_start_suggestions_scan_job`. Each of the three was independently proven to intercept by temporarily poisoning its original moved function with a raise, running the targeted test successfully, and restoring the source. External routes patching `web._start_suggestions_scan_job` remain unchanged.
+
+**Verification:** **17/17** AST-identical (modulo `web.` lookups), **0** unresolved names or MODULE-SELF issues, **23/23** moved names identical through `src.web_server`, Forge worker injection identical, daemon thread target identical, and offline Flask URL map **195/195** equal (routes, endpoints, methods). Focused project-venv pytest: **375 passed / 30 subtests / 1 warning** across 13 files (exit 0); separately scheduled scan **46 passed / 7 subtests**. Full-suite invoked **once**, Python **exit 4** because the shared test-controller lock was held; no bypass/retry, Claude must run the independent full suite. `analyze.py --test-assignments` rerun before and after: no new moved-binding assignment hazards. The ignored analyzer copy was adapted to skip already-extracted functions and write its preview into ignored notes, not this tracked plan: **27 surviving clusters / 261 grouped functions / 19 leftovers; new leaf C28**, C23 still intentionally skipped.
+
+`src/web_server.py`: **11,689 → 10,561 lines (−1,128)**. Worktree-only evidence: ignored `.local-review-notes/architecture-phase4b/step3_*` (checks, attribution scans, interception proofs, URL maps, test logs, analyzer). **No dev integration, restart, live verification, push, or provider write.** Deploy requirement is **restart after independent review, passing full suite and dev integration**.
+
 ## Slice 4b step 2 — implementation record (2026-11-13)
 
 **Reviewed by Claude, integrated (`db9e78f7`), restarted, live-verified:** fresh isolated worktree `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-00ac9c21`, branch `refactor/architecture-4b-step2`, base dev `0856b685`. One pure-move code commit per cluster, with identical compatibility re-exports:
