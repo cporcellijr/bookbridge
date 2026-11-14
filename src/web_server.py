@@ -1780,114 +1780,18 @@ from src.web.kosync_login_mirror import (
 
 
 
-def sync_daemon():
-    """Background sync daemon running in a separate thread."""
-    try:
-        # Setup schedule for sync operations
-        # Use the global SYNC_PERIOD_MINS which is validated
-        schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(manager.run_sync_for_all_users)
-        schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(_mirror_kosync_logins_from_grimmory)
-        schedule.every(1).minutes.do(manager.check_pending_jobs)
-        schedule.every(1).minutes.do(_suggestions_auto_scan_tick)
-        schedule.every(1).minutes.do(manager.flush_reading_sessions_for_all_users)
-        schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(_reconcile_aligned_shelf)
-        schedule.every(1).hours.do(_run_diagnostics_send)
-        schedule.every(1).hours.do(_run_storyteller_library_hourly)
-        schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(_reconcile_abs_collection)
-
-        logger.info(f"🔄 Sync daemon started (period: {SYNC_PERIOD_MINS} minutes)")
-
-        _mirror_kosync_logins_from_grimmory()
-
-        # Run initial sync cycle (per user)
-        try:
-            manager.run_sync_for_all_users()
-        except Exception as e:
-            logger.error(f"❌ Initial sync cycle failed: {e}", exc_info=True)
-
-        _reconcile_aligned_shelf()
-
-        # Catch-up diagnostics send on startup (24h guard inside is a no-op when not due)
-        try:
-            _run_diagnostics_send()
-        except Exception:
-            pass
-
-        _reconcile_abs_collection()
-
-        # Main daemon loop
-        while True:
-            try:
-                # logger.debug("Running pending schedule jobs...")
-                schedule.run_pending()
-                time.sleep(30)  # Check every 30 seconds
-            except Exception as e:
-                logger.error(f"❌ Sync daemon error: {e}", exc_info=True)
-                time.sleep(60)  # Wait longer on error
-
-    except Exception as e:
-        logger.error(f"❌ Sync daemon crashed: {e}", exc_info=True)
+from src.web import sync_daemon as _sync_daemon
+_sync_daemon._WEB_MODULE = sys.modules[__name__]
+from src.web.sync_daemon import (
+    sync_daemon,
+    _is_abs_audio_book,
+    _reconcile_abs_collection,
+)
 
 
-def _is_abs_audio_book(book):
-    if (book.sync_mode or '') == 'ebook_only':
-        return False
-    if (book.audio_source or 'ABS').strip().lower() != 'abs':
-        return False
-    return not str(book.abs_id).startswith(('booklore:', 'bookorbit:', 'ebook-'))
 
 
-def _reconcile_abs_collection():
-    if not env_truthy('ABS_COLLECTION_RECONCILE') or database_service is None:
-        return
-    conditions = get_persistent_condition_logger()
-    try:
-        default_owner = database_service._default_user_id()
-        by_owner = {}
-        for book in database_service.get_books_by_status('active'):
-            if _is_abs_audio_book(book):
-                by_owner.setdefault(book.user_id or default_owner, []).append(book.abs_id)
-        registry = container.user_client_registry()
-    except Exception as e:
-        conditions.warn(
-            logger, "abs_collection_reconcile", "ABS collection reconcile failed: %s", e, exc_info=True,
-        )
-        return
-    conditions.resolve(logger, "abs_collection_reconcile", "ABS collection reconcile resumed")
-    added = 0
-    for owner, item_ids in by_owner.items():
-        if owner is None:
-            continue
-        try:
-            bundle = registry.get_clients(owner)
-            if not bundle.abs_client.is_configured():
-                continue
-            collection = resolve_setting(bundle.credentials, "ABS_COLLECTION_NAME", "Synced with KOReader")
-            count, refused = bundle.abs_client.add_missing_to_collection(item_ids, collection)
-        except Exception as e:
-            conditions.warn(
-                logger, f"abs_collection_reconcile:{owner}",
-                "ABS collection reconcile failed for user %s: %s", owner, e, exc_info=True,
-            )
-            continue
-        conditions.resolve(
-            logger, f"abs_collection_reconcile:{owner}", "ABS collection reconcile resumed for user %s", owner,
-        )
-        added += count
-        refused_key = f"abs_collection_refused:{owner}:{collection}"
-        if refused:
-            conditions.warn(
-                logger, refused_key,
-                "ABS collection '%s' of user %s is missing %d matched audiobook(s) that could not be added: %s",
-                collection, owner, len(refused), refused[0],
-            )
-        else:
-            conditions.resolve(
-                logger, refused_key, "ABS collection '%s' of user %s is complete again", collection, owner,
-            )
-    if added:
-        logger.info("🏷️ ABS collection reconcile added %d matched audiobook(s)", added)
-    return added
+
 
 
 # ---------------- ORIGINAL ABS-KOSYNC HELPERS ----------------
