@@ -38,12 +38,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import src.web_server as web_server
 from src.web_server import suggestion_source_badge
 from tests.test_webserver import MockContainer
+from discover_template_source import discover_template_source
 
-_SUGGESTIONS = Path(__file__).resolve().parents[1] / "templates" / "suggestions.html"
 
 
 def _source() -> str:
-    return _SUGGESTIONS.read_text(encoding="utf-8")
+    return discover_template_source("suggestions.html")
 
 
 def _rule(selector: str) -> str:

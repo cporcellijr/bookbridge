@@ -13,12 +13,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.web_server as web_server
 from tests.test_webserver import MockContainer
+from discover_template_source import discover_template_source
 
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 
 
 def _source(name: str = "suggestions.html") -> str:
-    return (_TEMPLATES / name).read_text(encoding="utf-8")
+    return discover_template_source(name)
 
 
 def _queue_item(abs_id: str, **extra) -> dict:
@@ -155,7 +156,7 @@ class SearchTemplateGuardTests(unittest.TestCase):
         self.assertNotIn("/add-book", source)
 
     def test_no_template_links_to_the_removed_page(self):
-        for path in _TEMPLATES.glob("*.html"):
+        for path in _TEMPLATES.rglob("*.html"):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("url_for('add_book'", text, path.name)
             self.assertNotIn('href="/add-book', text, path.name)

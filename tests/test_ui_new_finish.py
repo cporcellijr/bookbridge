@@ -8,6 +8,7 @@ import unittest
 from flask.signals import template_rendered
 
 from tests.test_ui_new_foundation import TestUiModeRoutes
+from discover_template_source import discover_template_source
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -123,7 +124,7 @@ class TestP8Finish(unittest.TestCase):
         self.assertIn(".book-hero { grid-template-columns: minmax(0,90px) minmax(0,1fr); }", block(finish, 640))
 
     def test_discover_chip_text_is_unchanged_and_visuals_use_new_tokens(self):
-        scripts = source("templates/next/_discover_scripts.html")
+        scripts = discover_template_source("next/_discover_scripts.html")
         css = source("static/css/next-finish.css")
         for word in ("Needs review", "Manual choice", "Same folder", "Same series", "Exact match"):
             self.assertIn(word, scripts)
