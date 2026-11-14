@@ -7436,46 +7436,7 @@ from src.web.routes.book import book_page, api_library_hero, api_book_synopsis
 
 
 
-def index():
-    """Dashboard - loads books and progress from database service"""
-    user = current_user()
-    mappings, overall_progress, integrations = _dashboard_mappings_for_user(user)
-
-    suggestions = [s for s in database_service.get_all_pending_suggestions(user_id=get_current_user_id()) if len(s.matches) > 0]
-    grouped_mappings = _group_dashboard_mappings_by_series(mappings)
-    library_template = ui_template('index.html')
-    hero_mapping = None
-    if library_template == 'next/index.html' and _display_settings_for(user)["UI_SHOW_HERO"] == "true":
-        hero_mapping = _pick_hero_mapping(mappings)
-        if hero_mapping:
-            hero_mapping["is_hero"] = True
-            leader = hero_mapping.get("last_sync_leader")
-            hero_mapping["hero_leader_service"] = _hero_leader_service(leader)
-            hero_mapping["hero_leader_progress"] = _hero_leader_percent(hero_mapping, leader)
-
-    latest_version, update_available = get_update_status()
-    whats_new_ctx = _build_whats_new_context(user)
-
-    show_diagnostics_modal = (
-        not env_truthy('DIAGNOSTICS_PROMPTED')
-        and bool(os.environ.get('DIAGNOSTICS_ENDPOINT_URL', '').strip())
-        and (current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, 'is_admin', False)))
-    )
-
-    return render_template(
-        library_template,
-        hero_mapping=hero_mapping,
-        mappings=mappings,
-        grouped_mappings=grouped_mappings,
-        integrations=integrations,
-        progress=overall_progress,
-        suggestions=suggestions,
-        app_version=APP_VERSION,
-        update_available=update_available,
-        latest_version=latest_version,
-        show_diagnostics_modal=show_diagnostics_modal,
-        whats_new=whats_new_ctx
-    )
+from src.web.routes.library import index
 
 
 from src.web.routes.book_actions import api_current_audio_chapter, delete_mapping, delete_selected_mappings, clear_progress, remap_alignment, sync_now, mark_complete, update_hash
@@ -12894,7 +12855,8 @@ def create_app(test_container=None):
     account_routes.register(app, sys.modules[__name__])
     from src.web.routes import admin_users as admin_users_routes
     admin_users_routes.register(app, sys.modules[__name__])
-    app.add_url_rule('/', 'index', index)
+    from src.web.routes import library as library_routes
+    library_routes.register(app, sys.modules[__name__])
     from src.web.routes import book as book_routes
     book_routes.register(app, sys.modules[__name__])
     from src.web.routes import book_actions as book_actions_routes
