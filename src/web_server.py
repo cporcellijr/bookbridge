@@ -1349,91 +1349,7 @@ def _establish_session_and_redirect(user):
     return redirect(_safe_next_url())
 
 
-def login():
-    """Render/handle the login form."""
-    if database_service is not None:
-        try:
-            if database_service.count_users() == 0:
-                return redirect(url_for('setup', next=request.args.get('next') or url_for('index')))
-        except Exception:
-            pass
-    if current_user() is not None:
-        return redirect(url_for('index'))
-
-    remote_user = _remote_auth_user()
-    if remote_user is not None:
-        return _establish_session_and_redirect(remote_user)
-
-    error = None
-    if request.method == 'POST':
-        username = (request.form.get('username') or '').strip()
-        password = request.form.get('password') or ''
-        failure_key = (username.lower(), request.remote_addr or "")
-        now = time.time()
-        with _LOGIN_FAILURES_LOCK:
-            failures = [t for t in _LOGIN_FAILURES.get(failure_key, []) if now - t < _LOGIN_FAILURE_WINDOW]
-            if failures:
-                _LOGIN_FAILURES[failure_key] = failures
-            else:
-                _LOGIN_FAILURES.pop(failure_key, None)
-        if len(failures) >= _LOGIN_FAILURE_LIMIT:
-            return render_template('login.html', error="Too many login attempts. Try again shortly."), 429
-        user = None
-        if database_service is not None:
-            user = database_service.verify_user_credentials(username, password)
-        if user:
-            with _LOGIN_FAILURES_LOCK:
-                _LOGIN_FAILURES.pop(failure_key, None)
-            return _establish_session_and_redirect(user)
-        with _LOGIN_FAILURES_LOCK:
-            _LOGIN_FAILURES[failure_key] = failures + [now]
-        error = "Invalid username or password"
-        logger.warning("Failed login attempt for username '%s' from %s", username, request.remote_addr)
-
-    return render_template('login.html', error=error), (401 if error else 200)
-
-
-def setup():
-    """First-run admin setup. Only available while no users exist."""
-    if database_service is None:
-        return ("Database not initialized", 500)
-    try:
-        if database_service.count_users() != 0:
-            return redirect(url_for('login'))
-    except Exception as e:
-        logger.error("Could not inspect users for setup: %s", e, exc_info=True)
-        return ("Database unavailable", 500)
-
-    error = None
-    if request.method == 'POST':
-        username = (request.form.get('username') or '').strip()
-        password = request.form.get('password') or ''
-        confirm_password = request.form.get('confirm_password') or ''
-
-        if not username:
-            error = "Username is required"
-        elif not password:
-            error = "Password is required"
-        elif password != confirm_password:
-            error = "Passwords do not match"
-        else:
-            try:
-                from src.db.user_bootstrap import create_initial_admin_user
-                user, _counts = create_initial_admin_user(database_service, username, password)
-                session.clear()
-                return _establish_session_and_redirect(user)
-            except ValueError:
-                return redirect(url_for('login'))
-            except Exception as e:
-                logger.error("Initial admin setup failed: %s", e, exc_info=True)
-                error = "Could not create admin account"
-
-    return render_template('setup.html', error=error), (400 if error else 200)
-
-
-def logout():
-    session.clear()
-    return redirect(url_for('login'))
+from src.web.routes.login import login, setup, logout
 
 
 from src.web.routes.account import account, account_language, account_interface, account_display, account_display_page, account_integrations, account_test_connection, account_abs_libraries, account_booklore_libraries, account_bookorbit_scan_libraries
@@ -12848,9 +12764,8 @@ def create_app(test_container=None):
 
 
     # Register all routes here
-    app.add_url_rule('/setup', 'setup', setup, methods=['GET', 'POST'])
-    app.add_url_rule('/login', 'login', login, methods=['GET', 'POST'])
-    app.add_url_rule('/logout', 'logout', logout, methods=['GET', 'POST'])
+    from src.web.routes import login as login_routes
+    login_routes.register(app, sys.modules[__name__])
     from src.web.routes import account as account_routes
     account_routes.register(app, sys.modules[__name__])
     from src.web.routes import admin_users as admin_users_routes
