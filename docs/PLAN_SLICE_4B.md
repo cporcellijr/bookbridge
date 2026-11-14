@@ -2,6 +2,27 @@
 
 **Original inventory/planning baseline:** `6f9629018eeb7ed571e50232f3ee50292071a604` (2026-11-13), isolated DevSpace worktree. The execution record below supersedes the original sequencing and C34 destination; remaining cluster rows are historical inventory until reviewed. Authority: `AGENTS.md`, `docs/PLAN_ARCHITECTURE_CLEANUP.md`, `docs/ARCHITECTURE_CLEANUP_HANDOFF.md` and architecture audit sections D and F.
 
+## Slice 4b step 2 — implementation record (2026-11-13)
+
+**Implementation pending independent review:** fresh isolated worktree `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-00ac9c21`, branch `refactor/architecture-4b-step2`, base dev `0856b685`. One pure-move code commit per cluster, with identical compatibility re-exports:
+
+| Cluster | Destination | Commit | AST comparison | Name check |
+|---|---|---|---|---|
+| C19 dashboard sync warning/cache | `src/web/dashboard_sync_warning.py` | `640af596` | 6/6 identical | 0 unresolved / 0 MODULE-SELF |
+| C36 Storyteller/series backfill | `src/web/storyteller_maintenance.py` | `243ce692` | 5/5 identical | 0 / 0 |
+| C38 BookFusion lookup | `src/web/bookfusion_lookup.py` | `0450b610` | 7/7 identical | 0 / 0 |
+| C07 diagnostics dispatch/receiver | `src/web/diagnostics_helpers.py` | `49611c8a` | 2/2 identical | 0 / 0 |
+| C08 KoSync login mirror | `src/web/kosync_login_mirror.py` | `de7eb7df` | 3/3 identical | 0 / 0 |
+| C06 admin-user actions | `src/web/admin_actions.py` | `35f5878d` | 1/1 identical | 0 / 0 |
+
+Each destination follows the step-1 `_WEB_MODULE = None` + lazy `_web_server()` binding pattern, bound from `web_server.py` to `sys.modules[__name__]` at module import, with the original helper names re-exported. All web-dependent lookups go through `web.X` at call time; no `src.web_server` import occurs in a new module at import time. `create_app` is unchanged. C19 owns `_DASHBOARD_SYNC_WARNING_CACHE` and `_AUDIO_AXIS_SYNC_CLIENTS`; `create_app().clear()` still clears the exact re-exported cache object. C08 owns `KOSYNC_MIRRORED_LOGIN_KEY` and re-exports it. No `global` scalar rebinding in moved bodies; backfill, diagnostics, mirror, and admin callback identities are preserved. `inspect.getsource(web_server._apply_user_admin_action)` resolves to the real moved function; the original registry/source assertions passed.
+
+**Patch/assignment audit:** test-side patching and reassignment of all moved symbols was re-grepped (including patch calls, patch.object, aliases, setattr/delattr). **Zero moved-name patch/assignment sites**: no tests needed repointing and no raising-original interception proof is applicable. No test code was edited.
+
+**Combined verification:** `web_server.py` **12,322 → 11,689 lines** (−633); **24/24 AST-identical** to `0856b685`, six module name checks each with 0 unresolved and 0 MODULE-SELF; offline Flask URL map **195/195 identical** including endpoint names and methods. Focused `.venv` pytest across **30 selected test files**: **960 passed / 2 skipped / 68 subtests / one warning / exit 0**. Full suite attempted once through `.venv`, **Python exit code 4 because controller lock was busy**; it was not retried or bypassed. Original analyzer rerun in worktree notes after skipping already-extracted groups: **31 surviving clusters, 294 top-level functions, zero newly-leaf clusters** (existing leaves C09, C23, C26, C29, C33). Ignored evidence: `.local-review-notes/architecture-phase4b/step2_*`.
+
+**Pending:** Claude independent review and full suite, then integrate into local dev, **restart** and live-verify. No push, dev merge, restart or live checkout edits were made. No rebuild or migration is necessary.
+
 ## Slice 4b step 1 — implementation record (2026-11-13)
 
 Fresh isolated worktree from dev `543830bb`; **reviewed by Claude, integrated (`fd407d07`), restarted, live-verified**; full suite 7906 passed / 0 failures. The three clusters were pure-moved in this order, one code commit each:

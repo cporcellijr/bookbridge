@@ -1,6 +1,6 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Slice 4 route extraction complete. Slice 4b step 1 (C39 probes, C37 connection-test dispatcher, C34 cover freshness) integrated (`fd407d07`), restarted, live-verified. `web_server.py` 17,771 → 12,322 lines overall. Next: slice 4b step 2.**
+Updated: 2026-11-13. **Slice 4 route extraction complete. Slice 4b step 2 implemented in isolated worktree, pending independent review/full suite/integration/restart: `web_server.py` 17,771 → 11,689 lines overall. Step 1 remains integrated (`fd407d07`), restarted and live-verified. No step-2 deployment.**
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
@@ -32,6 +32,8 @@ Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITEC
 | 4.7 Suggestions, Processing, Book Actions, Matching | `36bf0532`..`749dcad3`; fixes `092e3691`, `c32404ce`, `76067f90` |
 | 4.8 Settings, System, Library index | `ad77428e`, `82addb1d`, `f391e574` |
 | 4.9 Login, Setup, Logout | `a68db6ed` |
+| 4b.1 Probes, connection dispatcher, cover freshness | `e9e535be`, `da371072`, `fd407d07` (integrated/restarted) |
+| 4b.2 Six helper moves C19/C36/C38/C07/C08/C06 | `640af596`, `243ce692`, `0450b610`, `49611c8a`, `de7eb7df`, `35f5878d` (worktree only) |
 
 All are on local dev and deployed. HEAD may be a documentation-only successor; verify actual Git state before new work. Nothing was pushed.
 
@@ -58,6 +60,29 @@ Offline evidence: implementation worktree `.local-review-notes/architecture-phas
 
 ## Next action
 
-**Slice 4b step 1 done** (base `543830bb`): C39 `e9e535be` → `src/services/integration_connection_probes.py`, C37 `da371072` → `src/web/connection_tests.py`, C34 `fd407d07` → `src/web/cover_freshness.py` (owns the cover pool/fresh-until/thumb-version state; web_server binds `_WEB_MODULE` at import, re-exports the same objects). Claude review: 32/32 AST identical; name_check problems only the old tool's annotated-assignment gap (DevSpace's fix adopted into the live tool) and startup-set `COVERS_DIR`; nothing in `src/` imports `src.web_server` at runtime, so the import-time binding is safe. Full **7906 passed / 15 skipped / 0 failures** (RC 0). Live: test-connection unknown service 400 and Storyteller probe response identical to baseline; covers/thumbnails served; fresh thumbnails generate (202 → 200). Note: the `_thumb_versions_seeded_dir` re-export in web_server.py is a stale scalar (always `None`); read it only via `src.web.cover_freshness`. Next: step 2 — pick independent clusters that clear the addendum gates; leaf order is not required when moved code reaches remaining helpers via `web.X`. Original analyzer restored at live `.local-review-notes/architecture-phase4b/analyze.py`.
+**Slice 4b step 2 awaiting independent Claude review:** isolated worktree
+`C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-00ac9c21` on
+`refactor/architecture-4b-step2` based at `0856b685`. Six code commits:
+C19 `640af596` → `src/web/dashboard_sync_warning.py`, C36 `243ce692` →
+`src/web/storyteller_maintenance.py`, C38 `0450b610` →
+`src/web/bookfusion_lookup.py`, C07 `49611c8a` →
+`src/web/diagnostics_helpers.py`, C08 `de7eb7df` →
+`src/web/kosync_login_mirror.py`, C06 `35f5878d` →
+`src/web/admin_actions.py`. Every function was AST-matched to the base
+(24/24), each name check showed 0 unresolved/0 MODULE-SELF, cache and callback
+identities remained unchanged, and C06 `inspect.getsource` still inspects
+the real body. No moved-name patch/assignment hazards, so no tests were
+repointed. Flask map 195/195 identical; focused 960 passed / 2 skipped /
+68 subtests (exit 0). **Full suite attempted once, Python exit 4: controller
+lock busy**; Claude runs the independent full suite. Analyzer: no newly
+leaf clusters; existing leaves C09/C23/C26/C29/C33. `web_server.py`
+12,322 → 11,689 lines. Evidence: worktree ignored
+`.local-review-notes/architecture-phase4b/step2_*`. Pending: code review,
+full suite, integrate into local dev, **restart**, live verification.
+**No push, dev merge, restart, or live checkout edits occurred in step 2.**
+Next step should re-evaluate independent leaves following the plan's review
+addendum; C23 remains intentionally skipped.
+
+**Historical step-1 handoff:** **Slice 4b step 1 done** (base `543830bb`): C39 `e9e535be` → `src/services/integration_connection_probes.py`, C37 `da371072` → `src/web/connection_tests.py`, C34 `fd407d07` → `src/web/cover_freshness.py` (owns the cover pool/fresh-until/thumb-version state; web_server binds `_WEB_MODULE` at import, re-exports the same objects). Claude review: 32/32 AST identical; name_check problems only the old tool's annotated-assignment gap (DevSpace's fix adopted into the live tool) and startup-set `COVERS_DIR`; nothing in `src/` imports `src.web_server` at runtime, so the import-time binding is safe. Full **7906 passed / 15 skipped / 0 failures** (RC 0). Live: test-connection unknown service 400 and Storyteller probe response identical to baseline; covers/thumbnails served; fresh thumbnails generate (202 → 200). Note: the `_thumb_versions_seeded_dir` re-export in web_server.py is a stale scalar (always `None`); read it only via `src.web.cover_freshness`. Next: step 2 — pick independent clusters that clear the addendum gates; leaf order is not required when moved code reaches remaining helpers via `web.X`. Original analyzer restored at live `.local-review-notes/architecture-phase4b/analyze.py`.
 
 **Historical handoff:** Order changed by Claude 2026-11-13 (owner: "however you think best"): slice 4 (`web_server.py`, 17.4k lines, the largest debt) before slice 3. Step 9 moved the last direct route group; slice 4 route extraction is complete. Next is slice 4b: move cohesive helper clusters out of `web_server.py` into `src/services` (or `src/web/` for request-bound helpers), one cluster per commit, keeping compatibility re-exports because tests patch `src.web_server.*`. Extraction used the step-1 pattern: `src/web/routes/<group>.py` exposing `register(app, web_module)`, `app.add_url_rule` (no Blueprints, endpoint names unchanged), runtime state reached via `web = _web_server()` because production runs `web_server.py` as `__main__`, compatibility re-exports in `web_server.py`. Evidence per step: `.local-review-notes/architecture-phase4/move_check.py --route-modules ...` (AST identical) AND `name_check.py <modules>` (no unprefixed web_server globals; every `web.X` exists; no MODULE-SELF uses such as `sys.modules[__name__]`, `__file__` or bare `globals()`, which change meaning once moved), url_map diff, response capture. Any test that reads `web_server.py` source must also scan `src/web/routes/` (or it fails, or passes vacuously, after the move). Plain `register(app, web_module)` with one rules tuple; no `phase=` ordering. DevSpace implements and commits in the worktree; Claude re-runs the full suite (DevSpace often hits the suite lock; read the PYTHON exit code, not a trailing echo's), reviews, integrates, restarts, live-verifies. Then slice 3 (Library/Discover behavior matrix), 5, 6, 7.
