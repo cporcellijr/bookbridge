@@ -56,16 +56,31 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP7 | 2c402ad6 | C22 → `library_access` | 7 | 5,637 | 7/7 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 0 target edits: 6 `_claim_book_for_user_id` facade sites (7 tests) and 1 `_dashboard_visible_books_for_user` facade site (11 tests) passed with raising moved originals; no double-patch needed | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP8 | this commit | C24 → `dashboard_context` | 11 | 5,432 | 11/11 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 10 test patch repoints: `_dashboard_mappings_for_user` spy caller path proved; 9 `_hero_synopsis_source` sites passed poisoned-original (7 tests, 2 subtests); 7 other facade-patched sites passed poisoned-original (7 tests, 28 subtests); Classic hero picker guarded via facade | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP9 | this commit | C31 → `match_queue_store` | 18 | 5,185 | 18/18 identical | only startup-set `DATA_DIR` (read via `web.DATA_DIR`, known false positive); 0 other unresolved / 0 MODULE-SELF | 195/195 unchanged | 4 path patch repoints, 0 double-patches; path 4/4 tests, load 19 tests, drain 1 test / 4 subtests, bulk 11 tests raising-original; drain wrap spy source-proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP10 | this commit | C11 → `matched_ebook_delivery` | 10 | 4,841 | 10/10 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical to CP9 | 0 patch repoints, 0 double-patches; `_shelve_matched_ebook` 1, `_shelve_saved_ebook` 6, `_download_storyteller_artifact` 2 poisoned-original tests; facade caller paths traced | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 
 ### Remaining
 
-C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
 
 ### Skipped
 
 C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
 
 ### Verified checkpoints
+
+#### CP10 verified — C11 (`matched_ebook_delivery`)
+
+Moved all 10 shelving, Readest, and Storyteller artifact functions as pure moves. `web_server.py` 5,185 → 4,841 lines (step-6 task 3 cumulative 5,432 → 4,841). `move_check` 10/10 AST-identical (combined C31+C11: 28/28), `name_check` 0 unresolved / 0 MODULE-SELF, 10/10 identical facade re-exports, destination `_WEB_MODULE` is the active facade, and offline Flask URL map exactly unchanged at 195/195 routes against CP9. Focused eight-file suite: 365 passed / 25 subtests passed / 1 warning, Python exit 0. Full suite: 7906 passed / 15 skipped / 0 failures, 17 warnings, Python exit 0 (two extra Windows cp1252 decoding warnings emitted by fresh-subprocess import-order tests; both tests passed). `git diff --check` clean. Ignored evidence: `step6/t3-c11-*.log`, `step6/t3-c11-exit.txt`, `step6/t3-move-check.log`, `step6/t3-proof-*.log`.
+
+All nine patch sites remain on the web_server facade; **zero target repoints and zero double-patches** after caller tracing and selected raising-original proofs. `tests/test_match_paths_regression.py:2688` patches `_shelve_matched_ebook`: its `_process_batch_queue` call reaches `src/web/match_queue_processor.py`, whose call is `web._shelve_matched_ebook`, and the selected test passed while the destination original raised (1 test / exit 0). The cluster's `_shelve_saved_ebook` also calls `_shelve_matched_ebook` bare, but this particular patched scenario never traverses that in-cluster caller, so no destination patch or double-patch is necessary. This distinction was checked against the source and the patch's `assert_called_once_with` assertion.
+
+Six `_shelve_saved_ebook` facade patches remain: `tests/test_comic_audio_boundaries.py:29`, `tests/test_match_paths_regression.py:2604/2632/2654`, `tests/test_suggestions_auto_match.py:231/267`. Calls come from the outside-cluster auto-match workflow, queue processors, or routes, all resolving the facade. Six selected tests (five subtests) passed with the destination original raising. Some explicitly assert `not_called` (comic/approval/no-success paths), which is a no-call outcome and not independent proof of interception; the route/processor source-level `web._shelve_saved_ebook` lookups and positive call assertions in the other tests establish the patch path. Neither caller is in this cluster.
+
+Two `_download_storyteller_artifact` facade patches remain: `tests/test_match_paths_regression.py:546` and `tests/test_storyteller_519.py:727`. Source callers in `src/web/mapping_creation.py` and `src/web/storyteller_library_watch.py` resolve `web._download_storyteller_artifact`. Both selected tests passed with moved original raising (2 tests / exit 0); the Storyteller join test asserts download was *not* called, so its poison success is a no-call guard rather than interception and is supported by traced caller routing.
+
+The test-side assignments to `web_server._global_clients` in `tests/test_suggestions_review_fixes.py:125/141` remain unchanged. `_global_clients`, `container`, and `database_service` are retained in the web module, and `_aligned_shelf_assignment` reads `web._global_clients` at each call; there is no captured copy in the new module. No moved global assignment, `__file__` anchor, or state clone. No tests or assertions weakened.
+
+Deployment requirement: restart **after integration only**; no integration, push, restart or live access.
 
 #### CP9 verified — C31 (`match_queue_store`)
 
