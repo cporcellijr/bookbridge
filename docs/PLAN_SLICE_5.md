@@ -122,7 +122,14 @@ a following checkpoint may replace it with its resolved hash. `git log --grep` r
 | CP17 | `39dcf27c` | `AdvancedQueriesMixin` | 26 | 3079 | 312/312 (100%); same attributes; names 0; structural review passed; ownership default sentinel verified | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP18 | `9abf9e40` | `AcquisitionMixin` | 27 | 2307 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP19 | `d590a7ab` | `StateMixin` | 6 | 2214 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
-| CP20 | `[Refactor] Move books database methods into BooksMixin` (this commit) | `BooksMixin` | 45 | 979 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP20 | `629ebad0` | `BooksMixin` | 45 | 979 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+
+## Stretch documentation
+
+| Item | Commit | Status / verification |
+|---|---|---|
+| S1 acquisition behavior matrix | `[Docs] Map acquisition provider behavior for slice 6` (this commit) | Complete; provider cells and consolidation decisions independently checked against source and line bounds. No code changes. |
+| S2 sync leaf-helper risk note | pending | Not started. |
 
 ## Skipped
 
@@ -132,17 +139,19 @@ None.
 
 No code checkpoints remain.
 
-Optional stretch S1/S2 documentation remains pending.
+S1 is complete: `docs/SLICE6_ACQUISITION_BEHAVIOR_MATRIX.md`. S2 remains pending.
 
 ## Report back
 
 Completed **CP0-CP20**, each as one commit; no skipped checkpoints. **297/297** mapped methods moved.
 Current database_service.py: **979 lines**, down from 7897. Every completed checkpoint's full suite and Python exit code are in Progress above: **7906 passed / 15 skipped / 0 failures, exit 0**.
 All **312** original methods remain AST/text identical and reachable with the same dir(DatabaseService) set. DatabaseMigrator and core class attributes remain unchanged. Shared/exclusive aliases retain identity; mixin loggers keep src.db.database_service. The CP17 KoSync ownership default was explicitly checked against the canonical sentinel.
-No tests, models, migrations, journal settings or code outside src/db/ changed. The only tracked documentation change so far is this plan.
+No tests, models, migrations, journal settings or code outside src/db/ changed. Tracked documentation includes this plan and the S1 acquisition behavior matrix.
 The base has 312 direct DatabaseService methods rather than the estimated 317. The corrected map retains 15 core methods, including _scope_koreader_user shared by status/statistics; compute_annotation_key remains because its body names DatabaseService, and migrate_book_data remains because its method-local relative import requires the original package. Cross-domain calls remain through self/cls.
 Evidence and reusable tools: ignored .local-review-notes/slice5/ (mover, AST/name checks with self-tests, per-domain focused lists, focused/full logs and Python exit codes, structural review diffs). Incomplete Omni gate tooling required the authorized Luna fallback. Some full runs emitted two already-known Windows subprocess charmap-decoding warnings in test_import_order; all required counts and exit codes passed. No test infrastructure was changed.
-Remaining: no code checkpoints; optional S1/S2 documentation is pending.
+Remaining: S2 documentation only; all code checkpoints and S1 are complete.
 Deploy requirement: **restart** (Python only, no migration), after Claude integrates. **No dev merge, restart, push or live DB/container access performed by this task.** BRANCH_STATUS.md is left to Claude.
 
 CP20 initially exposed six failures from the method-local relative model import in migrate_book_data. Returning that method verbatim to core fixed all six (6/6 passed), then the complete focused set passed 4337 / 4 skipped and the full suite passed 7906 / 15 skipped, Python exit 0. No method or test body changed.
+
+S1 complete: actual shared behavior is already implemented through common intent/catalog/review/pairing helpers. Provider receipt adapters, release validation and Shelfmark-audio-only scan retry remain distinct. The matrix rejects the initial research overclaim that reconciliation is pure/stateless or all retries are shared. Citations independently verified; no live/provider calls.
