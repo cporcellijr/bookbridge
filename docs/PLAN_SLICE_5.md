@@ -116,7 +116,8 @@ a following checkpoint may replace it with its resolved hash. `git log --grep` r
 | CP13 | `0426e312` | `KoSyncProgressMixin` | 8 | 5774 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP14 | `454ce317` | `KOReaderStatsMixin` | 32 | 4677 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP15 | `30f5797d` | `ReadingSessionsMixin` | 17 | 4186 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
-| CP16 | `[Refactor] Move annotations database methods into AnnotationsMixin` (this commit) | `AnnotationsMixin` | 21 | 3519 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP16 | `697e6065` | `AnnotationsMixin` | 21 | 3519 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP17 | `[Refactor] Move advanced queries database methods into AdvancedQueriesMixin` (this commit) | `AdvancedQueriesMixin` | 26 | 3079 | 312/312 (100%); same attributes; names 0; structural review passed; ownership default sentinel verified | 7906 passed / 15 skipped / 0 failures; exit 0 |
 
 ## Skipped
 
@@ -124,14 +125,22 @@ None.
 
 ## Remaining
 
-CP17-CP160 in table order. Stretch S1/S2 may follow the last code checkpoint.
+- CP18: acquisition (27 methods).
+- CP19: state (6 methods).
+- CP20: books (46 methods).
+- Optional stretch S1/S2 documentation has not started.
+
+Next invocation: `.local-review-notes/slice5/move_domain.py CP18`, then the gates,
+focused files from `CP18-tests.txt`, and the full suite through the shared lock.
+The ignored mover and gate scripts are ready; no production edits are pending.
 
 ## Report back
 
-Completed CP0-CP16; no skipped checkpoints. 193/298 mapped methods moved.
-Current database_service.py: **3519 lines**, down from 7897. Every completed checkpoint's full suite and exit code are in Progress above (7906 passed / 15 skipped / 0 failures, exit 0).
-All 312 original methods remain AST/text identical and reachable, with the same dir(DatabaseService) attribute set; DatabaseMigrator and all core class attributes remain unchanged. Shared and exclusive constant aliases retain identity and mixin loggers keep src.db.database_service.
-No tests, models, migrations, journal settings or code outside src/db/ changed.
-CP0 finding: the base has 312 direct DatabaseService methods rather than the estimated 317. Unlabeled domains are explicitly mapped; cross-domain calls remain through self/cls. Core retains the 14 methods named in the map, including _scope_koreader_user used across status/statistics.
-Evidence: ignored .local-review-notes/slice5/ (mover, gates, focused/full logs and Python exit codes, full structural review diffs). CP0 gate tooling required the authorized Luna fallback after incomplete Omni output.
-Deploy requirement: **restart** (Python only, no migration), after Claude integrates. No dev merge, restart, push or live DB/container access performed. BRANCH_STATUS.md is left to Claude.
+Completed **CP0-CP17**, each as one commit; no skipped checkpoints. **219/298** mapped methods moved.
+Current database_service.py: **3079 lines**, down from 7897. Every completed checkpoint's full suite and Python exit code are in Progress above: **7906 passed / 15 skipped / 0 failures, exit 0**. CP17 focused: 1182 passed / 2 skipped, exit 0; full: 136.29s, exit 0.
+All **312** original methods remain AST/text identical and reachable with the same dir(DatabaseService) set. DatabaseMigrator and core class attributes remain unchanged. Shared/exclusive aliases retain identity; mixin loggers keep src.db.database_service. The CP17 KoSync ownership default was explicitly checked against the canonical sentinel.
+No tests, models, migrations, journal settings or code outside src/db/ changed. The only tracked documentation change is this plan.
+The base has 312 direct DatabaseService methods rather than the estimated 317. The corrected map retains 14 core methods, including _scope_koreader_user shared by status/statistics; compute_annotation_key remains because its body names DatabaseService. Cross-domain calls remain through self/cls.
+Evidence and reusable tools: ignored `.local-review-notes/slice5/` (mover, AST/name checks with self-tests, per-domain focused lists, focused/full logs and Python exit codes, structural review diffs). Incomplete Omni gate tooling required the authorized Luna fallback. Some full runs emitted two already-known Windows subprocess charmap-decoding warnings in test_import_order; all required counts and exit codes passed. No test infrastructure was changed.
+Remaining work: CP18-CP20, then optional S1/S2. The worktree is left at a committed green checkpoint for handoff.
+Deploy requirement: **restart** (Python only, no migration), after Claude integrates. **No dev merge, restart, push or live DB/container access performed.** BRANCH_STATUS.md is left to Claude.
