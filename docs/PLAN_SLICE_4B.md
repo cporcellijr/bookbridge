@@ -53,6 +53,7 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP4 | this commit | C15 → `suggestions_ebook_catalog` | 10 | 6,728 | 10/10 identical | only startup-set `EBOOK_DIR` (read as `web.EBOOK_DIR`, known false positive) | 195/195 identical (Codex) | 7 target edits; 4 names proven with raising originals (Claude finished; decorator-patched `test_owner_may_still_rematch_own_mapping` proven directly) | see Claude review |
 | CP5 | 1f3a47a0 | C21 → `dashboard_projection` | 16 | 6,022 | 16/16 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 2 target edits in `test_ui_account_display`; 7+2+1+1 sites passed raising-original (4 names), 14 `_build_dashboard_mappings` sites passed destination-binding guard (wraps/side-effect call-through) | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP6 | this commit | C27 → `suggestions_discovery` | 9 | 5,766 | 9/9 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 0 target edits: 5 `_get_suggestions_service` patches remain on facade (`scan_library_suggestions` outside cluster or no-call guard); 1 `_get_ignored_suggestion_source_ids` facade patch remains; originals made to raise: 5 sites / 16 tests + 3 subtests and 1 site / 11 tests passed | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP7 | this commit | C22 → `library_access` | 7 | 5,637 | 7/7 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 0 target edits: 6 `_claim_book_for_user_id` facade sites (7 tests) and 1 `_dashboard_visible_books_for_user` facade site (11 tests) passed with raising moved originals; no double-patch needed | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 
 ### Remaining
 
@@ -63,6 +64,13 @@ C22, C24, C31, C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains int
 C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
 
 ### Verified checkpoints
+
+#### CP7 verified — C22 (`library_access`)
+
+Moved all 7 functions; `_claim_book_for_current_user` continues to call the moved `_claim_book_for_user_id` by bare name, and `_persist_bookfusion_link_for_current_user` continues to call the moved explicit-user helper by bare name. `database_service`, `manager` and other runtime bindings remain in `web_server`, read as `web.X`. Re-exports are the same objects. `web_server.py` 5,766 → 5,637 lines. `move_check` 7/7 identical; `name_check` 0 unresolved / 0 MODULE-SELF; offline Flask URL map 195/195; unchanged route registration. `git diff --check` clean.
+
+No patch repoints were necessary after caller tracing: six `tests/test_storyteller_519.py` patches of `src.web_server._claim_book_for_user_id` (lines 201, 244, 268, 316, 336 and fixture line 583) exercise `_storyteller_auto_link_candidates` in the separately moved `src/web/storyteller_library_watch.py`, which resolves the claim through `web._claim_book_for_user_id`. None exercises `_claim_book_for_current_user` (the one same-cluster bare caller), so no double-patch is warranted. All six sites passed with the destination original made to raise: 7 tests / Python exit 0, including the parameterized test. The `tests/test_suggestions_redesign_api.py:81` facade patch of `_dashboard_visible_books_for_user` intercepts the externally registered API route, which reads through the web facade; all 11 tests passed with the moved original made to raise (Python exit 0). No assertions or test targets were changed. Focused five-file run: 133 passed, 4 subtests passed, 1 warning; Python exit 0. Full suite through the project venv: 7906 passed / 15 skipped / 0 failures; Python exit 0. Initial full-suite attempts hit controller contention (exit 4); they were retried without touching the OS lock. Evidence: ignored `step6/t2-c22-*.log`, `step6/t2-proof-*.log`, `step6/t2-c22-final-exit.txt`. Deployment requirement: restart (after integration only); no merge/push/restart/live access.
+
 
 #### CP1 verified — C14 (`suggestions_audio_catalog`)
 
