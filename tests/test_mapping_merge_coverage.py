@@ -23,7 +23,9 @@ REPO = Path(__file__).resolve().parents[1]
 SOURCES = (
     REPO / "src" / "web_server.py",
     REPO / "src" / "services" / "book_mapping_service.py",
+    *sorted((REPO / "src" / "web" / "routes").glob("*.py")),
 )
+MATCH_SOURCE = REPO / "src" / "web" / "routes" / "matching.py"
 # Either the shared helper, or the older inline sequence that match() still uses.
 MERGE_MARKERS = ("absorb_duplicate_mapping", "migrate_book_data")
 
@@ -56,16 +58,16 @@ def test_every_audiobook_mapping_path_merges_duplicates():
     # match() stamps sync_mode from a variable, so the literal detector above does
     # not see it. It is the original home of the merge and must keep one, so it is
     # pinned by name rather than discovered.
-    web_server_src = (REPO / "src" / "web_server.py").read_text(encoding="utf-8")
-    for node in ast.walk(ast.parse(web_server_src)):
+    match_src = MATCH_SOURCE.read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(match_src)):
         if isinstance(node, ast.FunctionDef) and node.name == "match":
-            segment = ast.get_source_segment(web_server_src, node) or ""
-            checked.append("web_server.py:match")
+            segment = ast.get_source_segment(match_src, node) or ""
+            checked.append("matching.py:match")
             if not any(marker in segment for marker in MERGE_MARKERS):
-                offenders.append("web_server.py:match (line %d)" % node.lineno)
+                offenders.append("matching.py:match (line %d)" % node.lineno)
             break
     else:
-        raise AssertionError("web_server.match() not found -- this pin has drifted")
+        raise AssertionError("matching.match() not found -- this pin has drifted")
 
     assert checked, "found no mapping-creating functions -- the detector has drifted"
     assert not offenders, (

@@ -189,10 +189,13 @@ class TestMatchTimeShelving:
         assert required.db.get_pending_shelf_adds() == []
 
     def test_every_match_path_hands_its_book_to_the_decision(self):
-        tree = ast.parse(Path(web_server.__file__).read_text(encoding="utf-8"))
+        # Routes call it as `web._shelve_matched_ebook(...)`, web_server as a bare name.
+        sources = [Path(web_server.__file__), *sorted((Path(web_server.__file__).parent / "web" / "routes").glob("*.py"))]
         calls = [
-            node for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_shelve_matched_ebook"
+            node for path in sources
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+            if isinstance(node, ast.Call)
+            and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "_shelve_matched_ebook"
         ]
         assert calls
         assert all(any(keyword.arg == "book" for keyword in call.keywords) for call in calls)

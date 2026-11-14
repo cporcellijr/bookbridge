@@ -264,6 +264,8 @@ class TestP6RenderedRoutes(unittest.TestCase):
     def test_login_and_setup_remain_classic(self):
         source = (ROOT / "src/web_server.py").read_text(encoding="utf-8")
         self.assertIn("return render_template('setup.html', error=error)", source)
+        for path in sorted((ROOT / "src/web/routes").glob("*.py")):
+            self.assertNotIn("next/setup.html", path.read_text(encoding="utf-8"), path.name)
         self.assertNotIn("next/setup.html", source)
         self.assertFalse((ROOT / "templates/next/setup.html").exists())
         self.db.set_user_credential(self.reader.id, "UI_MODE", "new")
