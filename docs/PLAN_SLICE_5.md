@@ -29,14 +29,16 @@ The table order is the checkpoint order. Jobs includes its sync markers and tran
 | CP11 | user_links | 2287-2641 | 17 | `repositories/user_links.py` / `UserLinksMixin` | None |
 | CP12 | memberships | 2133-2284 | 8 | `repositories/memberships.py` / `MembershipsMixin` | None |
 | CP13 | kosync_progress | 4490-4765 | 8 | `repositories/kosync_progress.py` / `KoSyncProgressMixin` | None |
-| CP14 | koreader_stats | 5107-5393, 6363-7210 | 33 | `repositories/koreader_stats.py` / `KOReaderStatsMixin` | None |
+| CP14 | koreader_stats | 5107-5393, 6363-7210 | 32 | `repositories/koreader_stats.py` / `KOReaderStatsMixin` | `_scope_koreader_user`: shared user scoping used by status and statistics |
 | CP15 | reading_sessions | 7213-7723 | 17 | `repositories/reading_sessions.py` / `ReadingSessionsMixin` | None |
 | CP16 | annotations | 5659-6360 | 21 | `repositories/annotations.py` / `AnnotationsMixin` | compute_annotation_key |
 | CP17 | advanced_queries | 4015-4484 | 26 | `repositories/advanced_queries.py` / `AdvancedQueriesMixin` | None |
 | CP18 | acquisition | 2792-3593 | 27 | `repositories/acquisition.py` / `AcquisitionMixin` | None |
 | CP19 | state | 2686-2788 | 6 | `repositories/state.py` / `StateMixin` | None |
 | CP20 | books | 808-2130 | 46 | `repositories/books.py` / `BooksMixin` | None |
-| Core | Startup/session, catalog callbacks, progress tracking, user scoping | 140-291, 2649-2684, 5682-5688 | 13 retained | `database_service.py` | `__init__`, `register_catalog_change_callback`, `_notify_catalog_change`, `_run_alembic_migrations`, `get_session`, `_note_progress_written`, `progress_write_seq`, `progress_written_since`, `_mark_progress_written`, `_resolve_uid`, `_default_user_id`, `is_primary_admin`, `compute_annotation_key` |
+| Core | Startup/session, catalog callbacks, progress tracking, user scoping | 140-291, 2649-2684, 5111-5114, 5682-5688 | 14 retained | `database_service.py` | `__init__`, `register_catalog_change_callback`, `_notify_catalog_change`, `_run_alembic_migrations`, `get_session`, `_note_progress_written`, `progress_write_seq`, `progress_written_since`, `_mark_progress_written`, `_resolve_uid`, `_default_user_id`, `is_primary_admin`, `_scope_koreader_user`, `compute_annotation_key` |
+
+CP8 review correction: `_scope_koreader_user` serves both status and statistics and stays in core under the shared user-scoping rule. The corrected map moves 298 methods and retains 14.
 
 Core retains initialization/migrations/session ownership, all progress-lock state and callback methods,
 default-user scoping helpers and `compute_annotation_key` (its body names DatabaseService).
@@ -105,7 +107,8 @@ a following checkpoint may replace it with its resolved hash. `git log --grep` r
 | CP4 | `0fba79f5` | `SuggestionsMixin` | 14 | 7473 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP5 | `3183c839` | `KOReaderStatusMixin` | 6 | 7248 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP6 | `5515353d` | `CredentialsMixin` | 8 | 7128 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
-| CP7 | `[Refactor] Move settings database methods into SettingsMixin` (this commit) | `SettingsMixin` | 14 | 7006 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP7 | `b6a24881` | `SettingsMixin` | 14 | 7006 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP8 | `[Refactor] Move users database methods into UsersMixin` (this commit) | `UsersMixin` | 14 | 6793 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 
 ## Skipped
 
@@ -113,14 +116,14 @@ None.
 
 ## Remaining
 
-CP8-CP70 in table order. Stretch S1/S2 may follow the last code checkpoint.
+CP9-CP80 in table order. Stretch S1/S2 may follow the last code checkpoint.
 
 ## Report back
 
-Completed CP0-CP7; no skipped checkpoints. 58/299 mapped methods moved.
-Current database_service.py: **7006 lines**, down from 7897. Every completed checkpoint's full suite and exit code are in Progress above (7906 passed / 15 skipped / 0 failures, exit 0).
+Completed CP0-CP8; no skipped checkpoints. 72/298 mapped methods moved.
+Current database_service.py: **6793 lines**, down from 7897. Every completed checkpoint's full suite and exit code are in Progress above (7906 passed / 15 skipped / 0 failures, exit 0).
 All 312 original methods remain AST/text identical and reachable, with the same dir(DatabaseService) attribute set; DatabaseMigrator and all core class attributes remain unchanged. Shared and exclusive constant aliases retain identity and mixin loggers keep src.db.database_service.
 No tests, models, migrations, journal settings or code outside src/db/ changed.
-CP0 finding: the base has 312 direct DatabaseService methods rather than the estimated 317. Unlabeled domains are explicitly mapped; cross-domain calls remain through self/cls. Core retains the 13 methods named in the map.
+CP0 finding: the base has 312 direct DatabaseService methods rather than the estimated 317. Unlabeled domains are explicitly mapped; cross-domain calls remain through self/cls. Core retains the 14 methods named in the map, including _scope_koreader_user used across status/statistics.
 Evidence: ignored .local-review-notes/slice5/ (mover, gates, focused/full logs and Python exit codes, full structural review diffs). CP0 gate tooling required the authorized Luna fallback after incomplete Omni output.
 Deploy requirement: **restart** (Python only, no migration), after Claude integrates. No dev merge, restart, push or live DB/container access performed. BRANCH_STATUS.md is left to Claude.
