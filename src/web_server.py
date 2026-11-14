@@ -12001,46 +12001,9 @@ def _serialize_kosync_document_for_ui(doc, linked_book=None) -> dict:
     }
 
 
-def api_me_kosync_documents():
-    """User-scoped KOSync document list for the dashboard modal."""
-    user = current_user()
-    claimed_abs_ids = _current_user_claimed_abs_ids(user)
-    visible_docs = []
-    for doc in database_service.get_all_kosync_documents():
-        if not _kosync_document_visible_to_user(doc, user, claimed_abs_ids):
-            continue
-        linked_book = database_service.get_book(doc.linked_abs_id) if doc.linked_abs_id else None
-        visible_docs.append(_serialize_kosync_document_for_ui(doc, linked_book=linked_book))
-
-    return jsonify({
-        "documents": visible_docs,
-        "total": len(visible_docs),
-        "linked": sum(1 for d in visible_docs if d["linked_abs_id"]),
-        "unlinked": sum(1 for d in visible_docs if not d["linked_abs_id"]),
-    })
+from src.web.routes.me import api_me_kosync_documents, api_me_link_kosync_document, api_me_unlink_kosync_document, api_me_delete_kosync_document, api_me_books
 
 
-def api_me_books():
-    """Return current user's claimed BookBridge books as KOSync link targets."""
-    user = current_user()
-    if current_app.config.get('LOGIN_DISABLED'):
-        books = database_service.get_all_books()
-    elif user is None:
-        books = []
-    else:
-        books = database_service.get_all_books(user_id=user.id)
-
-    result = []
-    for book in books or []:
-        result.append({
-            "abs_id": book.abs_id,
-            "title": book.abs_title,
-            "author": getattr(book, "audio_title", None) or "",
-            "ebook_filename": book.ebook_filename,
-            "kosync_doc_id": book.kosync_doc_id,
-        })
-    result.sort(key=lambda b: (b.get("title") or "").lower())
-    return jsonify({"books": result, "total": len(result)})
 
 
 def _get_visible_kosync_document_or_response(doc_hash: str):
@@ -12054,74 +12017,10 @@ def _get_visible_kosync_document_or_response(doc_hash: str):
     return doc, None
 
 
-def api_me_link_kosync_document(doc_hash):
-    """Link a visible device hash to one of the current user's claimed books."""
-    doc, error = _get_visible_kosync_document_or_response(doc_hash)
-    if error:
-        return error
-
-    data = request.get_json(silent=True) or {}
-    abs_id = str(data.get("abs_id") or "").strip()
-    if not abs_id:
-        return jsonify({"success": False, "error": "Missing book selection."}), 400
-
-    book = database_service.get_book(abs_id)
-    if not book:
-        return jsonify({"success": False, "error": "That book is not in your library."}), 404
-
-    if not _book_claimed_by_current_scope(abs_id):
-        return jsonify({"success": False, "error": "That book is not in your library."}), 403
-
-    success = database_service.link_kosync_document(doc.document_hash, abs_id)
-    if not success:
-        return jsonify({"success": False, "error": "Could not link this KOSync document."}), 500
-
-    database_service.dismiss_suggestion(doc.document_hash)
-    linked = database_service.get_kosync_document(doc.document_hash)
-    return jsonify({
-        "success": True,
-        "message": f"Linked to {book.abs_title}",
-        "document": _serialize_kosync_document_for_ui(linked, linked_book=book),
-    })
 
 
-def api_me_unlink_kosync_document(doc_hash):
-    """Clear the book link for a visible KOSync document."""
-    doc, error = _get_visible_kosync_document_or_response(doc_hash)
-    if error:
-        return error
-    if not doc.linked_abs_id:
-        return jsonify({"success": True, "message": "Document is already unlinked."})
-    if not _book_claimed_by_current_scope(doc.linked_abs_id):
-        return jsonify({"success": False, "error": "You do not have permission to change this document."}), 403
-
-    success = database_service.unlink_kosync_document(doc.document_hash)
-    if not success:
-        return jsonify({"success": False, "error": "Could not unlink this KOSync document."}), 500
-    updated = database_service.get_kosync_document(doc.document_hash)
-    return jsonify({
-        "success": True,
-        "message": "Document unlinked.",
-        "document": _serialize_kosync_document_for_ui(updated),
-    })
 
 
-def api_me_delete_kosync_document(doc_hash):
-    """Delete an unlinked KOSync document owned by the current user."""
-    doc, error = _get_visible_kosync_document_or_response(doc_hash)
-    if error:
-        return error
-    if doc.linked_abs_id:
-        return jsonify({"success": False, "error": "Unlink this document before deleting it."}), 400
-    if not current_app.config.get('LOGIN_DISABLED'):
-        user = current_user()
-        if user is None or doc.user_id != user.id:
-            return jsonify({"success": False, "error": "You do not have permission to delete this document."}), 403
-
-    success = database_service.delete_kosync_document(doc.document_hash)
-    if not success:
-        return jsonify({"success": False, "error": "Could not delete this KOSync document."}), 500
-    return jsonify({"success": True, "message": "Document deleted."})
 
 
 def _delete_or_unlink_book(user, abs_id, book) -> None:
@@ -14934,11 +14833,8 @@ def create_app(test_container=None):
     readalong_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/api/sync-now/<abs_id>', 'sync_now', sync_now, methods=['POST'])
     app.add_url_rule('/api/mark-complete/<abs_id>', 'mark_complete', mark_complete, methods=['POST'])
-    app.add_url_rule('/api/me/kosync-documents', 'api_me_kosync_documents', api_me_kosync_documents, methods=['GET'])
-    app.add_url_rule('/api/me/kosync-documents/<doc_hash>/link', 'api_me_link_kosync_document', api_me_link_kosync_document, methods=['POST'])
-    app.add_url_rule('/api/me/kosync-documents/<doc_hash>/unlink', 'api_me_unlink_kosync_document', api_me_unlink_kosync_document, methods=['POST'])
-    app.add_url_rule('/api/me/kosync-documents/<doc_hash>', 'api_me_delete_kosync_document', api_me_delete_kosync_document, methods=['DELETE'])
-    app.add_url_rule('/api/me/books', 'api_me_books', api_me_books, methods=['GET'])
+    from src.web.routes import me as me_routes
+    me_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/update-hash/<abs_id>', 'update_hash', update_hash, methods=['POST'])
     from src.web.routes import covers as covers_routes
     covers_routes.register(app, sys.modules[__name__])
