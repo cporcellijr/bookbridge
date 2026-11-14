@@ -57,16 +57,25 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP8 | this commit | C24 → `dashboard_context` | 11 | 5,432 | 11/11 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 10 test patch repoints: `_dashboard_mappings_for_user` spy caller path proved; 9 `_hero_synopsis_source` sites passed poisoned-original (7 tests, 2 subtests); 7 other facade-patched sites passed poisoned-original (7 tests, 28 subtests); Classic hero picker guarded via facade | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP9 | this commit | C31 → `match_queue_store` | 18 | 5,185 | 18/18 identical | only startup-set `DATA_DIR` (read via `web.DATA_DIR`, known false positive); 0 other unresolved / 0 MODULE-SELF | 195/195 unchanged | 4 path patch repoints, 0 double-patches; path 4/4 tests, load 19 tests, drain 1 test / 4 subtests, bulk 11 tests raising-original; drain wrap spy source-proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP10 | this commit | C11 → `matched_ebook_delivery` | 10 | 4,841 | 10/10 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical to CP9 | 0 patch repoints, 0 double-patches; `_shelve_matched_ebook` 1, `_shelve_saved_ebook` 6, `_download_storyteller_artifact` 2 poisoned-original tests; facade caller paths traced | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP11 | this commit | C35 → `reading_stats` | 31 | 4,126 | 31/31 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints, 0 double-patches; 5 moved originals poisoned across 9 selected test-node runs; facade-only call paths confirmed | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 
 ### Remaining
 
-C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
 
 ### Skipped
 
 C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
 
 ### Verified checkpoints
+
+#### CP11 verified — C35 (`reading_stats`)
+
+Moved all 31 reader statistics, history, listening, and progress-row functions with 31/31 AST-identical (only `web.` reads and the lazy active-facade lookup changed). `web_server.py` 4,841 → 4,126 lines. `STATS_CACHE`, `STATS_CACHE_LOCK`, `STATS_CACHE_TTL_SECONDS`, `_HEATMAP_DAYS`, `container`, and `database_service` stay in `web_server`; no copies exist in `src.web.reading_stats`, and the cache/lock are read through `web.X` at call time. Identity checks verify all 31 re-exports are the same destination objects and `_WEB_MODULE` is the active facade. `name_check` 0 problems; URL map 195/195 with unchanged route/endpoint/method records. Focused five-file suite: 234 passed / 2 skipped / 35 subtests passed / 1 warning, Python exit 0. Full suite: 7906 passed / 15 skipped / 0 failures / 15 warnings, Python exit **0** (123.85 seconds). `git diff --check` clean.
+
+All nine listed C35 patch sites stay on the `src.web_server` facade, with **zero repoints and zero double-patches**. In `tests/test_webserver.py`, the three decorators for `_build_listening_stats_payload`, `_write_cached_stats`, and `_read_cached_stats` (2853–2855) intercept the API stats route in `src/web/routes/stats.py`, which resolves `web.X`, not another function inside C35; each moved original independently raised while the exact decorated test node passed (one test each). `_local_listening_stats` (2972/2986) and `_stats_abs_client` (2973/2987) are also called directly from the separate yearly-recap route through `web.X`: the two exact yearly-recap tests passed with each moved original poisoned. Although the C35 internal `_build_listening_stats_payload` calls those two helpers by bare name, these patched recap scenarios never traverse that builder. The two `tests/test_ui_hero_content.py` `_stats_abs_client` patches remain on the facade because `src/web/dashboard_context.py::_hero_listening_piece` reads `web._stats_abs_client`; the exact two hero tests also passed with the destination original raising (four `_stats_abs_client` nodes total). Positive payload assertions and source-level caller traces establish interception; neither an unpatched in-cluster caller nor a spy calling the real original is involved. `tests/test_reader_stats_access.py` and `tests/test_stats_user_scoping.py` still clear the **same** facade `STATS_CACHE` in place; focused tests passed with no test edits or weakened assertions. Ignored logs: `step6/t4-c35-*` and `step6/prove_t4.py`.
+
+Deployment requirement: restart **after integration only**; no merge, push, restart, live access, or edits to the running checkout.
 
 #### CP10 verified — C11 (`matched_ebook_delivery`)
 
