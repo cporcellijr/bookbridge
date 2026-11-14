@@ -598,21 +598,17 @@ _ADMIN_ONLY_ENDPOINTS = {
 }
 
 
-def current_user():
-    """Return the logged-in User for this request (cached on g), or None."""
-    if 'current_user' in g.__dict__:
-        return g.current_user
-    user = None
-    uid = session.get('user_id')
-    if uid and database_service is not None:
-        try:
-            candidate = database_service.get_user(uid)
-            if candidate and candidate.active:
-                user = candidate
-        except Exception:
-            user = None
-    g.current_user = user
-    return user
+from src.web import session_auth as _session_auth
+_session_auth._WEB_MODULE = sys.modules[__name__]
+from src.web.session_auth import (
+    current_user,
+    admin_required,
+    _safe_next_url,
+    _trusted_proxy_networks,
+    _remote_auth_peer_trusted,
+    _remote_auth_user,
+    _establish_session_and_redirect,
+)
 
 
 # ---------------- i18n / UI LANGUAGE ----------------
@@ -1220,133 +1216,7 @@ def _release_request_user_context(_exc=None):
         reset_current_user_credentials(tok)
 
 
-def admin_required(f):
-    """Decorator for routes that require an admin user (e.g. user management)."""
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if current_app.config.get('LOGIN_DISABLED'):
-            return f(*args, **kwargs)
-        user = current_user()
-        if user is None:
-            if _request_wants_json():
-                return jsonify({"error": "authentication required"}), 401
-            return redirect(url_for('login', next=request.path))
-        if not user.is_admin:
-            return ("Forbidden: admin access required", 403)
-        return f(*args, **kwargs)
-    return wrapper
-
-
-def _safe_next_url(default=None):
-    """Resolve the post-auth redirect target, allowing only same-site relative
-    paths. Absolute (`http://…`) and protocol-relative (`//host`, `/\\host`)
-    values are rejected to prevent an open redirect, as are control characters:
-    browsers drop a tab (`/\t/host` becomes `//host`) and CR/LF break headers."""
-    fallback = default or url_for('index')
-    next_url = request.args.get('next') or fallback
-    if (
-        not next_url.startswith('/')
-        or next_url.startswith('//')
-        or next_url.startswith('/\\')
-        or any(ord(ch) < 32 or ord(ch) == 127 for ch in next_url)
-    ):
-        return fallback
-    return next_url
-
-
 _LOOPBACK_PROXY_NETWORKS = ('127.0.0.0/8', '::1/128')
-
-
-def _trusted_proxy_networks() -> list:
-    """Networks allowed to present the remote-auth header, read per call.
-
-    Empty/unset means loopback only. Parsed per call so the Settings UI applies
-    without a restart; malformed entries are dropped rather than silently
-    widening (or emptying) the trust list.
-    """
-    import ipaddress
-
-    raw = os.environ.get('REMOTE_AUTH_TRUSTED_PROXIES', '') or ''
-    entries = [part.strip() for part in raw.replace('\n', ',').split(',') if part.strip()]
-    if not entries:
-        entries = list(_LOOPBACK_PROXY_NETWORKS)
-
-    networks = []
-    for entry in entries:
-        try:
-            networks.append(ipaddress.ip_network(entry, strict=False))
-        except ValueError:
-            get_persistent_condition_logger().warn(
-                logger,
-                f"remote_auth_bad_proxy_entry:{entry}",
-                "⚠️ REMOTE_AUTH_TRUSTED_PROXIES entry %s is not a valid IP or CIDR — ignoring it",
-                sanitize_log_data(entry),
-            )
-    return networks
-
-
-def _remote_auth_peer_trusted() -> bool:
-    """Whether this request's direct peer may present the remote-auth header.
-
-    The header is a complete authentication bypass, so it is only honoured from a
-    configured proxy address. Without this check anything able to reach the
-    published port could send `Remote-User: admin`. `request.remote_addr` is the
-    real TCP peer here (the app installs no ProxyFix/X-Forwarded-For rewriting),
-    so it cannot be spoofed by a client header.
-    """
-    import ipaddress
-
-    peer = (request.remote_addr or '').strip()
-    if not peer:
-        return False
-    try:
-        address = ipaddress.ip_address(peer)
-    except ValueError:
-        return False
-    return any(address in network for network in _trusted_proxy_networks())
-
-
-def _remote_auth_user():
-    """Return the User named by the configured reverse-proxy header, or None."""
-    if not env_truthy('REMOTE_AUTH_ENABLED'):
-        return None
-    header_name = os.environ.get('REMOTE_AUTH_HEADER', 'Remote-User').strip() or 'Remote-User'
-    username = (request.headers.get(header_name) or '').strip()
-    if not username or database_service is None:
-        return None
-    if not _remote_auth_peer_trusted():
-        # Someone reached the port directly and supplied the header. That is either
-        # a misconfigured trust list or an attempt to bypass login, and both need to
-        # be visible — but it can repeat on every request, so it is rate-limited.
-        get_persistent_condition_logger().warn(
-            logger,
-            f"remote_auth_untrusted_peer:{request.remote_addr}",
-            "🔒 Rejected %s header from untrusted address %s — add the reverse proxy "
-            "to REMOTE_AUTH_TRUSTED_PROXIES if this is your proxy (empty = loopback only)",
-            sanitize_log_data(header_name),
-            sanitize_log_data(request.remote_addr or 'unknown'),
-        )
-        return None
-    try:
-        user = database_service.get_user_by_username(username)
-    except Exception:
-        return None
-    if user is None or not user.active:
-        return None
-    return user
-
-
-def _establish_session_and_redirect(user):
-    """Set up an authenticated session for `user` and redirect to a safe next."""
-    session['user_id'] = user.id
-    session['username'] = user.username
-    session['role'] = user.role
-    session.permanent = True
-    try:
-        database_service.touch_user_login(user.id)
-    except Exception:
-        pass
-    return redirect(_safe_next_url())
 
 
 from src.web.routes.login import login, setup, logout
