@@ -64,16 +64,31 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP15 | this commit | C10 → `kosync_ebook_identity` | 3 | 2,965 | 3/3 identical | only 3 startup-set `EBOOK_DIR` warnings; no other problems | 195/195 unchanged | 0 repoints, 0 double-patches; 10 assignment sites / 5 exact nodes + 12 find patches / 10 nodes + 3 get patches / 3 nodes; 3 poisoned-original groups pass | 7906 passed / 15 skipped / 0 failures / 15 warnings; Python exit 0 |
 | CP16 | this commit | C02 → `session_auth` | 7 | 2,835 | 7/7 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints, 0 double-patches; all 5 assignments + 5 patch sites tested with poisoned original; 2 positive adapter probes | 7906 passed / 15 skipped / 0 failures / 17 warnings; Python exit 0 |
 | CP17 | this commit | C03 → `user_clients` | 8 + 2 classes | 2,723 | 10/10 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints, 0 double-patches; 17 uc assignments / 12 nodes, 37 uc-patch passes + 3 subtests, 16 scan-patch passes + 24 subtests, 1 audiobook patch, 2 global-client class/assignment passes; positive facade probes | 7906 passed / 15 skipped / 0 failures / 15 warnings; Python exit 0 (twice) |
+| CP18 | this commit | C01 → `request_context` | 10 moved; 2 retained | 2,517 | 10/10 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints, 0 double-patches; 2 `_bind_request_user_context` post-registration direct calls (not patches); 4 poisoned-original facade proofs / 4 passed | 7906 passed / 15 skipped / 0 failures / 15 warnings; Python exit 0 |
 
 ### Remaining
 
-C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C04. C23 remains intentionally skipped (31 lines; no module justified). C01 movable helpers are complete at CP18; `translations_dir` and `available_locales` deliberately remain in `web_server.py`.
 
 ### Skipped
 
-C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
+C23: intentional existing decision. The C01 `__file__`/cache-retention decision is resolved at CP18; C04 still has a recorded global-rebinding blocker below.
 
 ### Verified checkpoints
+
+#### CP18 verified — C01 (`request_context`)
+
+Pure-moved ten C01 functions from `src/web_server.py` to `src/web/request_context.py` with signatures, bodies, response bytes, logs and error handling preserved modulo the lazy `web.` facade reference; **2,723 → 2,517** lines (−206). `translations_dir` remains in `web_server.py` because its `__file__` path anchor must point to the app root. `available_locales` and `available_locales = functools.lru_cache(maxsize=1)(available_locales)` also remain there: both the cached facade identity and `.cache_clear()` are part of the i18n test contract. The retained `available_locales()` resolves `_normalize_locale` by its bare re-exported global, so it calls the exact moved object unless the facade is patched. `_BASE_LOCALE`, `_CSRF_BOOTSTRAP_TEMPLATE`, `database_service` and all other web-server bindings are read through `web.X`; the new module imports `typing.Optional` locally for `_normalize_locale`'s unchanged runtime annotation.
+
+**Pure-move gates:** 10/10 AST-equivalent; `name_check` **0 unresolved / 0 MODULE-SELF**; all ten re-exports identical (`is`) to the definitions in `request_context`; `_WEB_MODULE` bound to the active `src.web_server`; URL map **195/195** with every rule, endpoint and method identical. `create_app` AST is identical to `2ee28b97`; it still registers the same facade callback identities in the same order (`require_login_guard`, `csrf_protect_guard`, teardown, gzip/CSRF after-request hooks, context processor, Babel locale selector, Jinja globals). `git diff --check` passed. No source-reading test repoints, no production call rewiring and no test assertion changes.
+
+**In-cluster `web.` call sites:** `get_locale` → `web.current_user()`, `web.available_locales()`, `web.has_request_context()`; `inject_csrf_script` → `web._ensure_csrf_token()`; `_bind_request_user_context` → `web._global_fallback_allowed()`, `web.set_current_user_id()`, `web.set_current_user_credentials()`; `_release_request_user_context` → `web.reset_current_user_id()`, `web.reset_current_user_credentials()`; `ui_template` → `web.user_setting()`; `inject_global_vars` → `web._display_abs_server()`, `web._load_match_queue()`, `web._display_settings_for(web.current_user())`, `web.current_user()`. Other `web.` reads (`request`, `session`, `g`, `os`, `gzip`, `DEFAULT_CONFIG`, `TemplateNotFound`, `_BASE_LOCALE`, `_CSRF_BOOTSTRAP_TEMPLATE`, `database_service`, `logger`) are call-time references, not state clones. In-cluster `_normalize_locale` calls from `get_locale` stay bare; `available_locales` is retained, so its reference is `web.available_locales`.
+
+**Patch/interception audit:** Whole-test search found no test mock/assignment targeting any moved C01 symbol. `tests/test_multiuser_auth.py::TestMultiUserAuth::test_bind_request_user_context_scopes_global_fallback_flag` has **two direct facade calls after `create_app`** (one regular user, one admin), not two patches; both pass in the focused suite. Its request guard remains in `web_server.py` and looks up `_bind_request_user_context` at request time, so facade patching intercepts whether applied before or after registration. The other registered callback references are captured at `create_app` registration, unchanged from baseline, with no patch site depending on later assignment.
+
+**Poisoned-original, exact-node proofs:** Ignored disposable tests were run with the destination original changed to raise and restored in `finally`; **4/4 passed**. `test_t9_interception.py::test_bind_after_create_app_facade_patch_intercepts` (1), `::test_bind_before_create_app_facade_patch_intercepts` (1) both poisoned `request_context._bind_request_user_context`; `::test_available_locales_uses_facade_normalize_after_reexport` (1) poisoned `request_context._normalize_locale`; `::test_get_locale_and_template_context_use_facade_current_user` (1) poisoned `session_auth.current_user` to verify C02's facade interception in the new C01 callers. No temporary changes remain, and the checks are retained only under ignored `.local-review-notes/architecture-phase4b/step6/`.
+
+**Focused suite:** 562 passed / 2 skipped / 282 subtests / 0 failures / 1 warning; Python exit **0**. **Full suite:** 7906 passed / 15 skipped / 0 failures / 15 warnings; Python exit 0. **Deploy after integration:** restart only; no merge, push, restart, migration, or live access performed in this task.
 
 #### CP17 verified — C03 (`user_clients`)
 
