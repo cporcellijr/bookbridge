@@ -34,7 +34,7 @@
 
 Worktree: `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-4b6`; branch `refactor/architecture-4b-step6`; baseline `17f11eb8` (8,566 lines). No integration, push, restart or live access; Claude integrates and writes BRANCH_STATUS. Deployment requirement: **restart**.
 
-**Checkpoint handoff:** task 3 integrated. Next: task 4 (C35, C30) via DevSpace.
+**Checkpoint handoff:** task 4 verified and committed (CP11/CP12) in its isolated worktree. Next: task 5 (C28, C40); Claude owns integration.
 
 CP0 reran the ignored analyzer in inventory and `--test-assignments` modes (both exit 0). Its copied legacy inventory generator now skips already-extracted spans and writes only an ignored preview. Current inventory: 20 surviving clusters (including intentionally skipped C23), 198 grouped functions, 3 classes, 19 retained functions. Assignment scan: 461 test files / 755 bindings, 140 assignments / 9 deletions / 56 in-place sites / 987 read-only uses, zero parse failures; 1,240 unresolved candidates are conservative alias/dynamic accesses requiring per-cluster manual review, not confirmed hazards.
 
@@ -57,17 +57,26 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP8 | this commit | C24 → `dashboard_context` | 11 | 5,432 | 11/11 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 10 test patch repoints: `_dashboard_mappings_for_user` spy caller path proved; 9 `_hero_synopsis_source` sites passed poisoned-original (7 tests, 2 subtests); 7 other facade-patched sites passed poisoned-original (7 tests, 28 subtests); Classic hero picker guarded via facade | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP9 | this commit | C31 → `match_queue_store` | 18 | 5,185 | 18/18 identical | only startup-set `DATA_DIR` (read via `web.DATA_DIR`, known false positive); 0 other unresolved / 0 MODULE-SELF | 195/195 unchanged | 4 path patch repoints, 0 double-patches; path 4/4 tests, load 19 tests, drain 1 test / 4 subtests, bulk 11 tests raising-original; drain wrap spy source-proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP10 | this commit | C11 → `matched_ebook_delivery` | 10 | 4,841 | 10/10 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical to CP9 | 0 patch repoints, 0 double-patches; `_shelve_matched_ebook` 1, `_shelve_saved_ebook` 6, `_download_storyteller_artifact` 2 poisoned-original tests; facade caller paths traced | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
-| CP11 | this commit | C35 → `reading_stats` | 31 | 4,126 | 31/31 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints, 0 double-patches; 5 moved originals poisoned across 9 selected test-node runs; facade-only call paths confirmed | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP11 | 70faddf1 | C35 → `reading_stats` | 31 | 4,126 | 31/31 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints, 0 double-patches; 5 moved originals poisoned across 9 selected test-node runs; facade-only call paths confirmed | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP12 | this commit | C30 → `suggestions_state_store` | 11 | 3,846 | 11/11 identical | only startup-set `DATA_DIR` (2 read sites via `web.DATA_DIR`, known false positive); no other problems | 195/195 unchanged | 0 repoints, 0 double-patches; 9 load and 2 save patch sites, raising-original proofs (22 + 3 selected passes) | 7906 passed / 15 skipped / 0 failures / 17 warnings; Python exit 0 |
 
 ### Remaining
 
-C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
 
 ### Skipped
 
 C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
 
 ### Verified checkpoints
+
+#### CP12 verified — C30 (`suggestions_state_store`)
+
+Moved all 11 per-user Suggestions state and persisted-cache functions as pure moves: 11/11 AST-identical modulo `web.` and the lazy module lookup. `web_server.py` 4,126 → 3,846 lines. The same `SUGGESTIONS_STATE_STORE` dict, `SUGGESTIONS_STATE_LOCK`, `SUGGESTIONS_CACHE_LOCK`, `SUGGESTIONS_CACHE_FILE_NAME`, `SUGGESTIONS_STATE_TTL_SECONDS`, and startup-populated `DATA_DIR` remain in `web_server`, never copied into `src.web.suggestions_state_store`; the moved functions resolve them as `web.X` on each invocation. Startup-set `DATA_DIR` is deliberately absent until app initialization; the two `name_check` reports are the prescribed known false positive, with zero other unresolved names or MODULE-SELF. All 11 re-export object identities and active `_WEB_MODULE` binding match. URL map 195/195 with exact rule/endpoint/method signatures unchanged; `py_compile` and `git diff --check` clean. Focused eight-file suite: 179 passed / 17 subtests passed / 1 warning, Python exit 0. Full suite: 7906 passed / 15 skipped / 0 failures / 17 warnings, Python exit **0** (118.54 seconds); initial controller-busy attempts exited 4, retried without changing the lock. Exact URL map 195/195 compared against CP11.
+
+**All 11 C30 patch sites remain on the web-server facade: zero test repoints, zero double-patches.** The `_load_persisted_suggestions_cache` patches at `tests/test_suggestions_discovery_lifecycle.py:56/210/231`, `tests/test_suggestions_exclude_local.py:142/166`, `tests/test_suggestions_redesign_api.py:76`, `tests/test_suggestions_review_fixes.py:130`, and `tests/test_suggestions_search_tab.py:191/199` intercept calls made outside this cluster: `web_server.scan_library_suggestions`, `web_server._run_suggestions_scan_job`, `web_server._suggestions_search_results`, or `src/api/suggestions_redesign.py`'s `_current_inputs`/ignore route, all of which look up the facade name. They do **not** traverse the same-cluster `_rehydrate_suggestions_state_from_cache` or `_persist_suggestions_state`, which call the destination's bare `_load_persisted_suggestions_cache`. The selected 21 exact test nodes (22 tests plus 3 subtests) passed with the destination load original raising; helper-wide mocks were exercised by every relevant test node, without invoking unrelated direct-real-cache tests. The `_save_persisted_suggestions_cache` patches at `tests/test_suggestions_discovery_lifecycle.py:211` and `tests/test_suggestions_exclude_local.py:167` intercept direct facade reads from the redesign ignore handler and the retained `_run_suggestions_scan_job`, respectively; the corresponding exact tests passed with the moved save original raising (3 total passes including the direct-assignment/restore test in `test_suggestions_redesign_api.py:182`). In both helper classes, positive response/persistence payload assertions plus caller tracing establish interception, not merely a no-call pass. No patched scenario enters the bare-call `_persist_suggestions_state` path, and none is a wrap-spy that intentionally invokes the real original. The 9+ in-place mutation sites in `test_match_paths_regression.py`, `test_source_information_ui.py`, and `test_suggestions_ui_integration.py` still operate on the same original `web_server.SUGGESTIONS_STATE_STORE`; focused tests passed without test changes or weakened assertions. Ignored evidence: `step6/t4-c30-*`, including exact-node poisoned-original proofs.
+
+Deployment requirement: restart **after integration only**; no merge, push, restart, live access, or edits to the running checkout.
 
 #### CP11 verified — C35 (`reading_stats`)
 
