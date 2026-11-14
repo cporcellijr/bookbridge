@@ -558,7 +558,7 @@ class TestOpenSession(ScheduledScanTestCase):
             "no_match_abs_ids": [],
             "stats": {"scanned_new": len(cache_by_abs), "reused_cached": 0, "total_unmatched": len(cache_by_abs)},
         }
-        with patch.object(web_server, "scan_library_suggestions", return_value=results):
+        with patch("src.web.suggestions_scan_workflow.scan_library_suggestions", return_value=results):
             job_id = web_server._run_scheduled_suggestions_scan(full=full)
         self.assertEqual("done", web_server.SUGGESTIONS_SCAN_JOBS[job_id]["status"])
 

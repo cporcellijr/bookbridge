@@ -2094,7 +2094,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             self.assertEqual(session_data.get("suggestions_scan_job_id"), "job-1")
 
         with patch(
-            "src.web_server._get_suggestions_scan_job",
+            "src.web.suggestions_scan_workflow._get_suggestions_scan_job",
             return_value={
                 "status": "running",
                 "error": None,
@@ -2108,7 +2108,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             self.assertEqual(status_payload["progress"]["percent"], 40)
 
         with patch(
-            "src.web_server._get_suggestions_scan_job",
+            "src.web.suggestions_scan_workflow._get_suggestions_scan_job",
             return_value={
                 "status": "done",
                 "error": None,
