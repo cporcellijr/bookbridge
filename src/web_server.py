@@ -5490,21 +5490,8 @@ def render_restarting_page(next_url, health_url, restart_url):
         restart_url=restart_url,
     )
 
-def api_health():
-    """Lightweight readiness endpoint for restart polling."""
-    response = jsonify({
-        "ok": True,
-        "version": APP_VERSION,
-    })
-    response.headers["Cache-Control"] = "no-store, max-age=0"
-    return response
+from src.web.routes.system import api_health, api_restart, clean_inactive_cache, test_connection
 
-def api_restart():
-    """Trigger an asynchronous app restart after the restart page has loaded."""
-    start_restart_async()
-    response = jsonify({"ok": True})
-    response.headers["Cache-Control"] = "no-store, max-age=0"
-    return response
 
 from src.web.routes.settings import settings
 
@@ -11666,48 +11653,6 @@ def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
 
 
 
-def clean_inactive_cache():
-    """Preview inactive cache ownership without deleting uncertain files.
-
-    Previous cleanup compared raw book IDs with normalized adapter cache
-    directories, and did not protect retryable or job-held source tracks.
-    Until safe deletion can be coordinated with active workers and complete
-    ownership provenance, the endpoint must stay non-destructive.
-    """
-    payload = request.get_json(silent=True) or {}
-    if payload.get("dry_run") is False:
-        return jsonify({
-            "success": False, "dry_run": True,
-            "error": "Cache deletion is disabled until ownership and running-job safety are verified",
-        }), 409
-
-    books = database_service.get_all_books()
-    jobs = database_service.get_all_jobs()
-    inventory = inventory_audio_cache(DATA_DIR / "audio_cache", books, jobs)
-    status_by_book = {book.abs_id: getattr(book, "status", None) for book in books}
-
-    possible_inactive = [
-        entry for entry in inventory.entries
-        if entry.state == "mapped"
-        and len(entry.book_ids) == 1
-        and not entry.job_ids
-        and status_by_book.get(entry.book_ids[0]) == "inactive"
-    ]
-    unverified = [entry for entry in inventory.entries
-                  if entry.state in ("unverified", "ambiguous", "unsafe_symlink", "tombstone")]
-    return jsonify({
-        "success": True, "dry_run": True, "cleanup_disabled": True,
-        "deleted_audio": 0, "deleted_transcripts": 0, "deleted_epubs": 0,
-        "potential_inactive_audio": [
-            {"cache_name": entry.directory.name, "bytes": entry.total_bytes}
-            for entry in possible_inactive
-        ],
-        "potential_inactive_audio_bytes": sum(entry.total_bytes for entry in possible_inactive),
-        "protected_audio_directories": len(inventory.entries) - len(possible_inactive),
-        "unverified_audio_directories": len(unverified),
-        "unverified_audio_bytes": sum(entry.total_bytes for entry in unverified),
-        "note": "Preview only. No audio, transcript, EPUB or original audiobook files were deleted.",
-    })
 
 
 def _run_storyteller_backfill():
@@ -12043,19 +11988,6 @@ def _run_test_connection(service: str, payload: dict):
         return jsonify({"ok": False, "message": _test_conn_error(e)})
 
 
-@admin_required
-def test_connection(service: str):
-    """Test connectivity with diagnostic error messages.
-
-    Settings posts only the global fields (server URLs, enable flags); account
-    fields live per-user, so fill the ones not posted from the admin's own
-    saved credentials (#584).
-    """
-    submitted = request.get_json(silent=True) or {}
-    user = current_user()
-    if user is None:
-        return _run_test_connection(service, submitted)
-    return _run_test_connection(service, {**_posted_user_test_credentials(user, {}), **submitted})
 
 
 from src.web.routes.bookfusion import api_bookfusion_device_start, api_bookfusion_device_poll, api_bookfusion_search, api_bookfusion_link, api_bookfusion_unlink, api_bookfusion_upload
@@ -12983,8 +12915,8 @@ def create_app(test_container=None):
     me_routes.register(app, sys.modules[__name__])
     from src.web.routes import covers as covers_routes
     covers_routes.register(app, sys.modules[__name__])
-    app.add_url_rule('/api/health', 'api_health', api_health)
-    app.add_url_rule('/api/restart', 'api_restart', api_restart, methods=['POST'])
+    from src.web.routes import system as system_routes
+    system_routes.register(app, sys.modules[__name__])
     from src.web.routes import status as status_routes
     status_routes.register(app, sys.modules[__name__])
     from src.web.routes import stats as stats_routes
@@ -12999,12 +12931,10 @@ def create_app(test_container=None):
     init_suggestions_redesign_routes(app, sys.modules[__name__])
     from src.api.acquisition_routes import init_acquisition_routes
     init_acquisition_routes(app, sys.modules[__name__])
-    app.add_url_rule('/api/cache/clean', 'clean_cache', clean_inactive_cache, methods=['POST'])
     from src.web.routes import integration_lookups as integration_lookups_routes
     integration_lookups_routes.register(app, sys.modules[__name__])
     from src.web.routes import bookfusion as bookfusion_routes
     bookfusion_routes.register(app, sys.modules[__name__])
-    app.add_url_rule('/api/test-connection/<service>', 'test_connection', test_connection, methods=['POST'])
     from src.web.routes import diagnostics as diagnostics_routes
     diagnostics_routes.register(app, sys.modules[__name__])
 
