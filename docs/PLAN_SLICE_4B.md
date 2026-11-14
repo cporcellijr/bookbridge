@@ -34,7 +34,7 @@
 
 Worktree: `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-4b6`; branch `refactor/architecture-4b-step6`; baseline `17f11eb8` (8,566 lines). No integration, push, restart or live access; Claude integrates and writes BRANCH_STATUS. Deployment requirement: **restart**.
 
-**Checkpoint handoff:** task 7 integrated. Next: task 8 (C03) via DevSpace.
+**Checkpoint handoff:** task 7 integrated. CP17 (task 8, C03) verified in its isolated branch, awaiting Claude integration. Next: task 9 (C01), then task 10 (C04).
 
 CP0 reran the ignored analyzer in inventory and `--test-assignments` modes (both exit 0). Its copied legacy inventory generator now skips already-extracted spans and writes only an ignored preview. Current inventory: 20 surviving clusters (including intentionally skipped C23), 198 grouped functions, 3 classes, 19 retained functions. Assignment scan: 461 test files / 755 bindings, 140 assignments / 9 deletions / 56 in-place sites / 987 read-only uses, zero parse failures; 1,240 unresolved candidates are conservative alias/dynamic accesses requiring per-cluster manual review, not confirmed hazards.
 
@@ -63,16 +63,27 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP14 | this commit | C40 → `book_access` | 12 moved; 1 retained | 3,194 | 12/12 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints; 0 double-patches; all 6 mapping-access facade sites and 5 BookFusion assignments proven | 7906 passed / 15 skipped / 0 failures / 15 warnings; Python exit 0 |
 | CP15 | this commit | C10 → `kosync_ebook_identity` | 3 | 2,965 | 3/3 identical | only 3 startup-set `EBOOK_DIR` warnings; no other problems | 195/195 unchanged | 0 repoints, 0 double-patches; 10 assignment sites / 5 exact nodes + 12 find patches / 10 nodes + 3 get patches / 3 nodes; 3 poisoned-original groups pass | 7906 passed / 15 skipped / 0 failures / 15 warnings; Python exit 0 |
 | CP16 | this commit | C02 → `session_auth` | 7 | 2,835 | 7/7 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints, 0 double-patches; all 5 assignments + 5 patch sites tested with poisoned original; 2 positive adapter probes | 7906 passed / 15 skipped / 0 failures / 17 warnings; Python exit 0 |
+| CP17 | this commit | C03 → `user_clients` | 8 + 2 classes | 2,723 | 10/10 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints, 0 double-patches; 17 uc assignments / 12 nodes, 37 uc-patch passes + 3 subtests, 16 scan-patch passes + 24 subtests, 1 audiobook patch, 2 global-client class/assignment passes; positive facade probes | 7906 passed / 15 skipped / 0 failures / 15 warnings; Python exit 0 (twice) |
 
 ### Remaining
 
-C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
 
 ### Skipped
 
 C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
 
 ### Verified checkpoints
+
+#### CP17 verified — C03 (`user_clients`)
+
+Moved eight C03 functions and both classes (`_UnavailableClient`, `_GlobalClients`) from `src/web_server.py` to `src/web/user_clients.py` as pure moves. `web_server.py` **2,835 → 2,723** lines (−112). Function bodies, method bodies, signatures, decorators, authorization paths, error strings, and client fallbacks retain their original AST modulo the lazy `web.` references and `_web_server()` binding. No per-user or admin credential fallback policy changed. `_active_bundle`, `container`, `database_service`, `_UNAVAILABLE_CLIENT`, and the replaceable `_global_clients` instance remain in `web_server.py`, read through `web.X`. The `user_clients` re-export and `_WEB_MODULE` binding occur at source lines **523–536**, before `_UNAVAILABLE_CLIENT = _UnavailableClient()` at **694** and `_global_clients = _GlobalClients()` at **699**. The two deliberate in-cluster `web.uc()` calls are in `get_audiobooks_conditionally` and `_scan_user_clients`; `uc` reads the facade's active bundle, request user, ambient user ID, container, logger and global fallback instance. Class methods use the facade's container and unavailable-client singleton, while `_GlobalClients` remains the same shared class object for `patch.object`.
+
+**Pure-move gates:** 10/10 AST-equivalent including both classes; `name_check` **0 unresolved / 0 MODULE-SELF**, including a manual class-method review; all ten re-exports are identical objects, and the new module's `_WEB_MODULE` is the active module; offline Flask URL map **195/195**, unchanged with no route edits. `git diff --check` passed. Direct positive probes verified both `web.uc` in-cluster interception paths, facade `_global_clients` reassignment, shared `_GlobalClients` property patch, re-export class identity, and module binding.
+
+**Interception proofs:** zero test repoints and zero double-patches. With the moved `uc` original deliberately raising, the 17 assignments in `tests/test_bookfusion_upload.py` were covered by 12 exact-node runs (**12 passed**), including `_run_route`, read-aloud variant tests, duplicate-ID resolution cases, and teardown. Representative facade `uc` patch sites across acquisition, dashboard, Discover/Search, and BookFusion ran with the moved original poisoned (**37 passed / 3 subtests**). With the moved `_scan_user_clients` original raising, its patched sites in `test_suggestions_catalog_completeness.py`, `test_suggestions_local_visibility.py`, `test_suggestions_search_tab.py`, `test_ui_new_current_chapter.py`, and `test_ui_new_discover.py` passed (**16 tests / 24 subtests**). The facade `get_audiobooks_conditionally` patch in `test_kosync_server.py` passed (**1**). Poisoning `_GlobalClients.abs_client` while `test_suggestions_review_fixes.py` assigned `_global_clients` and patched the class passed both primary and non-primary admin cases (**2**). All five proof groups passed after correcting an initial test-node selector typo; this was a collection-selector error, not an application failure. Temporary poison edits were restored; proof scripts/logs are ignored under `.local-review-notes/architecture-phase4b/step6/`.
+
+**Focused suite:** 17 files spanning multi-user, provider registry, acquisition, Discover, BookFusion, ABS, KoSync and settings: **574 passed / 66 subtests / 3 warnings**, Python exit **0** (70.04s). **Full suite:** `.venv` runner **7,906 passed / 15 skipped / 0 failures / 15 warnings**, Python exit **0** on two complete runs (157.30s and 124.58s). An initial full run and one retry returned **4** due to the shared controller lock; neither was treated as an application failure, and the lock was not modified or deleted. No test code or assertions changed. No merge, push, restart, or live access. Claude integrates. Deployment requirement after integration: **restart**.
 
 #### CP16 verified — C02 (`session_auth`)
 
