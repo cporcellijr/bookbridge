@@ -1642,124 +1642,11 @@ def _share_library_with_returning_user(user) -> int:
     return _share_library_with_new_user(user, returning=True)
 
 
-def _apply_user_admin_action(form):
-    """Handle a single user-management action (create/reset/toggle/delete).
-
-    Shared by the legacy /admin/users page and the Settings → Users tab.
-    Returns (message, error)."""
-    message = None
-    error = None
-
-    action = form.get('action')
-    try:
-        if action == 'create':
-            username = (form.get('username') or '').strip()
-            password = form.get('password') or ''
-            role = form.get('role') or 'user'
-            if not username or not password:
-                error = "Username and password are required"
-            elif database_service.get_user_by_username(username):
-                error = "That username already exists"
-            else:
-                new_user = database_service.create_user(username, password, role=role)
-                message = f"Created user '{username}'"
-                linked = _share_library_with_new_user(new_user)
-                if linked:
-                    message = f"Created user '{username}' and shared {linked} book(s)"
-        elif action == 'reset_password':
-            uid = int(form.get('user_id'))
-            new_pw = form.get('password') or ''
-            if not new_pw:
-                error = "Password cannot be empty"
-            else:
-                database_service.set_user_password(uid, new_pw)
-                message = "Password reset"
-        elif action == 'toggle_active':
-            uid = int(form.get('user_id'))
-            target = database_service.get_user(uid)
-            if target:
-                disabling = bool(target.active)
-                try:
-                    database_service.update_user_account(uid, active=not disabling)
-                except ValueError as policy_error:
-                    error = str(policy_error)
-                else:
-                    _after_user_account_changed(uid)
-                    message = f"{'Disabled' if disabling else 'Enabled'} '{target.username}'"
-                    if not disabling:
-                        linked = _share_library_with_returning_user(target)
-                        if linked:
-                            message = f"Enabled '{target.username}' and shared {linked} book(s)"
-        elif action == 'set_role':
-            uid = int(form.get('user_id'))
-            new_role = (form.get('role') or '').strip().lower()
-            target = database_service.get_user(uid)
-            demoting = new_role == 'user'
-            if not target:
-                error = "User not found"
-            elif new_role not in ('admin', 'user'):
-                error = "Invalid role"
-            elif target.role == new_role:
-                error = f"'{target.username}' is already {new_role}"
-            else:
-                try:
-                    database_service.update_user_account(uid, role=new_role)
-                except ValueError as policy_error:
-                    error = str(policy_error)
-                else:
-                    # The cached client bundle carries the global-fallback flag, which
-                    # this change flips.
-                    _after_user_account_changed(uid)
-                    logger.info(
-                        "👤 Role change: '%s' is now '%s'",
-                        sanitize_log_data(target.username), new_role,
-                    )
-                    if demoting:
-                        message = f"'{target.username}' is now a regular user"
-                    else:
-                        message = (
-                            f"'{target.username}' is now an admin. They still use their own "
-                            f"service logins — set them under Integrations."
-                        )
-        elif action == 'delete':
-            uid = int(form.get('user_id'))
-            target = database_service.get_user(uid)
-            if not target:
-                error = "User not found"
-            elif uid == current_user().id:
-                error = "You can't delete your own account"
-            else:
-                try:
-                    deleted = database_service.delete_user(uid)
-                except ValueError as policy_error:
-                    error = str(policy_error)
-                else:
-                    if deleted:
-                        _clear_match_queue_for_user_id(uid)
-                        _invalidate_user_clients(uid)
-                        if abs_socket_manager is not None:
-                            abs_socket_manager.stop_user(uid)
-                        message = f"Deleted '{target.username}'"
-                    else:
-                        error = "User not found"
-        elif action == 'share_library':
-            if not env_truthy('SHARE_ALL_BOOKS_WITH_ALL_USERS'):
-                error = "Enable Features → Shared Library first, then share the existing catalog."
-            else:
-                result = database_service.share_all_books_with_active_users()
-                links = result.get('links', 0)
-                users = result.get('users', 0)
-                logger.info(
-                    "🔗 Shared %d existing book link(s) across %d active user(s) (share-all-books reconcile)",
-                    links, users,
-                )
-                if links:
-                    message = f"Shared {links} book link(s) across {users} user(s)"
-                else:
-                    message = f"All {users} user(s) already see the full library"
-    except Exception as e:
-        error = f"Action failed: {e}"
-    return message, error
+from src.web import admin_actions as _admin_actions
+_admin_actions._WEB_MODULE = sys.modules[__name__]
+from src.web.admin_actions import (
+    _apply_user_admin_action,
+)
 
 
 
@@ -1869,159 +1756,28 @@ from src.services.alignment_service import ingest_storyteller_transcripts
 
 
 
-def _run_diagnostics_send(
-    force: bool = False,
-    manual: bool = False,
-    user_message: str = "",
-) -> dict:
-    """Build service flags and delegate to the diagnostics sender.
-
-    Every flag is computed in its own try/except so a missing or broken
-    provider never prevents the heartbeat from reaching the collector.
-    """
-    def _flag(fn):
-        try:
-            return bool(fn())
-        except Exception:
-            return False
-
-    flags = {
-        'abs': _flag(lambda: container.abs_client().is_configured()),
-        'kosync': env_truthy('KOSYNC_ENABLED'),
-        'storyteller': _flag(lambda: container.storyteller_client().is_configured()),
-        'booklore': _flag(lambda: container.booklore_client().is_configured()),
-        'bookfusion': _flag(lambda: container.bookfusion_client().is_configured()),
-        'book_orbit': _flag(lambda: container.bookorbit_client().is_configured()),
-        'kavita': _flag(lambda: container.kavita_client().is_configured()),
-        'cwa': _flag(lambda: container.cwa_client().is_configured()),
-        'hardcover': _flag(lambda: container.hardcover_client().is_configured()),
-        'storygraph': _flag(lambda: container.storygraph_client().is_configured()),
-        'goodreads': _flag(lambda: container.goodreads_client().is_configured()),
-        'slash_books': os.path.isdir(os.environ.get('EBOOK_IMPORT_DIR', '/books')),
-    }
-    try:
-        total_books = len(database_service.get_books_by_status('active'))
-    except Exception:
-        total_books = None
-
-    from src.services import diagnostics
-    return diagnostics.maybe_send_diagnostics(
-        database_service,
-        service_flags=flags,
-        total_books=total_books,
-        force=force,
-        manual=manual,
-        user_message=user_message,
-    )
+from src.web import diagnostics_helpers as _diagnostics_helpers
+_diagnostics_helpers._WEB_MODULE = sys.modules[__name__]
+from src.web.diagnostics_helpers import (
+    _diagnostics_receiver_context,
+    _run_diagnostics_send,
+)
 
 
-KOSYNC_MIRRORED_LOGIN_KEY = "KOSYNC_MIRRORED_LOGIN"
+from src.web import kosync_login_mirror as _kosync_login_mirror
+_kosync_login_mirror._WEB_MODULE = sys.modules[__name__]
+from src.web.kosync_login_mirror import (
+    KOSYNC_MIRRORED_LOGIN_KEY,
+    _kosync_login_fingerprint,
+    _mirror_kosync_login,
+    _mirror_kosync_logins_from_grimmory,
+)
 
 
-def _kosync_login_fingerprint(username, password):
-    return hashlib.sha256(f"{username}\0{password}".encode("utf-8")).hexdigest()
 
 
-def _mirror_kosync_login(user, registry, holders):
-    client = registry.get_clients(user.id).booklore_client
-    if not client.is_configured():
-        return False
-    login = client.get_koreader_sync_login()
-    if not login:
-        return False
-    username, password = login
-    conditions = get_persistent_condition_logger()
-    reader = sanitize_log_data(user.username)
-
-    collision_key = f"kosync_login_mirror_collision:{user.id}"
-    holder = holders.get(username.lower())
-    if holder is not None and holder.id != user.id:
-        conditions.warn(
-            logger, collision_key,
-            "⚠️ KoSync login for '%s' not taken from Grimmory: the username '%s' already belongs to '%s'",
-            reader, sanitize_log_data(username), sanitize_log_data(holder.username),
-        )
-        return False
-    conditions.resolve(logger, collision_key, "KoSync username for '%s' no longer belongs to another user", reader)
-
-    creds = database_service.get_user_credentials(user.id)
-    stored_user = creds.get("KOSYNC_USER") or ""
-    stored_key = creds.get("KOSYNC_KEY") or ""
-    mirrored = creds.get(KOSYNC_MIRRORED_LOGIN_KEY)
-    own_login_key = f"kosync_login_mirror_kept:{user.id}"
-    if (
-        stored_user and stored_key
-        and (stored_user, stored_key) != (username, password)
-        and mirrored != _kosync_login_fingerprint(stored_user, stored_key)
-    ):
-        conditions.warn(
-            logger, own_login_key,
-            "⚠️ KoSync login for '%s' was set in BookBridge and is kept; clear their KoSync username "
-            "to take the login from Grimmory",
-            reader,
-        )
-        return False
-    conditions.resolve(logger, own_login_key, "KoSync login for '%s' now follows Grimmory", reader)
-
-    changed = []
-    if stored_user != username:
-        changed.append("username")
-    if stored_key != password:
-        changed.append("password")
-    fingerprint = _kosync_login_fingerprint(username, password)
-    if changed or mirrored != fingerprint:
-        database_service.set_user_credentials(user.id, {
-            "KOSYNC_USER": username,
-            "KOSYNC_KEY": password,
-            KOSYNC_MIRRORED_LOGIN_KEY: fingerprint,
-        })
-    if not changed:
-        return False
-    registry.invalidate(user.id)
-    holders[username.lower()] = user
-    logger.info("🔑 KoSync login for '%s' taken from Grimmory (%s)", reader, ", ".join(changed))
-    return True
 
 
-def _mirror_kosync_logins_from_grimmory():
-    if not env_truthy('KOSYNC_CREDENTIALS_FROM_GRIMMORY') or database_service is None:
-        return
-    conditions = get_persistent_condition_logger()
-    try:
-        registry = container.user_client_registry()
-        users = database_service.list_users()
-        holders = {}
-        for user in users:
-            name = (database_service.get_user_credentials(user.id).get("KOSYNC_USER") or "").lower()
-            if name:
-                holders.setdefault(name, user)
-        global_name = os.environ.get("KOSYNC_USER", "").lower()
-        default_user_id = database_service._default_user_id()
-        default_user = next((user for user in users if user.id == default_user_id), None)
-        if global_name and default_user is not None:
-            holders.setdefault(global_name, default_user)
-    except Exception as e:
-        conditions.warn(
-            logger, "kosync_login_mirror", "KoSync login mirror: could not list users: %s", e, exc_info=True,
-        )
-        return
-    conditions.resolve(logger, "kosync_login_mirror", "KoSync login mirror: users listed again")
-
-    updated = 0
-    for user in users:
-        if not user.active:
-            continue
-        failure_key = f"kosync_login_mirror:{user.id}"
-        try:
-            if _mirror_kosync_login(user, registry, holders):
-                updated += 1
-        except Exception as e:
-            conditions.warn(
-                logger, failure_key, "KoSync login mirror failed for user %s: %s", user.id, e, exc_info=True,
-            )
-        else:
-            conditions.resolve(logger, failure_key, "KoSync login mirror works again for user %s", user.id)
-    return updated
 
 
 def sync_daemon():
@@ -5890,173 +5646,40 @@ def _resolve_dashboard_display_metadata(
     }
 
 
-def _storyteller_transcript_source(storyteller_uuid, storyteller_manifest):
-    return "storyteller" if storyteller_uuid or storyteller_manifest else None
+from src.web import dashboard_sync_warning as _dashboard_sync_warning
+_dashboard_sync_warning._WEB_MODULE = sys.modules[__name__]
+from src.web.dashboard_sync_warning import (
+    _AUDIO_AXIS_SYNC_CLIENTS,
+    _DASHBOARD_SYNC_WARNING_CACHE,
+    _compute_dashboard_sync_warning_pct,
+    _dashboard_sync_warning_cache_key,
+    _dashboard_sync_warning_candidates,
+    _dashboard_text_axis_pct,
+    _get_dashboard_sync_warning_clients,
+    _storyteller_transcript_source,
+)
 
 
-def _get_dashboard_sync_warning_clients(mapping, integrations):
-    client_names = []
-
-    # A book repointed away from ABS keeps its old ABS progress row so the
-    # repoint stays undoable, but the sync engine never refreshes that row and
-    # the dashboard hides its tile — counting it would flag permanent drift
-    # nothing can clear.
-    if (
-        integrations.get('abs')
-        and mapping.get('sync_mode') != 'ebook_only'
-        and (mapping.get('audio_source') or 'ABS') == 'ABS'
-    ):
-        client_names.append('abs')
-
-    if integrations.get('bookloreaudio') and mapping.get('audio_source') == 'BookLore':
-        client_names.append('bookloreaudio')
-
-    if integrations.get('bookorbitaudio') and mapping.get('audio_source') == 'BookOrbit':
-        client_names.append('bookorbitaudio')
-
-    if integrations.get('kosync'):
-        client_names.append('kosync')
-
-    if integrations.get('storyteller') and (
-        mapping.get('storyteller_uuid')
-        or mapping.get('storyteller_legacy_link')
-        or 'storyteller' in mapping.get('states', {})
-    ):
-        client_names.append('storyteller')
-
-    if integrations.get('booklore') and (
-        mapping.get('booklore_id')
-        or 'booklore' in mapping.get('states', {})
-    ):
-        client_names.append('booklore')
-
-    if integrations.get('bookorbit') and (
-        mapping.get('ebook_source') == 'BookOrbit'
-        or 'bookorbit' in mapping.get('states', {})
-    ):
-        client_names.append('bookorbit')
-
-    if integrations.get('kavita') and (
-        mapping.get('ebook_source') == 'Kavita'
-        or 'kavita' in mapping.get('states', {})
-    ):
-        client_names.append('kavita')
-
-    return client_names
 
 
 # Clients that report progress on the audio-time axis (elapsed seconds /
 # duration) rather than the ebook-text axis (characters / total). Their raw
 # percentage is not directly comparable to ebook clients, so it is mapped onto
 # the text axis via the alignment map before the drift comparison.
-_AUDIO_AXIS_SYNC_CLIENTS = {'abs', 'bookloreaudio', 'bookorbitaudio'}
 
 
-def _dashboard_text_axis_pct(client_name, state, mapping):
-    """Return a client's progress as an ebook text-axis percentage (0-100).
-
-    Ebook clients already report on the text axis. Audio clients report on the
-    time axis; convert their timestamp to a text fraction via the book's
-    alignment map so the two are comparable. Falls back to the raw percentage
-    when no alignment map is available (e.g. audio-only books)."""
-    percentage = state.get('percentage')
-    if percentage is None:
-        return None
-
-    if client_name not in _AUDIO_AXIS_SYNC_CLIENTS:
-        return float(percentage)
-
-    alignment_service = getattr(manager, "alignment_service", None) if manager else None
-    if not alignment_service:
-        return float(percentage)
-
-    timestamp = state.get('timestamp') or 0
-    if timestamp <= 0:
-        duration = mapping.get('duration') or 0
-        if duration > 0:
-            timestamp = (float(percentage) / 100.0) * duration
-    if timestamp <= 0:
-        return float(percentage)
-
-    try:
-        text_fraction = alignment_service.get_progress_for_time(mapping.get('abs_id'), float(timestamp))
-    except Exception:
-        text_fraction = None
-
-    if not isinstance(text_fraction, (int, float)) or isinstance(text_fraction, bool):
-        return float(percentage)
-    return text_fraction * 100.0
 
 
 # Drift is computed for every visible book on every dashboard render, and an
 # audio client's conversion loads that book's alignment map — a 10-15MB JSON blob
 # against a 3-entry cache. The result only moves when a position moves, so it is
 # memoized on the exact inputs that produced it (issue #412).
-_DASHBOARD_SYNC_WARNING_CACHE = LRUCache(capacity=512)
 
 
-def _dashboard_sync_warning_candidates(mapping, integrations):
-    """The (client, state) pairs eligible for the drift comparison.
-
-    Split out from the computation so callers can count the candidates — and bail
-    — before paying for any audio-to-text axis conversion."""
-    candidates = []
-    states = mapping.get('states', {})
-
-    for client_name in _get_dashboard_sync_warning_clients(mapping, integrations):
-        state = states.get(client_name)
-        if not state:
-            continue
-        raw = state.get('percentage')
-        if raw is None or raw <= 0:
-            continue
-        candidates.append((client_name, state))
-
-    return candidates
 
 
-def _dashboard_sync_warning_cache_key(mapping, candidates):
-    """Fingerprint the inputs the drift number is derived from.
-
-    Anything that can change the answer belongs here: the book, the set of
-    candidate clients, each one's reported position, and the duration used as the
-    timestamp fallback. Identical fingerprint, identical result."""
-    return (
-        mapping.get('abs_id'),
-        mapping.get('duration') or 0,
-        tuple(
-            (name, state.get('percentage'), state.get('timestamp'))
-            for name, state in candidates
-        ),
-    )
 
 
-def _compute_dashboard_sync_warning_pct(mapping, integrations):
-    candidates = _dashboard_sync_warning_candidates(mapping, integrations)
-
-    # One reporting client cannot drift from anything. Returning here keeps a
-    # single-integration install off the alignment path entirely.
-    if len(candidates) < 2:
-        return 0.0
-
-    cache_key = _dashboard_sync_warning_cache_key(mapping, candidates)
-    cached = _DASHBOARD_SYNC_WARNING_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    progress_values = []
-    for client_name, state in candidates:
-        value = _dashboard_text_axis_pct(client_name, state, mapping)
-        if value is None:
-            continue
-        progress_values.append(value)
-
-    if len(progress_values) < 2:
-        return 0.0
-
-    warning_pct = round(max(progress_values) - min(progress_values), 1)
-    _DASHBOARD_SYNC_WARNING_CACHE.put(cache_key, warning_pct)
-    return warning_pct
 
 
 def _shelf_watch_clients_for(meta: dict):
@@ -11433,151 +11056,25 @@ def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
 
 
 
-def _run_storyteller_backfill():
-    """
-    Bulk backfill storyteller transcripts for currently matched storyteller books.
-    """
-    assets_dir_raw = os.environ.get("STORYTELLER_ASSETS_DIR", "").strip()
-    if not assets_dir_raw:
-        return {
-            "success": False,
-            "error": "STORYTELLER_ASSETS_DIR is not configured",
-            "scanned": 0,
-            "ingested": 0,
-            "missing": 0,
-            "failed": 0,
-            "aligned": 0,
-            "duration_seconds": 0.0,
-        }, 400
-
-    started_at = time.time()
-    books = database_service.get_all_books() if database_service else []
-    storyteller_books = [
-        b for b in books
-        if getattr(b, "storyteller_uuid", None) or getattr(b, "transcript_source", None) == "storyteller"
-    ]
-
-    summary = {
-        "success": True,
-        "scanned": 0,
-        "ingested": 0,
-        "missing": 0,
-        "failed": 0,
-        "aligned": 0,
-        "duration_seconds": 0.0,
-    }
-
-    abs_client = container.abs_client() if container else None
-    alignment_service = getattr(manager, "alignment_service", None) if manager else None
-    ebook_parser = container.ebook_parser() if container else None
-
-    for book in storyteller_books:
-        summary["scanned"] += 1
-        abs_id = book.abs_id
-        try:
-            item_details = abs_client.get_item_details(abs_id) if abs_client else None
-            chapters = item_details.get("media", {}).get("chapters", []) if item_details else []
-            manifest_path = ingest_storyteller_transcripts(abs_id, book.abs_title or "", chapters)
-            if not manifest_path:
-                summary["missing"] += 1
-                continue
-
-            book.transcript_source = "storyteller"
-            book.transcript_file = manifest_path
-            summary["ingested"] += 1
-
-            aligned = False
-            if alignment_service:
-                storyteller_transcript = StorytellerTranscript(manifest_path)
-                book_text = ""
-                if ebook_parser and book.ebook_filename:
-                    try:
-                        epub_filename = book.original_ebook_filename or book.ebook_filename
-                        epub_path = safe_cache_path(container.epub_cache_dir(), epub_filename)
-                        if epub_path and epub_path.exists():
-                            book_text, _ = ebook_parser.extract_text_and_map(epub_path)
-                    except Exception as e:
-                        logger.warning(f"Could not extract text for storyteller backfill: {e}", exc_info=True)
-                        
-                aligned = alignment_service.align_storyteller_and_store(abs_id, storyteller_transcript, ebook_text=book_text)
-                if aligned:
-                    summary["aligned"] += 1
-
-            if aligned:
-                book.transcript_file = "DB_MANAGED"
-                if getattr(book, "status", None) in (None, "", "pending", "processing", "failed_retry_later", "failed_permanent", "crashed"):
-                    book.status = "active"
-            else:
-                book.status = "pending"
-
-            database_service.save_book(book)
-        except Exception as e:
-            summary["failed"] += 1
-            logger.warning(f"Storyteller backfill failed for '{abs_id}': {e}", exc_info=True)
-
-    summary["duration_seconds"] = round(time.time() - started_at, 3)
-    logger.info(
-        "Storyteller backfill summary: "
-        f"scanned={summary['scanned']} ingested={summary['ingested']} "
-        f"aligned={summary['aligned']} missing={summary['missing']} failed={summary['failed']} "
-        f"duration={summary['duration_seconds']}s"
-    )
-    return summary, 200
+from src.web import storyteller_maintenance as _storyteller_maintenance
+_storyteller_maintenance._WEB_MODULE = sys.modules[__name__]
+from src.web.storyteller_maintenance import (
+    _extract_series_from_title,
+    _run_storyteller_backfill,
+    _series_backfill_clients,
+    _series_refresh_action,
+    _series_seq_equal,
+)
 
 
 
 
-def _extract_series_from_title(title: str) -> tuple:
-    """Return (series_name, series_sequence) parsed out of a numbered title."""
-    return _series_from_title(title)
 
 
-def _series_seq_equal(stored: "float | int | str | None", resolved: "float | None") -> bool:
-    """True when a stored series sequence already matches a freshly resolved one."""
-    if stored is None and resolved is None:
-        return True
-    if stored is None or resolved is None:
-        return False
-    try:
-        return abs(float(stored) - float(resolved)) < 1e-9
-    except (TypeError, ValueError):
-        return False
 
 
-def _series_refresh_action(stored_name: "str | None", stored_seq: "float | int | str | None",
-                           resolution) -> str:
-    """Decide what a resolved series means for a stored row.
-
-    Returns ``update``, ``unchanged``, ``clear``, ``keep`` or ``none``.
-    ``clear`` is only ever returned when a service that owns the book actually
-    answered — silence from an offline or unconfigured library must leave the
-    stored series alone rather than read as "the series was deleted".
-    """
-    had_series = bool((stored_name or "").strip())
-    if resolution.name:
-        if had_series and resolution.name == stored_name:
-            if _series_seq_equal(stored_seq, resolution.sequence):
-                return "unchanged"
-            # Never trade a known volume number for an unknown one. Some
-            # libraries carry the series name but no index, and dropping the
-            # stored number would sort that book to the end of its own series.
-            if resolution.sequence is None and stored_seq is not None:
-                return "unchanged"
-        return "update"
-    if had_series:
-        return "clear" if resolution.service_answered else "keep"
-    return "none"
 
 
-def _series_backfill_clients() -> dict:
-    """Return the clients the series backfill resolves against, keyed by kwarg name."""
-    return {
-        "abs_client": container.abs_client(),
-        "bookorbit_client": container.bookorbit_client(),
-        "booklore_client": container.booklore_client(),
-        "kavita_client": container.kavita_client(),
-        "ebook_parser": container.ebook_parser(),
-    }
 
 
 from src.web.routes.admin_maintenance import api_series_backfill, api_audio_repoint_plan, api_audio_repoint_apply, api_audio_repoint_undo, api_debug_abs_series
@@ -11647,26 +11144,23 @@ from src.web.routes.bookfusion import api_bookfusion_device_start, api_bookfusio
 
 
 
-def _bookfusion_client_for_user(user_id):
-    """Build a BookFusion client bound to a specific user so a device-link token
-    persists to THAT user's credentials (used by the admin link-on-behalf flow)."""
-    from src.api.bookfusion_client import BookFusionClient
-    creds = database_service.get_user_credentials(user_id) or {}
-    return BookFusionClient(credentials=creds, database_service=database_service, user_id=user_id)
+from src.web import bookfusion_lookup as _bookfusion_lookup
+_bookfusion_lookup._WEB_MODULE = sys.modules[__name__]
+from src.web.bookfusion_lookup import (
+    _bookfusion_client_for_user,
+    _bookfusion_item_matches,
+    _bookfusion_reader_id_from_url,
+    _find_bookfusion_user_api_id,
+    _resolve_created_bookfusion_id,
+    _resolve_duplicate_bookfusion_id,
+    _serialize_bookfusion_search_item,
+)
 
 
 
 
 
 
-def _serialize_bookfusion_search_item(item: dict) -> dict:
-    """Normalize one BookFusion library search row for dashboard linking."""
-    book_id = item.get("id") or item.get("book_id")
-    return {
-        "id": str(book_id) if book_id not in (None, "") else "",
-        "title": str(item.get("title") or item.get("name") or "").strip(),
-        "author": _coerce_author_display(item.get("authors") or item.get("author")),
-    }
 
 
 
@@ -11724,118 +11218,14 @@ def _readaloud_integrity_error(path: Path) -> str | None:
 
 
 
-def _bookfusion_item_matches(item: dict, title: str, author: str = "") -> bool:
-    """Return whether a User-API search result matches local EPUB metadata."""
-    if not isinstance(item, dict):
-        return False
-    if (item.get("title") or "").strip().casefold() != title.strip().casefold():
-        return False
-    if not author:
-        return True
-    item_authors = item.get("authors") or item.get("author") or ""
-    if isinstance(item_authors, list):
-        first = item_authors[0] if item_authors else ""
-        first_author = str(first.get("name") or first.get("authorName") or "").strip() if isinstance(first, dict) else str(first or "").strip()
-    elif isinstance(item_authors, dict):
-        first_author = str(item_authors.get("name") or item_authors.get("authorName") or "").strip()
-    elif isinstance(item_authors, str):
-        first_author = item_authors.strip()
-    else:
-        first_author = ""
-    return first_author.casefold() == author.strip().casefold()
 
 
-def _bookfusion_reader_id_from_url(item: dict) -> int | None:
-    """Extract the Calibre/reader-facing id from a BookFusion User-API result."""
-    read_url = str(item.get("read_url") or "")
-    match = re.search(r"/books/(\d+)(?:[-/?#]|$)", read_url)
-    if not match:
-        return None
-    return int(match.group(1))
 
 
-def _find_bookfusion_user_api_id(results, title: str, author: str, expected_reader_id: int | None = None) -> int | None:
-    """Find an exact metadata match, optionally tied to a Calibre reader id."""
-    for item in results or []:
-        if not _bookfusion_item_matches(item, title, author):
-            continue
-        if expected_reader_id is not None and _bookfusion_reader_id_from_url(item) != expected_reader_id:
-            continue
-        try:
-            return int(item.get("id"))
-        except (ValueError, TypeError):
-            continue
-    return None
 
 
-def _resolve_created_bookfusion_id(calibre_book_id: int | None, title: str, author: str = "") -> int | None:
-    """Resolve a newly-uploaded Calibre id to BookFusion's User-API id.
-
-    The Calibre finalize endpoint returns the id embedded in ``read_url`` rather
-    than the User API's ``id``. Search is retried briefly because uploads are
-    indexed asynchronously; no link is saved until the exact title match (and
-    author, when supplied) also exposes that returned reader id.
-    """
-    if calibre_book_id is None or not title:
-        return None
-    reader_client = uc().bookfusion_client
-    if not reader_client.is_configured():
-        return None
-    for attempt in range(3):
-        try:
-            results = reader_client.search_books(page=1, per_page=10, q=title) or []
-        except Exception as exc:
-            logger.warning("BookFusion post-upload User API search failed: %s", exc, exc_info=True)
-            return None
-        resolved_id = _find_bookfusion_user_api_id(results, title, author, calibre_book_id)
-        if resolved_id is not None:
-            return resolved_id
-        if attempt < 2:
-            time.sleep(0.5 * (attempt + 1))
-    return None
 
 
-def _resolve_duplicate_bookfusion_id(upload_client, title: str, author: str = "") -> int | None:
-    """Try to find a BookFusion book id for an already-uploaded duplicate.
-
-    Called when upload init returns 422 (file digest already known). Uses the
-    reader client (``uc().bookfusion_client``) to search by title and verifies
-    that the returned book's title (and first author, when available) match
-    the local metadata before linking.
-    """
-    if not title:
-        return None
-    reader_client = uc().bookfusion_client
-    if not reader_client.is_configured():
-        return None
-    try:
-        results = reader_client.search_books(page=1, per_page=5, q=title) or []
-    except Exception as exc:
-        logger.warning("BookFusion duplicate search failed: %s", exc, exc_info=True)
-        return None
-    for item in results:
-        if not _bookfusion_item_matches(item, title, author):
-            continue
-        try:
-            candidate_id = int(item.get("id"))
-        except (ValueError, TypeError):
-            continue
-        try:
-            probe_url = reader_client.get_download_url(candidate_id)
-        except Exception as exc:
-            logger.debug(
-                "BookFusion duplicate probe failed for id %s: %s",
-                candidate_id, exc,
-            )
-            continue
-        if not probe_url:
-            logger.debug(
-                "BookFusion duplicate id %s not accessible, skipping",
-                candidate_id,
-            )
-            continue
-        return candidate_id
-    return None
 
 
 
@@ -11915,29 +11305,6 @@ from src.web.routes.diagnostics import api_diagnostics_send_now, api_diagnostics
 
 
 
-def _diagnostics_receiver_context():
-    """Validate settings and derive the receiver base URL for proxied requests.
-
-    Returns ``(base_url, token, error_message)``.  ``base_url`` is
-    ``scheme://netloc`` parsed from ``DIAGNOSTICS_ENDPOINT_URL`` (no
-    attacker-controlled path component).  ``token`` is the raw ingest
-    token.  When either setting is missing/empty *error_message* is a
-    human-readable string and both URL and token are empty.
-    """
-    endpoint = os.environ.get('DIAGNOSTICS_ENDPOINT_URL', '').strip()
-    token = os.environ.get('DIAGNOSTICS_INGEST_TOKEN', '').strip()
-    if not endpoint:
-        return '', '', 'Diagnostics endpoint is not configured.'
-    if not token:
-        return '', '', 'Diagnostics ingest token is not configured.'
-    parsed = urlparse(endpoint)
-    base = (
-        f'{parsed.scheme}://{parsed.netloc}'
-        if parsed.scheme in ('http', 'https') and parsed.netloc else ''
-    )
-    if not base:
-        return '', '', 'Diagnostics endpoint URL is invalid.'
-    return base, token, ''
 
 
 
