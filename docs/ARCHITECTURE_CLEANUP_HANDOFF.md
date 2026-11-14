@@ -1,6 +1,6 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Slice 4 route extraction complete. Slice 4b step 2 (C19, C36, C38, C07, C08, C06 → `src/web/`) integrated (`db9e78f7`), restarted, live-verified. `web_server.py` 17,771 → 11,689 lines overall. Next: slice 4b step 3.**
+Updated: 2026-11-13. **Slice 4 routes complete; slice 4b step 2 integrated and live-verified (`db9e78f7`). Slice 4b step 3 (C26/C33/C09/C29) implemented in an isolated worktree, awaiting independent Claude review/full suite. `web_server.py` 11,689 → 10,561 for step 3. Not yet integrated/restarted.**
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
@@ -33,9 +33,10 @@ Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITEC
 | 4.8 Settings, System, Library index | `ad77428e`, `82addb1d`, `f391e574` |
 | 4.9 Login, Setup, Logout | `a68db6ed` |
 | 4b.1 Probes, connection dispatcher, cover freshness | `e9e535be`, `da371072`, `fd407d07` (integrated/restarted) |
-| 4b.2 Six helper moves C19/C36/C38/C07/C08/C06 | `640af596`, `243ce692`, `0450b610`, `49611c8a`, `de7eb7df`, `35f5878d` (worktree only) |
+| 4b.2 Six helper moves C19/C36/C38/C07/C08/C06 | `640af596`, `243ce692`, `0450b610`, `49611c8a`, `de7eb7df`, `35f5878d` (integrated via `db9e78f7`; restarted) |
+| 4b.3 C26/C33/C09/C29 isolated; independent review pending | `f4917611`, `0255495f`, `bdd28d36`, `fbed9ffd` (one code commit per cluster; docs commit follows) |
 
-All are on local dev and deployed. HEAD may be a documentation-only successor; verify actual Git state before new work. Nothing was pushed.
+Through step 4b.2, completed entries are on local dev and deployed. Step 4b.3 remains in the isolated worktree awaiting review. Nothing was pushed.
 
 ## Final Phase 2C evidence
 
@@ -60,7 +61,11 @@ Offline evidence: implementation worktree `.local-review-notes/architecture-phas
 
 ## Next action
 
-**Slice 4b step 2 done:** isolated worktree
+**Review slice 4b step 3 before integrating.** Worktree `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-77fdec7f`, branch `refactor/architecture-4b-step3`, base local dev `83da1ba6`. Four code commits: C26 `f4917611` (3 match processors), C33 `0255495f` (2 read-along helpers + labels), C09 `bdd28d36` (3 sync/ABS reconcile helpers), C29 `fbed9ffd` (9 scheduled scan helpers + five bindings). All moved to `src/web/`, with bound web-module lookups and unchanged compatibility objects.
+
+Mechanical gates: **17/17 AST identical**, **0** name/MODULE-SELF issues, **23/23** same-object re-exports; injected Forge worker and daemon boot thread target are unchanged; Flask URL map **195/195** identical. C29 had exactly three repointed in-cluster test patch sites and three raising-original interception proofs. Focused **375 passed / 30 subtests** across 13 test files, exit 0. Full suite attempted once, Python **exit 4** (other controller holds lock); Claude must independently run it. Analyzer: new leaf C28, C23 still intentionally skipped. `web_server.py` **11,689 → 10,561 lines**. Evidence: ignored `.local-review-notes/architecture-phase4b/step3_*` in the worktree. **Next:** independent review + full suite; only then integrate dev, **restart**, and live-verify. No push or deployment yet. Detail: `docs/PLAN_SLICE_4B.md` step-3 record.
+
+**Historical step-2 handoff:** isolated worktree
 `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-00ac9c21` on
 `refactor/architecture-4b-step2` based at `0856b685`. Six code commits:
 C19 `640af596` → `src/web/dashboard_sync_warning.py`, C36 `243ce692` →
