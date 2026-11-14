@@ -162,7 +162,7 @@ class TestSuggestionsExcludeLocal(TestCase):
                 "scanned_at": 123, "_exclude_setting_changed": changed,
                 "ebook_discovery": {"state": "incomplete", "attempted_at": 123},
             }
-            with patch.object(web, "scan_library_suggestions", return_value=result), \
+            with patch("src.web.suggestions_scan_workflow.scan_library_suggestions", return_value=result), \
                     patch.object(web, "_load_persisted_suggestions_cache", return_value={"scanned_at": 123}), \
                     patch.object(web, "_save_persisted_suggestions_cache", side_effect=lambda data: saved.update(data) or True), \
                     patch.dict(os.environ, {SETTING: "true"}):
@@ -230,7 +230,7 @@ class TestSuggestionsExcludeLocal(TestCase):
                     patch.object(web, "_get_suggestions_service", return_value=service), \
                     patch.object(web, "uc", return_value=source_clients), \
                     patch.object(web, "get_suggestion_audiobooks", return_value=audio), \
-                    patch.object(web, "_auto_match_suggestions", side_effect=lambda result, _user_id: result), \
+                    patch("src.web.suggestions_scan_workflow._auto_match_suggestions", side_effect=lambda result, _user_id: result), \
                     patch.dict(os.environ, {SETTING: "false"}):
                 self.assertTrue(web._save_persisted_suggestions_cache({
                     "scan_cache_by_abs": {first_key: legacy_pair},
