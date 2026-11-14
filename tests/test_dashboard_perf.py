@@ -10,6 +10,7 @@ from flask.signals import template_rendered
 
 import tests.test_ui_new_foundation as foundation
 from src import web_server
+from src.web import dashboard_context
 from src.api.bookorbit_client import BookOrbitClient
 from src.db.models import Book, State
 
@@ -171,7 +172,7 @@ class TestDashboardWarmup(unittest.TestCase):
                 raise RuntimeError("boom")
             return real(user)
 
-        with patch.object(web_server, "_dashboard_mappings_for_user", side_effect=flaky):
+        with patch.object(dashboard_context, "_dashboard_mappings_for_user", side_effect=flaky):
             web_server._warm_dashboard_sync_warnings()
         self.assertEqual(sorted(seen), sorted([self.admin.id, self.reader.id]))
         self.assertEqual(len(web_server._DASHBOARD_SYNC_WARNING_CACHE.cache), 2)
