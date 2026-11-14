@@ -158,7 +158,7 @@ class JobQueueRouteTests(unittest.TestCase):
         ]
         (Path(self.tmp) / "match_queue.json").write_text(json.dumps(staged))
         self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
-        with patch("src.web_server._match_queue_file_path", return_value=Path(self.tmp) / "match_queue.json"):
+        with patch("src.web.match_queue_store._match_queue_file_path", return_value=Path(self.tmp) / "match_queue.json"):
             page = self.client.get("/job-queue")
         self.assertEqual(page.status_code, 200)
         html = page.get_data(as_text=True)
@@ -781,7 +781,7 @@ class JobQueueRouteTests(unittest.TestCase):
         ]
         path.write_text(json.dumps({"items": items}), encoding="utf-8")
         self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
-        with patch.object(ws, "_match_queue_file_path", return_value=path):
+        with patch("src.web.match_queue_store._match_queue_file_path", return_value=path):
             response = self.client.post("/job-queue/reorder",
                                         data={"queue_key": "d", "direction": "top"})
             self.assertEqual(response.status_code, 302)
@@ -818,7 +818,7 @@ class JobQueueRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/job-queue/reorder",
                           data={"queue_key": "alice", "direction": "top"}).status_code, 302)
         self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
-        with patch.object(ws, "_match_queue_file_path", return_value=path):
+        with patch("src.web.match_queue_store._match_queue_file_path", return_value=path):
             self.assertEqual(self.client.get("/job-queue/reorder").status_code, 405)
             self._assert_reorder_warning(
                 {"queue_key": "bob", "direction": "top"},
@@ -850,7 +850,7 @@ class JobQueueRouteTests(unittest.TestCase):
         ]
         path.write_text(json.dumps({"items": items}), encoding="utf-8")
         self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
-        with patch.object(ws, "_match_queue_file_path", return_value=path):
+        with patch("src.web.match_queue_store._match_queue_file_path", return_value=path):
             self._assert_reorder_warning(
                 {"queue_key": "same", "direction": "up"},
                 "That book couldn't be identified; refresh and try again.",
