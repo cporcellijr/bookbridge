@@ -63,7 +63,9 @@ Offline evidence: implementation worktree `.local-review-notes/architecture-phas
 
 ## Next action
 
-**4b step 6 task 8 done.** C03 ABS form + per-user client resolution moved (10/10 AST-identical incl. 2 classes; in-cluster callers use `web.uc()` so 17 test assignments intercept; 0 repoints); web_server.py 2,835 → 2,723; suite 7906/15/0. **Next:** task 9 (C01) via DevSpace.
+**4b step 6 task 9 done.** C01 request/locale/template hooks moved (10/10 AST-identical; `translations_dir` (`__file__`) and lru-cached `available_locales` kept in web_server; `get_locale`/`inject_global_vars` call `web.current_user()`); web_server.py 2,723 → 2,517; suite 7906/15/0. **Next:** task 10 (C04) via DevSpace.
+
+**Previous:** **4b step 6 task 8 done.** C03 ABS form + per-user client resolution moved (10/10 AST-identical incl. 2 classes; in-cluster callers use `web.uc()` so 17 test assignments intercept; 0 repoints); web_server.py 2,835 → 2,723; suite 7906/15/0. **Next:** task 9 (C01) via DevSpace.
 
 **Previous:** **4b step 6 task 7 done.** C02 session/auth helpers moved (7/7 AST-identical; `admin_required` calls `web.current_user()` so test assignments intercept; 0 repoints); web_server.py 2,965 → 2,835; suite 7906/15/0. **Next:** task 8 (C03) via DevSpace.
 
