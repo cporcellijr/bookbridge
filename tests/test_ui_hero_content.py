@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from src.web import dashboard_context
 from src.db.models import Book
 from src.utils.config_loader import ALL_SETTINGS, DEFAULT_CONFIG
 from src.utils.display_settings import normalize_display_value, resolve_display_settings
@@ -110,7 +111,7 @@ class TestHeroRoute(unittest.TestCase):
         self._ready()
         from src import web_server as ws
         self.service.set_user_credential(self.reader.id, "UI_HERO_CONTENT", "synopsis")
-        with patch.object(ws, "_hero_synopsis_source", return_value="Cached plain text") as lookup:
+        with patch.object(dashboard_context, "_hero_synopsis_source", return_value="Cached plain text") as lookup:
             for _ in range(2):
                 self.assertEqual(self.client.get("/api/library/hero/hero-owned").json[
                     "pieces"]["synopsis"]["text"], "Cached plain text")
@@ -121,7 +122,7 @@ class TestHeroRoute(unittest.TestCase):
 
         self.service.save_book(Book(abs_id="hero-none", abs_title="None"))
         self.service.link_user_book(self.reader.id, "hero-none")
-        with patch.object(ws, "_hero_synopsis_source", return_value=None) as lookup:
+        with patch.object(dashboard_context, "_hero_synopsis_source", return_value=None) as lookup:
             for _ in range(2):
                 self.assertEqual(self.client.get("/api/library/hero/hero-none").json["pieces"], {})
         lookup.assert_called_once()
@@ -137,7 +138,7 @@ class TestHeroRoute(unittest.TestCase):
         self.service.set_user_credential(self.reader.id, "UI_HERO_CONTENT", "synopsis")
         week = ws._HERO_SYNOPSIS_RECHECK_SECONDS
         self.service.set_user_book_synopsis_cache(self.reader.id, "hero-owned", None, ws.time.time() - week + 3600)
-        with patch.object(ws, "_hero_synopsis_source", return_value="Found later") as lookup:
+        with patch.object(dashboard_context, "_hero_synopsis_source", return_value="Found later") as lookup:
             self.assertEqual(self.client.get("/api/library/hero/hero-owned").json["pieces"], {})
             lookup.assert_not_called()
             self.service.set_user_book_synopsis_cache(self.reader.id, "hero-owned", None, ws.time.time() - week - 3600)
@@ -174,7 +175,7 @@ class TestHeroRoute(unittest.TestCase):
             self.service.set_user_credential(user.id, "UI_MODE", "new")
             self.service.set_user_credential(user.id, "UI_HERO_CONTENT", "synopsis")
         from src import web_server as ws
-        with patch.object(ws, "_hero_synopsis_source",
+        with patch.object(dashboard_context, "_hero_synopsis_source",
                           side_effect=lambda book, user: f"note-for-{user.id}") as lookup:
             reader = self.client.get("/api/library/hero/hero-owned")
             self.assertEqual(reader.json["pieces"]["synopsis"]["text"],

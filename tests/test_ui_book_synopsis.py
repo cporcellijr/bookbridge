@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from src.web import dashboard_context
 from src.db.models import Book
 from tests.test_ui_new_foundation import TestUiModeRoutes
 
@@ -41,20 +42,20 @@ class TestBookSynopsis(unittest.TestCase):
     def test_text_comes_from_cache_and_null_when_none(self):
         self._ready()
         from src import web_server as ws
-        with patch.object(ws, "_hero_synopsis_source", return_value="Plain <b>text</b>") as lookup:
+        with patch.object(dashboard_context, "_hero_synopsis_source", return_value="Plain <b>text</b>") as lookup:
             self.assertEqual(self.client.get("/api/book/syn-owned/synopsis").json,
                              {"text": "Plain <b>text</b>"})
             self.client.get("/api/book/syn-owned/synopsis")
         self.assertEqual(lookup.call_count, 1)
         self.service.save_book(Book(abs_id="syn-none", abs_title="Bare"))
         self.service.link_user_book(self.reader.id, "syn-none")
-        with patch.object(ws, "_hero_synopsis_source", return_value=None):
+        with patch.object(dashboard_context, "_hero_synopsis_source", return_value=None):
             self.assertEqual(self.client.get("/api/book/syn-none/synopsis").json, {"text": None})
 
     def test_source_error_logs_warning_and_returns_null(self):
         self._ready()
         from src import web_server as ws
-        with patch.object(ws, "_hero_synopsis_source", side_effect=RuntimeError("boom")), \
+        with patch.object(dashboard_context, "_hero_synopsis_source", side_effect=RuntimeError("boom")), \
              self.assertLogs(ws.logger, level="WARNING") as logs:
             response = self.client.get("/api/book/syn-owned/synopsis")
         self.assertEqual((response.status_code, response.json), (200, {"text": None}))
@@ -64,7 +65,7 @@ class TestBookSynopsis(unittest.TestCase):
         self._ready()
         from src import web_server as ws
         self.service.set_user_book_synopsis_cache(self.reader.id, "syn-owned", "Cached <i>story</i>", ws.time.time())
-        with patch.object(ws, "_hero_synopsis_source", side_effect=AssertionError("lookup")):
+        with patch.object(dashboard_context, "_hero_synopsis_source", side_effect=AssertionError("lookup")):
             for url in ("/book/syn-owned", "/book/syn-owned?fragment=1"):
                 with self.subTest(url=url):
                     html = self.client.get(url).get_data(as_text=True)
@@ -89,7 +90,7 @@ class TestBookSynopsis(unittest.TestCase):
     def test_book_page_without_cache_hides_section_and_names_endpoint(self):
         self._ready()
         from src import web_server as ws
-        with patch.object(ws, "_hero_synopsis_source", side_effect=AssertionError("lookup")):
+        with patch.object(dashboard_context, "_hero_synopsis_source", side_effect=AssertionError("lookup")):
             html = self.client.get("/book/syn-owned").get_data(as_text=True)
         section = html[html.index('<section class="book-section book-about"'):]
         section = section[:section.index(">") + 1]
