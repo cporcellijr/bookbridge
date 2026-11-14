@@ -25,6 +25,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Short reading sessions in KOReader sync again in long books.** A few pages in a long
+  novel can be under the 0.5% threshold but still past the 2,000-character backstop, and
+  that backstop never fired for KOReader: the bridge saved the device's new position before
+  the sync check ran, so the check saw no movement. KOReader progress now syncs after about
+  2,000 characters, and page turns add up across pushes. Short books and thresholds are
+  unchanged.
+
 - **Books keep syncing after you rename them in Calibre or CWA.** Editing a book's title or
   author renames its EPUB, and the bridge used to lose the file ("Could not locate or download
   locator target EPUB" every cycle) until you matched the book again. It now remembers which

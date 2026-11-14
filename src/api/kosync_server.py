@@ -31,7 +31,9 @@ from src.utils.config_loader import env_truthy
 from src.utils.kosync_canonical import load_persisted_pair
 from src.utils.kosync_headers import BRIDGE_INTERNAL_HEADER, hash_kosync_key
 from src.utils.logging_utils import get_persistent_condition_logger
-from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp, state_metadata_kwargs
+from src.utils.progress_metadata import (
+    get_kosync_approved_rewind_at, get_kosync_synced_pct, parse_service_timestamp, state_metadata_kwargs,
+)
 from src.utils.fixed_page_progress import is_cbz_book, page_from_persisted_state
 from src.utils.time_utils import datetime_to_epoch, utcnow
 from src.utils.user_context import get_current_user_id, set_current_user_id, reset_current_user_id
@@ -1950,9 +1952,11 @@ def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
     if not book or user_id is None:
         return
     try:
-        metadata = {}
+        previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
+        # Keep the percentage the cycle last saw, across several PUTs, so the cycle
+        # measures (and accumulates) movement from it instead of seeing a delta of 0.
+        metadata = state_metadata_kwargs({"synced_pct": get_kosync_synced_pct(previous)})
         if is_cbz_book(book):
-            previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
             # PUT updates the wire position immediately. Retain the last synced
             # page until the cycle consumes it, including across several PUTs,
             # so a single page turn is still detectable when its pct delta is 0.
@@ -2414,9 +2418,8 @@ def kosync_put_progress():
                 )
 
     if linked_book:
-        # NOTE: We intentionally do NOT update book_states here.
-        # The sync cycle is the only thing that should update book_states.
-        # This ensures proper delta detection between cycles.
+        # _record_user_kosync_state already wrote the per-user State; it keeps the
+        # cycle's last-seen position as the baseline so delta detection still works.
         logger.debug(f"KOSync: Updated linked book '{linked_book.abs_title}' to {percentage:.2%}")
 
         # Debounce sync trigger — wait until the reader stops turning pages
