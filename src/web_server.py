@@ -1436,171 +1436,15 @@ def logout():
     return redirect(url_for('login'))
 
 
-def account():
-    """Self-service account page: change own username and/or password.
-
-    Requires the current password to make any change. Admin management of other
-    users is a separate (Phase 6) admin UI.
-    """
-    user = current_user()
-    if user is None:
-        return redirect(url_for('login'))
-
-    error = None
-    message = None
-    if request.method == 'POST':
-        current_password = request.form.get('current_password') or ''
-        new_username = (request.form.get('username') or '').strip()
-        new_password = request.form.get('new_password') or ''
-        confirm_password = request.form.get('confirm_password') or ''
-
-        if not database_service.verify_user_credentials(user.username, current_password):
-            error = "Current password is incorrect"
-        elif new_password and new_password != confirm_password:
-            error = "New passwords do not match"
-        else:
-            changed = []
-            if new_username and new_username != user.username:
-                ok, err = database_service.set_username(user.id, new_username)
-                if not ok:
-                    error = err
-                else:
-                    session['username'] = new_username
-                    changed.append("username")
-            if not error and new_password:
-                database_service.set_user_password(user.id, new_password)
-                changed.append("password")
-            if not error:
-                message = "Updated " + " and ".join(changed) + "." if changed else "No changes made."
-                user = database_service.get_user(user.id)  # refresh for display
-
-    return render_template(
-        ui_template('account.html'),
-        error=error,
-        message=message,
-        account_user=user,
-        available_languages=[(code, locale_display_name(code)) for code in available_locales()],
-        current_language=_normalize_locale(user.language),
-    )
+from src.web.routes.account import account, account_language, account_interface, account_display, account_display_page, account_integrations, account_test_connection, account_abs_libraries, account_booklore_libraries, account_bookorbit_scan_libraries
 
 
-def account_language():
-    """Set the signed-in user's UI language, then reload the account page.
-
-    A redirect (rather than re-rendering in place) guarantees the whole page
-    comes back in the new locale on the next request.
-    """
-    user = current_user()
-    if user is None:
-        return redirect(url_for('login'))
-
-    # An empty value is the "Automatic (browser)" choice and clears the setting.
-    # Anything else must be a language we ship; a missing or unknown one is
-    # rejected so a stale form or a hand-crafted POST can't wipe the saved preference.
-    raw = request.form.get('language')
-    if raw is None:
-        return "Missing language", 400
-    language = _normalize_locale(raw)
-    if language is not None and language not in available_locales():
-        return "Unsupported language", 400
-    database_service.set_user_language(user.id, language)
-    return redirect(url_for('account'))
 
 
-def account_interface():
-    """Save the signed-in reader's interface and reopen the requested page."""
-    user = current_user()
-    if user is None:
-        return redirect(url_for('login'))
-
-    ui_mode = request.form.get('ui_mode')
-    if ui_mode not in ('classic', 'new'):
-        return "Unsupported interface", 400
-    database_service.set_user_credential(user.id, 'UI_MODE', ui_mode)
-    return redirect(_safe_next_url())
 
 
-def account_display_page():
-    """New-interface display controls and a small, reader-scoped library preview."""
-    user = current_user()
-    if user is None:
-        return redirect(url_for('login'))
-    if user_setting('UI_MODE', 'classic') != 'new':
-        return redirect(url_for('account') + '#account-display')
-
-    books = _dashboard_visible_books_for_user(database_service.get_all_books(user_id=user.id), user)
-    states = database_service.get_all_states(user_id=user.id)
-    percent_by_book = {}
-    for state in states:
-        if state.percentage is not None:
-            percent_by_book[state.abs_id] = max(percent_by_book.get(state.abs_id, 0), state.percentage)
-    books.sort(key=lambda book: (
-        not (0 < percent_by_book.get(book.abs_id, 0) < 1),
-        (getattr(book, 'abs_title', None) or '').casefold(),
-        book.abs_id,
-    ))
-    selected = books[:8]
-    # If possible, show a series pair so the series-stack switch has a visible example.
-    if selected:
-        first_series = next((getattr(book, 'series_name', None) for book in selected
-                             if getattr(book, 'series_name', None)), None)
-        if first_series and not any(getattr(book, 'series_name', None) == first_series
-                                    for book in selected[1:]):
-            companion = next((book for book in books[8:]
-                              if getattr(book, 'series_name', None) == first_series), None)
-            if companion:
-                selected[-1] = companion
-    preview = []
-    if selected:
-        integrations = _build_dashboard_integrations()
-        preview, _ = _build_dashboard_mappings(
-            selected, states, integrations,
-            all_hardcover=database_service.get_all_hardcover_details(),
-            all_storygraph=database_service.get_all_storygraph_details(),
-            all_goodreads=database_service.get_all_goodreads_details(),
-            reading_stats_by_book=database_service.get_all_reading_stats(user_id=user.id),
-            cached_booklore_by_filename=_index_cached_booklore_books(database_service.get_all_booklore_books()),
-            claim_times_by_book=database_service.get_book_claim_times(user_id=user.id),
-        )
-    return render_template(
-        'next/display.html',
-        preview_mappings=preview,
-        preview_groups=_group_dashboard_mappings_by_series(preview),
-    )
 
 
-def account_display():
-    """Save some or all of the signed-in reader's display settings.
-
-    Takes a JSON object or a form. Only the keys sent are written, and nothing is
-    written unless every key and value is allowed. For a form, the last value of a
-    repeated field wins, so a hidden "false" before a checkbox records unchecked.
-    """
-    user = current_user()
-    if user is None:
-        if _request_wants_json():
-            return jsonify({"ok": False, "error": "Authentication required"}), 401
-        return redirect(url_for('login'))
-
-    payload = request.get_json(silent=True)
-    if isinstance(payload, dict):
-        submitted = dict(payload)
-    else:
-        submitted = {key: request.form.getlist(key)[-1] for key in request.form}
-    submitted.pop(_CSRF_FORM_FIELD, None)
-
-    values = {}
-    for key, raw in submitted.items():
-        value = normalize_display_value(key, raw)
-        if value is None:
-            return jsonify({"ok": False, "error": "Unsupported display setting"}), 400
-        values[key] = value
-    if not values:
-        return jsonify({"ok": False, "error": "Nothing to save"}), 400
-    database_service.set_user_credentials(user.id, values)
-    if _request_wants_json():
-        return jsonify({"ok": True, "settings": _display_settings_for(user)})
-    return redirect(_safe_next_url())
 
 
 def _display_settings_for(user) -> dict:
@@ -1612,40 +1456,6 @@ def _display_settings_for(user) -> dict:
     return cached
 
 
-def account_integrations():
-    """Self-service integration settings for the signed-in user."""
-    user = current_user()
-    if user is None:
-        return redirect(url_for('login'))
-
-    from src.utils.user_config import PER_USER_FIELD_GROUPS
-
-    message = error = None
-    if request.method == 'POST':
-        error = _apply_user_integrations(user.id)
-        if error and _request_wants_json():
-            return jsonify({"error": error}), 400
-        if not error:
-            message = "Saved your integrations."
-            user = database_service.get_user(user.id)
-
-    creds = database_service.get_user_credentials(user.id)
-    master = {
-        key: os.environ.get(key, '')
-        for _g, fields in PER_USER_FIELD_GROUPS for key, _l, _t in fields
-    }
-    return render_template(
-        ui_template('account_integrations.html'),
-        groups=PER_USER_FIELD_GROUPS,
-        creds=creds,
-        master=master,
-        service_enable_keys=SERVICE_ENABLE_KEYS,
-        allow_master_fallback=_global_fallback_allowed(database_service, user),
-        message=message,
-        error=error,
-        account_user=user,
-        user_test_services=_USER_TEST_SERVICES,
-    ), (400 if error else 200)
 
 
 # Library-lookup credentials the primary admin's account also lends to the
@@ -1810,12 +1620,6 @@ def _posted_user_test_credentials(target, submitted):
 
 
 
-def account_test_connection(service):
-    user = current_user()
-    if user is None:
-        return jsonify({"ok": False, "message": "Authentication required"}), 401
-    payload = _posted_user_test_credentials(user, request.get_json(silent=True) or {})
-    return _run_test_connection(service, payload)
 
 
 
@@ -1852,51 +1656,14 @@ def _reader_scan_libraries(target, submitted):
     return allowed, None
 
 
-def account_bookorbit_scan_libraries():
-    """Reader-scoped read-only picker, including unsaved account field edits."""
-    user = current_user()
-    if user is None:
-        return jsonify({'error': 'Authentication required'}), 401
-    libraries, error = _reader_scan_libraries(user, request.get_json(silent=True) or {})
-    return (jsonify({'error': error}), 403) if error else jsonify(libraries)
 
 
 
 
-def account_abs_libraries():
-    """List current user's Audiobookshelf libraries from unsaved form credentials."""
-    user = current_user()
-    if user is None:
-        return jsonify({"error": "Authentication required"}), 401
-    payload = _posted_user_test_credentials(user, request.get_json(silent=True) or {})
-    from src.api.api_clients import ABSClient
-    client = ABSClient(credentials=payload)
-    if not client.is_configured():
-        return jsonify({"error": "Audiobookshelf not configured for this user (set the API token above)"}), 400
-    try:
-        return jsonify(client.get_libraries() or [])
-    except Exception as e:
-        logger.warning("Self-service ABS library lookup failed for user %s: %s", user.id, e, exc_info=True)
-        return jsonify({"error": str(e)}), 502
 
 
 
 
-def account_booklore_libraries():
-    """List current user's Grimmory libraries from unsaved form credentials."""
-    user = current_user()
-    if user is None:
-        return jsonify({"error": "Authentication required"}), 401
-    payload = _posted_user_test_credentials(user, request.get_json(silent=True) or {})
-    from src.api.booklore_client import BookloreClient
-    client = BookloreClient(database_service=database_service, credentials=payload)
-    if not client.is_configured():
-        return jsonify({"error": "Grimmory not configured for this user (set the login above)"}), 400
-    try:
-        return jsonify(client.get_libraries() or [])
-    except Exception as e:
-        logger.warning("Self-service Grimmory library lookup failed for user %s: %s", user.id, e, exc_info=True)
-        return jsonify({"error": str(e)}), 502
 
 
 # User-management actions accepted by both the legacy /admin/users page and the
@@ -15137,16 +14904,8 @@ def create_app(test_container=None):
     app.add_url_rule('/setup', 'setup', setup, methods=['GET', 'POST'])
     app.add_url_rule('/login', 'login', login, methods=['GET', 'POST'])
     app.add_url_rule('/logout', 'logout', logout, methods=['GET', 'POST'])
-    app.add_url_rule('/account', 'account', account, methods=['GET', 'POST'])
-    app.add_url_rule('/account/language', 'account_language', account_language, methods=['POST'])
-    app.add_url_rule('/account/interface', 'account_interface', account_interface, methods=['POST'])
-    app.add_url_rule('/account/display', 'account_display', account_display, methods=['POST'])
-    app.add_url_rule('/account/display', 'account_display_page', account_display_page, methods=['GET'])
-    app.add_url_rule('/account/integrations', 'account_integrations', account_integrations, methods=['GET', 'POST'])
-    app.add_url_rule('/api/account/test-connection/<service>', 'account_test_connection', account_test_connection, methods=['POST'])
-    app.add_url_rule('/api/account/abs-libraries', 'account_abs_libraries', account_abs_libraries, methods=['POST'])
-    app.add_url_rule('/api/account/booklore-libraries', 'account_booklore_libraries', account_booklore_libraries, methods=['POST'])
-    app.add_url_rule('/api/account/bookorbit-scan-libraries', 'account_bookorbit_scan_libraries', account_bookorbit_scan_libraries, methods=['POST'])
+    from src.web.routes import account as account_routes
+    account_routes.register(app, sys.modules[__name__])
     from src.web.routes import admin_users as admin_users_routes
     admin_users_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/', 'index', index)
