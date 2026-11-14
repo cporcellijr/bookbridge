@@ -175,6 +175,7 @@ class TestShippedTemplatesParse(unittest.TestCase):
             TEMPLATE_DIR / "next" / "_account_scripts.html",
             TEMPLATE_DIR / "next" / "_account_integrations_scripts.html",
             TEMPLATE_DIR / "next" / "_admin_user_integrations_scripts.html",
+            TEMPLATE_DIR / "next" / "_discover_main_script.html",
         ]
         for path in paths:
             for index, block in enumerate(script_blocks(path)):

@@ -29,6 +29,31 @@ def _compile_shipped_ru(directory: str) -> None:
     available_locales.cache_clear()
 
 
+class SharedPartialTranslationTests(unittest.TestCase):
+    """Partials shared by Classic and New keep the exact msgids the ru catalog translates.
+
+    Whitespace inside {% trans %} is part of the msgid, so re-indenting a block
+    while moving it silently drops the translation.
+    """
+
+    def test_diagnostics_optin_modal_strings_are_translated(self):
+        from babel.messages.extract import extract_from_file
+        from babel.messages.pofile import read_po
+
+        with open(_RU_PO, 'rb') as fh:
+            catalog = read_po(fh, locale='ru')
+        template = Path(__file__).parent.parent / "templates" / "_diagnostics_optin_modal.html"
+        missing = []
+        for _lineno, message, _comments, _context in extract_from_file(
+            "jinja2", str(template), options={"extensions": "jinja2.ext.i18n"}
+        ):
+            msgid = message[0] if isinstance(message, tuple) else message
+            entry = catalog.get(msgid)
+            if entry is None or not entry.string or entry.fuzzy:
+                missing.append(msgid)
+        self.assertEqual(missing, [])
+
+
 class ShippedCatalogTests(unittest.TestCase):
     """The ru catalog in the repo must not break a page once it is compiled.
 
