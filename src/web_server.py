@@ -7834,132 +7834,13 @@ def api_current_audio_chapter(abs_id: str) -> object:
 
 
 
-def job_queue_page():
-    """Read-only overview of staged work, in-flight batches and recent jobs."""
-    user = current_user()
-    user_id = user.id if user else None
-    acquisition_jobs = None
-
-    if request.args.get("acquisition_fragment") == "1":
-        acquisition_jobs = database_service.get_acquisition_jobs(user_id) if user_id is not None else []
-        linked_ids = {
-            job["linked_abs_id"] for job in acquisition_jobs if job.get("linked_abs_id")
-        }
-        bridge_statuses = database_service.get_linked_book_statuses(user_id, linked_ids)
-        # Failure labels depend on the full queue's globally ranked recent-25
-        # entries. Preserve that path until its semantics can be narrowed safely.
-        if not any(status in {"error", "failed_retry_later", "failed_permanent"}
-                   for status in bridge_statuses.values()):
-            return render_template(
-                "_acquisition_jobs_panel.html",
-                acquisition_jobs=acquisition_jobs,
-                focused_acquisition_job_id=request.args.get("acquisition_job", ""),
-                bridge_statuses=bridge_statuses,
-            )
-
-    books = database_service.get_all_books(user_id=user_id)
-    books = _dashboard_visible_books_for_user(books, user)
-    with _VISIBLE_BATCH_LOCK:
-        batches = [
-            {**batch, 'items': list(batch['items'])}
-            for batch in _VISIBLE_BATCHES.values()
-            if batch['user_id'] == user_id
-        ]
-    with _READALONG_GENERATION_LOCK:
-        active_readalong = set(_ACTIVE_READALONG_GENERATIONS)
-    jobs = [
-        *database_service.get_latest_jobs(kind=JOB_KIND_ALIGNMENT).values(),
-        *database_service.get_latest_jobs(kind=JOB_KIND_READALONG).values(),
-    ]
-    evidence = database_service.get_transcription_preflights(
-        user_id, [book.abs_id for book in books],
-    ) if user_id is not None else {}
-    for book in books:
-        row = evidence.get(book.abs_id)
-        if row and row["pairing_key"] != transcription_preflight_pair_key(book):
-            del evidence[book.abs_id]
-    add_library_comparison(evidence, {book.abs_id for book in books if book.status == "active"})
-    alignment_queue = database_service.get_pending_alignment_queue()
-    alignment_movable_ids = {
-        book.abs_id for book in books
-        if book.status == 'pending' and user_id is not None and book.user_id == user_id
-    }
-    snapshot = build_job_queue_view(
-        _load_match_queue(), batches, books, jobs, active_readalong,
-        alignment_queue=alignment_queue,
-        alignment_movable_ids=alignment_movable_ids,
-        preflights=evidence,
-    )
-    if acquisition_jobs is None:
-        acquisition_jobs = database_service.get_acquisition_jobs(user_id) if user_id is not None else []
-    bridge_statuses = {book.abs_id: book.status for book in books if book.abs_id}
-    for entry in snapshot["recent"]:
-        if entry.get("book_id") and entry.get("status") == "failed":
-            bridge_statuses[entry["book_id"]] = "failed"
-    for entry in snapshot["pending"]:
-        if entry.get("book_id"):
-            bridge_statuses[entry["book_id"]] = "pending"
-    for entry in snapshot["running"]:
-        if entry.get("book_id"):
-            bridge_statuses[entry["book_id"]] = "processing"
-    panel_context = {
-        "acquisition_jobs": acquisition_jobs,
-        "focused_acquisition_job_id": request.args.get("acquisition_job", ""),
-        "bridge_statuses": bridge_statuses,
-    }
-    if request.args.get("acquisition_fragment") == "1":
-        return render_template("_acquisition_jobs_panel.html", **panel_context)
-    return render_template(ui_template('job_queue.html'), queue_view=snapshot, **panel_context)
+from src.web.routes.processing import job_queue_page, job_queue_reorder, job_queue_preflight_ack, shelfmark
 
 
-def job_queue_reorder():
-    """Move only an owned, still-pending entry in the chosen queue."""
-    key = request.form.get('queue_key', '')
-    direction = request.form.get('direction', '')
-    queue_kind = request.form.get('queue', 'staged')
-    if not key or direction not in {'up', 'down', 'top'} or queue_kind not in {'staged', 'alignment'}:
-        flash("That move isn't valid.", "warning")
-    elif queue_kind == 'alignment':
-        user = current_user()
-        result = database_service.move_pending_alignment_book(
-            user.id if user is not None else None, key, direction,
-        )
-        if result == 'missing':
-            flash("That book is no longer waiting for alignment.", "warning")
-    else:
-        result = _match_queue_move(key, direction)
-        if result == 'missing':
-            flash("That book is no longer waiting in Add Book.", "warning")
-        elif result == 'ambiguous':
-            flash("That book couldn't be identified; refresh and try again.", "warning")
-    return redirect(url_for('job_queue_page'))
 
 
-def job_queue_preflight_ack():
-    """Acknowledge current per-reader evidence; never override match refusal."""
-    user = current_user()
-    if user is None:
-        abort(401)
-    abs_id = request.form.get("abs_id", "")
-    identity = request.form.get("identity", "")
-    if not database_service.is_user_linked(user.id, abs_id):
-        abort(404)
-    if not database_service.acknowledge_transcription_preflight(user.id, abs_id, identity):
-        abort(409)
-    flash("Pre-flight advisory acknowledged. The final content-match guard remains active.", "success")
-    return redirect(url_for("job_queue_page"))
 
 
-def shelfmark() -> object:
-    """Redirect to SHELFMARK_URL (library when unset)."""
-    url = os.environ.get("SHELFMARK_URL")
-    if not url:
-        return redirect(url_for('index'))
-    
-    # Case-insensitive sanitization for the external destination.
-    if not url.lower().startswith(('http://', 'https://')):
-        url = f"http://{url}"
-    return redirect(url)
 
 
 from src.web.routes.forge import forge, forge_search_audio, forge_search_text, forge_process
@@ -14305,12 +14186,11 @@ def create_app(test_container=None):
     from src.web.routes import book as book_routes
     book_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/api/books/<abs_id>/current-chapter', 'api_current_audio_chapter', api_current_audio_chapter, methods=['GET'])
-    app.add_url_rule('/job-queue', 'job_queue_page', job_queue_page, methods=['GET'])
-    app.add_url_rule('/job-queue/reorder', 'job_queue_reorder', job_queue_reorder, methods=['POST'])
-    app.add_url_rule('/job-queue/preflight/ack', 'job_queue_preflight_ack', job_queue_preflight_ack, methods=['POST'])
+    from src.web.routes import processing as processing_routes
+    processing_routes.register(app, sys.modules[__name__], phase='queue')
     from src.web.routes import whats_new as whats_new_routes
     whats_new_routes.register(app, sys.modules[__name__])
-    app.add_url_rule('/shelfmark', 'shelfmark', shelfmark)
+    processing_routes.register(app, sys.modules[__name__], phase='shelfmark')
     from src.web.routes import forge as forge_routes
     forge_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/book-linker', 'book_linker_legacy', _legacy_book_linker_redirect)
