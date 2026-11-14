@@ -1,6 +1,6 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Slice 4 steps 1–4 (Stats, Logs, What's New, Diagnostics, Forge, Alignments, Read-along EPUB, Status, Covers, Integration Lookups, Storyteller, BookFusion, Admin Maintenance, Book Page → `src/web/routes/`) are complete, integrated, restarted, and live-verified. `web_server.py` 15,586 lines. Next: step 5 = admin users + integrations (auth-heavy; per-user credential isolation).**
+Updated: 2026-11-13. **Slice 4 steps 1–5 complete (… BookFusion, Admin Maintenance, Book Page, Admin Users → `src/web/routes/`), integrated, restarted, live-verified. `web_server.py` 15,434 lines. Next: step 6 = Account (`/account*`, `/api/account*`) + `/api/me*`.**
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
@@ -27,6 +27,7 @@ Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITEC
 | 4.2 What's New, Diagnostics, Forge, Alignments, Read-along EPUB (+ `src/web/auth.py`) | `a889cb08`..`0c9f3283`; flake fix `726d8b4e` |
 | 4.3 Status, Covers, Integration Lookups, Storyteller | `c6c47cd5`..`046fcad8` |
 | 4.4 BookFusion, Admin Maintenance, Book Page | `e6ac8b86`..`d62112fa` |
+| 4.5 Admin Users | `845c954f` |
 
 All are on local dev and deployed. HEAD may be a documentation-only successor; verify actual Git state before new work. Nothing was pushed.
 
