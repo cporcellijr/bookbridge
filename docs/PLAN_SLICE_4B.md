@@ -55,16 +55,29 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP6 | this commit | C27 → `suggestions_discovery` | 9 | 5,766 | 9/9 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 0 target edits: 5 `_get_suggestions_service` patches remain on facade (`scan_library_suggestions` outside cluster or no-call guard); 1 `_get_ignored_suggestion_source_ids` facade patch remains; originals made to raise: 5 sites / 16 tests + 3 subtests and 1 site / 11 tests passed | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP7 | 2c402ad6 | C22 → `library_access` | 7 | 5,637 | 7/7 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 0 target edits: 6 `_claim_book_for_user_id` facade sites (7 tests) and 1 `_dashboard_visible_books_for_user` facade site (11 tests) passed with raising moved originals; no double-patch needed | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP8 | this commit | C24 → `dashboard_context` | 11 | 5,432 | 11/11 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 10 test patch repoints: `_dashboard_mappings_for_user` spy caller path proved; 9 `_hero_synopsis_source` sites passed poisoned-original (7 tests, 2 subtests); 7 other facade-patched sites passed poisoned-original (7 tests, 28 subtests); Classic hero picker guarded via facade | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP9 | this commit | C31 → `match_queue_store` | 18 | 5,185 | 18/18 identical | only startup-set `DATA_DIR` (read via `web.DATA_DIR`, known false positive); 0 other unresolved / 0 MODULE-SELF | 195/195 unchanged | 4 path patch repoints, 0 double-patches; path 4/4 tests, load 19 tests, drain 1 test / 4 subtests, bulk 11 tests raising-original; drain wrap spy source-proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 
 ### Remaining
 
-C22, C24, C31, C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
 
 ### Skipped
 
 C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
 
 ### Verified checkpoints
+
+#### CP9 verified — C31 (`match_queue_store`)
+
+Moved 18 queue-store functions, AST 18/18 identical modulo runtime `web.` reads. All 18 web_server exports are identical objects to destination symbols; destination `_WEB_MODULE` is the live facade. `web_server.py` 5,432 → 5,185 lines. No new queue state: `DATA_DIR`, `MATCH_QUEUE_FILE_NAME`, `MATCH_QUEUE_LOCK` and `database_service` stay in web_server; `web.MATCH_QUEUE_LOCK` is read at call time and destination declares no second lock. `name_check` has only the known startup-set `DATA_DIR` false positive; no other unresolved names or MODULE-SELF. Offline URL map still 195 rules, re-export/Jinja identity intact. Focused five-file suite 159 passed, 26 subtests passed, Python exit 0; full suite 7906 passed / 15 skipped / 15 warnings / 0 failures, Python exit 0. An earlier full-suite invocation exited 4 on the shared pytest-controller lock; it was not modified, and the later run succeeded. `git diff --check` clean. Ignored evidence: `step6/t3-c31-*.log`, `step6/t3-c31-exit.txt` and `step6/t3-proof-*.log`.
+
+Four patch-target edits in `tests/test_job_queue_view.py` (161, 784, 821, 853): `_match_queue_file_path` now patched on `src.web.match_queue_store`. The moved `_read_match_queue_unlocked` and `_write_match_queue_unlocked` call the destination's bare `_match_queue_file_path`, including when invoked by `web._match_queue_move` through the route. Four selected tests passed while that moved original raised (Python exit 0), proving the intended private file is used. No double-patch: no facade-side caller looks up `_match_queue_file_path` outside the cluster.
+
+The five `_load_match_queue` facade patch sites remain: `tests/test_dashboard_search_handoff.py` (86, 129), `tests/test_job_queue_view.py` (326), `tests/test_suggestions_discovery_lifecycle.py` (230), `tests/test_suggestions_redesign_api.py` (77). Dashboard's `inject_global_vars` and external `src/web/routes/processing.py` and `src/web/routes/suggestions.py` callers resolve the facade. The only bare in-cluster caller is `_match_queue_response`; the patching scenarios do not invoke that internal render path. The acquisition-fragment test explicitly asserts no queue read (poisoned-original success here is a no-call assertion, **not** an interception proof). The preselected-search test injects a facade dependency, not the in-cluster response path. The patched-test selection (dashboard handoff, acquisition fragment, targeted search, redesign API) passed with destination `_load_match_queue` raising (19 tests); façade call-path inspection covers cases without an actual invocation. No double-patch needed in these scenarios.
+
+Two `_match_queue_drain` facade patch sites stay in `tests/test_match_paths_regression.py` (1170, 1198): `src/web/routes/suggestions.py` calls `web._match_queue_drain` at each action. The 1170 mock-only test passed with the moved original raising (1 test, 4 subtests); the 1198 test wraps the **real** re-export and asserts `mock_drain.assert_called_once_with()`, so poisoning it would invalidate this intentional spy call; direct source-level facade lookup plus the focused test prove interception. The `_suggestion_bulk_block` facade patch stays in `tests/test_suggestions_redesign_api.py` (79), with route caller `web._suggestion_bulk_block`; 11 tests passed with moved original raising. All test assertions remain unchanged.
+
+Deployment requirement: restart **only after integration**; no merge, push, restart or live access in this task.
 
 #### CP8 verified — C24 (`dashboard_context`)
 
