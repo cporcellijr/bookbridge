@@ -34,7 +34,7 @@
 
 Worktree: `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-4b6`; branch `refactor/architecture-4b-step6`; baseline `17f11eb8` (8,566 lines). No integration, push, restart or live access; Claude integrates and writes BRANCH_STATUS. Deployment requirement: **restart**.
 
-**Checkpoint handoff:** task 5 integrated. Next: task 6 (C10) via DevSpace.
+**Checkpoint handoff:** task 5 integrated; task 6 (C10) complete in isolated worktree, pending Claude integration. Next after integration: task 7 (C02).
 
 CP0 reran the ignored analyzer in inventory and `--test-assignments` modes (both exit 0). Its copied legacy inventory generator now skips already-extracted spans and writes only an ignored preview. Current inventory: 20 surviving clusters (including intentionally skipped C23), 198 grouped functions, 3 classes, 19 retained functions. Assignment scan: 461 test files / 755 bindings, 140 assignments / 9 deletions / 56 in-place sites / 987 read-only uses, zero parse failures; 1,240 unresolved candidates are conservative alias/dynamic accesses requiring per-cluster manual review, not confirmed hazards.
 
@@ -61,16 +61,27 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP12 | this commit | C30 → `suggestions_state_store` | 11 | 3,846 | 11/11 identical | only startup-set `DATA_DIR` (2 read sites via `web.DATA_DIR`, known false positive); no other problems | 195/195 unchanged | 0 repoints, 0 double-patches; 9 load and 2 save patch sites, raising-original proofs (22 + 3 selected passes) | 7906 passed / 15 skipped / 0 failures / 17 warnings; Python exit 0 |
 | CP13 | bc852241 | C28 → `suggestions_scan_workflow` | 9 | 3,352 | 9/9 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 5 patch repoints across 3 files; 0 double-patches; original-poisoned exact-node proofs plus facade caller/assignment checks | 7906 passed / 15 skipped / 0 failures / 17 warnings; Python exit 0 |
 | CP14 | this commit | C40 → `book_access` | 12 moved; 1 retained | 3,194 | 12/12 identical | 0 unresolved / 0 MODULE-SELF | 195/195 unchanged | 0 repoints; 0 double-patches; all 6 mapping-access facade sites and 5 BookFusion assignments proven | 7906 passed / 15 skipped / 0 failures / 15 warnings; Python exit 0 |
+| CP15 | this commit | C10 → `kosync_ebook_identity` | 3 | 2,965 | 3/3 identical | only 3 startup-set `EBOOK_DIR` warnings; no other problems | 195/195 unchanged | 0 repoints, 0 double-patches; 10 assignment sites / 5 exact nodes + 12 find patches / 10 nodes + 3 get patches / 3 nodes; 3 poisoned-original groups pass | 7906 passed / 15 skipped / 0 failures / 15 warnings; Python exit 0 |
 
 ### Remaining
 
-C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
 
 ### Skipped
 
 C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
 
 ### Verified checkpoints
+
+#### CP15 verified — C10 (`kosync_ebook_identity`)
+
+Moved all three C10 EPUB/KoSync identity helpers into `src/web/kosync_ebook_identity.py`, preserving signatures, logs, branches, error handling and return values. `web_server.py` **3,194 → 2,965** lines (−229); `EBOOK_DIR`, `container`, and `database_service` remain in the facade and are read through `web.X`. `get_kosync_id_for_ebook` makes its two in-cluster file lookups through **`web.find_ebook_file(...)`**; `_compute_storyteller_trilink_kosync_id` makes both in-cluster identity lookups through **`web.get_kosync_id_for_ebook(...)`**. Those four explicit facade reads preserve assignment/patch interception. All outside-cluster consumers in `src/web/` (`dashboard_context`, `mapping_creation`, `match_queue_processor`, `storyteller_library_watch`, `suggestions_scan_workflow`, `routes/book_actions`, `routes/matching`) already use `web.X`; none required a repoint.
+
+**Pure-move gates:** three definitions **3/3 AST-identical** modulo `web.` and lazy module lookup; **3/3** re-exports are identical objects and `_WEB_MODULE` is bound to the active facade. `name_check` reported only three `web.EBOOK_DIR` references (two in `find_ebook_file`, one in `get_kosync_id_for_ebook`), the approved startup-set false positive; **zero other problems / zero MODULE-SELF**. `git diff --check` passed. Flask URL map remains **195/195**, with unchanged route registration and existing legacy/Jinja identities. Eleven-file focused suite: **515 passed / 2 skipped / 60 subtests passed / 3 warnings**, Python exit **0**. Full `.venv` suite: **7,906 passed / 15 skipped / 0 failures / 15 warnings**, Python exit **0** (124.04s); exit code persisted to ignored `step6/c10_full_exit.txt`.
+
+**Patch/assignment interception: zero test repoints, zero double-patches, no assertion changes.** Ten direct `src.web_server.get_kosync_id_for_ebook = ...` assignments/restorations in `test_storyteller_match_flow.py`, `test_suggestions_feature.py`, and `test_webserver.py` resolve to **five exact pytest nodes**, all included in the `get_kosync_id_for_ebook` poisoned-original proof. The three selected additional facade-patch nodes from `test_storyteller_match_flow.py`, `test_kosync_server.py` and `test_suggestions_redesign_api.py` also passed with that original raising (**8 passed total**, Python exit 0). The twelve `find_ebook_file` patch locations across `test_bookorbit_match_hash.py`, `test_cwa_on_demand_exact_id.py` and `test_ui_hero_content.py` resolve to **ten exact nodes**; all passed with the moved file-lookup original raising (**10 passed / 5 subtests**, Python exit 0). The `wraps=web_server.find_ebook_file` source-path-preference test intentionally retains a real-function spy but bypasses the file lookup on its selected-path fast path; it passed poisoned, and this no-call outcome is not independently represented as proof of interception. Other positive file-lookup and route cases establish the facade path. A separate ignored positive interception test exercised the real Storyteller `/match` route while the moved `_compute_storyteller_trilink_kosync_id` original raised: a facade patch was called exactly once and the existing route assertions passed (**1 passed**, exit 0). Source tracing confirmed every patched production caller resolves `web.X` at call time. Evidence and temporary poisoned tests are ignored under `.local-review-notes/architecture-phase4b/step6/`.
+
+No merge, push, restart, live service access, or application test edits. Claude integrates. Deployment requirement **after integration: restart**.
 
 #### CP14 verified — C40 (`book_access`)
 
