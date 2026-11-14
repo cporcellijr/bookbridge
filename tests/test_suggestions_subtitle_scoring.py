@@ -74,7 +74,7 @@ def test_bare_series_title_never_auto_matches_a_volume():
 def test_scan_records_carry_the_abs_subtitle_into_scoring():
     item = AudioResult(source="ABS", source_id="abs-1", title="Clearing the Air",
                        subtitle=FULL.split(": ", 1)[1], authors="Hannah Ritchie")
-    with patch.object(web_server, "get_searchable_audiobooks", return_value=[item]), \
+    with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", return_value=[item]), \
             patch.object(web_server, "_browser_cover_url", return_value=""):
         records = web_server.get_suggestion_audiobooks()
 

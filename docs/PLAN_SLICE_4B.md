@@ -16,15 +16,36 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 
 | CP | commit | cluster | functions | web_server lines | move_check | name_check | URL map | repoints + proofs | full suite (counts + exit code) |
 |---|---|---|---:|---:|---|---|---|---|---|
-| CP0 | this commit | inventory/assignment ledger | 0 | 8,566 | n/a | n/a | baseline capture pending CP1 | n/a | docs only; not run |
+| CP0 | 2d60b651 | inventory/assignment ledger | 0 | 8,566 | n/a | n/a | 195 baseline rules captured | n/a | docs only; not run |
+| CP1 | this commit | C14 → `suggestions_audio_catalog` | 8 + 1 class | 8,189 | 9/9 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 14 sites / 3 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 
 ### Remaining
 
-C14, C20, C13, C15, C21, C27, C22, C24, C31, C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C20, C13, C15, C21, C27, C22, C24, C31, C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
 
 ### Skipped
 
 C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
+
+#### CP1 verified — C14 (`suggestions_audio_catalog`)
+
+Moved 8 + 1 class; all 9 facade/module objects identical. All retained definitions, state initializers, imports and non-definition statements are AST-unchanged. No constants/state moved. Move-check 9/9; name-check 0 unresolved / 0 MODULE-SELF; offline route map 195/195 identical. Full suite: **7906 passed, 15 skipped, 15 warnings in 182.70s (0:03:02)**; Python **exit 0**, captured immediately.
+
+Focused touched-test-file run: **247 passed, 2 skipped, 1 warning, 10 subtests passed in 16.69s**, Python exit 0.
+
+Test target edits (all other lines/assertions unchanged):
+
+- `with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", return_value=[item]), \`
+- `with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", return_value=[item]), \`
+- `with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", side_effect=audio_search), \`
+
+Raising-original proofs (source restored after each run; each entry below passed through mocks while the original raised):
+
+- `_search_audiobooks_with_fallback` — 7 sites, Python exit 0; `tests/test_match_paths_regression.py:2962` → `src.web_server._search_audiobooks_with_fallback`; `tests/test_match_paths_regression.py:2975` → `src.web_server._search_audiobooks_with_fallback`; `tests/test_suggestions_discovery_lifecycle.py:235` → `web._search_audiobooks_with_fallback`; `tests/test_suggestions_search_tab.py:155` → `src.web_server._search_audiobooks_with_fallback`; `tests/test_suggestions_search_tab.py:182` → `src.web_server._search_audiobooks_with_fallback`; `tests/test_webserver.py:1955` → `ws._search_audiobooks_with_fallback`; `tests/test_webserver.py:2076` → `ws._search_audiobooks_with_fallback`. 7 passed, 1 warning in 1.73s.
+- `get_searchable_audiobooks` — 3 sites, Python exit 0; `tests/test_suggestions_series_match.py:200` → `src.web.suggestions_audio_catalog.get_searchable_audiobooks`; `tests/test_suggestions_subtitle_scoring.py:77` → `src.web.suggestions_audio_catalog.get_searchable_audiobooks`; `tests/test_webserver.py:1994` → `src.web.suggestions_audio_catalog.get_searchable_audiobooks`. 3 passed, 1 warning, 3 subtests passed in 1.07s.
+- `get_suggestion_audiobooks` — 4 sites, Python exit 0; `tests/test_suggestions_discovery_lifecycle.py:57` → `web.get_suggestion_audiobooks`; `tests/test_suggestions_exclude_local.py:144` → `web.get_suggestion_audiobooks`; `tests/test_suggestions_exclude_local.py:232` → `web.get_suggestion_audiobooks`; `tests/test_suggestions_review_fixes.py:132` → `web_server.get_suggestion_audiobooks`. 15 passed, 1 warning, 3 subtests passed in 1.14s.
+
+Ignored evidence: `.local-review-notes/architecture-phase4b/c14-full.log`, `suggestions_audio_catalog-gates.json`, `suggestions_audio_catalog-proof-results.json` and per-name proof logs. Deployment requirement: **restart**; no integration/deploy/live access performed.
 
 ### Current cluster inventory and interception audit
 

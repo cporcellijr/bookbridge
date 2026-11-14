@@ -1991,7 +1991,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         def ebook_search(query):
             return [book for book in ebooks if query.lower() in book.title.lower()]
 
-        with patch.object(ws, "get_searchable_audiobooks", side_effect=audio_search), \
+        with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", side_effect=audio_search), \
              patch.object(ws, "get_searchable_ebooks", side_effect=ebook_search):
             for title in (plain, quoted, 'The “Greene Shorts”Incest Collection'):
                 with self.subTest(title=title):
