@@ -752,3 +752,29 @@ Also excluded: `__main__` boot/scheduler, literal Flask guards/endpoint allowlis
 3. **Missed hazard: test-side assignment.** Tests also rebind module state by plain assignment, not only `patch`/`monkeypatch` (e.g. `tests/test_cover_freshness.py:98-99` swaps `web_server._cover_recheck_pool` for an inline pool; `tests/test_cover_browser_caching.py:72` and `tests/test_cover_freshness.py:81` mutate `_cover_fresh_until`). Mutating a shared dict in place is safe; *assigning* a moved name on `web_server` silently stops reaching the moved code. Each step must grep `web_server\.<name> =` / `setattr(web_server` / `ws.<name> =` in tests for every moved binding and repoint them.
 4. **Patch-bypass resolution = repoint the test** to patch the namespace the caller looks the name up in (the new module for in-cluster calls; `src.web_server` stays valid for calls made via `web.X`). Do not edit moved bodies to route through `web.` — that breaks the pure move. Show interception for each repointed test (e.g. temporarily make the moved original raise and confirm the test still passes), not just a green run.
 5. **Order.** Leaf-first by the AST graph, re-run after every step, several clusters per DevSpace step when they are independent leaves. C23 (31 lines) is skipped: too small to earn a module.
+
+## Test-side assignment hazards
+
+AST rescan at `543830bb` covers all **460** Python files under `tests/` and **737** module bindings, without importing BookBridge. Added to the patch-only ledger: **143 assign**, **0 literal-name setattr**, **9 del** hazards, plus **56 in-place** mutations that are safe when the same object is re-exported; **988 read-only** module-qualified uses are counted only. Counts include restoration/teardown. The ignored analyzer's `--test-assignments` mode writes `test_assignment_hazards.md` alongside it, with a table for every C01–C40, exact sites and destination modules; it does not regenerate this plan.
+
+| Cluster | assign | setattr | del | in-place |
+|---|---:|---:|---:|---:|
+| C02 | 5 | 0 | 0 | 0 |
+| C03 | 19 | 0 | 0 | 0 |
+| C04 | 5 | 0 | 0 | 4 |
+| C10 | 10 | 0 | 0 | 0 |
+| C11 | 2 | 0 | 0 | 0 |
+| C19 | 0 | 0 | 0 | 5 |
+| C28 | 2 | 0 | 0 | 10 |
+| C29 | 5 | 0 | 0 | 10 |
+| C30 | 0 | 0 | 0 | 9 |
+| C32 | 2 | 0 | 0 | 0 |
+| C34 | 3 | 0 | 0 | 18 |
+| C35 | 0 | 0 | 0 | 3 |
+| C40 | 5 | 0 | 0 | 0 |
+
+All four counts are zero for C01, C05–C09, C12–C18, C20–C27, C31, C33 and C36–C39. Shared state appears under each consumer cluster, so cluster columns are not additive: **49 unique assignments + 49 in-place sites** map to clusters; another **94 assignments + 9 deletions + 7 in-place sites** concern retained runtime, excluded or ownership-unspecified bindings. Those have no invented move destination; repoint only if their canonical owner actually moves.
+
+**C34 changes from easy/no listed test interception work to needs-test-repoints:** `_cover_recheck_pool` is assigned at `tests/test_cover_freshness.py:99,104` and `tests/test_cover_speed.py:59`. Repoint those writes to `src.web.cover_freshness` if it becomes the owner (the review addendum's `src/web/` directory rule applies). The alias-based `tests/test_cover_browser_caching.py:72` pop and the other 17 C34 in-place mutations remain safe with identity-preserving re-exports. Other clusters with assignments already had patch/repoint or shared-state work listed; C19/C30/C35 add only in-place sites. C23/C37/C39 gain no confirmed assignment hazards; sequencing is unchanged.
+
+Unresolved candidates are reported rather than guessed: **1,240 sites** (including ordinary object attributes whose names overlap module bindings), kept outside confirmed counts. These include helper-return/fixture aliases, cross-file inherited `self.web`, and six dynamic-name accesses on confirmed module aliases: three `getattr` reads and three `setattr` restores (`test_bookfusion_upload.py:478`, `test_cover_speed.py:65`, `test_suggestions_redesign_api.py:26`). Counts are lower bounds pending that manual review. Analyzer self-checks cover import/local/self aliases, shadowing, assignment/augmented assignment, literal `setattr`, deletion and in-place forms; both verified examples and five seeded random source-line spot-checks passed. No parse failures, source/test edits, deployment or full-suite run.
