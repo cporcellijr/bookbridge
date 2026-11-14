@@ -1,6 +1,6 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Slice 4 routes complete; slice 4b step 2 integrated and live-verified (`db9e78f7`). Slice 4b step 5 (C12/C18/C25/C17) integrated (`852a6328`), restarted, live-verified. `web_server.py` 17,771 → 8,566 lines overall. 4b paused after the low-hanging clusters. Audit slice 3 done (Discover `a98d97e4`, Library `d05d450c`). Slice 5 complete (`ff8d8e7a`, `cb44405d`), restarted, live-verified; `database_service.py` 7,897 → 979. Slice 6 matrix and slice 7 risk note written (unreviewed); next: review them.**
+Updated: 2026-11-13. **Slice 4 routes complete; slice 4b step 2 integrated and live-verified (`db9e78f7`). Slice 4b step 5 (C12/C18/C25/C17) integrated (`852a6328`), restarted, live-verified. `web_server.py` 17,771 → 8,566 lines overall. 4b paused after the low-hanging clusters. Audit slice 3 done (Discover `a98d97e4`, Library `d05d450c`). Slice 5 complete (`ff8d8e7a`, `cb44405d`), restarted, live-verified; `database_service.py` 7,897 → 979. Slices 6 and 7 reviewed and closed with no code change (nothing safely consolidatable / extractable). Next: remaining 4b hazard clusters (prompt for an implementation agent).**
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
