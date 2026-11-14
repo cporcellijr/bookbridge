@@ -11300,151 +11300,25 @@ def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
 
 
 
-def _run_storyteller_backfill():
-    """
-    Bulk backfill storyteller transcripts for currently matched storyteller books.
-    """
-    assets_dir_raw = os.environ.get("STORYTELLER_ASSETS_DIR", "").strip()
-    if not assets_dir_raw:
-        return {
-            "success": False,
-            "error": "STORYTELLER_ASSETS_DIR is not configured",
-            "scanned": 0,
-            "ingested": 0,
-            "missing": 0,
-            "failed": 0,
-            "aligned": 0,
-            "duration_seconds": 0.0,
-        }, 400
-
-    started_at = time.time()
-    books = database_service.get_all_books() if database_service else []
-    storyteller_books = [
-        b for b in books
-        if getattr(b, "storyteller_uuid", None) or getattr(b, "transcript_source", None) == "storyteller"
-    ]
-
-    summary = {
-        "success": True,
-        "scanned": 0,
-        "ingested": 0,
-        "missing": 0,
-        "failed": 0,
-        "aligned": 0,
-        "duration_seconds": 0.0,
-    }
-
-    abs_client = container.abs_client() if container else None
-    alignment_service = getattr(manager, "alignment_service", None) if manager else None
-    ebook_parser = container.ebook_parser() if container else None
-
-    for book in storyteller_books:
-        summary["scanned"] += 1
-        abs_id = book.abs_id
-        try:
-            item_details = abs_client.get_item_details(abs_id) if abs_client else None
-            chapters = item_details.get("media", {}).get("chapters", []) if item_details else []
-            manifest_path = ingest_storyteller_transcripts(abs_id, book.abs_title or "", chapters)
-            if not manifest_path:
-                summary["missing"] += 1
-                continue
-
-            book.transcript_source = "storyteller"
-            book.transcript_file = manifest_path
-            summary["ingested"] += 1
-
-            aligned = False
-            if alignment_service:
-                storyteller_transcript = StorytellerTranscript(manifest_path)
-                book_text = ""
-                if ebook_parser and book.ebook_filename:
-                    try:
-                        epub_filename = book.original_ebook_filename or book.ebook_filename
-                        epub_path = safe_cache_path(container.epub_cache_dir(), epub_filename)
-                        if epub_path and epub_path.exists():
-                            book_text, _ = ebook_parser.extract_text_and_map(epub_path)
-                    except Exception as e:
-                        logger.warning(f"Could not extract text for storyteller backfill: {e}", exc_info=True)
-                        
-                aligned = alignment_service.align_storyteller_and_store(abs_id, storyteller_transcript, ebook_text=book_text)
-                if aligned:
-                    summary["aligned"] += 1
-
-            if aligned:
-                book.transcript_file = "DB_MANAGED"
-                if getattr(book, "status", None) in (None, "", "pending", "processing", "failed_retry_later", "failed_permanent", "crashed"):
-                    book.status = "active"
-            else:
-                book.status = "pending"
-
-            database_service.save_book(book)
-        except Exception as e:
-            summary["failed"] += 1
-            logger.warning(f"Storyteller backfill failed for '{abs_id}': {e}", exc_info=True)
-
-    summary["duration_seconds"] = round(time.time() - started_at, 3)
-    logger.info(
-        "Storyteller backfill summary: "
-        f"scanned={summary['scanned']} ingested={summary['ingested']} "
-        f"aligned={summary['aligned']} missing={summary['missing']} failed={summary['failed']} "
-        f"duration={summary['duration_seconds']}s"
-    )
-    return summary, 200
+from src.web import storyteller_maintenance as _storyteller_maintenance
+_storyteller_maintenance._WEB_MODULE = sys.modules[__name__]
+from src.web.storyteller_maintenance import (
+    _extract_series_from_title,
+    _run_storyteller_backfill,
+    _series_backfill_clients,
+    _series_refresh_action,
+    _series_seq_equal,
+)
 
 
 
 
-def _extract_series_from_title(title: str) -> tuple:
-    """Return (series_name, series_sequence) parsed out of a numbered title."""
-    return _series_from_title(title)
 
 
-def _series_seq_equal(stored: "float | int | str | None", resolved: "float | None") -> bool:
-    """True when a stored series sequence already matches a freshly resolved one."""
-    if stored is None and resolved is None:
-        return True
-    if stored is None or resolved is None:
-        return False
-    try:
-        return abs(float(stored) - float(resolved)) < 1e-9
-    except (TypeError, ValueError):
-        return False
 
 
-def _series_refresh_action(stored_name: "str | None", stored_seq: "float | int | str | None",
-                           resolution) -> str:
-    """Decide what a resolved series means for a stored row.
-
-    Returns ``update``, ``unchanged``, ``clear``, ``keep`` or ``none``.
-    ``clear`` is only ever returned when a service that owns the book actually
-    answered — silence from an offline or unconfigured library must leave the
-    stored series alone rather than read as "the series was deleted".
-    """
-    had_series = bool((stored_name or "").strip())
-    if resolution.name:
-        if had_series and resolution.name == stored_name:
-            if _series_seq_equal(stored_seq, resolution.sequence):
-                return "unchanged"
-            # Never trade a known volume number for an unknown one. Some
-            # libraries carry the series name but no index, and dropping the
-            # stored number would sort that book to the end of its own series.
-            if resolution.sequence is None and stored_seq is not None:
-                return "unchanged"
-        return "update"
-    if had_series:
-        return "clear" if resolution.service_answered else "keep"
-    return "none"
 
 
-def _series_backfill_clients() -> dict:
-    """Return the clients the series backfill resolves against, keyed by kwarg name."""
-    return {
-        "abs_client": container.abs_client(),
-        "bookorbit_client": container.bookorbit_client(),
-        "booklore_client": container.booklore_client(),
-        "kavita_client": container.kavita_client(),
-        "ebook_parser": container.ebook_parser(),
-    }
 
 
 from src.web.routes.admin_maintenance import api_series_backfill, api_audio_repoint_plan, api_audio_repoint_apply, api_audio_repoint_undo, api_debug_abs_series
