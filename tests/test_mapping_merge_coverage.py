@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parents[1]
 SOURCES = (
     REPO / "src" / "web_server.py",
     REPO / "src" / "services" / "book_mapping_service.py",
+    *sorted((REPO / "src" / "web").glob("*.py")),
     *sorted((REPO / "src" / "web" / "routes").glob("*.py")),
 )
 MATCH_SOURCE = REPO / "src" / "web" / "routes" / "matching.py"
