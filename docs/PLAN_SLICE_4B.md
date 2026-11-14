@@ -17,15 +17,18 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP | commit | cluster | functions | web_server lines | move_check | name_check | URL map | repoints + proofs | full suite (counts + exit code) |
 |---|---|---|---:|---:|---|---|---|---|---|
 | CP0 | 2d60b651 | inventory/assignment ledger | 0 | 8,566 | n/a | n/a | 195 baseline rules captured | n/a | docs only; not run |
-| CP1 | this commit | C14 → `suggestions_audio_catalog` | 8 + 1 class | 8,189 | 9/9 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 14 sites / 3 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP1 | 22ed3af5 | C14 → `suggestions_audio_catalog` | 8 + 1 class | 8,189 | 9/9 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 14 sites / 3 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP2 | this commit | C20 → `shelf_watch_service` | 6 | 8,060 | 6/6 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 10 sites / 4 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 
 ### Remaining
 
-C20, C13, C15, C21, C27, C22, C24, C31, C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C13, C15, C21, C27, C22, C24, C31, C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
 
 ### Skipped
 
 C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
+
+### Verified checkpoints
 
 #### CP1 verified — C14 (`suggestions_audio_catalog`)
 
@@ -46,6 +49,27 @@ Raising-original proofs (source restored after each run; each entry below passed
 - `get_suggestion_audiobooks` — 4 sites, Python exit 0; `tests/test_suggestions_discovery_lifecycle.py:57` → `web.get_suggestion_audiobooks`; `tests/test_suggestions_exclude_local.py:144` → `web.get_suggestion_audiobooks`; `tests/test_suggestions_exclude_local.py:232` → `web.get_suggestion_audiobooks`; `tests/test_suggestions_review_fixes.py:132` → `web_server.get_suggestion_audiobooks`. 15 passed, 1 warning, 3 subtests passed in 1.14s.
 
 Ignored evidence: `.local-review-notes/architecture-phase4b/c14-full.log`, `suggestions_audio_catalog-gates.json`, `suggestions_audio_catalog-proof-results.json` and per-name proof logs. Deployment requirement: **restart**; no integration/deploy/live access performed.
+
+#### CP2 verified — C20 (`shelf_watch_service`)
+
+Moved 6; all 6 facade/module objects identical. All retained definitions, state initializers, imports and non-definition statements are AST-unchanged. No constants/state moved. Move-check 6/6; name-check 0 unresolved / 0 MODULE-SELF; offline route map 195/195 identical. Full suite: **7906 passed, 15 skipped, 15 warnings in 206.20s (0:03:26)**; Python **exit 0**, captured immediately.
+
+Focused touched-test-file run: **105 passed, 1 warning in 4.10s**, Python exit 0.
+
+Test target edits (all other lines/assertions unchanged):
+
+- `"src.web.shelf_watch_service._shelf_watch_clients_for", return_value=(self.booklore, "Kobo", "Kobo")`
+- `monkeypatch.setattr("src.web.shelf_watch_service._shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))`
+- `monkeypatch.setattr("src.web.shelf_watch_service._shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))`
+
+Raising-original proofs (source restored after each run; each entry below passed through mocks while the original raised):
+
+- `_complete_shelf_watch_approval` — 3 sites, Python exit 0; `tests/test_match_paths_regression.py:2602` → `src.web_server._complete_shelf_watch_approval`; `tests/test_match_paths_regression.py:2630` → `src.web_server._complete_shelf_watch_approval`; `tests/test_match_paths_regression.py:2652` → `src.web_server._complete_shelf_watch_approval`. 3 passed, 1 warning in 1.12s.
+- `_queue_item_shelf_watch_metadata` — 3 sites, Python exit 0; `tests/test_match_paths_regression.py:2598` → `src.web_server._queue_item_shelf_watch_metadata`; `tests/test_match_paths_regression.py:2625` → `src.web_server._queue_item_shelf_watch_metadata`; `tests/test_match_paths_regression.py:2648` → `src.web_server._queue_item_shelf_watch_metadata`. 3 passed, 1 warning in 1.12s.
+- `_shelf_watch_clients_for` — 3 sites, Python exit 0; `tests/test_shelf_match_removal.py:194` → `src.web.shelf_watch_service._shelf_watch_clients_for`; `tests/test_shelf_require_alignment.py:254` → `src.web.shelf_watch_service._shelf_watch_clients_for`; `tests/test_shelf_require_alignment.py:265` → `src.web.shelf_watch_service._shelf_watch_clients_for`. 4 passed, 1 warning in 1.09s.
+- `_watch_suggestion_review` — 1 sites, Python exit 0; `tests/test_suggestions_search_tab.py:208` → `src.web_server._watch_suggestion_review`. 1 passed, 1 warning in 1.28s.
+
+Ignored evidence: `.local-review-notes/architecture-phase4b/c20-full.log`, `shelf_watch_service-gates.json`, `shelf_watch_service-proof-results.json` and per-name proof logs. Deployment requirement: **restart**; no integration/deploy/live access performed.
 
 ### Current cluster inventory and interception audit
 
