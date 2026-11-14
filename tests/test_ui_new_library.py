@@ -812,7 +812,7 @@ class TestNewLibrary(unittest.TestCase):
         classic = (_ROOT / "templates/index.html").read_text(encoding="utf-8")
         for section in ("in-progress-section", "not-started-section", "finished-section"):
             self.assertIn(section, classic)
-        self.assertIn("section_bucket", (_ROOT / "src/web_server.py").read_text(encoding="utf-8"))
+        self.assertIn("section_bucket", (_ROOT / "src/web/dashboard_metadata.py").read_text(encoding="utf-8"))
 
     def test_library_filter_panel_template_contract(self):
         page = (_ROOT / "templates/next/index.html").read_text(encoding="utf-8")
