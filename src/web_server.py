@@ -7772,64 +7772,7 @@ def index():
     )
 
 
-def api_current_audio_chapter(abs_id: str) -> object:
-    """Optional chapter display from this reader's stored audiobook timestamp."""
-    user_id = get_current_user_id()
-    if user_id is None:
-        return jsonify({"error": "authentication required"}), 401
-    book = database_service.get_book(abs_id)
-    if book is None:
-        return jsonify({"error": "book not found"}), 404
-    if not database_service.is_user_linked(user_id, abs_id):
-        return jsonify({"error": "book not available for this user"}), 403
-
-    unavailable = {"available": False}
-    source = getattr(book, "audio_source", None) or (
-        "ABS" if getattr(book, "sync_mode", "audiobook") != "ebook_only" else None
-    )
-    client_name = {"ABS": "abs", "BookOrbit": "bookorbitaudio",
-                   "BookLore": "bookloreaudio"}.get(source)
-    if not client_name:
-        return jsonify(unavailable)
-    states = database_service.get_states_for_book(abs_id, user_id=user_id)
-    position = next((state.timestamp for state in states
-                     if state.client_name == client_name), None)
-    if position is None or position <= 0:
-        return jsonify(unavailable)
-
-    try:
-        # Fail closed for regular readers: uc() alone may fall back to global clients.
-        clients = _scan_user_clients()
-        if source == "ABS":
-            if not clients.abs_client.is_configured():
-                return jsonify(unavailable)
-            details = clients.abs_client.get_item_details(book.abs_id) or {}
-            chapters = (details.get("media") or {}).get("chapters") or []
-        elif source == "BookOrbit":
-            audio_sync = clients.sync_clients.get("BookOrbitAudio")
-            provider_id = audio_sync._resolve_book_id(book) if audio_sync else None
-            if provider_id is None:
-                return jsonify(unavailable)
-            adapter = BookOrbitAudioSourceAdapter(clients.bookorbit_client, Path("."))
-            chapters = adapter.get_real_chapters(provider_id)
-        else:
-            audio_sync = clients.sync_clients.get("BookLoreAudio")
-            provider_id = audio_sync._resolve_booklore_book_id(book) if audio_sync else None
-            if provider_id is None:
-                return jsonify(unavailable)
-            adapter = BookLoreAudioSourceAdapter(clients.booklore_client, Path("."))
-            chapters = adapter.get_real_chapters(provider_id)
-        chapter = resolve_current_chapter(chapters, position, source)
-        return jsonify({"available": True, **chapter} if chapter else unavailable)
-    except PermissionError:
-        # A reader without their own credentials for this service: nothing to show.
-        return jsonify(unavailable)
-    except Exception:
-        logger.warning(
-            "Current audio chapter unavailable: book=%s provider=%s",
-            sanitize_log_data(abs_id), source, exc_info=True,
-        )
-        return jsonify(unavailable)
+from src.web.routes.book_actions import api_current_audio_chapter, delete_mapping, delete_selected_mappings, clear_progress, remap_alignment, sync_now, mark_complete, update_hash
 
 
 
@@ -11443,150 +11386,12 @@ def _delete_or_unlink_book(user, abs_id, book) -> None:
     cleanup_mapping_resources(book, defer_audio_cache=worker_cancelled)
 
 
-def delete_mapping(abs_id):
-    book = database_service.get_book(abs_id)
-    if not book:
-        return redirect(url_for('index'))
-
-    user = current_user()
-    if not _user_may_modify_book(user, abs_id):
-        return ("Forbidden: you have not claimed this book", 403)
-
-    _delete_or_unlink_book(user, abs_id, book)
-    return redirect(url_for('index'))
 
 
-def delete_selected_mappings() -> Response | tuple[str, int]:
-    """Delete selected mappings using the same ownership and cleanup rules as one delete."""
-    abs_ids = list(dict.fromkeys(request.form.getlist('abs_ids')))
-    if not abs_ids or any(not abs_id.strip() for abs_id in abs_ids):
-        return ("Select at least one book", 400)
-
-    user = current_user()
-    # Authorize the entire selection before deleting any of it.
-    if any(not _user_may_modify_book(user, abs_id) for abs_id in abs_ids):
-        return ("Forbidden: you have not claimed every selected book", 403)
-
-    removed = failed = 0
-    for abs_id in abs_ids:
-        try:
-            book = database_service.get_book(abs_id)
-            if book:
-                _delete_or_unlink_book(user, abs_id, book)
-                removed += 1
-        except Exception:
-            failed += 1
-            logger.exception("Failed to delete selected mapping '%s'", sanitize_log_data(abs_id))
-
-    flash(f"Removed {removed} book(s) from your dashboard.", "success")
-    if failed:
-        flash(f"Could not fully remove {failed} book(s). Check the logs before retrying.", "error")
-    return redirect(url_for('index'))
 
 
-def clear_progress(abs_id):
-    """Clear progress for a mapping by setting all systems to 0%"""
-    # Get book from database service
-    book = database_service.get_book(abs_id)
-
-    if not book:
-        logger.warning(f"⚠️ Cannot clear progress: book not found for '{abs_id}'")
-        return redirect(url_for('index'))
-
-    user = current_user()
-    if not _user_may_modify_book(user, abs_id):
-        return ("Forbidden: you have not claimed this book", 403)
-
-    try:
-        # Scope to the acting user: drop only their state rows and reset progress
-        # through their own clients, never the global/admin bundle.
-        logger.info(f"🔄 Clearing progress for {sanitize_log_data(book.abs_title or abs_id)}")
-        manager.clear_progress(
-            abs_id,
-            user_id=(user.id if user else None),
-            sync_clients=uc().sync_clients,
-        )
-        logger.info(f"✅ Progress cleared successfully for {sanitize_log_data(book.abs_title or abs_id)}")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to clear progress for '{abs_id}': {e}", exc_info=True)
-
-    return redirect(url_for('index'))
 
 
-def remap_alignment(abs_id):
-    """Rebuild a book's audio↔text alignment with the best available backend.
-
-    Unlike Clear Position, Remap never touches the reader's saved progress — it only
-    rebuilds the audio↔ebook map:
-      - CTC configured and the current map is not already CTC -> rebuild with CTC.
-      - otherwise an estimated map (no measured word timings) -> force a fresh
-        word-timestamped transcription and re-anchor.
-      - a map already at the best available backend -> nothing to do.
-
-    The rebuild runs through the normal pending -> forge pipeline, exactly like
-    ``/api/alignments/realign`` (single scope).
-    """
-    book = database_service.get_book(abs_id)
-    if not book:
-        return jsonify({"success": False, "error": "Book not found"}), 404
-
-    user = current_user()
-    if not _user_may_modify_book(user, abs_id):
-        return _forbidden_book_response(json_response=True)
-
-    # Audio→text alignment only exists for mappings that have an audiobook side.
-    if getattr(book, "sync_mode", "audiobook") == "ebook_only":
-        return jsonify({
-            "success": False,
-            "error": "This mapping has no audiobook to align.",
-        }), 400
-
-    # None = no stored map; "" = map with unrecorded (legacy) method.
-    current_method = database_service.get_alignment_method(abs_id)
-    ctc_available = env_truthy("CTC_ENABLED")
-
-    # Methods that are already word-accurate and need no word-level rebuild. Coarse
-    # fallbacks ('lexical', 'linear', 'llm_anchor', 'storyteller[_linear]', legacy '')
-    # are all improvable, so they are deliberately absent here.
-    _word_accurate = ("ctc", "lexical_timed")
-
-    target = None
-    if ctc_available and current_method != "ctc":
-        target = "ctc"
-    elif (current_method or "") not in _word_accurate:
-        target = "word_level"
-
-    if target is None:
-        return jsonify({
-            "success": False,
-            "status": "up_to_date",
-            "message": "Alignment already uses the best available backend.",
-        })
-
-    # A rebuild reuses the cached transcript to skip Whisper; a transcript captured
-    # before word-level timing has no per-word times, so drop it to force a fresh,
-    # word-timestamped transcription. (CTC ignores the transcript entirely.)
-    if target == "word_level":
-        transcriber = getattr(manager, "transcriber", None) if manager else None
-        if transcriber is not None:
-            try:
-                if not transcriber.has_word_timed_transcript(abs_id):
-                    transcriber.invalidate_transcript_cache(abs_id)
-            except Exception as e:
-                logger.warning(
-                    f"⚠️ Remap: could not invalidate transcript for '{abs_id}': {e}",
-                    exc_info=True,
-                )
-
-    if not database_service.set_book_status(abs_id, "pending"):
-        return jsonify({"success": False, "error": "Could not queue remap."}), 500
-
-    logger.info(
-        f"🔁 Remap queued for {sanitize_log_data(book.abs_title or abs_id)} "
-        f"(backend='{target}', from='{current_method or 'none'}')"
-    )
-    return jsonify({"success": True, "backend": target})
 
 
 # Human-readable labels for the `Job.stage` values `readalong_builder.py` /
@@ -11733,219 +11538,8 @@ from src.web.routes.readalong import generate_readalong_epub, readalong_epub_sta
 
 
 
-def sync_now(abs_id):
-    book = database_service.get_book(abs_id)
-    if not book:
-        return jsonify({"success": False, "error": "Book not found"}), 404
 
-    user = current_user()
-    if not _user_may_modify_book(user, abs_id):
-        return _forbidden_book_response(json_response=True)
 
-    if user is not None and not current_app.config.get('LOGIN_DISABLED'):
-        threading.Thread(
-            target=manager.sync_cycle,
-            kwargs={'target_abs_id': abs_id, 'user_id': user.id},
-            daemon=True,
-        ).start()
-    else:
-        threading.Thread(target=manager.run_sync_for_all_users, kwargs={'target_abs_id': abs_id}, daemon=True).start()
-    return jsonify({"success": True})
-
-def mark_complete(abs_id):
-    book = database_service.get_book(abs_id)
-    if not book:
-        return jsonify({"success": False, "error": "Book not found"}), 404
-
-    user = current_user()
-    if not _user_may_modify_book(user, abs_id):
-        return jsonify({"success": False, "error": "Forbidden: you have not claimed this book"}), 403
-
-    perform_delete = request.json.get('delete', False) if request.json else False
-
-    # Determine applicable sync type from the book's sync_mode.
-    sync_type = 'ebook' if getattr(book, 'sync_mode', 'audiobook') == 'ebook_only' else 'audiobook'
-
-    locator = LocatorResult(percentage=1.0)
-    update_req = UpdateProgressRequest(locator_result=locator, txt="Book finished", previous_location=None)
-
-    # Push through the acting user's own clients (not the global/admin bundle) so a
-    # user's "finished" never lands on another account's trackers.
-    # Follow the same applicability pattern as SyncManager.clear_progress:
-    # configured + matching sync_type + supports_book.
-    for client_name, client in uc().sync_clients.items():
-        if not client.is_configured():
-            continue
-        # Skip if this client does not handle the book's sync type.
-        if sync_type not in client.get_supported_sync_types():
-            continue
-        # Skip if the client cannot handle this book's specific source.
-        if not client.supports_book(book):
-            continue
-
-        success = False
-        result = None
-        updated_state = {}
-        if client_name.lower() == 'abs':
-            try:
-                success = bool(client.abs_client.mark_finished(abs_id))
-                if success:
-                    # ABS's isFinished flag does not necessarily move currentTime
-                    # to the exact duration. Persist audio-position seconds here,
-                    # never wall-clock epoch seconds, because ABSSyncClient uses
-                    # State.timestamp as its previous audio position.
-                    duration = getattr(book, 'duration', None)
-                    updated_state = {
-                        'pct': 1.0,
-                        'ts': float(duration) if duration and duration > 0 else 0.0,
-                    }
-            except Exception as e:
-                logger.error(f"❌ ABS mark_finished failed for '{abs_id}': {e}", exc_info=True)
-        else:
-            try:
-                result = client.update_progress(book, update_req)
-                success = getattr(result, 'success', False) if result else False
-                if success:
-                    updated_state = getattr(result, 'updated_state', {}) or {}
-            except Exception as e:
-                logger.error(f"❌ '{client_name}' mark-complete failed for '{abs_id}': {e}", exc_info=True)
-
-        # Only persist state when the write succeeded.
-        if success:
-            # Preserve locator/audio metadata returned by the client. Percentage
-            # clients historically use State.timestamp as an observation epoch;
-            # audio clients return a real position in updated_state['ts'].
-            now = int(time.time())
-            resolved_timestamp = updated_state.get('ts')
-            state_timestamp = resolved_timestamp if resolved_timestamp is not None else now
-            state = State(
-                abs_id=abs_id,
-                client_name=client_name.lower(),
-                percentage=1.0,
-                timestamp=state_timestamp,
-                last_updated=now,
-                user_id=(user.id if user else None),
-                xpath=updated_state.get('xpath'),
-                cfi=updated_state.get('cfi'),
-            )
-            database_service.save_state(state)
-
-    # Tell the reader devices too. This path writes 100% to every client directly
-    # and never runs a sync cycle, so the cycle's completion edge -- which is what
-    # normally marks a book finished for KOReader -- never sees it. Pressing this
-    # button is the most explicit "I finished this" the bridge has, so it would be
-    # the worst one to miss.
-    if not perform_delete and user_preference_enabled('KOREADER_STATUS_SYNC_ENABLED', 'true', database_service):
-        try:
-            written = database_service.record_koreader_status_for_book(
-                abs_id,
-                status='complete',
-                device_key='bridge',
-                user_id=(user.id if user else None),
-            )
-            if written:
-                logger.info(
-                    f"🏁 '{abs_id}' marked finished for KOReader "
-                    f"({written} document hash(es), via mark-complete)"
-                )
-        except Exception as e:
-            logger.warning(
-                f"⚠️ Could not mark '{sanitize_log_data(abs_id)}' finished for KOReader: {e}",
-                exc_info=True,
-            )
-
-    if perform_delete:
-        _delete_or_unlink_book(user, abs_id, book)
-
-    return jsonify({"success": True})
-
-def update_hash(abs_id):
-    from flask import flash
-    new_hash = request.form.get('new_hash', '').strip()
-    book = database_service.get_book(abs_id)
-
-    if not book:
-        flash("❌ Book not found", "error")
-        return redirect(url_for('index'))
-
-    user = current_user()
-    if not _user_may_modify_book(user, abs_id):
-        return _forbidden_book_response()
-    claimants = database_service.get_book_user_ids(abs_id)
-    if (
-        user is not None
-        and not user.is_admin
-        and len(claimants) > 1
-    ):
-        return ("Forbidden: only an administrator can change a shared book hash", 403)
-
-    old_hash = book.kosync_doc_id
-
-    if new_hash:
-        if _hash_owned_by_foreign_mapping(new_hash, abs_id):
-            return _FOREIGN_MAPPING_MESSAGE, 403
-        book.kosync_doc_id = new_hash
-        database_service.save_book(book)
-        logger.info(f"✅ Updated KoSync hash for '{sanitize_log_data(book.abs_title)}' to manual input: '{new_hash}'")
-        updated = True
-    else:
-        # Auto-regenerate
-        # When recalculating with empty input, prioritize the standard EPUB.
-        # over the current filename (which might be a Storyteller artifact).
-        target_filename = book.original_ebook_filename or book.ebook_filename
-        
-        booklore_id = None
-        booklore_client = uc().booklore_client
-        if booklore_client.is_configured():
-            bl_book = booklore_client.find_book_by_filename(target_filename)
-            if bl_book:
-                booklore_id = bl_book.get('id')
-
-        recalc_hash = get_kosync_id_for_ebook(target_filename, booklore_id, original_filename=book.ebook_filename)
-        
-        if recalc_hash:
-            # [CHANGED] Manual update (via UI) should always succeed, even if it changes a linked hash.
-            # The protection logic remains in match() and batch_match() to prevent automated overwrites.
-            if _hash_owned_by_foreign_mapping(recalc_hash, abs_id):
-                return _FOREIGN_MAPPING_MESSAGE, 403
-            book.kosync_doc_id = recalc_hash
-            database_service.save_book(book)
-            logger.info(f"✅ Auto-regenerated KoSync hash for '{sanitize_log_data(book.abs_title)}': '{recalc_hash}'")
-            updated = True
-        else:
-            flash("❌ Could not recalculate hash (file not found?)", "error")
-            return redirect(url_for('index'))
-
-    # Keep both sides of a hash change resolvable. The selected hash remains the
-    # book's primary pointer, while the previous hash stays linked as a sibling so
-    # existing devices and progress rows are never stranded.
-    hashes_to_link = [book.kosync_doc_id]
-    if old_hash and old_hash != book.kosync_doc_id:
-        hashes_to_link.append(old_hash)
-    for doc_hash in hashes_to_link:
-        if not updated or not doc_hash:
-            continue
-        try:
-            database_service.ensure_linked_kosync_document(doc_hash, abs_id)
-        except Exception as e:
-            logger.warning(
-                f"⚠️ Could not register linked KoSync document '{sanitize_log_data(doc_hash)}' "
-                f"for '{sanitize_log_data(book.abs_title)}': {e}",
-                exc_info=True
-            )
-
-    # Trigger an instant sync cycle so the engine can reconcile progress
-    # using 'furthest wins' logic. This avoids overwriting newer progress
-    # that may already exist on the KOSync server (e.g., from BookNexus).
-    if updated and book.kosync_doc_id != old_hash:
-        logger.info(f"🔄 Hash changed for '{sanitize_log_data(book.abs_title)}' — triggering instant sync to reconcile progress")
-        sync_kwargs = {'target_abs_id': abs_id}
-        if user is not None and not current_app.config.get('LOGIN_DISABLED'):
-            sync_kwargs['user_id'] = user.id
-        threading.Thread(target=manager.sync_cycle, kwargs=sync_kwargs, daemon=True).start()
-
-    flash(f"✅ Updated KoSync Hash for {book.abs_title}", "success")
-    return redirect(url_for('index'))
 
 
 def _extracted_cover_is_stale(cover_path, source_path) -> bool:
@@ -14185,7 +13779,8 @@ def create_app(test_container=None):
     app.add_url_rule('/', 'index', index)
     from src.web.routes import book as book_routes
     book_routes.register(app, sys.modules[__name__])
-    app.add_url_rule('/api/books/<abs_id>/current-chapter', 'api_current_audio_chapter', api_current_audio_chapter, methods=['GET'])
+    from src.web.routes import book_actions as book_actions_routes
+    book_actions_routes.register(app, sys.modules[__name__], phase='chapter')
     from src.web.routes import processing as processing_routes
     processing_routes.register(app, sys.modules[__name__], phase='queue')
     from src.web.routes import whats_new as whats_new_routes
@@ -14200,17 +13795,13 @@ def create_app(test_container=None):
     app.add_url_rule('/batch-match', 'batch_match', batch_match, methods=['GET', 'POST'])
     from src.web.routes import suggestions as suggestions_routes
     suggestions_routes.register(app, sys.modules[__name__], phase='page')
-    app.add_url_rule('/delete/<abs_id>', 'delete_mapping', delete_mapping, methods=['POST'])
-    app.add_url_rule('/delete-selected', 'delete_selected_mappings', delete_selected_mappings, methods=['POST'])
-    app.add_url_rule('/clear-progress/<abs_id>', 'clear_progress', clear_progress, methods=['POST'])
-    app.add_url_rule('/api/remap-alignment/<abs_id>', 'remap_alignment', remap_alignment, methods=['POST'])
+    book_actions_routes.register(app, sys.modules[__name__], phase='book_write')
     from src.web.routes import readalong as readalong_routes
     readalong_routes.register(app, sys.modules[__name__])
-    app.add_url_rule('/api/sync-now/<abs_id>', 'sync_now', sync_now, methods=['POST'])
-    app.add_url_rule('/api/mark-complete/<abs_id>', 'mark_complete', mark_complete, methods=['POST'])
+    book_actions_routes.register(app, sys.modules[__name__], phase='sync_write')
     from src.web.routes import me as me_routes
     me_routes.register(app, sys.modules[__name__])
-    app.add_url_rule('/update-hash/<abs_id>', 'update_hash', update_hash, methods=['POST'])
+    book_actions_routes.register(app, sys.modules[__name__], phase='hash')
     from src.web.routes import covers as covers_routes
     covers_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/api/health', 'api_health', api_health)
