@@ -51,6 +51,7 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP2 | afeaaba9 | C20 → `shelf_watch_service` | 6 | 8,060 | 6/6 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 10 sites / 4 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP3 | 1606e2b6 | C13 → `storyteller_library_watch` | 4 | 7,461 | 4/4 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 4 target edits; 4 sites / 2 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP4 | this commit | C15 → `suggestions_ebook_catalog` | 10 | 6,728 | 10/10 identical | only startup-set `EBOOK_DIR` (read as `web.EBOOK_DIR`, known false positive) | 195/195 identical (Codex) | 7 target edits; 4 names proven with raising originals (Claude finished; decorator-patched `test_owner_may_still_rematch_own_mapping` proven directly) | see Claude review |
+| CP5 | this commit | C21 → `dashboard_projection` | 16 | 6,022 | 16/16 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 2 target edits in `test_ui_account_display`; 7+2+1+1 sites passed raising-original (4 names), 14 `_build_dashboard_mappings` sites passed destination-binding guard (wraps/side-effect call-through) | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 
 ### Remaining
 

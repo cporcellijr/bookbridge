@@ -154,7 +154,7 @@ class TestAccountDisplayPage(unittest.TestCase):
         self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
         self._series_books()
         self._login('ui-reader')
-        with patch('src.web_server._prefetch_bookorbit_authors', return_value={}) as authors,                 patch('src.web_server._prefetch_bookfusion_links', return_value={}) as links:
+        with patch('src.web.dashboard_projection._prefetch_bookorbit_authors', return_value={}) as authors,                 patch('src.web.dashboard_projection._prefetch_bookfusion_links', return_value={}) as links:
             self.assertEqual(self.client.get('/account/display').status_code, 200)
         authors.assert_called_once()
         links.assert_called_once()
