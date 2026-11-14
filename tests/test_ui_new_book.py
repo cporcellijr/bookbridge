@@ -6,6 +6,7 @@ import re
 import unittest
 import tests.test_ui_new_foundation as foundation
 from src.db.models import Book, State
+from discover_template_source import discover_template_source
 
 
 class TestBookPage(unittest.TestCase):
@@ -486,9 +487,9 @@ class TestDiscoverScriptDrift(unittest.TestCase):
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        original = (root / 'templates/suggestions.html').read_text(encoding='utf-8')
+        original = discover_template_source('suggestions.html')
         classic_base = (root / 'templates/base.html').read_text(encoding='utf-8')
-        current = (root / 'templates/next/_discover_scripts.html').read_text(encoding='utf-8')
+        current = discover_template_source('next/_discover_scripts.html')
         classic_helper = classic_base.split('<script>', 1)[1].split('</script>', 1)[0]
         new_helper = current.split('<script>', 1)[1].split('</script>', 1)[0]
         self.assertEqual(new_helper, classic_helper)

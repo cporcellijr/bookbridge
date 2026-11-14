@@ -9,6 +9,7 @@ from unittest.mock import patch
 from flask.signals import template_rendered
 
 import tests.test_ui_new_foundation as foundation
+from discover_template_source import discover_template_source
 
 
 class TestNewDiscover(unittest.TestCase):
@@ -183,7 +184,7 @@ class TestReadalongAskedOnceAtMatchAll(unittest.TestCase):
         root = Path(foundation._TEMPLATES)
         for page in ('suggestions.html', 'next/suggestions.html', 'next/_discover_scripts.html'):
             with self.subTest(page=page):
-                self.assertNotIn('readalongEpubCheckbox', (root / page).read_text(encoding='utf-8'))
+                self.assertNotIn('readalongEpubCheckbox', discover_template_source(page))
         for panel in ('_match_queue_panel.html', 'next/_match_queue_panel.html'):
             with self.subTest(panel=panel):
                 self.assertIn('id="queueReadalongCheckbox"', (root / panel).read_text(encoding='utf-8'))

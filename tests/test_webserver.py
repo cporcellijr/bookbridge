@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.kosync_headers import BRIDGE_INTERNAL_HEADER, KOSYNC_ACCEPT, hash_kosync_key
+from discover_template_source import discover_template_source
 
 
 def _http_response(status_code, payload=None, text="", headers=None):
@@ -257,7 +258,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             src.web_server.render_template = original_render
 
     def _read_template_source(self, template_name: str) -> str:
-        return (Path(__file__).parent.parent / 'templates' / template_name).read_text(encoding='utf-8')
+        return discover_template_source(template_name)
 
     def test_manifest_rebuild_is_wired_to_catalog_changes_not_sync_cycles(self):
         """The device-sync manifest must be invalidated by catalog changes only.
