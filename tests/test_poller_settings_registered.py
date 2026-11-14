@@ -60,7 +60,7 @@ class TestEveryPollablePrefixIsRegistered(unittest.TestCase):
     def test_settle_toggles_are_in_bool_keys(self):
         """A checkbox missing from bool_keys never persists 'false' — the most
         recurring bug class in this repo."""
-        source = (Path(__file__).parent.parent / "src" / "web_server.py").read_text(encoding="utf-8")
+        source = (Path(__file__).parent.parent / "src" / "web" / "routes" / "settings.py").read_text(encoding="utf-8")
         for _client, prefix in ClientPoller._POLLABLE:
             key = f"{prefix}_POLL_WAIT_FOR_SETTLE"
             self.assertIn(f"'{key}'", source, f"{key} missing from web_server bool_keys")

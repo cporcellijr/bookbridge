@@ -24,7 +24,7 @@ REPO = Path(__file__).parent.parent
 
 
 def _bool_keys() -> list:
-    src = io.open(REPO / 'src' / 'web_server.py', encoding='utf-8').read()
+    src = io.open(REPO / 'src' / 'web' / 'routes' / 'settings.py', encoding='utf-8').read()
     i = src.index("        bool_keys = [")
     return re.findall(r"'([A-Z0-9_]+)'", src[i:src.index("]", i)])
 
@@ -80,7 +80,7 @@ class SaveLoopGuardTestCase(unittest.TestCase):
     """The guard itself, read off the save loop's source."""
 
     def _save_loop_source(self) -> str:
-        src = io.open(REPO / 'src' / 'web_server.py', encoding='utf-8').read()
+        src = io.open(REPO / 'src' / 'web' / 'routes' / 'settings.py', encoding='utf-8').read()
         start = src.index("        # 2. Handle Text Inputs")
         return src[start:src.index("new_booklore_settings", start)]
 

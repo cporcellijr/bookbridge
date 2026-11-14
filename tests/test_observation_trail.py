@@ -662,7 +662,7 @@ class TestRewindTrustGate(unittest.TestCase):
 
         self.assertIn("SYNC_TRUST_CORROBORATED_REWIND", ALL_SETTINGS)
         self.assertIn("SYNC_TRUST_CORROBORATED_REWIND", DEFAULT_CONFIG)
-        web_server = open("src/web_server.py", encoding="utf-8").read()
+        web_server = open("src/web/routes/settings.py", encoding="utf-8").read()
         self.assertIn("'SYNC_TRUST_CORROBORATED_REWIND',", web_server)
         template = "".join((Path("templates") / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         self.assertIn('name="SYNC_TRUST_CORROBORATED_REWIND"', template)
