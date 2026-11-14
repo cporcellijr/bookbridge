@@ -75,7 +75,7 @@ Focused selection is based on exact method-name matches in tests/, always includ
 | user_links | `get_session` | 23 |
 | memberships | `_notify_catalog_change`, `get_session` | 55 |
 | kosync_progress | `_mark_progress_written`, `_resolve_uid`, `get_session` | 24 |
-| koreader_stats | `_resolve_uid`, `get_session` | 6 |
+| koreader_stats | `_resolve_uid`, `_scope_koreader_user`, `get_session` | 6 |
 | reading_sessions | `_local_date_from_epoch`, `_resolve_uid`, `get_session` | 19 |
 | annotations | `compute_annotation_key`, `get_session` | 5 |
 | advanced_queries | `_mark_progress_written`, `_resolve_uid`, `get_session` | 43 |
@@ -111,7 +111,8 @@ a following checkpoint may replace it with its resolved hash. `git log --grep` r
 | CP8 | `eb7f80a4` | `UsersMixin` | 14 | 6793 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP9 | `c19bfc6c` | `JobsMixin` | 14 | 6554 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP10 | `fcdf457a` | `GoodreadsMixin` | 4 | 6514 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
-| CP11 | `[Refactor] Move user links database methods into UserLinksMixin` (this commit) | `UserLinksMixin` | 17 | 6181 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP11 | `c3c11fa1` | `UserLinksMixin` | 17 | 6181 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP12 | `[Refactor] Move memberships database methods into MembershipsMixin` (this commit) | `MembershipsMixin` | 8 | 6039 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 
 ## Skipped
 
@@ -119,12 +120,12 @@ None.
 
 ## Remaining
 
-CP12-CP110 in table order. Stretch S1/S2 may follow the last code checkpoint.
+CP13-CP120 in table order. Stretch S1/S2 may follow the last code checkpoint.
 
 ## Report back
 
-Completed CP0-CP11; no skipped checkpoints. 107/298 mapped methods moved.
-Current database_service.py: **6181 lines**, down from 7897. Every completed checkpoint's full suite and exit code are in Progress above (7906 passed / 15 skipped / 0 failures, exit 0).
+Completed CP0-CP12; no skipped checkpoints. 115/298 mapped methods moved.
+Current database_service.py: **6039 lines**, down from 7897. Every completed checkpoint's full suite and exit code are in Progress above (7906 passed / 15 skipped / 0 failures, exit 0).
 All 312 original methods remain AST/text identical and reachable, with the same dir(DatabaseService) attribute set; DatabaseMigrator and all core class attributes remain unchanged. Shared and exclusive constant aliases retain identity and mixin loggers keep src.db.database_service.
 No tests, models, migrations, journal settings or code outside src/db/ changed.
 CP0 finding: the base has 312 direct DatabaseService methods rather than the estimated 317. Unlabeled domains are explicitly mapped; cross-domain calls remain through self/cls. Core retains the 14 methods named in the map, including _scope_koreader_user used across status/statistics.
