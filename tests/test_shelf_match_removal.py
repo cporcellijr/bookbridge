@@ -191,8 +191,8 @@ class TestShelveMatchedEbook(unittest.TestCase):
 
     def test_remove_only_same_shelf_is_a_successful_noop(self):
         metadata = {"grimmory_filename": "book.epub"}
-        with patch.object(
-            web_server, "_shelf_watch_clients_for", return_value=(self.booklore, "Kobo", "Kobo")
+        with patch(
+            "src.web.shelf_watch_service._shelf_watch_clients_for", return_value=(self.booklore, "Kobo", "Kobo")
         ):
             self.assertTrue(web_server._complete_shelf_watch_approval(metadata, remove_only=True))
 

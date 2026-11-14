@@ -1991,8 +1991,8 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         def ebook_search(query):
             return [book for book in ebooks if query.lower() in book.title.lower()]
 
-        with patch.object(ws, "get_searchable_audiobooks", side_effect=audio_search), \
-             patch.object(ws, "get_searchable_ebooks", side_effect=ebook_search):
+        with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", side_effect=audio_search), \
+             patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=ebook_search):
             for title in (plain, quoted, 'The “Greene Shorts”Incest Collection'):
                 with self.subTest(title=title):
                     response = self.client.get('/api/suggestions/search', query_string={'q': title})
@@ -3312,7 +3312,7 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
                 return [SimpleNamespace(name=fname, source="BookOrbit", source_id="42")]
             return [SimpleNamespace(name=fname, source="Local File", source_id=None)]
 
-        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+        with patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=fake_search):
             out = ws._search_ebooks_with_fallback("sublimation - isabel j. kim (2026)")
 
         self.assertEqual(len(out), 1)
@@ -3325,7 +3325,7 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
         def fake_search(term):
             return [SimpleNamespace(name="OnlyLocal.epub", source="Local File", source_id=None)]
 
-        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+        with patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=fake_search):
             out = ws._search_ebooks_with_fallback("only local (2020).epub")
 
         self.assertEqual(len(out), 1)
@@ -3340,7 +3340,7 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
                 return [SimpleNamespace(name="First Time Caller.epub", source="BookOrbit", source_id="42")]
             return []
 
-        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+        with patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=fake_search):
             out = ws._search_ebooks_with_fallback("first-time caller")
 
         self.assertEqual(len(out), 1)
@@ -3355,7 +3355,7 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
                 return [SimpleNamespace(name="First Time Caller.epub", source="BookOrbit", source_id="42")]
             return []
 
-        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+        with patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=fake_search):
             out = ws._search_ebooks_with_fallback("First-Time Caller (Unabridged).epub")
 
         self.assertEqual(len(out), 1)

@@ -2,6 +2,407 @@
 
 **Original inventory/planning baseline:** `6f9629018eeb7ed571e50232f3ee50292071a604` (2026-11-13), isolated DevSpace worktree. The execution record below supersedes the original sequencing and C34 destination; remaining cluster rows are historical inventory until reviewed. Authority: `AGENTS.md`, `docs/PLAN_ARCHITECTURE_CLEANUP.md`, `docs/ARCHITECTURE_CLEANUP_HANDOFF.md` and architecture audit sections D and F.
 
+## Step 6 ledger (2026-11-14)
+
+Worktree: `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-4b6`; branch `refactor/architecture-4b-step6`; baseline `17f11eb8` (8,566 lines). No integration, push, restart or live access; Claude integrates and writes BRANCH_STATUS. Deployment requirement: **restart**.
+
+**Checkpoint handoff:** Codex ran out of usage during CP4 (C15); Claude finished and committed CP4. Remaining clusters are split into small DevSpace tasks (see Step 6 task list).
+
+CP0 reran the ignored analyzer in inventory and `--test-assignments` modes (both exit 0). Its copied legacy inventory generator now skips already-extracted spans and writes only an ignored preview. Current inventory: 20 surviving clusters (including intentionally skipped C23), 198 grouped functions, 3 classes, 19 retained functions. Assignment scan: 461 test files / 755 bindings, 140 assignments / 9 deletions / 56 in-place sites / 987 read-only uses, zero parse failures; 1,240 unresolved candidates are conservative alias/dynamic accesses requiring per-cluster manual review, not confirmed hazards.
+
+All existing module-level constants and mutable state stay in web_server for step 6, read through `web.X` at call time; no new state copies. Assignments of moved callables are interception sites and may require target repoints; assignments of retained state stay unchanged. Class definitions, if moved, retain decorators and identical identities. Function signatures, decorators, bodies (except `web.`), logs, guards, Jinja globals and route wiring are frozen. Tests may change only patch targets/source paths with the same assertions. Expected repoints below are candidates: actual caller lookup and raising-original proofs decide each site.
+
+Primary runs focused checks and the full suite sequentially for every checkpoint, records the Python exit code immediately, and waits/retries exit 4 without modifying the controller lock. No green checkpoint is committed before the full suite passes.
+
+### Progress
+
+| CP | commit | cluster | functions | web_server lines | move_check | name_check | URL map | repoints + proofs | full suite (counts + exit code) |
+|---|---|---|---:|---:|---|---|---|---|---|
+| CP0 | 2d60b651 | inventory/assignment ledger | 0 | 8,566 | n/a | n/a | 195 baseline rules captured | n/a | docs only; not run |
+| CP1 | 22ed3af5 | C14 → `suggestions_audio_catalog` | 8 + 1 class | 8,189 | 9/9 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 14 sites / 3 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP2 | afeaaba9 | C20 → `shelf_watch_service` | 6 | 8,060 | 6/6 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 10 sites / 4 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP3 | 1606e2b6 | C13 → `storyteller_library_watch` | 4 | 7,461 | 4/4 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 4 target edits; 4 sites / 2 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP4 | this commit | C15 → `suggestions_ebook_catalog` | 10 | 6,728 | 10/10 identical | only startup-set `EBOOK_DIR` (read as `web.EBOOK_DIR`, known false positive) | 195/195 identical (Codex) | 7 target edits; 4 names proven with raising originals (Claude finished; decorator-patched `test_owner_may_still_rematch_own_mapping` proven directly) | see Claude review |
+
+### Remaining
+
+C15, C21, C27, C22, C24, C31, C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+
+### Skipped
+
+C23: intentional existing decision. C01 and C04 blockers are recorded below; final checkpoint disposition follows inspection.
+
+### Verified checkpoints
+
+#### CP1 verified — C14 (`suggestions_audio_catalog`)
+
+Moved 8 + 1 class; all 9 facade/module objects identical. All retained definitions, state initializers, imports and non-definition statements are AST-unchanged. No constants/state moved. Move-check 9/9; name-check 0 unresolved / 0 MODULE-SELF; offline route map 195/195 identical. Full suite: **7906 passed, 15 skipped, 15 warnings in 182.70s (0:03:02)**; Python **exit 0**, captured immediately.
+
+Focused touched-test-file run: **247 passed, 2 skipped, 1 warning, 10 subtests passed in 16.69s**, Python exit 0.
+
+Test target edits (all other lines/assertions unchanged):
+
+- `with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", return_value=[item]), \`
+- `with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", return_value=[item]), \`
+- `with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", side_effect=audio_search), \`
+
+Raising-original proofs (source restored after each run; each entry below passed through mocks while the original raised):
+
+- `_search_audiobooks_with_fallback` — 7 sites, Python exit 0; `tests/test_match_paths_regression.py:2962` → `src.web_server._search_audiobooks_with_fallback`; `tests/test_match_paths_regression.py:2975` → `src.web_server._search_audiobooks_with_fallback`; `tests/test_suggestions_discovery_lifecycle.py:235` → `web._search_audiobooks_with_fallback`; `tests/test_suggestions_search_tab.py:155` → `src.web_server._search_audiobooks_with_fallback`; `tests/test_suggestions_search_tab.py:182` → `src.web_server._search_audiobooks_with_fallback`; `tests/test_webserver.py:1955` → `ws._search_audiobooks_with_fallback`; `tests/test_webserver.py:2076` → `ws._search_audiobooks_with_fallback`. 7 passed, 1 warning in 1.73s.
+- `get_searchable_audiobooks` — 3 sites, Python exit 0; `tests/test_suggestions_series_match.py:200` → `src.web.suggestions_audio_catalog.get_searchable_audiobooks`; `tests/test_suggestions_subtitle_scoring.py:77` → `src.web.suggestions_audio_catalog.get_searchable_audiobooks`; `tests/test_webserver.py:1994` → `src.web.suggestions_audio_catalog.get_searchable_audiobooks`. 3 passed, 1 warning, 3 subtests passed in 1.07s.
+- `get_suggestion_audiobooks` — 4 sites, Python exit 0; `tests/test_suggestions_discovery_lifecycle.py:57` → `web.get_suggestion_audiobooks`; `tests/test_suggestions_exclude_local.py:144` → `web.get_suggestion_audiobooks`; `tests/test_suggestions_exclude_local.py:232` → `web.get_suggestion_audiobooks`; `tests/test_suggestions_review_fixes.py:132` → `web_server.get_suggestion_audiobooks`. 15 passed, 1 warning, 3 subtests passed in 1.14s.
+
+Ignored evidence: `.local-review-notes/architecture-phase4b/c14-full.log`, `suggestions_audio_catalog-gates.json`, `suggestions_audio_catalog-proof-results.json` and per-name proof logs. Deployment requirement: **restart**; no integration/deploy/live access performed.
+
+#### CP2 verified — C20 (`shelf_watch_service`)
+
+Moved 6; all 6 facade/module objects identical. All retained definitions, state initializers, imports and non-definition statements are AST-unchanged. No constants/state moved. Move-check 6/6; name-check 0 unresolved / 0 MODULE-SELF; offline route map 195/195 identical. Full suite: **7906 passed, 15 skipped, 15 warnings in 206.20s (0:03:26)**; Python **exit 0**, captured immediately.
+
+Focused touched-test-file run: **105 passed, 1 warning in 4.10s**, Python exit 0.
+
+Test target edits (all other lines/assertions unchanged):
+
+- `"src.web.shelf_watch_service._shelf_watch_clients_for", return_value=(self.booklore, "Kobo", "Kobo")`
+- `monkeypatch.setattr("src.web.shelf_watch_service._shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))`
+- `monkeypatch.setattr("src.web.shelf_watch_service._shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))`
+
+Raising-original proofs (source restored after each run; each entry below passed through mocks while the original raised):
+
+- `_complete_shelf_watch_approval` — 3 sites, Python exit 0; `tests/test_match_paths_regression.py:2602` → `src.web_server._complete_shelf_watch_approval`; `tests/test_match_paths_regression.py:2630` → `src.web_server._complete_shelf_watch_approval`; `tests/test_match_paths_regression.py:2652` → `src.web_server._complete_shelf_watch_approval`. 3 passed, 1 warning in 1.12s.
+- `_queue_item_shelf_watch_metadata` — 3 sites, Python exit 0; `tests/test_match_paths_regression.py:2598` → `src.web_server._queue_item_shelf_watch_metadata`; `tests/test_match_paths_regression.py:2625` → `src.web_server._queue_item_shelf_watch_metadata`; `tests/test_match_paths_regression.py:2648` → `src.web_server._queue_item_shelf_watch_metadata`. 3 passed, 1 warning in 1.12s.
+- `_shelf_watch_clients_for` — 3 sites, Python exit 0; `tests/test_shelf_match_removal.py:194` → `src.web.shelf_watch_service._shelf_watch_clients_for`; `tests/test_shelf_require_alignment.py:254` → `src.web.shelf_watch_service._shelf_watch_clients_for`; `tests/test_shelf_require_alignment.py:265` → `src.web.shelf_watch_service._shelf_watch_clients_for`. 4 passed, 1 warning in 1.09s.
+- `_watch_suggestion_review` — 1 sites, Python exit 0; `tests/test_suggestions_search_tab.py:208` → `src.web_server._watch_suggestion_review`. 1 passed, 1 warning in 1.28s.
+
+Ignored evidence: `.local-review-notes/architecture-phase4b/c20-full.log`, `shelf_watch_service-gates.json`, `shelf_watch_service-proof-results.json` and per-name proof logs. Deployment requirement: **restart**; no integration/deploy/live access performed.
+
+#### CP3 verified — C13 (`storyteller_library_watch`)
+
+Moved 4; all 4 facade/module objects identical. All retained definitions, state initializers, imports and non-definition statements are AST-unchanged. No constants/state moved. Move-check 4/4; name-check 0 unresolved / 0 MODULE-SELF; offline route map 195/195 identical. Full suite: **7906 passed, 15 skipped, 15 warnings in 187.88s (0:03:07)**; Python **exit 0**, captured immediately.
+
+Focused touched-test-file run: **69 passed, 1 warning in 1.83s**, Python exit 0.
+
+Test target edits (all other lines/assertions unchanged):
+
+- `patch("src.web.storyteller_library_watch._upsert_storyteller_mapping",`
+- `patch("src.web.storyteller_library_watch._storyteller_auto_link_candidates", return_value=0), \`
+- `monkeypatch.setattr("src.web.storyteller_library_watch._upsert_storyteller_mapping", Mock(return_value=(None, "download failed", 500)))`
+- `monkeypatch.setattr("src.web.storyteller_library_watch._upsert_storyteller_mapping", upsert)`
+
+Raising-original proofs (source restored after each run; each entry below passed through mocks while the original raised):
+
+- `_storyteller_auto_link_candidates` — 1 sites, Python exit 0; `tests/test_storyteller_519.py:356` → `src.web.storyteller_library_watch._storyteller_auto_link_candidates`. 1 passed, 1 warning in 0.94s.
+- `_upsert_storyteller_mapping` — 3 sites, Python exit 0; `tests/test_storyteller_519.py:266` → `src.web.storyteller_library_watch._upsert_storyteller_mapping`; `tests/test_storyteller_519.py:624` → `src.web.storyteller_library_watch._upsert_storyteller_mapping`; `tests/test_storyteller_519.py:726` → `src.web.storyteller_library_watch._upsert_storyteller_mapping`. 6 passed, 1 warning in 0.96s.
+
+Ignored evidence: `.local-review-notes/architecture-phase4b/c13-full.log`, `storyteller_library_watch-gates.json`, `storyteller_library_watch-proof-results.json` and per-name proof logs. Deployment requirement: **restart**; no integration/deploy/live access performed.
+
+### Current cluster inventory and interception audit
+
+#### C14 — Audio suggestion catalog
+
+**Current members:** `EbookResult` (2814–2858), `_ebook_edition_label` (2861–2917), `_record_suggestions_source_state` (2920–2929), `get_searchable_audiobooks` (2932–3056), `_punctuation_search_key` (3059–3061), `_punctuation_search_fragment` (3064–3071), `_audiobook_search_variants` (3074–3127), `_search_audiobooks_with_fallback` (3130–3148), `get_suggestion_audiobooks` (3187–3239).
+
+**Target:** `src/web/suggestions_audio_catalog.py`. **Constants moving:** none. **Bindings staying:** `container`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**`get_searchable_audiobooks`:** `tests/test_suggestions_series_match.py:200`; `tests/test_suggestions_subtitle_scoring.py:77`; `tests/test_webserver.py:1994`. Potential destination repoints for in-cluster callers: `_search_audiobooks_with_fallback`, `get_suggestion_audiobooks`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_search_audiobooks_with_fallback`:** `tests/test_match_paths_regression.py:2962`; `tests/test_match_paths_regression.py:2975`; `tests/test_suggestions_discovery_lifecycle.py:235`; `tests/test_suggestions_search_tab.py:155`; `tests/test_suggestions_search_tab.py:182`; `tests/test_webserver.py:1955`; `tests/test_webserver.py:2076`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`get_suggestion_audiobooks`:** `tests/test_suggestions_discovery_lifecycle.py:57`; `tests/test_suggestions_exclude_local.py:144`; `tests/test_suggestions_exclude_local.py:232`; `tests/test_suggestions_review_fixes.py:132`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C20 — Shelf-watch review/approval
+
+**Current members:** `_shelf_watch_clients_for` (4088–4103), `_queue_item_shelf_watch_metadata` (4106–4132), `_watch_library_key` (4135–4138), `_is_other_book_in_watched_library` (4141–4153), `_watch_suggestion_review` (4156–4189), `_complete_shelf_watch_approval` (4192–4226).
+
+**Target:** `src/web/shelf_watch_service.py`. **Constants moving:** none. **Bindings staying:** `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**`_shelf_watch_clients_for`:** `tests/test_shelf_match_removal.py:194`; `tests/test_shelf_require_alignment.py:254`; `tests/test_shelf_require_alignment.py:265`. Potential destination repoints for in-cluster callers: `_complete_shelf_watch_approval`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_queue_item_shelf_watch_metadata`:** `tests/test_match_paths_regression.py:2598`; `tests/test_match_paths_regression.py:2625`; `tests/test_match_paths_regression.py:2648`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_watch_suggestion_review`:** `tests/test_suggestions_search_tab.py:208`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_complete_shelf_watch_approval`:** `tests/test_match_paths_regression.py:2602`; `tests/test_match_paths_regression.py:2630`; `tests/test_match_paths_regression.py:2652`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C13 — Storyteller auto-link and upsert
+
+**Current members:** `_storyteller_auto_link_candidates` (2198–2371), `_storyteller_user_library_pass` (2378–2430), `_run_storyteller_library_hourly` (2433–2480), `_upsert_storyteller_mapping` (2486–2811).
+
+**Target:** `src/web/storyteller_library_watch.py`. **Constants moving:** none. **Bindings staying:** `EBOOK_ALREADY_MAPPED`, `_FOREIGN_MAPPING_MESSAGE`, `_STORYTELLER_PASSES_IN_PROGRESS`, `_STORYTELLER_PASS_LOCK`, `_active_bundle`, `container`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**`_storyteller_auto_link_candidates`:** `tests/test_storyteller_519.py:356`. Potential destination repoints for in-cluster callers: `_storyteller_user_library_pass`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_upsert_storyteller_mapping`:** `tests/test_storyteller_519.py:266`; `tests/test_storyteller_519.py:624`; `tests/test_storyteller_519.py:726`. Potential destination repoints for in-cluster callers: `_storyteller_auto_link_candidates`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+#### C15 — Ebook suggestion catalog
+
+**Current members:** `_ebook_is_provider` (3151–3153), `_search_ebooks_with_fallback` (3156–3184), `_first_not_none` (3242–3243), `_ebook_title_key` (3246–3248), `_scan_excludes_local_files` (3251–3253), `_submitted_ebook_path` (3256–3266), `_refuse_regular_user_local_selection` (3269–3287), `_build_local_ebook_title_index` (3290–3327), `get_searchable_ebooks` (3330–3928), `_promote_authoritative_ebook_matches` (3931–3952).
+
+**Target:** `src/web/suggestions_ebook_catalog.py`. **Constants moving:** none. **Bindings staying:** `EBOOK_DIR`, `container`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**`_search_ebooks_with_fallback`:** `tests/test_match_paths_regression.py:2962`; `tests/test_match_paths_regression.py:2975`; `tests/test_suggestions_discovery_lifecycle.py:236`; `tests/test_suggestions_search_tab.py:156`; `tests/test_suggestions_search_tab.py:183`; `tests/test_webserver.py:1956`; `tests/test_webserver.py:2077`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_refuse_regular_user_local_selection`:** `tests/test_cross_user_mapping_guard.py:126`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`get_searchable_ebooks`:** `tests/test_suggestions_discovery_lifecycle.py:58`; `tests/test_suggestions_exclude_local.py:145`; `tests/test_suggestions_review_fixes.py:133`; `tests/test_webserver.py:1995`; `tests/test_webserver.py:3315`; `tests/test_webserver.py:3328`; `tests/test_webserver.py:3343`; `tests/test_webserver.py:3358`. Potential destination repoints for in-cluster callers: `_search_ebooks_with_fallback`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_promote_authoritative_ebook_matches`:** `tests/test_webserver.py:1957`; `tests/test_webserver.py:2078`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C21 — Dashboard projection/preload/format
+
+**Current members:** `_format_dashboard_last_sync` (4229–4237), `_build_dashboard_integrations` (4240–4250), `_group_dashboard_states_by_book` (4253–4257), `_dashboard_leader_service` (4260–4298), `_format_strip_slot` (4312–4328), `_build_format_strip` (4331–4380), `_browser_cover_url` (4383–4447), `_is_synthetic_bridge_key` (4450–4460), `_sanitize_cover_urls` (4463–4490), `_public_link_base` (4493–4502), `_prefetch_bookfusion_links` (4505–4527), `_bookorbit_source_ids` (4530–4540), `_prefetch_bookorbit_authors` (4543–4589), `_bookorbit_author_for_book` (4592–4604), `_build_dashboard_mapping` (4607–4869), `_build_dashboard_mappings` (4872–4965).
+
+**Target:** `src/web/dashboard_projection.py`. **Constants moving:** none. **Bindings staying:** `_AUDIO_BRIDGE_PREFIXES`, `_FORMAT_STRIP_EBOOK_CLIENTS`, `_FORMAT_STRIP_SERVICE_NAMES`, `database_service`, `manager`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**`_build_dashboard_integrations`:** `tests/test_dashboard_bookfusion_bulk.py:107`; `tests/test_dashboard_perf.py:111`; `tests/test_ui_new_book.py:110`; `tests/test_ui_new_book.py:121`; `tests/test_ui_new_book.py:131`; `tests/test_ui_new_book.py:166`; `tests/test_ui_new_book.py:69`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_browser_cover_url`:** `tests/test_suggestions_series_match.py:201`; `tests/test_suggestions_subtitle_scoring.py:78`. Potential destination repoints for in-cluster callers: `_sanitize_cover_urls`, `_build_dashboard_mapping`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_prefetch_bookfusion_links`:** `tests/test_ui_account_display.py:157`. Potential destination repoints for in-cluster callers: `_build_dashboard_mappings`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_prefetch_bookorbit_authors`:** `tests/test_ui_account_display.py:157`. Potential destination repoints for in-cluster callers: `_build_dashboard_mappings`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_build_dashboard_mappings`:** `tests/test_dashboard_refresh_cost.py:234`; `tests/test_ui_new_book.py:157`; `tests/test_ui_new_book.py:29`; `tests/test_ui_new_book.py:44`; `tests/test_ui_new_library.py:1051`; `tests/test_ui_new_library.py:1108`; `tests/test_ui_new_library.py:1148`; `tests/test_ui_new_library.py:245`; `tests/test_ui_new_library.py:277`; `tests/test_ui_new_library.py:334`; `tests/test_ui_new_library.py:386`; `tests/test_ui_new_library.py:469`; `tests/test_ui_new_library.py:684`; `tests/test_ui_new_library.py:748`; `tests/test_ui_new_library.py:772`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C27 — Discover search/reconciliation
+
+**Current members:** `_suggestions_search_results` (5446–5502), `_legacy_search_redirect` (5505–5515), `_suggestions_ebook_result` (5522–5559), `_resolve_suggestions_redesign_ebook_create` (5562–5616), `_get_suggestions_service` (5619–5643), `_get_ignored_suggestion_source_ids` (5646–5648), `_suggestions_discovery_sources_complete` (5651–5657), `_invalidate_suggestions_pair_cache` (5660–5687), `_reconcile_discovery_with_pair_matches` (5690–5718).
+
+**Target:** `src/web/suggestions_discovery.py`. **Constants moving:** none. **Bindings staying:** `container`, `database_service`, `manager`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**`_get_suggestions_service`:** `tests/test_suggestions_discovery_lifecycle.py:54`; `tests/test_suggestions_exclude_local.py:141`; `tests/test_suggestions_exclude_local.py:230`; `tests/test_suggestions_redesign_api.py:97`; `tests/test_suggestions_review_fixes.py:131`. Potential destination repoints for in-cluster callers: `_get_ignored_suggestion_source_ids`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_get_ignored_suggestion_source_ids`:** `tests/test_suggestions_redesign_api.py:78`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C22 — Library ownership/BookFusion links
+
+**Current members:** `_dashboard_visible_books_for_user` (4968–4980), `_claim_book_for_current_user` (4983–4992), `_claim_book_for_user_id` (4995–5016), `_active_bookfusion_link_user_id` (5019–5035), `_persist_bookfusion_link_for_user_id` (5038–5064), `_persist_bookfusion_link_for_current_user` (5067–5082), `audiobook_matches_search` (5085–5108).
+
+**Target:** `src/web/library_access.py`. **Constants moving:** none. **Bindings staying:** `database_service`, `manager`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**`_dashboard_visible_books_for_user`:** `tests/test_suggestions_redesign_api.py:81`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_claim_book_for_user_id`:** `tests/test_storyteller_519.py:201`; `tests/test_storyteller_519.py:244`; `tests/test_storyteller_519.py:268`; `tests/test_storyteller_519.py:316`; `tests/test_storyteller_519.py:336`; `tests/test_storyteller_519.py:583`. Potential destination repoints for in-cluster callers: `_claim_book_for_current_user`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+#### C24 — Dashboard user fetch/hero
+
+**Current members:** `_dashboard_mappings_for_user` (5149–5175), `_warm_dashboard_sync_warnings` (5178–5200), `_pick_hero_mapping` (5203–5219), `_hero_leader_service` (5222–5229), `_hero_leader_percent` (5232–5237), `_hero_plain_text` (5246–5251), `_hero_synopsis_source` (5254–5292), `_hero_cached_synopsis` (5295–5304), `_hero_daily_totals` (5307–5328), `_hero_listening_piece` (5331–5350), `_hero_reading_piece` (5353–5373).
+
+**Target:** `src/web/dashboard_context.py`. **Constants moving:** none. **Bindings staying:** `_FORMAT_STRIP_SERVICE_NAMES`, `_HERO_SYNOPSIS_LOCKS`, `_HERO_SYNOPSIS_RECHECK_SECONDS`, `container`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**`_dashboard_mappings_for_user`:** `tests/test_dashboard_perf.py:174`. Potential destination repoints for in-cluster callers: `_warm_dashboard_sync_warnings`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_pick_hero_mapping`:** `tests/test_ui_new_library.py:72`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_hero_synopsis_source`:** `tests/test_ui_book_synopsis.py:44`; `tests/test_ui_book_synopsis.py:51`; `tests/test_ui_book_synopsis.py:57`; `tests/test_ui_book_synopsis.py:67`; `tests/test_ui_book_synopsis.py:92`; `tests/test_ui_hero_content.py:113`; `tests/test_ui_hero_content.py:124`; `tests/test_ui_hero_content.py:140`; `tests/test_ui_hero_content.py:177`. Potential destination repoints for in-cluster callers: `_hero_cached_synopsis`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_hero_cached_synopsis`:** `tests/test_ui_book_synopsis.py:36`; `tests/test_ui_hero_content.py:104`; `tests/test_ui_hero_content.py:89`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_hero_listening_piece`:** `tests/test_ui_hero_content.py:64`; `tests/test_ui_hero_content.py:90`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_hero_reading_piece`:** `tests/test_ui_hero_content.py:105`; `tests/test_ui_hero_content.py:91`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C31 — Durable match queue
+
+**Current members:** `_match_queue_file_path` (6568–6569), `_read_match_queue_unlocked` (6572–6593), `_write_match_queue_unlocked` (6596–6612), `_normalize_match_queue_user_id` (6615–6635), `_match_queue_scope` (6638–6653), `_match_queue_item_visible` (6656–6667), `_match_queue_stamp` (6670–6673), `_clear_match_queue_for_user_id` (6676–6685), `_load_match_queue` (6688–6695), `_save_match_queue` (6698–6710), `_match_queue_add` (6713–6728), `_match_queue_move` (6731–6766), `_match_queue_remove` (6769–6779), `_match_queue_clear` (6782–6789), `_match_queue_drain` (6792–6804), `_match_queue_response` (6807–6816), `_apply_queue_readalong_request` (6819–6826), `_suggestion_bulk_block` (6829–6836).
+
+**Target:** `src/web/match_queue_store.py`. **Constants moving:** none. **Bindings staying:** `DATA_DIR`, `MATCH_QUEUE_FILE_NAME`, `MATCH_QUEUE_LOCK`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**`_match_queue_file_path`:** `tests/test_job_queue_view.py:161`; `tests/test_job_queue_view.py:784`; `tests/test_job_queue_view.py:821`; `tests/test_job_queue_view.py:853`. Potential destination repoints for in-cluster callers: `_read_match_queue_unlocked`, `_write_match_queue_unlocked`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_load_match_queue`:** `tests/test_dashboard_search_handoff.py:129`; `tests/test_dashboard_search_handoff.py:86`; `tests/test_job_queue_view.py:326`; `tests/test_suggestions_discovery_lifecycle.py:230`; `tests/test_suggestions_redesign_api.py:77`. Potential destination repoints for in-cluster callers: `_match_queue_response`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_match_queue_drain`:** `tests/test_match_paths_regression.py:1170`; `tests/test_match_paths_regression.py:1198`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_suggestion_bulk_block`:** `tests/test_suggestions_redesign_api.py:79`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C11 — Shelving and Storyteller artifacts
+
+**Current members:** `_is_storyteller_artifact_filename` (1828–1831), `_is_abs_hosted_ebook_filename` (1834–1843), `_aligned_shelf_target` (1846–1848), `_aligned_shelf_assignment` (1851–1876), `_reconcile_aligned_shelf` (1879–1927), `_shelve_matched_ebook` (1930–2022), `_shelve_saved_ebook` (2025–2041), `_publish_saved_ebook_to_readest` (2044–2086), `_download_storyteller_artifact` (2089–2172), `_resolve_abs_chapters_for_storyteller_ingest` (2175–2185).
+
+**Target:** `src/web/matched_ebook_delivery.py`. **Constants moving:** none. **Bindings staying:** `_global_clients`, `container`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** `tests/test_suggestions_review_fixes.py:125` _global_clients (assign); `tests/test_suggestions_review_fixes.py:141` _global_clients (assign).
+
+**`_shelve_matched_ebook`:** `tests/test_match_paths_regression.py:2688`. Potential destination repoints for in-cluster callers: `_shelve_saved_ebook`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_shelve_saved_ebook`:** `tests/test_comic_audio_boundaries.py:29`; `tests/test_match_paths_regression.py:2604`; `tests/test_match_paths_regression.py:2632`; `tests/test_match_paths_regression.py:2654`; `tests/test_suggestions_auto_match.py:231`; `tests/test_suggestions_auto_match.py:267`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_download_storyteller_artifact`:** `tests/test_match_paths_regression.py:546`; `tests/test_storyteller_519.py:727`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C35 — Reader statistics/progress payload
+
+**Current members:** `_get_stats_timezone` (7135–7147), `_build_stats_cache_key` (7150–7156), `_read_cached_stats` (7159–7168), `_write_cached_stats` (7171–7177), `_date_series` (7180–7186), `_activity_dates_from_daily` (7189–7197), `_calculate_current_streak_from_dates` (7200–7206), `_normalize_abs_author` (7209–7212), `_recent_daily_from_mapping` (7215–7229), `_heatmap_window` (7237–7239), `_heatmap_from_mapping` (7242–7253), `_summarize_activity` (7256–7268), `_normalize_listening_session` (7271–7286), `_years_from_days` (7289–7296), `_abs_finished_books` (7299–7343), `_build_listening_yearly_recap` (7346–7379), `_build_listening_book_list` (7382–7407), `_abs_last_listened` (7410–7430), `_abs_listening_book_list` (7433–7460), `_abs_book_listening_detail` (7463–7503), `_local_listening_stats` (7506–7518), `_stats_abs_client` (7521–7529), `_build_listening_stats_payload` (7532–7598), `_build_reading_stats_payload` (7601–7656), `_merge_daily_activity` (7659–7676), `_merge_heatmap_activity` (7679–7694), `_merge_recent_sessions` (7697–7700), `_merge_book_lists` (7703–7735), `_build_combined_yearly_recap` (7738–7777), `_build_combined_stats_payload` (7780–7838), `_build_dashboard_progress_rows` (7854–7902).
+
+**Target:** `src/web/reading_stats.py`. **Constants moving:** none. **Bindings staying:** `STATS_CACHE`, `STATS_CACHE_LOCK`, `STATS_CACHE_TTL_SECONDS`, `_HEATMAP_DAYS`, `container`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** `tests/test_reader_stats_access.py:57` STATS_CACHE (in-place); `tests/test_reader_stats_access.py:67` STATS_CACHE (in-place); `tests/test_stats_user_scoping.py:38` STATS_CACHE (in-place).
+
+**`_read_cached_stats`:** `tests/test_webserver.py:2855`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_write_cached_stats`:** `tests/test_webserver.py:2854`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_local_listening_stats`:** `tests/test_webserver.py:2972`; `tests/test_webserver.py:2986`. Potential destination repoints for in-cluster callers: `_build_listening_stats_payload`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_stats_abs_client`:** `tests/test_ui_hero_content.py:160`; `tests/test_ui_hero_content.py:228`; `tests/test_webserver.py:2973`; `tests/test_webserver.py:2987`. Potential destination repoints for in-cluster callers: `_build_listening_stats_payload`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_build_listening_stats_payload`:** `tests/test_webserver.py:2853`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C30 — Suggestions state and cache
+
+**Current members:** `_clear_legacy_suggestions_session_payload` (6271–6285), `_prune_suggestions_state_store` (6288–6296), `_default_suggestions_state` (6299–6313), `_get_suggestions_state` (6316–6335), `_suggestions_cache_scope_key` (6338–6346), `_suggestions_cache_file_path` (6349–6353), `_empty_suggestions_cache_payload` (6356–6371), `_load_persisted_suggestions_cache` (6374–6416), `_save_persisted_suggestions_cache` (6419–6509), `_rehydrate_suggestions_state_from_cache` (6512–6552), `_persist_suggestions_state` (6555–6565).
+
+**Target:** `src/web/suggestions_state_store.py`. **Constants moving:** none. **Bindings staying:** `DATA_DIR`, `SUGGESTIONS_CACHE_FILE_NAME`, `SUGGESTIONS_CACHE_LOCK`, `SUGGESTIONS_STATE_LOCK`, `SUGGESTIONS_STATE_STORE`, `SUGGESTIONS_STATE_TTL_SECONDS`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** `tests/test_match_paths_regression.py:153` SUGGESTIONS_STATE_STORE (in-place); `tests/test_match_paths_regression.py:1561` SUGGESTIONS_STATE_STORE (in-place); `tests/test_match_paths_regression.py:1628` SUGGESTIONS_STATE_STORE (in-place); `tests/test_match_paths_regression.py:1767` SUGGESTIONS_STATE_STORE (in-place); `tests/test_match_paths_regression.py:1863` SUGGESTIONS_STATE_STORE (in-place); `tests/test_match_paths_regression.py:2139` SUGGESTIONS_STATE_STORE (in-place); `tests/test_match_paths_regression.py:2205` SUGGESTIONS_STATE_STORE (in-place); `tests/test_source_information_ui.py:142` SUGGESTIONS_STATE_STORE (in-place); `tests/test_suggestions_ui_integration.py:104` SUGGESTIONS_STATE_STORE (in-place).
+
+**`_load_persisted_suggestions_cache`:** `tests/test_suggestions_discovery_lifecycle.py:210`; `tests/test_suggestions_discovery_lifecycle.py:231`; `tests/test_suggestions_discovery_lifecycle.py:56`; `tests/test_suggestions_exclude_local.py:142`; `tests/test_suggestions_exclude_local.py:166`; `tests/test_suggestions_redesign_api.py:76`; `tests/test_suggestions_review_fixes.py:130`; `tests/test_suggestions_search_tab.py:191`; `tests/test_suggestions_search_tab.py:199`. Potential destination repoints for in-cluster callers: `_rehydrate_suggestions_state_from_cache`, `_persist_suggestions_state`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_save_persisted_suggestions_cache`:** `tests/test_suggestions_discovery_lifecycle.py:211`; `tests/test_suggestions_exclude_local.py:167`. Potential destination repoints for in-cluster callers: `_persist_suggestions_state`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+#### C28 — Suggestions scanner/automatch
+
+**Current members:** `scan_library_suggestions` (5721–5916), `_prune_suggestions_scan_jobs` (5919–5928), `_auto_match_threshold` (5972–5982), `_is_same_folder_match` (5985–5995), `_auto_match_suggestions` (5998–6164), `_run_suggestions_scan_job` (6167–6235), `_get_suggestions_scan_job` (6238–6245), `_running_suggestions_scan_job_id` (6248–6256), `_owned_suggestions_scan_job` (6259–6268).
+
+**Target:** `src/web/suggestions_scan_workflow.py`. **Constants moving:** none. **Bindings staying:** `SUGGESTIONS_SCAN_JOBS`, `SUGGESTIONS_SCAN_JOBS_LOCK`, `SUGGESTIONS_SCAN_JOB_TTL_SECONDS`, `_SCAN_JOB_ACTIVE`, `container`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** `tests/test_match_paths_regression.py:151` SUGGESTIONS_SCAN_JOBS (in-place); `tests/test_match_paths_regression.py:1921` SUGGESTIONS_SCAN_JOBS (in-place); `tests/test_match_paths_regression.py:1955` SUGGESTIONS_SCAN_JOBS (in-place); `tests/test_scheduled_suggestions_scan.py:307` SUGGESTIONS_SCAN_JOBS (in-place); `tests/test_scheduled_suggestions_scan.py:317` SUGGESTIONS_SCAN_JOBS (in-place); `tests/test_scheduled_suggestions_scan.py:435` SUGGESTIONS_SCAN_JOBS (in-place); `tests/test_source_information_ui.py:140` SUGGESTIONS_SCAN_JOBS (in-place); `tests/test_suggestions_feature.py:237` _run_suggestions_scan_job (assign); `tests/test_suggestions_feature.py:242` _run_suggestions_scan_job (assign); `tests/test_suggestions_scan_queue.py:99` SUGGESTIONS_SCAN_JOBS (in-place); `tests/test_suggestions_scan_queue.py:100` SUGGESTIONS_SCAN_JOBS (in-place); `tests/test_suggestions_ui_integration.py:102` SUGGESTIONS_SCAN_JOBS (in-place).
+
+**`scan_library_suggestions`:** `tests/test_scheduled_suggestions_scan.py:561`; `tests/test_suggestions_exclude_local.py:165`. Potential destination repoints for in-cluster callers: `_run_suggestions_scan_job`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_auto_match_suggestions`:** `tests/test_suggestions_exclude_local.py:233`. Potential destination repoints for in-cluster callers: `_run_suggestions_scan_job`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_run_suggestions_scan_job`:** `tests/test_suggestions_scan_queue.py:33`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_get_suggestions_scan_job`:** `tests/test_match_paths_regression.py:2096`; `tests/test_match_paths_regression.py:2110`. Potential destination repoints for in-cluster callers: `_owned_suggestions_scan_job`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_running_suggestions_scan_job_id`:** `tests/test_suggestions_redesign_api.py:80`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C40 — Book access and delete authorization
+
+**Current members:** `_user_may_modify_book` (6851–6864), `_acting_user_may_modify_book` (6872–6890), `_existing_mapping_access` (6893–6915), `_may_absorb_mapping` (6918–6926), `_may_replace_mapping` (6929–6937), `_hash_owned_by_foreign_mapping` (6940–6952), `_forbidden_book_response` (6955–6959), `_current_user_claimed_abs_ids` (6962–6974), `_kosync_document_visible_to_user` (6977–6987), `_book_claimed_by_current_scope` (6990–6999), `_serialize_kosync_document_for_ui` (7002–7020), `_get_visible_kosync_document_or_response` (7028–7036), `_delete_or_unlink_book` (7045–7056).
+
+**Target:** `src/web/book_access.py`. **Constants moving:** none. **Bindings staying:** `database_service`, `manager`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** `tests/test_bookfusion_upload.py:527` _user_may_modify_book (assign); `tests/test_bookfusion_upload.py:748` _user_may_modify_book (assign); `tests/test_bookfusion_upload.py:790` _user_may_modify_book (assign); `tests/test_bookfusion_upload.py:838` _user_may_modify_book (assign); `tests/test_bookfusion_upload.py:919` _user_may_modify_book (assign).
+
+**`_user_may_modify_book`:** `tests/test_anomaly_bookfusion_hash_validation.py:64`. Potential destination repoints for in-cluster callers: `_acting_user_may_modify_book`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_existing_mapping_access`:** `tests/test_match_paths_regression.py:561`; `tests/test_storyteller_519.py:265`; `tests/test_storyteller_519.py:335`; `tests/test_storyteller_519.py:598`; `tests/test_storyteller_519.py:623`; `tests/test_storyteller_519.py:723`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C10 — EPUB/KoSync identity
+
+**Current members:** `find_ebook_file` (1590–1603), `get_kosync_id_for_ebook` (1606–1800), `_compute_storyteller_trilink_kosync_id` (1803–1825).
+
+**Target:** `src/web/kosync_ebook_identity.py`. **Constants moving:** none. **Bindings staying:** `EBOOK_DIR`, `container`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** `tests/test_storyteller_match_flow.py:137` get_kosync_id_for_ebook (assign); `tests/test_storyteller_match_flow.py:145` get_kosync_id_for_ebook (assign); `tests/test_suggestions_feature.py:256` get_kosync_id_for_ebook (assign); `tests/test_suggestions_feature.py:276` get_kosync_id_for_ebook (assign); `tests/test_webserver.py:630` get_kosync_id_for_ebook (assign); `tests/test_webserver.py:688` get_kosync_id_for_ebook (assign); `tests/test_webserver.py:695` get_kosync_id_for_ebook (assign); `tests/test_webserver.py:733` get_kosync_id_for_ebook (assign); `tests/test_webserver.py:741` get_kosync_id_for_ebook (assign); `tests/test_webserver.py:789` get_kosync_id_for_ebook (assign).
+
+**`find_ebook_file`:** `tests/test_bookorbit_match_hash.py:110`; `tests/test_bookorbit_match_hash.py:139`; `tests/test_bookorbit_match_hash.py:157`; `tests/test_bookorbit_match_hash.py:52`; `tests/test_bookorbit_match_hash.py:72`; `tests/test_bookorbit_match_hash.py:90`; `tests/test_cwa_on_demand_exact_id.py:129`; `tests/test_cwa_on_demand_exact_id.py:151`; `tests/test_cwa_on_demand_exact_id.py:171`; `tests/test_ui_hero_content.py:206`; `tests/test_ui_hero_content.py:214`; `tests/test_ui_hero_content.py:220`. Potential destination repoints for in-cluster callers: `get_kosync_id_for_ebook`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`get_kosync_id_for_ebook`:** `tests/test_cross_user_mapping_guard.py:100`; `tests/test_cross_user_mapping_guard.py:115`; `tests/test_cross_user_mapping_guard.py:125`; `tests/test_cross_user_mapping_guard.py:136`; `tests/test_cross_user_mapping_guard.py:150`; `tests/test_cross_user_mapping_guard.py:193`; `tests/test_cross_user_mapping_guard.py:75`; `tests/test_cross_user_mapping_guard.py:88`; `tests/test_kosync_server.py:895`; `tests/test_match_paths_regression.py:1093`; `tests/test_match_paths_regression.py:1112`; `tests/test_match_paths_regression.py:1136`; `tests/test_match_paths_regression.py:1148`; `tests/test_match_paths_regression.py:1270`; `tests/test_match_paths_regression.py:1315`; `tests/test_match_paths_regression.py:1344`; `tests/test_match_paths_regression.py:1386`; `tests/test_match_paths_regression.py:1416`; `tests/test_match_paths_regression.py:1445`; `tests/test_match_paths_regression.py:204`; `tests/test_match_paths_regression.py:2054`; `tests/test_match_paths_regression.py:2247`; `tests/test_match_paths_regression.py:229`; `tests/test_match_paths_regression.py:2364`; `tests/test_match_paths_regression.py:251`; `tests/test_match_paths_regression.py:2511`; `tests/test_match_paths_regression.py:2535`; `tests/test_match_paths_regression.py:2551`; `tests/test_match_paths_regression.py:2664`; `tests/test_match_paths_regression.py:271`; `tests/test_match_paths_regression.py:2743`; `tests/test_match_paths_regression.py:2774`; `tests/test_match_paths_regression.py:2803`; `tests/test_match_paths_regression.py:2841`; `tests/test_match_paths_regression.py:2872`; `tests/test_match_paths_regression.py:289`; `tests/test_match_paths_regression.py:2902`; `tests/test_match_paths_regression.py:372`; `tests/test_match_paths_regression.py:411`; `tests/test_match_paths_regression.py:450`; `tests/test_match_paths_regression.py:487`; `tests/test_match_paths_regression.py:519`; `tests/test_match_paths_regression.py:560`; `tests/test_match_paths_regression.py:575`; `tests/test_match_paths_regression.py:602`; `tests/test_match_paths_regression.py:623`; `tests/test_match_paths_regression.py:647`; `tests/test_match_paths_regression.py:671`; `tests/test_match_paths_regression.py:692`; `tests/test_match_paths_regression.py:727`; `tests/test_match_paths_regression.py:819`; `tests/test_match_paths_regression.py:952`; `tests/test_storyteller_match_flow.py:163`; `tests/test_suggestions_auto_match.py:508`; `tests/test_suggestions_auto_match.py:538`; `tests/test_suggestions_auto_match.py:560`; `tests/test_suggestions_auto_match.py:586`; `tests/test_suggestions_auto_match.py:616`; `tests/test_suggestions_auto_match.py:654`; `tests/test_suggestions_auto_match.py:679`; `tests/test_suggestions_auto_match.py:708`; `tests/test_suggestions_redesign_api.py:290`; `tests/test_webserver.py:1122`. Potential destination repoints for in-cluster callers: `_compute_storyteller_trilink_kosync_id`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+#### C02 — Session and authentication helpers
+
+**Current members:** `current_user` (601–615), `admin_required` (1223–1237), `_safe_next_url` (1240–1254), `_trusted_proxy_networks` (1260–1285), `_remote_auth_peer_trusted` (1288–1306), `_remote_auth_user` (1309–1336), `_establish_session_and_redirect` (1339–1349).
+
+**Target:** `src/web/session_auth.py (existing src/web/auth.py is the route guard adapter; avoid replacing it)`. **Constants moving:** none. **Bindings staying:** `_LOOPBACK_PROXY_NETWORKS`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** `tests/test_bookfusion_upload.py:524` current_user (assign); `tests/test_bookfusion_upload.py:747` current_user (assign); `tests/test_bookfusion_upload.py:789` current_user (assign); `tests/test_bookfusion_upload.py:837` current_user (assign); `tests/test_bookfusion_upload.py:918` current_user (assign).
+
+**`current_user`:** `tests/test_anomaly_bookfusion_hash_validation.py:63`; `tests/test_dashboard_cover_url_exposure.py:275`; `tests/test_suggestions_discovery_lifecycle.py:227`; `tests/test_suggestions_redesign_api.py:82`; `tests/test_suggestions_review_fixes.py:129`. Potential destination repoints for in-cluster callers: `admin_required`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+#### C03 — ABS form and user client resolution
+
+**Current members:** `get_audiobooks_conditionally` (523–543), `_normalize_abs_form_value` (546–554), `_display_abs_server` (557–561), `_UnavailableClient` (717–719), `_GlobalClients` (725–753), `uc` (770–798), `_scan_user_clients` (801–809), `_acting_user_may_use_global_config` (812–818), `_client_bundle_kwargs` (821–825), `_optional_client_configured` (828–836).
+
+**Target:** `src/web/user_clients.py`. **Constants moving:** none. **Bindings staying:** `_active_bundle`, `_global_clients`, `container`, `database_service`.
+
+**Global rebinding / module-self blockers:** none.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** `tests/test_bookfusion_upload.py:574` uc (assign); `tests/test_bookfusion_upload.py:758` uc (assign); `tests/test_bookfusion_upload.py:771` uc (assign); `tests/test_bookfusion_upload.py:800` uc (assign); `tests/test_bookfusion_upload.py:813` uc (assign); `tests/test_bookfusion_upload.py:864` uc (assign); `tests/test_bookfusion_upload.py:891` uc (assign); `tests/test_bookfusion_upload.py:935` uc (assign); `tests/test_bookfusion_upload.py:960` uc (assign); `tests/test_bookfusion_upload.py:1173` uc (assign); `tests/test_bookfusion_upload.py:1184` uc (assign); `tests/test_bookfusion_upload.py:1191` uc (assign); `tests/test_bookfusion_upload.py:1201` uc (assign); `tests/test_bookfusion_upload.py:1216` uc (assign); `tests/test_bookfusion_upload.py:1231` uc (assign); `tests/test_bookfusion_upload.py:1242` uc (assign); `tests/test_bookfusion_upload.py:1256` uc (assign); `tests/test_suggestions_review_fixes.py:125` _global_clients (assign); `tests/test_suggestions_review_fixes.py:141` _global_clients (assign).
+
+**`get_audiobooks_conditionally`:** `tests/test_kosync_server.py:892`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`uc`:** `tests/test_acquisition_bookorbit.py:138`; `tests/test_acquisition_bookorbit.py:527`; `tests/test_acquisition_job_actions.py:28`; `tests/test_acquisition_release_picker.py:240`; `tests/test_acquisition_shelfmark.py:121`; `tests/test_acquisition_shelfmark.py:39`; `tests/test_anomaly_bookfusion_hash_validation.py:101`; `tests/test_anomaly_bookfusion_hash_validation.py:66`; `tests/test_anomaly_regressions.py:106`; `tests/test_bookfusion_integration.py:368`; `tests/test_bookorbit_match_hash.py:108`; `tests/test_bookorbit_match_hash.py:137`; `tests/test_bookorbit_match_hash.py:155`; `tests/test_bookorbit_match_hash.py:50`; `tests/test_bookorbit_match_hash.py:70`; `tests/test_bookorbit_match_hash.py:88`; `tests/test_bookorbit_suggestion_title_pairing.py:48`; `tests/test_bookorbit_suggestion_title_pairing.py:64`; `tests/test_bookorbit_suggestion_title_pairing.py:77`; `tests/test_cache_deletion_guard.py:193`; `tests/test_cross_user_mapping_guard.py:228`; `tests/test_cwa_on_demand_exact_id.py:127`; `tests/test_cwa_on_demand_exact_id.py:149`; `tests/test_cwa_on_demand_exact_id.py:169`; `tests/test_dashboard_bookorbit_author.py:101`; `tests/test_dashboard_bookorbit_author.py:106`; `tests/test_dashboard_bookorbit_author.py:112`; `tests/test_dashboard_bookorbit_author.py:118`; `tests/test_dashboard_bookorbit_author.py:94`; `tests/test_dashboard_perf.py:54`; `tests/test_discover_open_to_readers.py:125`; `tests/test_discover_open_to_readers.py:136`; `tests/test_discover_open_to_readers.py:57`; `tests/test_discover_open_to_readers.py:65`; `tests/test_kosync_server.py:891`; `tests/test_library_hidden_folders.py:47`; `tests/test_library_hidden_folders.py:60`; `tests/test_linkable_ebook_search.py:161`; `tests/test_linkable_ebook_search.py:71`; `tests/test_linkable_ebook_search.py:87`; `tests/test_readalong_api_delivery.py:244`; `tests/test_readalong_api_delivery.py:257`; `tests/test_readalong_epub_action.py:322`; `tests/test_readalong_epub_action.py:340`; `tests/test_readalong_epub_action.py:356`; `tests/test_readalong_epub_action.py:375`; `tests/test_readalong_epub_action.py:386`; `tests/test_readalong_epub_action.py:493`; `tests/test_readalong_epub_action.py:539`; `tests/test_readalong_epub_action.py:566`; `tests/test_readalong_epub_action.py:579`; `tests/test_readalong_epub_action.py:597`; `tests/test_readalong_epub_action.py:627`; `tests/test_settings_live_save.py:181`; `tests/test_shelf_require_alignment.py:46`; `tests/test_shelf_require_alignment.py:64`; `tests/test_shelf_watch_throttle_cleared_on_delete.py:193`; `tests/test_storyteller_519.py:355`; `tests/test_storyteller_519.py:438`; `tests/test_storyteller_519.py:671`; `tests/test_storyteller_519.py:686`; `tests/test_storyteller_519.py:759`; `tests/test_storyteller_519.py:788`; `tests/test_storyteller_519.py:843`; `tests/test_storyteller_519.py:851`; `tests/test_storyteller_artifact_audio_strip.py:82`; `tests/test_suggestions_discovery_lifecycle.py:224`; `tests/test_suggestions_discovery_lifecycle.py:55`; `tests/test_suggestions_exclude_local.py:103`; `tests/test_suggestions_exclude_local.py:143`; `tests/test_suggestions_exclude_local.py:231`; `tests/test_suggestions_redesign_api.py:287`; `tests/test_suggestions_redesign_api.py:363`; `tests/test_suggestions_review_fixes.py:227`; `tests/test_suggestions_review_fixes.py:47`; `tests/test_suggestions_scan_queue.py:34`; `tests/test_suggestions_search_tab.py:112`; `tests/test_suggestions_search_tab.py:123`; `tests/test_suggestions_search_tab.py:152`; `tests/test_suggestions_search_tab.py:181`; `tests/test_suggestions_search_tab.py:190`; `tests/test_suggestions_search_tab.py:198`; `tests/test_suggestions_search_tab.py:207`; `tests/test_suggestions_search_tab.py:250`; `tests/test_suggestions_search_tab.py:67`; `tests/test_suggestions_search_tab.py:87`; `tests/test_suggestions_search_tab.py:99`. Potential destination repoints for in-cluster callers: `get_audiobooks_conditionally`, `_scan_user_clients`; keep or double-patch facade callers as needed. Prove every retained/repointed site with the original raising.
+
+**`_scan_user_clients`:** `tests/test_suggestions_catalog_completeness.py:315`; `tests/test_suggestions_search_tab.py:217`; `tests/test_suggestions_search_tab.py:262`; `tests/test_ui_new_current_chapter.py:197`; `tests/test_ui_new_current_chapter.py:225`; `tests/test_ui_new_current_chapter.py:243`; `tests/test_ui_new_current_chapter.py:257`; `tests/test_ui_new_current_chapter.py:271`; `tests/test_ui_new_current_chapter.py:281`; `tests/test_ui_new_current_chapter.py:286`; `tests/test_ui_new_discover.py:115`; `tests/test_ui_new_discover.py:126`; `tests/test_ui_new_discover.py:142`; `tests/test_ui_new_discover.py:154`; `tests/test_ui_new_discover.py:165`; `tests/test_ui_new_discover.py:51`; `tests/test_ui_new_discover.py:59`; `tests/test_ui_new_discover.py:95`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+#### C01 — Request UI, locale and template context
+
+**Current members:** `_normalize_locale` (630–635), `translations_dir` (638–649), `available_locales` (652–681), `locale_display_name` (687–694), `get_locale` (697–714), `_request_wants_json` (990–997), `inject_csrf_script` (1143–1163), `gzip_html_response` (1166–1190), `_bind_request_user_context` (1193–1211), `_release_request_user_context` (1214–1220), `ui_template` (1445–1455), `inject_global_vars` (1459–1537).
+
+**Target:** `src/web/request_context.py`. **Constants moving:** none. **Bindings staying:** `_BASE_LOCALE`, `_CSRF_BOOTSTRAP_TEMPLATE`, `available_locales`, `database_service`.
+
+**Global rebinding / module-self blockers:** translations_dir: ['__file__:648'].
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** none confirmed.
+
+**Patched moved names / expected repoints:** none in the analyzer; per-name grep still required before moving.
+
+#### C04 — Background task spawn and tracker automatch
+
+**Current members:** `_tracker_automatch_worker` (851–877), `_enqueue_tracker_automatch` (880–901), `_visible_batch_items` (904–910), `_spawn_user_background` (913–987).
+
+**Target:** `src/web/background_tasks.py`. **Constants moving:** none. **Bindings staying:** `_BACKGROUND_TASKS_SYNCHRONOUS`, `_TRACKER_AUTOMATCH_QUEUE`, `_VISIBLE_BATCHES`, `_VISIBLE_BATCH_LABELS`, `_VISIBLE_BATCH_LOCK`, `_active_bundle`, `_tracker_automatch_worker_lock`, `_tracker_automatch_worker_started`.
+
+**Global rebinding / module-self blockers:** _tracker_automatch_worker_started.
+
+**Test assignment/mutation sites (retain state; audit callable assignments):** `tests/test_deferred_automatch.py:128` _BACKGROUND_TASKS_SYNCHRONOUS (assign); `tests/test_deferred_automatch.py:131` _BACKGROUND_TASKS_SYNCHRONOUS (assign); `tests/test_deferred_automatch.py:137` _BACKGROUND_TASKS_SYNCHRONOUS (assign); `tests/test_job_queue_view.py:126` _VISIBLE_BATCHES (in-place); `tests/test_job_queue_view.py:689` _VISIBLE_BATCHES (in-place); `tests/test_job_queue_view.py:756` _VISIBLE_BATCHES (in-place); `tests/test_job_queue_view.py:760` _VISIBLE_BATCHES (in-place); `tests/test_suggestions_feature.py:238` _BACKGROUND_TASKS_SYNCHRONOUS (assign); `tests/test_suggestions_feature.py:241` _BACKGROUND_TASKS_SYNCHRONOUS (assign).
+
+**`_enqueue_tracker_automatch`:** `tests/test_match_paths_regression.py:529`; `tests/test_match_paths_regression.py:563`; `tests/test_suggestions_redesign_api.py:288`; `tests/test_suggestions_review_fixes.py:48`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
+**`_spawn_user_background`:** `tests/test_dashboard_perf.py:55`; `tests/test_global_service_gate.py:341`; `tests/test_match_paths_regression.py:1086`; `tests/test_match_paths_regression.py:1170`; `tests/test_match_paths_regression.py:1200`; `tests/test_match_paths_regression.py:564`; `tests/test_match_paths_regression.py:917`; `tests/test_multiuser_auth.py:1430`; `tests/test_readalong_epub_action.py:155`; `tests/test_readalong_epub_action.py:166`; `tests/test_readalong_epub_action.py:208`; `tests/test_readalong_epub_action.py:233`; `tests/test_readalong_epub_action.py:252`; `tests/test_readalong_epub_action.py:258`; `tests/test_readalong_epub_action.py:264`; `tests/test_readalong_epub_action.py:275`; `tests/test_readalong_epub_action.py:288`; `tests/test_readalong_epub_action.py:303`; `tests/test_storyteller_519.py:416`; `tests/test_suggestions_search_tab.py:100`; `tests/test_suggestions_search_tab.py:113`; `tests/test_suggestions_search_tab.py:124`; `tests/test_suggestions_search_tab.py:251`; `tests/test_ui_new_discover.py:155`; `tests/test_ui_new_discover.py:166`. Keep facade targets: no in-cluster direct caller currently found. Prove every retained/repointed site with the original raising.
+
 ## Slice 4b step 5 — implementation record (2026-11-13)
 
 Claude direct, low-hanging batch (no in-cluster patch bypasses, no test assignments). Branch `refactor/architecture-4b-step5` off `b602986c`: C12 `5fc72d84` → `src/web/mapping_status.py` (4), C18 `f4aee476` → `src/web/dashboard_metadata.py` (25 + `SERIES_PREVIEW_LIMIT`), C25 `1c5c56ea` → `src/web/match_queue_items.py` (6), C17 `9d67c233` → `src/web/mapping_creation.py` (6; `_FOREIGN_MAPPING_MESSAGE`/`_LIBRARY_AUDIO_SOURCES` stay). Source-reading tests `9f8437c0`: `test_ui_new_library` `section_bucket` now reads `dashboard_metadata.py`; `test_mapping_merge_coverage` SOURCES also scans `src/web/*.py` (still 3 checked writers, two now in `mapping_creation.py`; without this the move silently dropped them). Move-check 41/41 identical, name-check 0. Raising-original proofs: every test that patches a moved name on `src.web_server` still passes (callers stay in web_server or call via `web.`). Full **7906 passed / 15 skipped / 0 failures** (RC 0). Merge `852a6328`, restarted 03:38Z, 0 startup Traceback/ERROR; live before/after identical (step 2 probe + dashboard card/series/author/title attributes and 40 book pages, admin and reader). C12/C17/C25 write mappings: not exercised live. `web_server.py` 10,029 → 8,566.

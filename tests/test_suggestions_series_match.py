@@ -197,7 +197,7 @@ def test_a_series_match_needs_the_same_author(library):
 def test_scan_records_carry_the_audiobook_series():
     item = AudioResult(source="ABS", source_id="abs-1", title="My Struggle, Book 3",
                        series_label="My Struggle #3", authors=AUTHOR)
-    with patch.object(web_server, "get_searchable_audiobooks", return_value=[item]), \
+    with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", return_value=[item]), \
             patch.object(web_server, "_browser_cover_url", return_value=""):
         records = web_server.get_suggestion_audiobooks()
     assert records[0]["audio_series"] == "My Struggle #3"

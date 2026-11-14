@@ -163,7 +163,7 @@ class TestLocalVisibility(SearchTabBase):
         self.assertIsNone(self.web._resolve_suggestions_redesign_ebook_create(entry))
 
     def test_regular_user_local_index_is_not_built(self):
-        with patch.object(self.web, "_build_local_ebook_title_index", return_value={}) as build:
+        with patch("src.web.suggestions_ebook_catalog._build_local_ebook_title_index", return_value={}) as build:
             self._as(self.reg)
             self._discover()
             self.web.get_searchable_ebooks("")
@@ -182,7 +182,7 @@ class TestLocalVisibility(SearchTabBase):
         )
         self._as(self.reg)
         with patch.object(self.web, "uc", return_value=clients), \
-                patch.object(self.web, "_build_local_ebook_title_index") as build:
+                patch("src.web.suggestions_ebook_catalog._build_local_ebook_title_index") as build:
             found, _inventory, _states = self._discover()
             build.assert_not_called()
             self.assertEqual([(b.name, b.source, b.source_id) for b in found], [("Local Title.epub", "BookOrbit", 9)])

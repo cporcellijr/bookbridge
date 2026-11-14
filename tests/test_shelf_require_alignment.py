@@ -251,7 +251,7 @@ class TestOtherShelvingPathsDefer:
         book = required.book()
         reader, client = required.user("reader")
         required.acting_as(reader)
-        monkeypatch.setattr(web_server, "_shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))
+        monkeypatch.setattr("src.web.shelf_watch_service._shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))
 
         assert web_server._complete_shelf_watch_approval({"grimmory_filename": "a1.epub"}, book=book)
 
@@ -262,7 +262,7 @@ class TestOtherShelvingPathsDefer:
     def test_shelf_watch_approval_moves_when_off(self, shelving, monkeypatch):
         book = shelving.book()
         client = shelving.global_client
-        monkeypatch.setattr(web_server, "_shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))
+        monkeypatch.setattr("src.web.shelf_watch_service._shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))
 
         assert web_server._complete_shelf_watch_approval({"grimmory_filename": "a1.epub"}, book=book)
 
