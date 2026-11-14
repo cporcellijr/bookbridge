@@ -1,6 +1,6 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Slice 4 steps 1–6 complete (… BookFusion, Admin Maintenance, Book Page, Admin Users, Account, Me → `src/web/routes/`), integrated, restarted, live-verified. `web_server.py` 15,089 lines. Next: step 7.**
+Updated: 2026-11-13. **Slice 4 steps 1–7 complete (… BookFusion, Admin Maintenance, Book Page, Admin Users, Account, Me, Suggestions, Processing, Book Actions, Matching → `src/web/routes/`), integrated, restarted, live-verified. `web_server.py` 13,510 lines. Next: step 8 (Settings + system routes + index), then step 9 (login/logout/setup).**
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
@@ -29,6 +29,7 @@ Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITEC
 | 4.4 BookFusion, Admin Maintenance, Book Page | `e6ac8b86`..`d62112fa` |
 | 4.5 Admin Users | `845c954f` |
 | 4.6 Account, Me API | `731a504b`, `09611792` |
+| 4.7 Suggestions, Processing, Book Actions, Matching | `36bf0532`..`749dcad3`; fixes `092e3691`, `c32404ce`, `76067f90` |
 
 All are on local dev and deployed. HEAD may be a documentation-only successor; verify actual Git state before new work. Nothing was pushed.
 
@@ -47,4 +48,4 @@ Offline evidence: implementation worktree `.local-review-notes/architecture-phas
 
 ## Next action
 
-Order changed by Claude 2026-11-13 (owner: "however you think best"): slice 4 (`web_server.py`, 17.4k lines, the largest debt) before slice 3. Continue slice 4 one route group per commit with the step-1 pattern: `src/web/routes/<group>.py` exposing `register(app, web_module)`, `app.add_url_rule` (no Blueprints, endpoint names unchanged), runtime state reached via `web = _web_server()` because production runs `web_server.py` as `__main__`, compatibility re-exports in `web_server.py`. Evidence per step: `.local-review-notes/architecture-phase4/move_check.py --route-modules ...` (AST identical) AND `name_check.py <modules>` (no unprefixed web_server globals; every `web.X` exists), url_map diff, response capture. DevSpace implements and commits in the worktree; Claude re-runs the full suite (DevSpace often hits the suite lock; read the PYTHON exit code, not a trailing echo's), reviews, integrates, restarts, live-verifies. Then slice 3 (Library/Discover behavior matrix), 5, 6, 7.
+Order changed by Claude 2026-11-13 (owner: "however you think best"): slice 4 (`web_server.py`, 17.4k lines, the largest debt) before slice 3. Continue slice 4 one route group per commit with the step-1 pattern: `src/web/routes/<group>.py` exposing `register(app, web_module)`, `app.add_url_rule` (no Blueprints, endpoint names unchanged), runtime state reached via `web = _web_server()` because production runs `web_server.py` as `__main__`, compatibility re-exports in `web_server.py`. Evidence per step: `.local-review-notes/architecture-phase4/move_check.py --route-modules ...` (AST identical) AND `name_check.py <modules>` (no unprefixed web_server globals; every `web.X` exists; no MODULE-SELF uses such as `sys.modules[__name__]`, `__file__` or bare `globals()`, which change meaning once moved), url_map diff, response capture. Any test that reads `web_server.py` source must also scan `src/web/routes/` (or it fails, or passes vacuously, after the move). Plain `register(app, web_module)` with one rules tuple; no `phase=` ordering. DevSpace implements and commits in the worktree; Claude re-runs the full suite (DevSpace often hits the suite lock; read the PYTHON exit code, not a trailing echo's), reviews, integrates, restarts, live-verifies. Then slice 3 (Library/Discover behavior matrix), 5, 6, 7.
