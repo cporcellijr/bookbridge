@@ -15,25 +15,18 @@ def _web_server():
     return import_module("src.web_server")
 
 
-def register(app: Any, web_module: Any, phase: str) -> None:
+def register(app: Any, web_module: Any) -> None:
     """Register Suggestions endpoints without changing their Flask names."""
     global _WEB_MODULE
     _WEB_MODULE = web_module
-    rules_by_phase = {
-        'page': (
-            ('/suggestions', 'suggestions', suggestions_page, ['GET', 'POST']),
-        ),
-        'api_read': (
-            ('/api/suggestions', 'get_suggestions', get_suggestions, ['GET']),
-            ('/api/suggestions/scan-status', 'suggestions_scan_status', suggestions_scan_status, ['GET']),
-        ),
-        'api_action': (
-            ('/api/suggestions/<source_id>/dismiss', 'dismiss_suggestion', dismiss_suggestion, ['POST']),
-            ('/api/suggestions/<source_id>/ignore', 'ignore_suggestion', ignore_suggestion, ['POST']),
-            ('/api/suggestions/clear_stale', 'clear_stale_suggestions', clear_stale_suggestions, ['POST']),
-        ),
-    }
-    rules = rules_by_phase[phase]
+    rules = (
+        ('/suggestions', 'suggestions', suggestions_page, ['GET', 'POST']),
+        ('/api/suggestions', 'get_suggestions', get_suggestions, ['GET']),
+        ('/api/suggestions/scan-status', 'suggestions_scan_status', suggestions_scan_status, ['GET']),
+        ('/api/suggestions/<source_id>/dismiss', 'dismiss_suggestion', dismiss_suggestion, ['POST']),
+        ('/api/suggestions/<source_id>/ignore', 'ignore_suggestion', ignore_suggestion, ['POST']),
+        ('/api/suggestions/clear_stale', 'clear_stale_suggestions', clear_stale_suggestions, ['POST']),
+    )
     for rule, endpoint, view, methods in rules:
         if methods is None:
             app.add_url_rule(rule, endpoint, view)
@@ -181,9 +174,9 @@ def suggestions_page():
                 from src.api.suggestions_redesign import _current_inputs, _project
 
                 user_id = web.get_current_user_id()
-                persisted, mapped, queue, ignored = _current_inputs(web.sys.modules[__name__], user_id)
+                persisted, mapped, queue, ignored = _current_inputs(web, user_id)
                 projection = _project(
-                    web.sys.modules[__name__], persisted, mapped, queue, ignored,
+                    web, persisted, mapped, queue, ignored,
                     tab='ebook_only', filters={}, sort='series',
                 )
                 if web.request.form.get('generation') != str(projection.get('generation')):
