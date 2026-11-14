@@ -710,33 +710,13 @@ _tracker_automatch_worker_started = False
 _tracker_automatch_worker_lock = threading.Lock()
 
 
-def _tracker_automatch_worker():
-    while True:
-        sync_clients, book = _TRACKER_AUTOMATCH_QUEUE.get()
-        try:
-            abs_id = getattr(book, "abs_id", "?")
-            hardcover = sync_clients.get("Hardcover")
-            if hardcover and hardcover.is_configured():
-                try:
-                    hardcover._automatch_hardcover(book)
-                except Exception as e:
-                    logger.warning("Deferred Hardcover automatch failed for '%s': %s", abs_id, e, exc_info=True)
-            storygraph = sync_clients.get("StoryGraph")
-            if storygraph and storygraph.is_configured():
-                try:
-                    storygraph._automatch_storygraph(book)
-                except Exception as e:
-                    logger.warning("Deferred StoryGraph automatch failed for '%s': %s", abs_id, e, exc_info=True)
-            goodreads = sync_clients.get("Goodreads")
-            if goodreads and goodreads.is_configured():
-                try:
-                    goodreads._automatch(book)
-                except Exception as e:
-                    logger.warning("Deferred Goodreads automatch failed for '%s': %s", abs_id, e, exc_info=True)
-        except Exception as e:
-            logger.error("Deferred tracker automatch worker error: %s", e, exc_info=True)
-        finally:
-            _TRACKER_AUTOMATCH_QUEUE.task_done()
+from src.web import background_tasks as _background_tasks
+_background_tasks._WEB_MODULE = sys.modules[__name__]
+from src.web.background_tasks import (
+    _tracker_automatch_worker,
+    _visible_batch_items,
+    _spawn_user_background,
+)
 
 
 def _enqueue_tracker_automatch(sync_clients, book):
@@ -761,92 +741,6 @@ def _enqueue_tracker_automatch(sync_clients, book):
             threading.Thread(target=_tracker_automatch_worker, daemon=True, name="tracker-automatch").start()
             _tracker_automatch_worker_started = True
     _TRACKER_AUTOMATCH_QUEUE.put((snapshot, book))
-
-
-def _visible_batch_items(items, token):
-    """Expose which submitted batch item is being handed off to a worker."""
-    for idx, item in enumerate(items):
-        with _VISIBLE_BATCH_LOCK:
-            if token in _VISIBLE_BATCHES:
-                _VISIBLE_BATCHES[token]['current'] = idx
-        yield item
-
-
-def _spawn_user_background(fn, *args, label="background"):
-    """Run `fn(*args)` on a daemon thread with the request's user context re-bound.
-
-    Batch-match processing (artifact downloads, hash, transcript ingest, save,
-    collection/shelf) is slow and N×, but none of it needs the response. We capture
-    the active bundle + ambient user id/credentials in the request and re-bind them in
-    the worker so `uc()` / `user_setting` / DB ownership resolve for the same user
-    off-thread (a worker thread has no Flask request context). Errors are logged.
-
-    In test mode (`create_app(test_container=...)`) it runs inline so integration
-    tests observe the side effects right after the request — the request context is
-    still active there, so `uc()` resolves normally without the re-bind.
-    """
-    batch_token = None
-    if label in _VISIBLE_BATCH_LABELS and args and isinstance(args[0], list) and args[0]:
-        owner = current_user()
-        batch_token = uuid.uuid4().hex
-        # Only retain display metadata, never file paths or service credentials.
-        safe_items = [
-            {key: item.get(key) for key in (
-                'abs_id', 'abs_title', 'audio_title', 'title', 'readalong_epub_requested'
-            )} for item in args[0]
-        ]
-        with _VISIBLE_BATCH_LOCK:
-            _VISIBLE_BATCHES[batch_token] = {
-                'user_id': owner.id if owner else None,
-                'label': _VISIBLE_BATCH_LABELS[label],
-                'items': safe_items,
-                'current': -1,
-            }
-        args = (_visible_batch_items(args[0], batch_token), *args[1:])
-
-    def finish_visible_batch():
-        if batch_token is not None:
-            with _VISIBLE_BATCH_LOCK:
-                _VISIBLE_BATCHES.pop(batch_token, None)
-
-    if _BACKGROUND_TASKS_SYNCHRONOUS:
-        try:
-            fn(*args)
-        except Exception as e:
-            logger.error("%s failed: %s", label, e, exc_info=True)
-        finally:
-            finish_visible_batch()
-        return
-
-    bundle = uc()
-    try:
-        user = current_user()
-        user_id = user.id if user is not None else None
-    except Exception:
-        user_id = None
-    if user_id is None:
-        user_id = get_current_user_id()
-    creds = get_current_user_credentials()
-
-    def runner():
-        tok_bundle = _active_bundle.set(bundle)
-        tok_uid = set_current_user_id(user_id)
-        tok_creds = set_current_user_credentials(creds)
-        try:
-            fn(*args)
-        except Exception as e:
-            logger.error("%s failed: %s", label, e, exc_info=True)
-        finally:
-            reset_current_user_credentials(tok_creds)
-            reset_current_user_id(tok_uid)
-            _active_bundle.reset(tok_bundle)
-            finish_visible_batch()
-
-    try:
-        threading.Thread(target=runner, daemon=True, name=label).start()
-    except Exception:
-        finish_visible_batch()
-        raise
 
 
 def require_login_guard():
