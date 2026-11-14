@@ -34,7 +34,7 @@
 
 Worktree: `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-4b6`; branch `refactor/architecture-4b-step6`; baseline `17f11eb8` (8,566 lines). No integration, push, restart or live access; Claude integrates and writes BRANCH_STATUS. Deployment requirement: **restart**.
 
-**Checkpoint handoff:** task 10 integrated. Next: step 6 wrap-up (Claude).
+**Checkpoint handoff:** step 6 complete (2026-11-14). All movable clusters extracted; `web_server.py` 8,566 → 2,411 lines over CP1–CP19, test delta 0, every task restarted and live-verified. Deliberately retained in web_server: C23 (31 lines, no module justified), `_user_may_modify_book` (test assignments), `translations_dir` (`__file__`), cached `available_locales` (`.cache_clear()` in tests), `_enqueue_tracker_automatch` (`global` flag), and all module state.
 
 CP0 reran the ignored analyzer in inventory and `--test-assignments` modes (both exit 0). Its copied legacy inventory generator now skips already-extracted spans and writes only an ignored preview. Current inventory: 20 surviving clusters (including intentionally skipped C23), 198 grouped functions, 3 classes, 19 retained functions. Assignment scan: 461 test files / 755 bindings, 140 assignments / 9 deletions / 56 in-place sites / 987 read-only uses, zero parse failures; 1,240 unresolved candidates are conservative alias/dynamic accesses requiring per-cluster manual review, not confirmed hazards.
 

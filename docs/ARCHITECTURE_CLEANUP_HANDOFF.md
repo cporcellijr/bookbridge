@@ -1,6 +1,6 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Slice 4 routes complete; slice 4b step 2 integrated and live-verified (`db9e78f7`). Slice 4b step 5 (C12/C18/C25/C17) integrated (`852a6328`), restarted, live-verified. `web_server.py` 17,771 → 8,566 lines overall. 4b paused after the low-hanging clusters. Audit slice 3 done (Discover `a98d97e4`, Library `d05d450c`). Slice 5 complete (`ff8d8e7a`, `cb44405d`), restarted, live-verified; `database_service.py` 7,897 → 979. Slices 6 and 7 closed. through task 1 integrated; next: task 2 (C22, C24) via DevSpace.**
+Updated: 2026-11-14. **Architecture cleanup complete.** Slices 0–5 done, restarted and live-verified; slices 6 and 7 closed with no code change. `web_server.py` 17,771 → 2,411 lines overall (4b step 6: 8,566 → 2,411 across CP1–CP19, test delta 0); `database_service.py` 7,897 → 979. All on local `dev`, not pushed.
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
@@ -63,7 +63,9 @@ Offline evidence: implementation worktree `.local-review-notes/architecture-phas
 
 ## Next action
 
-**4b step 6 task 10 done.** C04 background spawn moved (3/3 AST-identical; `_enqueue_tracker_automatch` kept for its `global` flag and starts the re-exported worker); web_server.py 2,517 → 2,411; suite 7906/15/0. **Next:** step 6 wrap-up (Claude).
+**Architecture cleanup complete (2026-11-14).** Slices 0–5 done, 6 and 7 closed with no code change. Slice 4b step 6 ended with `web_server.py` at 2,411 lines (from 8,566 at the step 6 baseline) across 19 checkpoints, test delta 0, each restarted and live-verified. Nothing is pushed; `dev` holds all of it. No further slice is scheduled.
+
+**Previous:** **4b step 6 task 10 done.** C04 background spawn moved (3/3 AST-identical; `_enqueue_tracker_automatch` kept for its `global` flag and starts the re-exported worker); web_server.py 2,517 → 2,411; suite 7906/15/0. **Next:** step 6 wrap-up (Claude).
 
 **Previous:** **4b step 6 task 9 done.** C01 request/locale/template hooks moved (10/10 AST-identical; `translations_dir` (`__file__`) and lru-cached `available_locales` kept in web_server; `get_locale`/`inject_global_vars` call `web.current_user()`); web_server.py 2,723 → 2,517; suite 7906/15/0. **Next:** task 10 (C04) via DevSpace.
 
