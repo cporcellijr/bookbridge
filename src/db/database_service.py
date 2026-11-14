@@ -69,7 +69,6 @@ from src.utils.time_utils import utcnow
 logger = logging.getLogger(__name__)
 
 # Default for adopt_kosync_document_if_unowned: None is a real owner (no user).
-_ANY_USER = object()
 
 # Reading-session buffer delivery destinations, mapped to the status column each
 # one owns. A buffered session is delivered to these independently, so one being
@@ -94,36 +93,22 @@ _READING_SESSION_DESTINATIONS = {
 # cannot change the manifest. This matters because the sync cycle and the
 # transcription jobs call save_book constantly to write back routine fields --
 # announcing every one of those rebuilt the whole manifest back to back.
-MANIFEST_RELEVANT_BOOK_FIELDS = (
-    "status",
-    "abs_title",
-    "original_ebook_filename",
-    "ebook_filename",
-    "kosync_doc_id",
-    "sync_mode",
-    "ebook_source",
-    "ebook_source_id",
-)
 
 
-def _manifest_signature(book) -> tuple:
-    """Snapshot the manifest-relevant columns of a book row for change detection."""
-    return tuple(getattr(book, field, None) for field in MANIFEST_RELEVANT_BOOK_FIELDS)
 
 # SQLite limits bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, historically 999).
 # Use 500 to stay well under the cap with room for other query parameters.
-_SQL_IN_CHUNK = 500
 
 _PENDING_SHELF_ADDS_KEY = "BOOKLORE_SHELF_PENDING_ADDS"
 _SHELF_ASSIGNMENTS_KEY = "BOOKLORE_SHELF_ASSIGNMENTS"
 
 
-def _username_key(name: str) -> str:
-    """Unicode-correct comparison key for usernames (SQLite lower() folds ASCII only)."""
-    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", (name or "").strip()).casefold())
 
 
-class DatabaseService:
+from .repositories.tracker_details import TrackerDetailsMixin
+from .repositories._common import MANIFEST_RELEVANT_BOOK_FIELDS, _ANY_USER, _SQL_IN_CHUNK, _manifest_signature, _username_key
+
+class DatabaseService(TrackerDetailsMixin):
     """
     Unified SQLAlchemy-based database service providing direct model operations.
 
@@ -3852,116 +3837,14 @@ class DatabaseService:
             }
 
     # HardcoverDetails operations
-    def get_hardcover_details(self, abs_id: str) -> Optional[HardcoverDetails]:
-        """Get hardcover details for a book."""
-        with self.get_session() as session:
-            details = session.query(HardcoverDetails).filter(HardcoverDetails.abs_id == abs_id).first()
-            if details:
-                session.expunge(details)
-            return details
 
-    def save_hardcover_details(self, details: HardcoverDetails) -> HardcoverDetails:
-        """Save or update hardcover details."""
-        with self.get_session() as session:
-            existing = session.query(HardcoverDetails).filter(HardcoverDetails.abs_id == details.abs_id).first()
 
-            if existing:
-                # Update existing details
-                for attr in ['hardcover_book_id', 'hardcover_slug', 'hardcover_edition_id', 'hardcover_pages',
-                           'hardcover_audio_seconds', 'isbn', 'asin', 'matched_by']:
-                    if hasattr(details, attr):
-                        new_value = getattr(details, attr)
-                        if new_value is None and getattr(existing, attr) is not None:
-                            continue
-                        setattr(existing, attr, new_value)
-                session.flush()
-                session.refresh(existing)
-                session.expunge(existing)
-                return existing
-            else:
-                # Create new details
-                session.add(details)
-                session.flush()
-                session.refresh(details)
-                session.expunge(details)
-                return details
 
-    def delete_hardcover_details(self, abs_id: str) -> bool:
-        """Delete hardcover details for a book."""
-        with self.get_session() as session:
-            details = session.query(HardcoverDetails).filter(HardcoverDetails.abs_id == abs_id).first()
-            if details:
-                session.delete(details)
-                return True
-            return False
-
-    def get_all_hardcover_details(self) -> List[HardcoverDetails]:
-        """Get all hardcover details."""
-        with self.get_session() as session:
-            details = session.query(HardcoverDetails).all()
-            for detail in details:
-                session.expunge(detail)
-            return details
 
     # StorygraphDetails operations
-    def get_storygraph_details(self, abs_id: str) -> Optional[StorygraphDetails]:
-        """Get StoryGraph details for a book."""
-        with self.get_session() as session:
-            details = session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == abs_id).first()
-            if details:
-                session.expunge(details)
-            return details
 
-    def save_storygraph_details(self, details: StorygraphDetails) -> StorygraphDetails:
-        """Save or update StoryGraph details."""
-        with self.get_session() as session:
-            existing = session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == details.abs_id).first()
 
-            if existing:
-                for attr in [
-                    'storygraph_book_id',
-                    'storygraph_url',
-                    'storygraph_edition_id',
-                    'storygraph_pages',
-                    'storygraph_rating',
-                    'storygraph_review_count',
-                    'storygraph_rating_updated_at',
-                    'isbn',
-                    'asin',
-                    'matched_by',
-                ]:
-                    if hasattr(details, attr):
-                        new_value = getattr(details, attr)
-                        if new_value is None and getattr(existing, attr) is not None:
-                            continue
-                        setattr(existing, attr, new_value)
-                session.flush()
-                session.refresh(existing)
-                session.expunge(existing)
-                return existing
 
-            session.add(details)
-            session.flush()
-            session.refresh(details)
-            session.expunge(details)
-            return details
-
-    def delete_storygraph_details(self, abs_id: str) -> bool:
-        """Delete StoryGraph details for a book."""
-        with self.get_session() as session:
-            details = session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == abs_id).first()
-            if details:
-                session.delete(details)
-                return True
-            return False
-
-    def get_all_storygraph_details(self) -> List[StorygraphDetails]:
-        """Get all StoryGraph details."""
-        with self.get_session() as session:
-            details = session.query(StorygraphDetails).all()
-            for detail in details:
-                session.expunge(detail)
-            return details
 
     def get_goodreads_details(self, abs_id: str) -> Optional[GoodreadsDetails]:
         """Get a book's Goodreads link."""
