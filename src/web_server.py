@@ -1363,13 +1363,21 @@ from src.web.routes.account import account, account_language, account_interface,
 
 
 
-def _display_settings_for(user) -> dict:
-    """Resolved display settings for ``user`` (server defaults when None), cached for the request."""
-    cached = g.get('display_settings')
-    if cached is None:
-        stored = database_service.get_user_credentials(user.id) if user is not None else {}
-        cached = g.display_settings = resolve_display_settings(stored or {})
-    return cached
+from src.web import account_helpers as _account_helpers
+_account_helpers._WEB_MODULE = sys.modules[__name__]
+from src.web.account_helpers import (
+    _TEST_CONNECTION_FIELDS,
+    _display_settings_for,
+    _apply_user_integrations,
+    _after_user_integrations_saved,
+    _posted_user_test_credentials,
+    _reader_scan_libraries,
+    _invalidate_user_clients,
+    _refresh_user_abs_listener,
+    _after_user_account_changed,
+    _share_library_with_new_user,
+    _share_library_with_returning_user,
+)
 
 
 
@@ -1378,78 +1386,6 @@ def _display_settings_for(user) -> dict:
 # engine's global singletons (shelf-watch, scans, suggestions, ABS socket,
 # manifest). Mirrored to the global settings when the primary admin saves.
 from src.utils.user_config import ENGINE_MIRROR_KEYS as _ENGINE_MIRROR_KEYS
-
-
-def _apply_user_integrations(user_id):
-    """Save the posted per-user integration fields to a user's credential store
-    and invalidate their cached client bundle. Secrets keep-if-blank, text
-    clears-if-blank, toggles save true/false.
-
-    Admin users can inherit master/global settings; regular users require
-    explicit per-user account values so they do not accidentally sync admin
-    libraries.
-    """
-    from src.utils.user_config import PER_USER_FIELD_GROUPS
-    values = {}
-    for _group, fields in PER_USER_FIELD_GROUPS:
-        for key, _label, ftype in fields:
-            if ftype == 'bool':
-                values[key] = 'true' if key in request.form else 'false'
-            elif ftype == 'secret':
-                submitted = request.form.get(key, '')
-                if submitted:  # blank => keep existing secret
-                    values[key] = submitted
-            else:  # text/select: blank clears => inherit master/default
-                values[key] = request.form.get(key, '')
-
-    destination = values.get('SHELFMARK_AUDIOBOOK_LIBRARY_ID', '')
-    saved_destination = str(database_service.get_user_credential(user_id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID', '') or '')
-    if destination:
-        if not destination.isdecimal() or int(destination) <= 0:
-            return 'Audiobook destination library must be a positive BookOrbit library ID.'
-    if destination and destination != saved_destination:
-        # Only a newly chosen destination needs the live check; unrelated edits must not depend on BookOrbit.
-        target = database_service.get_user(user_id)
-        libraries, error = _reader_scan_libraries(target, dict(request.form))
-        if error:
-            return error
-        if not any(str(item.get('id')) == destination for item in libraries):
-            return 'Selected audiobook destination library is not accessible for scanning.'
-    database_service.set_user_credentials(user_id, values)
-    _after_user_integrations_saved(user_id)
-    return None
-
-
-def _after_user_integrations_saved(user_id):
-    """Refresh a user's cached clients after their integrations change, and mirror
-    the primary admin's library-lookup creds to the global settings."""
-    _invalidate_user_clients(user_id)
-
-    # Keep the engine's global config in sync with the primary admin's account.
-    # The global singletons (shelf-watch, library scans, suggestions, the global
-    # ABS socket, manifest) authenticate with the primary admin, so mirror that
-    # admin's library-lookup creds to the global settings. Background features
-    # pick these up on the next restart; the admin's own per-user bundle was
-    # rebuilt by the invalidate above.
-    try:
-        primary_admin_id = database_service._default_user_id()
-    except Exception:
-        primary_admin_id = None
-    if primary_admin_id is not None and user_id == primary_admin_id:
-        for key in _ENGINE_MIRROR_KEYS:
-            val = database_service.get_user_credential(user_id, key)
-            # Blank optional library IDs deliberately remove the global filter;
-            # other blanks keep the configured value/default they inherit.
-            if val or (val == '' and key in {'ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'}):
-                database_service.set_setting(key, val)
-                os.environ[key] = val
-
-    # The user's ABS Socket.IO listener authenticates with their own key, so a
-    # new or rotated key has to reach it: reconnect a running listener, or start
-    # one for an account that only now has a key. This runs after the mirror
-    # above so the primary admin's token still matches the global key and is
-    # not given a second, per-user listener.
-    _refresh_user_abs_listener(user_id)
 
 
 from src.web.routes.admin_users import admin_users, admin_user_integrations, admin_user_test_connection, admin_user_abs_libraries, admin_user_booklore_libraries, admin_user_bookorbit_scan_libraries, admin_user_bookfusion_device_start, admin_user_bookfusion_device_poll
@@ -1472,104 +1408,10 @@ _USER_TEST_SERVICES = {
 }
 
 
-_TEST_CONNECTION_FIELDS = {
-    'abs': ['ABS_SERVER', 'ABS_KEY'],
-    'kosync': [
-        'KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY',
-        'KOSYNC_AUTH_METHOD',
-    ],
-    'storyteller': ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
-    'booklore': ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
-    'bookorbit': ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD', 'BOOKORBIT_API_KEY'],
-    'kavita': ['KAVITA_ENABLED', 'KAVITA_SERVER', 'KAVITA_API_KEY'],
-    'bookfusion': ['BOOKFUSION_ENABLED', 'BOOKFUSION_API_URL', 'BOOKFUSION_ACCESS_TOKEN'],
-    'cwa': ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
-    'readest': ['READEST_ANNOTATION_SYNC', 'READEST_EMAIL', 'READEST_PASSWORD', 'READEST_SUPABASE_URL'],
-    'hardcover': ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
-    'storygraph': ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
-    'goodreads': ['GOODREADS_ENABLED', 'GOODREADS_SESSION_COOKIE', 'GOODREADS_COOKIE_REFRESH_URL', 'GOODREADS_COOKIE_REFRESH_TOKEN', 'GOODREADS_BROWSER_URL'],
-    'shelfmark': ['SHELFMARK_URL', 'SHELFMARK_USER', 'SHELFMARK_PASSWORD'],
-}
-
-
-def _posted_user_test_credentials(target, submitted):
-    """Resolve saved per-user credentials plus unsaved form edits for a test.
-
-    Secret blanks keep the stored value, matching the save form. Regular users
-    do not inherit global account credentials; admin users may.
-    """
-    from src.utils.user_config import (
-        PER_USER_CREDENTIAL_KEYS,
-        PER_USER_FIELD_GROUPS,
-        _ALLOW_GLOBAL_FALLBACK_KEY,
-        resolve_setting,
-    )
-
-    stored = database_service.get_user_credentials(target.id) or {}
-    creds = {k: v for k, v in stored.items() if k in PER_USER_CREDENTIAL_KEYS}
-    creds[_ALLOW_GLOBAL_FALLBACK_KEY] = _global_fallback_allowed(database_service, target)
-
-    field_types = {
-        key: ftype
-        for _group, fields in PER_USER_FIELD_GROUPS
-        for key, _label, ftype in fields
-    }
-    for key, ftype in field_types.items():
-        if key not in submitted:
-            continue
-        if ftype == 'secret' and not submitted.get(key):
-            continue
-        creds[key] = submitted.get(key)
-
-    payload = {}
-    for service_fields in _TEST_CONNECTION_FIELDS.values():
-        for key in service_fields:
-            if key in PER_USER_CREDENTIAL_KEYS:
-                # A connection test validates credentials, so it is not subject to
-                # the install-wide service gate: an admin must be able to check a
-                # user's account before switching the service on for everyone.
-                payload[key] = resolve_setting(creds, key, "", enforce_global_gate=False)
-            else:
-                payload[key] = os.environ.get(key, "")
-    return payload
 
 
 
 
-
-
-
-
-def _reader_scan_libraries(target, submitted):
-    """Read only libraries this reader may actually scan; never use an admin client."""
-    from src.api.bookorbit_client import BookOrbitClient
-    from src.utils.user_config import _ALLOW_GLOBAL_FALLBACK_KEY
-
-    if target is None:
-        return [], "Reader not found."
-    payload = _posted_user_test_credentials(target, submitted)
-    payload[_ALLOW_GLOBAL_FALLBACK_KEY] = _global_fallback_allowed(database_service, target)
-    client = BookOrbitClient(credentials=payload)
-    if not client.is_configured():
-        return [], "Configure this reader's BookOrbit credentials first."
-    libraries = client.get_libraries()
-    if not isinstance(libraries, list) or not libraries:
-        return [], "BookOrbit libraries could not be listed for this reader."
-    allowed = []
-    first_error = None
-    for library in libraries:
-        if not isinstance(library, dict) or str(library.get('id') or '').isdigit() is False:
-            continue
-        _history, error = client.get_scan_history(library['id'], limit=1)
-        if error is None:
-            allowed.append({'id': str(library['id']), 'name': str(library.get('name') or library['id'])})
-        elif first_error is None:
-            first_error = error
-    if not allowed:
-        return [], ('This BookOrbit account needs Manage libraries and library access to start scans.'
-                    if first_error == 'scan_forbidden' else
-                    'BookOrbit scan permissions or libraries could not be verified.')
-    return allowed, None
 
 
 
@@ -1589,57 +1431,6 @@ def _reader_scan_libraries(target, submitted):
 # whole settings form and restarts.
 _USER_ADMIN_ACTIONS = {'create', 'reset_password', 'toggle_active', 'set_role', 'delete', 'share_library'}
 
-
-
-def _invalidate_user_clients(user_id: int) -> None:
-    """Refresh cached credentials and access policy after a user's account changes."""
-    try:
-        container.user_client_registry().invalidate(user_id)
-    except Exception as e:
-        logger.debug("Could not invalidate client bundle for user %s: %s", user_id, e)
-
-
-def _refresh_user_abs_listener(user_id: int) -> None:
-    """Re-evaluate the user's ABS Socket.IO listener after their account or credentials changed."""
-    if abs_socket_manager is None:
-        return
-    try:
-        abs_socket_manager.refresh_user(user_id)
-    except Exception as e:
-        logger.warning("Could not refresh the ABS listener for user %s: %s", user_id, e, exc_info=True)
-
-
-def _after_user_account_changed(user_id: int) -> None:
-    """Apply an enable/disable/role change: refresh cached clients and the user's ABS listener."""
-    _invalidate_user_clients(user_id)
-    _refresh_user_abs_listener(user_id)
-
-
-def _share_library_with_new_user(new_user, returning: bool = False) -> int:
-    """With share-all-books on, a new or re-enabled account starts with the whole
-    library rather than only books matched from now on. Returns the number of
-    books shared."""
-    if not env_truthy('SHARE_ALL_BOOKS_WITH_ALL_USERS'):
-        return 0
-    kind = "re-enabled" if returning else "new"
-    try:
-        linked = database_service.backfill_user_books_for_user(new_user.id)
-        logger.info(
-            "🔗 Shared %d existing book(s) with %s user '%s' (share-all-books enabled)",
-            linked, kind, sanitize_log_data(new_user.username),
-        )
-        return linked
-    except Exception as share_err:
-        logger.warning(
-            "Could not backfill shared books for %s user '%s': %s",
-            kind, sanitize_log_data(new_user.username), share_err, exc_info=True,
-        )
-        return 0
-
-
-def _share_library_with_returning_user(user) -> int:
-    """Share-on-enable for an account that already existed."""
-    return _share_library_with_new_user(user, returning=True)
 
 
 from src.web import admin_actions as _admin_actions
@@ -4347,126 +4138,19 @@ _LIBRARY_AUDIO_SOURCES = ("BookLore", "BookOrbit")
 _AUDIO_BRIDGE_PREFIXES = {"booklore": "booklore", "bookorbit": "bookorbit"}
 
 
-def _audio_source_display_name(source):
-    """'BookLore' is the internal key; users know it as Grimmory."""
-    return "Grimmory" if source == "BookLore" else str(source or "")
-
-
-def _audio_source_from_bridge_key(bridge_key):
-    """Infer the audio source from a bridge key's prefix ('booklore:'/'bookorbit:').
-
-    Un-prefixed non-empty keys are ABS item ids; an empty key yields ''."""
-    key = str(bridge_key or "")
-    for src in _LIBRARY_AUDIO_SOURCES:
-        if key.lower().startswith(f"{src.lower()}:"):
-            return src
-    return "ABS" if key else ""
-
-
-# Map internal audio source key -> (UI badge label, CSS class).
-# These are the FULL product names used on UI chips, deliberately distinct from
-# _audio_source_display_name(), which stays short ("ABS") because it feeds
-# generated book titles.
-_AUDIO_SOURCE_BADGE_LABELS = {
-    "ABS": ("Audiobookshelf", "abs"),
-    "BookLore": ("Grimmory", "grimmory"),
-    "BookOrbit": ("BookOrbit", "bookorbit"),
-}
-
-
-def suggestion_source_badge(audio_source: str | None, bridge_key: str | None = None) -> tuple[str, str]:
-    """Resolve a suggestion's audio provider to a (label, css_class) badge pair."""
-    source = (audio_source or _audio_source_from_bridge_key(bridge_key) or "ABS").strip()
-    return _AUDIO_SOURCE_BADGE_LABELS.get(source, (source, "unknown"))
-
-
-def _build_bridge_key(audio_source, audio_source_id):
-    if audio_source_id is None:
-        return None
-    source_id = str(audio_source_id).strip()
-    if not source_id:
-        return None
-
-    head = source_id.lower().split(":", 1)[0]
-    if ":" in source_id and head in _AUDIO_BRIDGE_PREFIXES:
-        return f"{head}:{source_id.split(':', 1)[1].strip()}"
-
-    source_name = str(audio_source or "").strip().lower()
-    if source_name in _AUDIO_BRIDGE_PREFIXES:
-        return f"{_AUDIO_BRIDGE_PREFIXES[source_name]}:{source_id}"
-    return source_id
-
-
-def _normalize_text_source_type(raw_source):
-    return normalize_ebook_source(raw_source)
-
-
-def _safe_local_source_path(raw_path) -> str:
-    """Return a local ebook path only when it resolves inside a library root.
-
-    The value arrives in a request payload, so it is confined to BOOKS_DIR /
-    EXTRA_EBOOK_DIRS / the epub cache before any staging, parsing, hashing, or
-    upload reads it. Returns '' for a missing or out-of-tree path, which the
-    forge callers already treat as "local file path unavailable".
-    """
-    raw = str(raw_path or "").strip()
-    if not raw:
-        return ""
-    safe_path = safe_library_path(raw)
-    if safe_path is None:
-        logger.warning(
-            "Refused local ebook source outside the configured library roots: %s",
-            sanitize_log_data(raw),
-        )
-        return ""
-    return str(safe_path)
-
-
-def _build_forge_text_item(source_type, source_id, source_path, original_filename):
-    normalized_source = _normalize_text_source_type(source_type)
-    normalized_source_id = str(source_id or "").strip()
-    normalized_source_path = str(source_path or "").strip()
-
-    text_item = {
-        "source": normalized_source,
-        "path": normalized_source_path,
-        "booklore_id": normalized_source_id,
-        "bookorbit_id": normalized_source_id,
-        "kavita_id": normalized_source_id,
-        "bookfusion_id": normalized_source_id,
-        "cwa_id": normalized_source_id,
-        "abs_id": normalized_source_id,
-        "source_id": normalized_source_id,
-        "filename": original_filename,
-    }
-
-    if normalized_source == "ABS":
-        text_item["abs_id"] = normalized_source_id
-    if normalized_source == "Booklore":
-        text_item["booklore_id"] = normalized_source_id
-    if normalized_source == "BookOrbit":
-        text_item["bookorbit_id"] = normalized_source_id
-    if normalized_source == "Kavita":
-        text_item["kavita_id"] = normalized_source_id
-    if normalized_source == "BookFusion":
-        text_item["bookfusion_id"] = normalized_source_id
-    if normalized_source == "CWA":
-        text_item["cwa_id"] = normalized_source_id
-        if normalized_source_path:
-            text_item["download_url"] = normalized_source_path
-    if normalized_source == "Local File":
-        text_item["path"] = _safe_local_source_path(normalized_source_path)
-
-    return text_item
-
-
-def _parse_audio_duration(raw_value):
-    try:
-        if raw_value is None or raw_value == "":
-            return None
-        return float(raw_value)
-    except (TypeError, ValueError):
-        return None
+from src.web import audio_source_adapters as _audio_source_adapters
+_audio_source_adapters._WEB_MODULE = sys.modules[__name__]
+from src.web.audio_source_adapters import (
+    _AUDIO_SOURCE_BADGE_LABELS,
+    _audio_source_display_name,
+    _audio_source_from_bridge_key,
+    suggestion_source_badge,
+    _build_bridge_key,
+    _normalize_text_source_type,
+    _safe_local_source_path,
+    _build_forge_text_item,
+    _parse_audio_duration,
+)
 
 
 def _set_bookorbit_link_for_current_user(book, audio_source) -> None:
@@ -8620,227 +8304,11 @@ from src.web.routes.suggestions import suggestions_page, suggestions_scan_status
 
 
 
-def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
-    """Delete external artifacts and membership data for a mapped book."""
-    if not book:
-        return
-    clients = uc()
-
-    try:
-        remaining_books = database_service.get_all_books()
-    except Exception as e:
-        logger.warning(
-            "Failed to check remaining mappings during resource cleanup; "
-            "preserving shared Storyteller resources: %s",
-            e,
-            exc_info=True,
-        )
-        remaining_books = None
-
-    remaining_storyteller_uuids = set()
-    remaining_cache_filenames = set()
-    if remaining_books is not None:
-        for remaining_book in remaining_books:
-            remaining_filename = getattr(remaining_book, 'ebook_filename', None)
-            if remaining_filename:
-                remaining_cache_filenames.add(remaining_filename)
-            remaining_local_filename = local_ebook_filename(remaining_book)
-            if remaining_local_filename:
-                remaining_cache_filenames.add(remaining_local_filename)
-
-            remaining_uuid = getattr(remaining_book, 'storyteller_uuid', None)
-            if not remaining_uuid and remaining_filename:
-                match = re.match(r"^storyteller_([0-9a-fA-F-]+)\.epub$", remaining_filename)
-                if match:
-                    remaining_uuid = match.group(1)
-            if remaining_uuid:
-                remaining_storyteller_uuids.add(remaining_uuid)
-                remaining_cache_filenames.add(f"storyteller_{remaining_uuid}.epub")
-
-    if book.transcript_file and book.transcript_file != "DB_MANAGED":
-        remove_owned(book.transcript_file, DATA_DIR / "transcripts")
-
-    # Clean up audio cache directories (source tracks + WAV chunks from whisper transcription)
-    other_ids = None if remaining_books is None else [b.abs_id for b in remaining_books]
-    if not defer_audio_cache:
-        errors = []
-        for removed in remove_book_cache_dirs(DATA_DIR / "audio_cache", book.abs_id, other_ids=other_ids, errors=errors):
-            logger.info(f"🗑️ Deleted audio cache: {removed}")
-        for e in errors:
-            logger.warning(f"⚠️ Failed to delete audio cache: {e}", exc_info=e)
-
-    # Clean up full transcript directory (chapter JSON files + manifest)
-    errors = []
-    for removed in remove_book_cache_dirs(DATA_DIR / "transcripts" / "storyteller", book.abs_id, other_ids=other_ids, errors=errors):
-        logger.info(f"🗑️ Deleted transcript directory: {removed}")
-    for e in errors:
-        logger.warning(f"⚠️ Failed to delete transcript directory: {e}", exc_info=e)
-
-    cached_ebook_filename = local_ebook_filename(book)
-    preserve_cached_ebook = (
-        remaining_books is None
-        or cached_ebook_filename in remaining_cache_filenames
-    )
-    if cached_ebook_filename and not preserve_cached_ebook:
-        cache_dirs = []
-        try:
-            cache_dirs.append(container.epub_cache_dir())
-        except Exception:
-            pass
-
-        manager_cache_dir = getattr(manager, 'epub_cache_dir', None)
-        if manager_cache_dir:
-            cache_dirs.append(manager_cache_dir)
-
-        seen_dirs = set()
-        for cache_dir in cache_dirs:
-            cache_dir_path = Path(cache_dir)
-            cache_dir_key = str(cache_dir_path)
-            if cache_dir_key in seen_dirs:
-                continue
-            seen_dirs.add(cache_dir_key)
-
-            cached_path = safe_cache_path(cache_dir_path, cached_ebook_filename)
-            if cached_path and cached_path.exists():
-                try:
-                    cached_path.unlink()
-                    logger.info(f"🗑️ Deleted cached ebook file: {cached_ebook_filename}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to delete cached ebook {cached_ebook_filename}: {e}", exc_info=True)
-
-    # KoSync progress must not outlive the mapping. The document hash comes from
-    # the EPUB's content, so re-matching the same file re-links the identical hash
-    # and the furthest-wins gate serves the pre-delete position back against the
-    # fresh book's empty state (#358). This applies to every sync mode — it was
-    # previously done for ebook-only mappings alone.
-    try:
-        docs_deleted, progress_deleted = database_service.delete_kosync_data_for_book(book.abs_id)
-        if docs_deleted or progress_deleted:
-            logger.info(
-                f"🗑️ Deleted KOSync data for mapping '{book.abs_id}': "
-                f"{docs_deleted} document(s), {progress_deleted} progress row(s)"
-            )
-    except Exception as e:
-        logger.warning(f"⚠️ Failed to delete KOSync data for '{book.abs_id}': {e}", exc_info=True)
-
-    # A deleted mapping is the user's explicit "re-match this" signal, so the
-    # shelf-watch re-scan throttle must not outlive it either: the throttle row
-    # is keyed by the library's book id, which survives both the delete and a
-    # rename in the source library, so re-adding the book to the watch shelf
-    # would otherwise be skipped as `skipped_throttled` for the whole rescan
-    # window.
-    from src.services.shelf_watch_service import clear_shelf_watch_throttle
-    clear_shelf_watch_throttle(database_service, book)
-
-    is_abs_backed = (
-        getattr(book, 'sync_mode', 'audiobook') != 'ebook_only'
-        and not str(book.abs_id).startswith('booklore:')
-    )
-    if is_abs_backed:
-        collection_name = user_setting('ABS_COLLECTION_NAME', 'Synced with KOReader')
-        try:
-            clients.abs_client.remove_from_collection(book.abs_id, collection_name)
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to remove from ABS collection: {e}", exc_info=True)
-    else:
-        logger.info(f"Skipping ABS collection cleanup for non-ABS mapping '{book.abs_id}'")
-
-    storyteller_uuid = getattr(book, 'storyteller_uuid', None)
-    if not storyteller_uuid and getattr(book, 'ebook_filename', None):
-        match = re.match(r"^storyteller_([0-9a-fA-F-]+)\.epub$", book.ebook_filename)
-        if match:
-            storyteller_uuid = match.group(1)
-            logger.info(f"Inferred Storyteller UUID for cleanup: '{storyteller_uuid[:8]}...'")
-
-    preserve_storyteller_link = (
-        remaining_books is None
-        or storyteller_uuid in remaining_storyteller_uuids
-    )
-    if storyteller_uuid and not preserve_storyteller_link:
-        storyteller_collection_name = os.environ.get('STORYTELLER_COLLECTION_NAME', 'Synced with KOReader')
-        try:
-            st_client = clients.storyteller_client
-            if hasattr(st_client, 'remove_from_collection_by_uuid'):
-                removed = st_client.remove_from_collection_by_uuid(storyteller_uuid, storyteller_collection_name)
-                if not removed:
-                    logger.warning(f"Storyteller collection removal returned no success for '{storyteller_uuid[:8]}...'")
-            else:
-                logger.warning("Storyteller client has no remove_from_collection_by_uuid method")
-        except Exception as e:
-            logger.warning(f"Failed to remove from Storyteller collection: {e}", exc_info=True)
-    elif storyteller_uuid:
-        logger.info(
-            f"Preserving shared Storyteller resources for '{storyteller_uuid[:8]}...': "
-            "another mapping still references them"
-        )
-
-    if book.ebook_filename:
-        shelf_filename = book.original_ebook_filename or book.ebook_filename
-        is_bookorbit = (getattr(book, 'ebook_source', None) or '').strip().lower() == 'bookorbit'
-        is_kavita = (getattr(book, 'ebook_source', None) or '').strip().lower() == 'kavita'
-        try:
-            shelf_assignments = (
-                database_service.get_shelf_assignments(book.abs_id)
-                if not is_bookorbit and not is_kavita else []
-            )
-            database_service.remove_pending_shelf_adds(book.abs_id, all_users=True)
-            if is_bookorbit:
-                client = clients.bookorbit_client
-                if client.is_configured():
-                    shelf_name = (user_setting('BOOKORBIT_SHELF_NAME', 'Kobo') or 'Kobo').strip()
-                    ebook_source_id = getattr(book, 'ebook_source_id', None)
-                    if ebook_source_id and hasattr(client, 'remove_book_id_from_shelf'):
-                        client.remove_book_id_from_shelf(ebook_source_id, shelf_name)
-                    else:
-                        client.remove_from_shelf(shelf_filename, shelf_name)
-            elif is_kavita:
-                client = clients.kavita_client
-                if client.is_configured():
-                    shelf_name = (user_setting('KAVITA_COLLECTION_NAME', 'BookBridge') or 'BookBridge').strip()
-                    ebook_source_id = getattr(book, 'ebook_source_id', None)
-                    if ebook_source_id:
-                        client.remove_book_id_from_shelf(ebook_source_id, shelf_name)
-                    else:
-                        client.remove_from_shelf(shelf_filename, shelf_name)
-            elif shelf_assignments:
-                removed_targets = set()
-                cleanup_succeeded = True
-                for assignment in shelf_assignments:
-                    source_id = assignment.get('source_id') or book.ebook_source_id
-                    target = (assignment['target_user_id'], assignment['shelf_name'], source_id)
-                    if target in removed_targets:
-                        continue
-                    removed_targets.add(target)
-                    target_user_id, shelf_name, source_id = target
-                    if target_user_id is None:
-                        client = _global_clients.booklore_client
-                    else:
-                        try:
-                            client = container.user_client_registry().get_clients(
-                                target_user_id
-                            ).booklore_client
-                        except Exception:
-                            cleanup_succeeded = False
-                            continue
-                    if (not client.is_configured()
-                            or not client.remove_book_id_from_shelf(
-                                source_id, shelf_name
-                            )):
-                        cleanup_succeeded = False
-                if cleanup_succeeded:
-                    database_service.remove_shelf_assignments(book.abs_id)
-            elif shelf_add_waits_for_alignment(book):
-                client, shelf_name = _aligned_shelf_target(get_current_user_id())
-                if client is not None and client.is_configured():
-                    client.remove_book_id_from_shelf(book.ebook_source_id, shelf_name)
-            else:
-                client = clients.booklore_client
-                if client.is_configured():
-                    shelf_name = user_setting('BOOKLORE_SHELF_NAME', 'Kobo')
-                    client.remove_from_shelf(shelf_filename, shelf_name)
-        except Exception as e:
-            source_label = 'BookOrbit' if is_bookorbit else ('Kavita' if is_kavita else 'Grimmory')
-            logger.warning(f"⚠️ Failed to remove from {source_label} shelf: {e}", exc_info=True)
+from src.web import mapping_cleanup as _mapping_cleanup
+_mapping_cleanup._WEB_MODULE = sys.modules[__name__]
+from src.web.mapping_cleanup import (
+    cleanup_mapping_resources,
+)
 
 
 def _user_may_modify_book(user, abs_id) -> bool:
