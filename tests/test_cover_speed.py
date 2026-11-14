@@ -33,6 +33,7 @@ class _RecordingPool:
 class _CoverTestCase(unittest.TestCase):
     def setUp(self):
         from src import web_server
+        from src.web import cover_freshness
 
         self.web = web_server
         self.temp = TemporaryDirectory()
@@ -51,18 +52,23 @@ class _CoverTestCase(unittest.TestCase):
         self.pool = _RecordingPool()
         saved = {
             name: getattr(web_server, name, None)
-            for name in ("COVERS_DIR", "database_service", "container",
-                         "_cover_recheck_pool", "_thumb_versions_seeded_dir")
+            for name in ("COVERS_DIR", "database_service", "container")
+        }
+        saved_cover = {
+            name: getattr(cover_freshness, name)
+            for name in ("_cover_recheck_pool", "_thumb_versions_seeded_dir")
         }
         web_server.COVERS_DIR = self.covers
         web_server.database_service = DB()
-        web_server._cover_recheck_pool = self.pool
+        cover_freshness._cover_recheck_pool = self.pool
         web_server._cover_fresh_until.clear()
         web_server._thumb_versions.clear()
 
         def restore():
             for name, value in saved.items():
                 setattr(web_server, name, value)
+            for name, value in saved_cover.items():
+                setattr(cover_freshness, name, value)
             web_server._cover_fresh_until.clear()
             web_server._thumb_versions.clear()
 

@@ -65,6 +65,7 @@ class TestCoverFreshnessVerdictCaching(unittest.TestCase):
 
     def setUp(self):
         import src.web_server as web_server
+        from src.web import cover_freshness
 
         self.web_server = web_server
         self.tmp = TemporaryDirectory()
@@ -95,13 +96,13 @@ class TestCoverFreshnessVerdictCaching(unittest.TestCase):
             def submit(_self, fn, *args):
                 fn(*args)
 
-        self._saved_pool = web_server._cover_recheck_pool
-        web_server._cover_recheck_pool = _InlinePool()
+        self._saved_pool = cover_freshness._cover_recheck_pool
+        cover_freshness._cover_recheck_pool = _InlinePool()
 
         def _restore():
             web_server.COVERS_DIR = self._saved_covers
             web_server.database_service = self._saved_db
-            web_server._cover_recheck_pool = self._saved_pool
+            cover_freshness._cover_recheck_pool = self._saved_pool
 
         self.addCleanup(_restore)
 

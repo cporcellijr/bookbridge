@@ -1,6 +1,16 @@
 # Architecture cleanup — slice 4b helper-extraction plan
 
-**Planning only — no application or test edits.** Baseline: `6f9629018eeb7ed571e50232f3ee50292071a604` (2026-11-13), isolated DevSpace worktree. Authority: `AGENTS.md`, `docs/PLAN_ARCHITECTURE_CLEANUP.md`, `docs/ARCHITECTURE_CLEANUP_HANDOFF.md` and architecture audit sections D and F.
+**Original inventory/planning baseline:** `6f9629018eeb7ed571e50232f3ee50292071a604` (2026-11-13), isolated DevSpace worktree. The execution record below supersedes the original sequencing and C34 destination; remaining cluster rows are historical inventory until reviewed. Authority: `AGENTS.md`, `docs/PLAN_ARCHITECTURE_CLEANUP.md`, `docs/ARCHITECTURE_CLEANUP_HANDOFF.md` and architecture audit sections D and F.
+
+## Slice 4b step 1 — implementation record (2026-11-13)
+
+Fresh isolated worktree from dev `543830bb`; **awaiting Claude review**; no integration, push, restart or live writes. The three clusters were pure-moved in this order, one code commit each:
+
+- [x] **C39 provider probes** → `src/services/integration_connection_probes.py`, commit `e9e535be`: 21/21 AST identical, zero web-module dependencies. Repointed Ollama in-cluster probe patch; raising-original interception proven.
+- [x] **C37 connection dispatcher** → `src/web/connection_tests.py`, commit `da371072`: 5/5 AST identical; imports the C39 probes from their new module, and re-exports retain original external lookup names.
+- [x] **C34 cover freshness** → `src/web/cover_freshness.py`, third commit of this step: 6/6 AST identical modulo call-time `web.` startup access; all cover cache dicts, pool and rebound `_thumb_versions_seeded_dir` live in this module. `web_server.py` re-exports the original names. Tests now assign/restore the pool and seeded scalar in the owning module, not on the compatibility facade; the old dictionary-mutation tests remain valid. Inline/recording-pool interception proven with the real pool configured to raise.
+
+**Combined checks:** 32/32 moved functions AST identical; 0 unresolved/0 MODULE-SELF (ignored `name_check.py` extended to recognize annotated module assignments and the setup-time-only `web.COVERS_DIR`); 195/195 Flask URL registrations identical against a disposable `543830bb` source-overlay process; focused **429 passed / 2 skipped / 120 subtests / exit 0**; full suite attempted once **exit 4, pytest controller lock busy** (Claude to run). `web_server.py` **13,037 → 12,322** lines. The original ignored `architecture-phase4b/analyze.py` was absent from the live checkout; a local AST direct-call implementation was reconstructed, run and stored under ignored notes. **No newly leaf clusters** remain after the three removals; C23 (31 lines) remains intentionally skipped. Deployment requirement: **restart only after independent review and dev integration**.
 
 ## Scope, measurement, and migration contract
 

@@ -10594,121 +10594,22 @@ from src.web.routes.readalong import generate_readalong_epub, readalong_epub_sta
 
 
 
-def _extracted_cover_is_stale(cover_path, source_path) -> bool:
-    """True when the ebook has been rewritten since its cover was extracted.
+from src.web import cover_freshness as _cover_freshness
+_cover_freshness._WEB_MODULE = sys.modules[__name__]
+from src.web.cover_freshness import (
+    _extracted_cover_is_stale, _schedule_cover_recheck, _recheck_cover,
+    _thumb_version, _seed_thumb_versions, thumb_cover_src,
+    _COVER_FRESH_TTL_SECONDS, _cover_fresh_until, _cover_recheck_pool,
+    _thumb_versions, _thumb_versions_seeded_dir,
+)
 
-    Adding or replacing a cover rewrites the EPUB, but the extracted jpg is
-    written once and served forever, so the dashboard keeps showing the old
-    art (and it is preferred over the live audio cover). Compare mtimes so an
-    edited book re-extracts on the next request.
-    """
-    try:
-        return Path(source_path).stat().st_mtime > Path(cover_path).stat().st_mtime
-    except (OSError, TypeError):
-        return False
-
-
-# How long a cover is trusted before its ebook is looked at again. Looking means
-# resolve_book_path, which scans the library: measured at 0.2-8 s per book on a network
-# mount. So it never runs on a request: an existing cover is served at once and the
-# ebook is re-checked on one background thread, at most once per book per window.
-_COVER_FRESH_TTL_SECONDS = 3600
-# A book with no cover yet retries its extraction sooner: the ebook may still be arriving.
+# Missing covers retry sooner than already-extracted covers.
 _COVER_MISSING_RETRY_SECONDS = 300
-_cover_fresh_until: dict = {}
-_cover_recheck_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cover-fresh")
-
-
-def _schedule_cover_recheck(doc_hash: str) -> None:
-    """Queue one background ebook check for a cover, unless one ran this window."""
-    now = time.time()
-    if _cover_fresh_until.get(doc_hash, 0) > now:
-        return
-    _cover_fresh_until[doc_hash] = now + _COVER_FRESH_TTL_SECONDS
-    try:
-        _cover_recheck_pool.submit(_recheck_cover, doc_hash)
-    except RuntimeError:
-        _cover_fresh_until.pop(doc_hash, None)  # the pool is shutting down
-
-
-def _recheck_cover(doc_hash: str) -> None:
-    """Re-extract a cover whose ebook changed and retire a thumbnail that no longer matches."""
-    try:
-        cover_path = COVERS_DIR / f"{doc_hash}.jpg"
-        if not cover_path.exists():
-            return
-        book = database_service.get_book_by_kosync_id(doc_hash)
-        if book and book.ebook_filename:
-            parser = container.ebook_parser()
-            source_path = None
-            try:
-                source_path = parser.resolve_book_path(book.ebook_filename)
-            except Exception as e:
-                logger.debug(f"Cover freshness check could not resolve the ebook: {e}")
-            if source_path and _extracted_cover_is_stale(cover_path, source_path):
-                logger.info(
-                    "🖼️ Re-extracting cover for '%s': the ebook changed since it was cached",
-                    sanitize_log_data(getattr(book, "abs_title", None) or doc_hash),
-                )
-                parser.extract_cover(source_path, cover_path)
-        thumb_path = COVERS_DIR / "thumbs" / f"{doc_hash}.jpg"
-        if doc_hash in _thumb_versions and not cover_thumbnail_cache.is_current(cover_path, thumb_path):
-            # The page goes back to probing this cover until the new thumbnail is served.
-            _thumb_versions.pop(doc_hash, None)
-            cover_thumbnail_cache.enqueue(cover_path, thumb_path)
-    except Exception as e:
-        logger.warning(f"Cover freshness check failed for {doc_hash}: {e}", exc_info=True)
-
-# Browser-side cache window for extracted covers. Flask leaves `max_age` unset by
-# default, which sends `Cache-Control: no-cache` — the browser then revalidates
-# EVERY cover on EVERY dashboard load, so a large library pays hundreds of
-# conditional round trips just to be told 304. Covers are auth-gated, hence
-# `private`. Kept short: an unversioned cover URL shows a re-extracted cover only
-# after this window, on top of the server's own re-check window.
+# Short browser revalidation for unversioned extracted covers.
 _COVER_BROWSER_MAX_AGE_SECONDS = 300
-
-# Thumbnails the New Library may render directly as `?v=<version>` URLs, which the
-# browser keeps for a year: a regenerated thumbnail gets a new version, so a new URL.
-# Versions are read from the thumbnails on disk once per process, so the page renders
-# direct URLs straight after a restart. Each render queues the background ebook check
-# (_schedule_cover_recheck), which drops a version whose thumbnail went out of date.
+# Long browser caching of versioned thumbnails.
 _THUMB_IMMUTABLE_CACHE = 'private, max-age=31536000, immutable'
-_thumb_versions: dict = {}
-_thumb_versions_seeded_dir = None
 
-
-def _thumb_version(stat: os.stat_result) -> str:
-    return f"{stat.st_size:x}-{stat.st_mtime_ns:x}"
-
-
-def _seed_thumb_versions() -> None:
-    """Read every finished thumbnail's version from disk, once per covers folder."""
-    global _thumb_versions_seeded_dir
-    if _thumb_versions_seeded_dir == COVERS_DIR:
-        return
-    _thumb_versions_seeded_dir = COVERS_DIR
-    try:
-        with os.scandir(COVERS_DIR / "thumbs") as entries:
-            for entry in entries:
-                if not entry.name.endswith(".jpg"):
-                    continue
-                stat = entry.stat()
-                if stat.st_size:
-                    _thumb_versions.setdefault(entry.name[:-len(".jpg")], _thumb_version(stat))
-    except OSError as e:
-        logger.debug(f"Could not read the cover thumbnail folder: {e}")
-
-
-def thumb_cover_src(doc_hash: str | None) -> str | None:
-    """Versioned thumbnail URL for a cover that has a finished thumbnail, else None."""
-    if not doc_hash:
-        return None
-    _seed_thumb_versions()
-    version = _thumb_versions.get(doc_hash)
-    if not version:
-        return None
-    _schedule_cover_recheck(doc_hash)
-    return f"/covers/thumb/{doc_hash}.jpg?v={version}"
 
 
 def _send_cover_cached(filename: str):
