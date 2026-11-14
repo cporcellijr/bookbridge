@@ -6,7 +6,7 @@
 
 Worktree: `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-4b6`; branch `refactor/architecture-4b-step6`; baseline `17f11eb8` (8,566 lines). No integration, push, restart or live access; Claude integrates and writes BRANCH_STATUS. Deployment requirement: **restart**.
 
-**Checkpoint handoff:** latest green CP3 (this commit; 7,461 web_server lines; full 7906 passed / 15 skipped / Python exit 0). Next: CP4 C15 (not started). Continue in this worktree; no integration or live access.
+**Checkpoint handoff:** Codex ran out of usage during CP4 (C15); Claude finished and committed CP4. Remaining clusters are split into small DevSpace tasks (see Step 6 task list).
 
 CP0 reran the ignored analyzer in inventory and `--test-assignments` modes (both exit 0). Its copied legacy inventory generator now skips already-extracted spans and writes only an ignored preview. Current inventory: 20 surviving clusters (including intentionally skipped C23), 198 grouped functions, 3 classes, 19 retained functions. Assignment scan: 461 test files / 755 bindings, 140 assignments / 9 deletions / 56 in-place sites / 987 read-only uses, zero parse failures; 1,240 unresolved candidates are conservative alias/dynamic accesses requiring per-cluster manual review, not confirmed hazards.
 
@@ -21,7 +21,8 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 | CP0 | 2d60b651 | inventory/assignment ledger | 0 | 8,566 | n/a | n/a | 195 baseline rules captured | n/a | docs only; not run |
 | CP1 | 22ed3af5 | C14 → `suggestions_audio_catalog` | 8 + 1 class | 8,189 | 9/9 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 14 sites / 3 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 | CP2 | afeaaba9 | C20 → `shelf_watch_service` | 6 | 8,060 | 6/6 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 10 sites / 4 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
-| CP3 | this commit | C13 → `storyteller_library_watch` | 4 | 7,461 | 4/4 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 4 target edits; 4 sites / 2 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP3 | 1606e2b6 | C13 → `storyteller_library_watch` | 4 | 7,461 | 4/4 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 4 target edits; 4 sites / 2 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP4 | this commit | C15 → `suggestions_ebook_catalog` | 10 | 6,728 | 10/10 identical | only startup-set `EBOOK_DIR` (read as `web.EBOOK_DIR`, known false positive) | 195/195 identical (Codex) | 7 target edits; 4 names proven with raising originals (Claude finished; decorator-patched `test_owner_may_still_rematch_own_mapping` proven directly) | see Claude review |
 
 ### Remaining
 
