@@ -102,7 +102,8 @@ a following checkpoint may replace it with its resolved hash. `git log --grep` r
 | CP1 | `389a0991` | `TrackerDetailsMixin` | 8 | 7780 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP2 | `9e06d98d` | `BookloreMixin` | 5 | 7718 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP3 | `8d665f4d` | `EmbeddingsMixin` | 3 | 7677 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
-| CP4 | `[Refactor] Move suggestions database methods into SuggestionsMixin` (this commit) | `SuggestionsMixin` | 14 | 7473 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP4 | `0fba79f5` | `SuggestionsMixin` | 14 | 7473 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP5 | `[Refactor] Move koreader status database methods into KOReaderStatusMixin` (this commit) | `KOReaderStatusMixin` | 6 | 7248 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 
 ## Skipped
 
@@ -110,12 +111,12 @@ None.
 
 ## Remaining
 
-CP5-CP20 in table order. Stretch S1/S2 may follow the last code checkpoint.
+CP6-CP20 in table order. Stretch S1/S2 may follow the last code checkpoint.
 
 ## Report back
 
-Completed CP0-CP4; no skipped checkpoints. 30/299 mapped methods moved.
-Current database_service.py: **7473 lines**, down from 7897. Every completed checkpoint's full suite and exit code are in Progress above (7906 passed / 15 skipped / 0 failures, exit 0).
+Completed CP0-CP5; no skipped checkpoints. 36/299 mapped methods moved.
+Current database_service.py: **7248 lines**, down from 7897. Every completed checkpoint's full suite and exit code are in Progress above (7906 passed / 15 skipped / 0 failures, exit 0).
 All 312 original methods remain AST/text identical and reachable, with the same dir(DatabaseService) attribute set; DatabaseMigrator and all core class attributes remain unchanged. Shared and exclusive constant aliases retain identity and mixin loggers keep src.db.database_service.
 No tests, models, migrations, journal settings or code outside src/db/ changed.
 CP0 finding: the base has 312 direct DatabaseService methods rather than the estimated 317. Unlabeled domains are explicitly mapped; cross-domain calls remain through self/cls. Core retains the 13 methods named in the map.
