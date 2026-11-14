@@ -366,7 +366,7 @@ class TestMultiUserAuth(unittest.TestCase):
         alice = self.svc.create_user("alice-scan", "pw", role="user")
         bob = self.svc.create_user("bob-scan", "pw", role="user")
         self.client.post('/login', data={'username': 'alice-scan', 'password': 'pw'})
-        with patch('src.web_server._reader_scan_libraries',
+        with patch('src.web.account_helpers._reader_scan_libraries',
                    return_value=([{'id': '7', 'name': 'Audiobooks'}], None)) as lookup:
             response = self.client.post('/account/integrations', data={
                 'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7',
@@ -386,7 +386,7 @@ class TestMultiUserAuth(unittest.TestCase):
             'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '../7',
         })
         self.assertEqual(bad.status_code, 400)
-        with patch('src.web_server._reader_scan_libraries',
+        with patch('src.web.account_helpers._reader_scan_libraries',
                    return_value=([], 'This BookOrbit account needs Manage libraries.')):
             denied = self.client.post('/account/integrations', data={
                 'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7',
@@ -398,7 +398,7 @@ class TestMultiUserAuth(unittest.TestCase):
         alice = self.svc.create_user("alice-scan-keep", "pw", role="user")
         self.client.post('/login', data={'username': 'alice-scan-keep', 'password': 'pw'})
         self.svc.set_user_credential(alice.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID', '7')
-        with patch('src.web_server._reader_scan_libraries',
+        with patch('src.web.account_helpers._reader_scan_libraries',
                    return_value=([], 'BookOrbit is unreachable.')) as lookup:
             response = self.client.post('/account/integrations', data={
                 'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7', 'KOSYNC_USER': 'alice-ko',
