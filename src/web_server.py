@@ -1726,44 +1726,7 @@ def _after_user_integrations_saved(user_id):
     _refresh_user_abs_listener(user_id)
 
 
-@admin_required
-def admin_user_integrations(user_id):
-    """Admin-managed per-user integrations. The admin sets each user's
-    credentials/library here; the admin's own integrations are the master
-    Settings. Regular users do not inherit blank account credentials."""
-    target = database_service.get_user(user_id)
-    if not target:
-        return ("User not found", 404)
-
-    from src.utils.user_config import PER_USER_FIELD_GROUPS
-
-    message = error = None
-    if request.method == 'POST':
-        error = _apply_user_integrations(user_id)
-        if error and _request_wants_json():
-            return jsonify({"error": error}), 400
-        if not error:
-            message = f"Saved integrations for {target.username}."
-            target = database_service.get_user(user_id)
-
-    creds = database_service.get_user_credentials(user_id)
-    # Master/global value per key, shown as the inherited fallback hint.
-    master = {
-        key: os.environ.get(key, '')
-        for _g, fields in PER_USER_FIELD_GROUPS for key, _l, _t in fields
-    }
-    return render_template(
-        ui_template('admin_user_integrations.html'),
-        groups=PER_USER_FIELD_GROUPS,
-        creds=creds,
-        master=master,
-        service_enable_keys=SERVICE_ENABLE_KEYS,
-        allow_master_fallback=_global_fallback_allowed(database_service, target),
-        message=message,
-        error=error,
-        target_user=target,
-        user_test_services=_USER_TEST_SERVICES,
-    ), (400 if error else 200)
+from src.web.routes.admin_users import admin_users, admin_user_integrations, admin_user_test_connection, admin_user_abs_libraries, admin_user_booklore_libraries, admin_user_bookorbit_scan_libraries, admin_user_bookfusion_device_start, admin_user_bookfusion_device_poll
 
 
 _USER_TEST_SERVICES = {
@@ -1845,13 +1808,6 @@ def _posted_user_test_credentials(target, submitted):
     return payload
 
 
-@admin_required
-def admin_user_test_connection(user_id, service):
-    target = database_service.get_user(user_id)
-    if not target:
-        return jsonify({"ok": False, "message": "User not found"}), 404
-    payload = _posted_user_test_credentials(target, request.get_json(silent=True) or {})
-    return _run_test_connection(service, payload)
 
 
 def account_test_connection(service):
@@ -1862,23 +1818,6 @@ def account_test_connection(service):
     return _run_test_connection(service, payload)
 
 
-@admin_required
-def admin_user_abs_libraries(user_id):
-    """List this user's Audiobookshelf libraries, using the credentials posted
-    from the integrations form (so the admin can look up before saving)."""
-    target = database_service.get_user(user_id)
-    if not target:
-        return jsonify({"error": "User not found"}), 404
-    payload = _posted_user_test_credentials(target, request.get_json(silent=True) or {})
-    from src.api.api_clients import ABSClient
-    client = ABSClient(credentials=payload)
-    if not client.is_configured():
-        return jsonify({"error": "Audiobookshelf not configured for this user (set the API token above)"}), 400
-    try:
-        return jsonify(client.get_libraries() or [])
-    except Exception as e:
-        logger.warning("Per-user ABS library lookup failed for user %s: %s", user_id, e, exc_info=True)
-        return jsonify({"error": str(e)}), 502
 
 
 def _reader_scan_libraries(target, submitted):
@@ -1922,14 +1861,6 @@ def account_bookorbit_scan_libraries():
     return (jsonify({'error': error}), 403) if error else jsonify(libraries)
 
 
-@admin_required
-def admin_user_bookorbit_scan_libraries(user_id):
-    """Admin can edit a reader's destination using only that reader's credentials."""
-    target = database_service.get_user(user_id)
-    if target is None:
-        return jsonify({'error': 'User not found'}), 404
-    libraries, error = _reader_scan_libraries(target, request.get_json(silent=True) or {})
-    return (jsonify({'error': error}), 403) if error else jsonify(libraries)
 
 
 def account_abs_libraries():
@@ -1949,23 +1880,6 @@ def account_abs_libraries():
         return jsonify({"error": str(e)}), 502
 
 
-@admin_required
-def admin_user_booklore_libraries(user_id):
-    """List this user's Grimmory libraries, using the credentials posted from
-    the integrations form."""
-    target = database_service.get_user(user_id)
-    if not target:
-        return jsonify({"error": "User not found"}), 404
-    payload = _posted_user_test_credentials(target, request.get_json(silent=True) or {})
-    from src.api.booklore_client import BookloreClient
-    client = BookloreClient(database_service=database_service, credentials=payload)
-    if not client.is_configured():
-        return jsonify({"error": "Grimmory not configured for this user (set the login above)"}), 400
-    try:
-        return jsonify(client.get_libraries() or [])
-    except Exception as e:
-        logger.warning("Per-user Grimmory library lookup failed for user %s: %s", user_id, e, exc_info=True)
-        return jsonify({"error": str(e)}), 502
 
 
 def account_booklore_libraries():
@@ -2165,30 +2079,6 @@ def _apply_user_admin_action(form):
     return message, error
 
 
-@admin_required
-def admin_users():
-    """Admin-only user management: create, reset password, enable/disable, delete.
-
-    The primary UI now lives in the Settings → Users tab; this page is the
-    direct entry point sharing the same backend."""
-    message = None
-    error = None
-    if request.method == 'POST':
-        message, error = _apply_user_admin_action(request.form)
-
-    users = database_service.list_users()
-    try:
-        primary_admin_id = database_service._default_user_id()
-    except Exception:
-        primary_admin_id = None
-    return render_template(
-        ui_template('admin_users.html'),
-        users=users,
-        message=message,
-        error=error,
-        current_user_id=current_user().id,
-        primary_admin_id=primary_admin_id,
-    )
 
 
 def ui_template(name: str) -> str:
@@ -14358,44 +14248,8 @@ def _bookfusion_client_for_user(user_id):
     return BookFusionClient(credentials=creds, database_service=database_service, user_id=user_id)
 
 
-@admin_required
-def admin_user_bookfusion_device_start(user_id) -> object:
-    """Start the BookFusion device-link flow on behalf of a specific user."""
-    target = database_service.get_user(user_id)
-    if not target:
-        return jsonify({"ok": False, "message": "User not found"}), 404
-    data = _bookfusion_client_for_user(target.id).start_device_link()
-    if not data:
-        return jsonify({"ok": False, "message": "Could not start BookFusion device link"}), 502
-    return jsonify({
-        "ok": True,
-        "device_code": data.get("device_code"),
-        "user_code": data.get("user_code"),
-        "verification_uri": data.get("verification_uri"),
-        "interval": data.get("interval", 5),
-        "expires_in": data.get("expires_in", 600),
-    })
 
 
-@admin_required
-def admin_user_bookfusion_device_poll(user_id) -> object:
-    """Poll the BookFusion device-link token endpoint on behalf of a specific
-    user, persisting the resulting access token to THAT user (not the admin)."""
-    target = database_service.get_user(user_id)
-    if not target:
-        return jsonify({"ok": False, "error": "user_not_found"}), 404
-    payload = request.get_json(silent=True) or {}
-    device_code = str(payload.get("device_code") or "").strip()
-    if not device_code:
-        return jsonify({"ok": False, "error": "missing_device_code"}), 400
-    result = _bookfusion_client_for_user(target.id).poll_token(device_code)
-    if result.get("ok"):
-        try:
-            container.user_client_registry().invalidate(target.id)
-        except Exception as e:
-            logger.debug("Could not invalidate BookFusion client bundle after admin link for user %s: %s", target.id, e)
-    status = 200 if result.get("ok") or result.get("error") in ("authorization_pending", "slow_down") else 400
-    return jsonify(result), status
 
 
 def _serialize_bookfusion_search_item(item: dict) -> dict:
@@ -15293,14 +15147,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/account/abs-libraries', 'account_abs_libraries', account_abs_libraries, methods=['POST'])
     app.add_url_rule('/api/account/booklore-libraries', 'account_booklore_libraries', account_booklore_libraries, methods=['POST'])
     app.add_url_rule('/api/account/bookorbit-scan-libraries', 'account_bookorbit_scan_libraries', account_bookorbit_scan_libraries, methods=['POST'])
-    app.add_url_rule('/admin/users', 'admin_users', admin_users, methods=['GET', 'POST'])
-    app.add_url_rule('/admin/users/<int:user_id>/integrations', 'admin_user_integrations', admin_user_integrations, methods=['GET', 'POST'])
-    app.add_url_rule('/api/admin/users/<int:user_id>/test-connection/<service>', 'admin_user_test_connection', admin_user_test_connection, methods=['POST'])
-    app.add_url_rule('/api/admin/users/<int:user_id>/abs-libraries', 'admin_user_abs_libraries', admin_user_abs_libraries, methods=['POST'])
-    app.add_url_rule('/api/admin/users/<int:user_id>/booklore-libraries', 'admin_user_booklore_libraries', admin_user_booklore_libraries, methods=['POST'])
-    app.add_url_rule('/api/admin/users/<int:user_id>/bookorbit-scan-libraries', 'admin_user_bookorbit_scan_libraries', admin_user_bookorbit_scan_libraries, methods=['POST'])
-    app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/start', 'admin_user_bookfusion_device_start', admin_user_bookfusion_device_start, methods=['POST'])
-    app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/poll', 'admin_user_bookfusion_device_poll', admin_user_bookfusion_device_poll, methods=['POST'])
+    from src.web.routes import admin_users as admin_users_routes
+    admin_users_routes.register(app, sys.modules[__name__])
     app.add_url_rule('/', 'index', index)
     from src.web.routes import book as book_routes
     book_routes.register(app, sys.modules[__name__])
