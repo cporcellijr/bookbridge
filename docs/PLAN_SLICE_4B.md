@@ -4,7 +4,7 @@
 
 ## Slice 4b step 2 — implementation record (2026-11-13)
 
-**Implementation pending independent review:** fresh isolated worktree `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-00ac9c21`, branch `refactor/architecture-4b-step2`, base dev `0856b685`. One pure-move code commit per cluster, with identical compatibility re-exports:
+**Reviewed by Claude, integrated (`db9e78f7`), restarted, live-verified:** fresh isolated worktree `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-00ac9c21`, branch `refactor/architecture-4b-step2`, base dev `0856b685`. One pure-move code commit per cluster, with identical compatibility re-exports:
 
 | Cluster | Destination | Commit | AST comparison | Name check |
 |---|---|---|---|---|
@@ -21,7 +21,7 @@ Each destination follows the step-1 `_WEB_MODULE = None` + lazy `_web_server()` 
 
 **Combined verification:** `web_server.py` **12,322 → 11,689 lines** (−633); **24/24 AST-identical** to `0856b685`, six module name checks each with 0 unresolved and 0 MODULE-SELF; offline Flask URL map **195/195 identical** including endpoint names and methods. Focused `.venv` pytest across **30 selected test files**: **960 passed / 2 skipped / 68 subtests / one warning / exit 0**. Full suite attempted once through `.venv`, **Python exit code 4 because controller lock was busy**; it was not retried or bypassed. Original analyzer rerun in worktree notes after skipping already-extracted groups: **31 surviving clusters, 294 top-level functions, zero newly-leaf clusters** (existing leaves C09, C23, C26, C29, C33). Ignored evidence: `.local-review-notes/architecture-phase4b/step2_*`.
 
-**Pending:** Claude independent review and full suite, then integrate into local dev, **restart** and live-verify. No push, dev merge, restart or live checkout edits were made. No rebuild or migration is necessary.
+Claude review: move-check 24/24 identical, name-check 0 problems, test grep found no patch/assign/setattr/del on any of the 27 moved bindings, the one source-reading test (`test_user_role_management` `inspect.getsource`) works through the re-export, and the import-time `_WEB_MODULE` binding is safe (no runtime `src.web_server` import outside the existing fallback seams). Full **7906 passed / 15 skipped / 0 failures** (RC 0; 17 warnings, +2 Windows subprocess-decode `_readerthread` warnings from `test_import_order`, environment). Integrated by branch name (merge `db9e78f7`), restarted, live-verified: before/after probe identical (dashboard + 22 book pages with sync-warning compute, diagnostics submissions 200, BookFusion search 400 not-configured for both users, admin create-user validation error with no write); startup 0 Traceback/ERROR with the daemon's KoSync-mirror and diagnostics catch-up passes. C36 backfill and C38 serializer are not exercised live (writes / BookFusion unconfigured); offline coverage only.
 
 ## Slice 4b step 1 — implementation record (2026-11-13)
 

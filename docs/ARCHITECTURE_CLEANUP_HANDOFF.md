@@ -1,6 +1,6 @@
 # Architecture cleanup handoff
 
-Updated: 2026-11-13. **Slice 4 route extraction complete. Slice 4b step 2 implemented in isolated worktree, pending independent review/full suite/integration/restart: `web_server.py` 17,771 → 11,689 lines overall. Step 1 remains integrated (`fd407d07`), restarted and live-verified. No step-2 deployment.**
+Updated: 2026-11-13. **Slice 4 route extraction complete. Slice 4b step 2 (C19, C36, C38, C07, C08, C06 → `src/web/`) integrated (`db9e78f7`), restarted, live-verified. `web_server.py` 17,771 → 11,689 lines overall. Next: slice 4b step 3.**
 
 Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITECTURE_DUPLICATION_AUDIT_2026-11-13.md), and AGENTS.md before continuing.
 
@@ -60,7 +60,7 @@ Offline evidence: implementation worktree `.local-review-notes/architecture-phas
 
 ## Next action
 
-**Slice 4b step 2 awaiting independent Claude review:** isolated worktree
+**Slice 4b step 2 done:** isolated worktree
 `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-00ac9c21` on
 `refactor/architecture-4b-step2` based at `0856b685`. Six code commits:
 C19 `640af596` → `src/web/dashboard_sync_warning.py`, C36 `243ce692` →
@@ -77,9 +77,7 @@ repointed. Flask map 195/195 identical; focused 960 passed / 2 skipped /
 lock busy**; Claude runs the independent full suite. Analyzer: no newly
 leaf clusters; existing leaves C09/C23/C26/C29/C33. `web_server.py`
 12,322 → 11,689 lines. Evidence: worktree ignored
-`.local-review-notes/architecture-phase4b/step2_*`. Pending: code review,
-full suite, integrate into local dev, **restart**, live verification.
-**No push, dev merge, restart, or live checkout edits occurred in step 2.**
+`.local-review-notes/architecture-phase4b/step2_*`. Claude review: move-check 24/24 identical, name-check 0 problems, test grep found no patch/assign/setattr/del on any of the 27 moved bindings, the one source-reading test (`test_user_role_management` `inspect.getsource`) works through the re-export, and the import-time `_WEB_MODULE` binding is safe (no runtime `src.web_server` import outside the existing fallback seams). Full **7906 passed / 15 skipped / 0 failures** (RC 0; 17 warnings, +2 Windows subprocess-decode `_readerthread` warnings from `test_import_order`, environment). Integrated by branch name (merge `db9e78f7`), restarted, live-verified: before/after probe identical (dashboard + 22 book pages with sync-warning compute, diagnostics submissions 200, BookFusion search 400 not-configured for both users, admin create-user validation error with no write); startup 0 Traceback/ERROR with the daemon's KoSync-mirror and diagnostics catch-up passes. C36 backfill and C38 serializer are not exercised live (writes / BookFusion unconfigured); offline coverage only. Live probe: `.local-review-notes/architecture-phase4b/live_probe_step2.py` (before/after JSON + `startup_step2.log` alongside).
 Next step should re-evaluate independent leaves following the plan's review
 addendum; C23 remains intentionally skipped.
 
