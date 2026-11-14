@@ -6,8 +6,7 @@ Read this, [the living plan](PLAN_ARCHITECTURE_CLEANUP.md), [the audit](ARCHITEC
 
 ## Workspace and owner instructions
 
-- Implementation worktree: DevSpace could not open `abs-kosync-enhanced-d6452ed1` for step 3 and used `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-a34f913b`; use whichever DevSpace can open, fast-forwarded to dev first. One editing agent at a time. Review scripts (`move_check.py`, `name_check.py`) live untracked in `.local-review-notes/architecture-phase4/` of both.
-- **Step 9 isolated worktree:** DevSpace refused direct opening of the designated persistent `d6452ed1` path, so the implementation used `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-851b49cd`, branch `refactor/architecture-slice4-step9`, based exactly on dev `b7b450bb`; `d6452ed1`, `a34f913b` and `d2e9af21` were inspected read-only at that SHA. Ignored `step9_*` evidence is in the new worktree.
+- Implementation worktree: all old worktrees were removed 2026-11-13 (branch cleanup). DevSpace creates a fresh worktree from `dev` per step. Review tools (`move_check.py`, `name_check.py`) and all step evidence live in the live checkout's ignored `.local-review-notes/architecture-phase4/`; copy them into the new worktree's `.local-review-notes/` (never commit them). One editing agent at a time.
 - Live checkout: `C:/Server/stacks/abs-kosync-enhanced`, branch `dev`. Never switch its branch.
 - Handle small mechanical cleanup directly and batch related changes. Delegations get a goal, acceptance criteria, and essential constraints; the receiving agent investigates and implements.
 - Implementation agents run focused checks; the primary reviewer runs the full suite. Coordinate sequentially through the existing lock; never delete/bypass it.
