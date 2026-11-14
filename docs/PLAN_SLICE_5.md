@@ -35,10 +35,12 @@ The table order is the checkpoint order. Jobs includes its sync markers and tran
 | CP17 | advanced_queries | 4015-4484 | 26 | `repositories/advanced_queries.py` / `AdvancedQueriesMixin` | None |
 | CP18 | acquisition | 2792-3593 | 27 | `repositories/acquisition.py` / `AcquisitionMixin` | None |
 | CP19 | state | 2686-2788 | 6 | `repositories/state.py` / `StateMixin` | None |
-| CP20 | books | 808-2130 | 46 | `repositories/books.py` / `BooksMixin` | None |
-| Core | Startup/session, catalog callbacks, progress tracking, user scoping | 140-291, 2649-2684, 5111-5114, 5682-5688 | 14 retained | `database_service.py` | `__init__`, `register_catalog_change_callback`, `_notify_catalog_change`, `_run_alembic_migrations`, `get_session`, `_note_progress_written`, `progress_write_seq`, `progress_written_since`, `_mark_progress_written`, `_resolve_uid`, `_default_user_id`, `is_primary_admin`, `_scope_koreader_user`, `compute_annotation_key` |
+| CP20 | books | 808-2130 | 45 | `repositories/books.py` / `BooksMixin` | `migrate_book_data`: method-local relative model import must keep its original package |
+| Core | Startup/session, catalog callbacks, progress tracking, user scoping | 140-291, 1513-1550, 2649-2684, 5111-5114, 5682-5688 | 15 retained | `database_service.py` | `__init__`, `register_catalog_change_callback`, `_notify_catalog_change`, `_run_alembic_migrations`, `get_session`, `_note_progress_written`, `progress_write_seq`, `progress_written_since`, `_mark_progress_written`, `_resolve_uid`, `_default_user_id`, `is_primary_admin`, `_scope_koreader_user`, `compute_annotation_key`, `migrate_book_data` |
 
-CP8 review correction: `_scope_koreader_user` serves both status and statistics and stays in core under the shared user-scoping rule. The corrected map moves 298 methods and retains 14.
+CP8 review correction: `_scope_koreader_user` serves both status and statistics and stays in core under the shared user-scoping rule. The map initially moved 298 methods and retained 14; the CP20 correction below changes this to 297/15.
+
+CP20 review correction: `migrate_book_data` has a method-local `from .models` import. Moving it changed package resolution and caused six focused failures. It remains in core, preserving its exact body; the other 45 Books methods move. Final map: **297 moved / 15 retained**. No test edits or compatibility shim.
 
 Core retains initialization/migrations/session ownership, all progress-lock state and callback methods,
 default-user scoping helpers and `compute_annotation_key` (its body names DatabaseService).
@@ -88,7 +90,7 @@ Focused selection is based on exact method-name matches in tests/, always includ
 Ignored support/evidence: `.local-review-notes/slice5/` (preserve for the next agent).
 `ast_check.py 795b8ef4` checks every base method, exact text and AST, unique placement,
 DatabaseMigrator and the fresh-import dir(DatabaseService) surface against a temporary base module.
-`name_check.py` checks lexical global resolution, logger names and shared-object identities.
+`name_check.py` checks lexical global resolution, logger names and shared-object identities. It also rejects method-local relative imports in extracted methods; its self-test covers that package-resolution hazard.
 Every checkpoint imports the facade, runs both gates, selects tests by moved method names plus
 `tests/test_database_service_integration.py`, then runs the full suite serially through the shared controller lock.
 Exit 4 means wait/retry without deleting the lock. Required full result: 7906 passed / 15 skipped / 0 failures, exit 0.
@@ -117,7 +119,17 @@ a following checkpoint may replace it with its resolved hash. `git log --grep` r
 | CP14 | `454ce317` | `KOReaderStatsMixin` | 32 | 4677 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP15 | `30f5797d` | `ReadingSessionsMixin` | 17 | 4186 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
 | CP16 | `697e6065` | `AnnotationsMixin` | 21 | 3519 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
-| CP17 | `[Refactor] Move advanced queries database methods into AdvancedQueriesMixin` (this commit) | `AdvancedQueriesMixin` | 26 | 3079 | 312/312 (100%); same attributes; names 0; structural review passed; ownership default sentinel verified | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP17 | `39dcf27c` | `AdvancedQueriesMixin` | 26 | 3079 | 312/312 (100%); same attributes; names 0; structural review passed; ownership default sentinel verified | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP18 | `9abf9e40` | `AcquisitionMixin` | 27 | 2307 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP19 | `d590a7ab` | `StateMixin` | 6 | 2214 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+| CP20 | `629ebad0` | `BooksMixin` | 45 | 979 | 312/312 (100%); same attributes; names 0; structural review passed | 7906 passed / 15 skipped / 0 failures; exit 0 |
+
+## Stretch documentation
+
+| Item | Commit | Status / verification |
+|---|---|---|
+| S1 acquisition behavior matrix | `8a70deb2` | Complete; provider cells and consolidation decisions independently checked against source and line bounds. No code changes. |
+| S2 sync leaf-helper risk note | `[Docs] Assess sync leaf helper extraction risks` (this commit) | Complete; nine input-only candidates, callers/patch sites and risk ratings independently checked. Protected guard/leader logic excluded. No code changes. |
 
 ## Skipped
 
@@ -125,22 +137,25 @@ None.
 
 ## Remaining
 
-- CP18: acquisition (27 methods).
-- CP19: state (6 methods).
-- CP20: books (46 methods).
-- Optional stretch S1/S2 documentation has not started.
+No code checkpoints remain.
 
-Next invocation: `.local-review-notes/slice5/move_domain.py CP18`, then the gates,
-focused files from `CP18-tests.txt`, and the full suite through the shared lock.
-The ignored mover and gate scripts are ready; no production edits are pending.
+No code or documentation work remains in this task. S1 and S2 are complete.
 
 ## Report back
 
-Completed **CP0-CP17**, each as one commit; no skipped checkpoints. **219/298** mapped methods moved.
-Current database_service.py: **3079 lines**, down from 7897. Every completed checkpoint's full suite and Python exit code are in Progress above: **7906 passed / 15 skipped / 0 failures, exit 0**. CP17 focused: 1182 passed / 2 skipped, exit 0; full: 136.29s, exit 0.
+Completed **CP0-CP20**, each as one commit; no skipped checkpoints. **297/297** mapped methods moved.
+Current database_service.py: **979 lines**, down from 7897. Every completed checkpoint's full suite and Python exit code are in Progress above: **7906 passed / 15 skipped / 0 failures, exit 0**.
 All **312** original methods remain AST/text identical and reachable with the same dir(DatabaseService) set. DatabaseMigrator and core class attributes remain unchanged. Shared/exclusive aliases retain identity; mixin loggers keep src.db.database_service. The CP17 KoSync ownership default was explicitly checked against the canonical sentinel.
-No tests, models, migrations, journal settings or code outside src/db/ changed. The only tracked documentation change is this plan.
-The base has 312 direct DatabaseService methods rather than the estimated 317. The corrected map retains 14 core methods, including _scope_koreader_user shared by status/statistics; compute_annotation_key remains because its body names DatabaseService. Cross-domain calls remain through self/cls.
-Evidence and reusable tools: ignored `.local-review-notes/slice5/` (mover, AST/name checks with self-tests, per-domain focused lists, focused/full logs and Python exit codes, structural review diffs). Incomplete Omni gate tooling required the authorized Luna fallback. Some full runs emitted two already-known Windows subprocess charmap-decoding warnings in test_import_order; all required counts and exit codes passed. No test infrastructure was changed.
-Remaining work: CP18-CP20, then optional S1/S2. The worktree is left at a committed green checkpoint for handoff.
-Deploy requirement: **restart** (Python only, no migration), after Claude integrates. **No dev merge, restart, push or live DB/container access performed.** BRANCH_STATUS.md is left to Claude.
+No tests, models, migrations, journal settings or code outside src/db/ changed. Tracked documentation includes this plan, the S1 acquisition behavior matrix and the S2 sync-helper risk note.
+The base has 312 direct DatabaseService methods rather than the estimated 317. The corrected map retains 15 core methods, including _scope_koreader_user shared by status/statistics; compute_annotation_key remains because its body names DatabaseService, and migrate_book_data remains because its method-local relative import requires the original package. Cross-domain calls remain through self/cls.
+Evidence and reusable tools: ignored .local-review-notes/slice5/ (mover, AST/name checks with self-tests, per-domain focused lists, focused/full logs and Python exit codes, structural review diffs). Incomplete Omni gate tooling required the authorized Luna fallback. Some full runs emitted two already-known Windows subprocess charmap-decoding warnings in test_import_order; all required counts and exit codes passed. No test infrastructure was changed.
+All code checkpoints and both stretch documents are complete.
+Deploy requirement: **restart** (Python only, no migration), after Claude integrates. **No dev merge, restart, push or live DB/container access performed by this task.** BRANCH_STATUS.md is left to Claude.
+
+CP20 initially exposed six failures from the method-local relative model import in migrate_book_data. Returning that method verbatim to core fixed all six (6/6 passed), then the complete focused set passed 4337 / 4 skipped and the full suite passed 7906 / 15 skipped, Python exit 0. No method or test body changed.
+
+S1 complete: actual shared behavior is already implemented through common intent/catalog/review/pairing helpers. Provider receipt adapters, release validation and Shelfmark-audio-only scan retry remain distinct. The matrix rejects the initial research overclaim that reconciliation is pure/stateless or all retries are shared. Citations independently verified; no live/provider calls.
+
+S2 complete: nine source-verified input-only leaf candidates with production callers, direct test/binding references and risk ratings. The threshold helper is held outside the candidate scope because leader selection calls it directly. Freshness, rollback and collapse guards are excluded. The Omni research stream failed upstream while the local router was healthy; the final note was independently completed using bounded AST/source/caller checks. No sync code changed.
+
+Final verification: CP0-CP20 full logs all show 7906 passed / 15 skipped / exit 0; all focused final exit codes are 0; AST/name self-tests pass. Final core is 979 lines with 15 methods; 297 methods moved. Worktree is left clean after the final documentation commit. No live verification/deployment was performed; Claude owns integration, restart and BRANCH_STATUS.md.
