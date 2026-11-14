@@ -263,8 +263,8 @@ def test_auto_link_hash_match_attaches_without_replacing_primary():
     with patch.object(ws, "database_service", db), \
          patch.object(ws, "user_setting", return_value="on"), \
          patch.object(ws, "_existing_mapping_access", return_value="modify"), \
-         patch.object(ws, "_upsert_storyteller_mapping",
-                      return_value=(existing, None, None)) as attach, \
+         patch("src.web.storyteller_library_watch._upsert_storyteller_mapping",
+               return_value=(existing, None, None)) as attach, \
          patch.object(ws, "_claim_book_for_user_id") as claim:
         assert ws._storyteller_auto_link_candidates(
             3, client, [item], [existing], {"abs-1"}) == 1
@@ -353,7 +353,7 @@ def test_periodic_pass_filters_foreign_books_before_hash_registration():
     db.get_all_books.return_value = [mine, other]
     with patch.object(ws, "database_service", db), \
          patch.object(ws, "uc", return_value=SimpleNamespace(storyteller_client=client)), \
-         patch.object(ws, "_storyteller_auto_link_candidates", return_value=0), \
+         patch("src.web.storyteller_library_watch._storyteller_auto_link_candidates", return_value=0), \
          patch("src.services.storyteller_library_watch.scan_linked") as scan:
         ws._storyteller_user_library_pass(7)
     assert scan.call_args.args[2] == [mine]
@@ -621,7 +621,7 @@ def test_failed_attempts_do_not_stop_the_pass(auto_link_env, monkeypatch, failur
             SimpleNamespace(abs_id="old", abs_title="Old", storyteller_uuid=None,
                             ebook_filename="plain.epub", kosync_doc_id=h) if int(h, 16) <= 6 else None)
         monkeypatch.setattr(ws, "_existing_mapping_access", lambda *args, **kwargs: "modify")
-        monkeypatch.setattr(ws, "_upsert_storyteller_mapping", Mock(return_value=(None, "download failed", 500)))
+        monkeypatch.setattr("src.web.storyteller_library_watch._upsert_storyteller_mapping", Mock(return_value=(None, "download failed", 500)))
     if failure == "create":
         create.side_effect = lambda item: (SimpleNamespace(abs_id="fresh", storyteller_uuid="u6", abs_title="Fresh")
                                           if item["storyteller_uuid"] == "u6" else None)
@@ -723,7 +723,7 @@ def test_hash_match_join_claims_without_downloading(auto_link_env, monkeypatch, 
     monkeypatch.setattr(ws, "_existing_mapping_access", lambda *args, **kwargs: "join")
     upsert = Mock()
     download = Mock()
-    monkeypatch.setattr(ws, "_upsert_storyteller_mapping", upsert)
+    monkeypatch.setattr("src.web.storyteller_library_watch._upsert_storyteller_mapping", upsert)
     monkeypatch.setattr(ws, "_download_storyteller_artifact", download)
     claimed = set()
     with caplog.at_level("INFO"):

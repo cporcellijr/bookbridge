@@ -6,6 +6,8 @@
 
 Worktree: `C:/Users/cporc/.devspace/worktrees/abs-kosync-enhanced-4b6`; branch `refactor/architecture-4b-step6`; baseline `17f11eb8` (8,566 lines). No integration, push, restart or live access; Claude integrates and writes BRANCH_STATUS. Deployment requirement: **restart**.
 
+**Checkpoint handoff:** latest green CP3 (this commit; 7,461 web_server lines; full 7906 passed / 15 skipped / Python exit 0). Next: CP4 C15 (not started). Continue in this worktree; no integration or live access.
+
 CP0 reran the ignored analyzer in inventory and `--test-assignments` modes (both exit 0). Its copied legacy inventory generator now skips already-extracted spans and writes only an ignored preview. Current inventory: 20 surviving clusters (including intentionally skipped C23), 198 grouped functions, 3 classes, 19 retained functions. Assignment scan: 461 test files / 755 bindings, 140 assignments / 9 deletions / 56 in-place sites / 987 read-only uses, zero parse failures; 1,240 unresolved candidates are conservative alias/dynamic accesses requiring per-cluster manual review, not confirmed hazards.
 
 All existing module-level constants and mutable state stay in web_server for step 6, read through `web.X` at call time; no new state copies. Assignments of moved callables are interception sites and may require target repoints; assignments of retained state stay unchanged. Class definitions, if moved, retain decorators and identical identities. Function signatures, decorators, bodies (except `web.`), logs, guards, Jinja globals and route wiring are frozen. Tests may change only patch targets/source paths with the same assertions. Expected repoints below are candidates: actual caller lookup and raising-original proofs decide each site.
@@ -18,11 +20,12 @@ Primary runs focused checks and the full suite sequentially for every checkpoint
 |---|---|---|---:|---:|---|---|---|---|---|
 | CP0 | 2d60b651 | inventory/assignment ledger | 0 | 8,566 | n/a | n/a | 195 baseline rules captured | n/a | docs only; not run |
 | CP1 | 22ed3af5 | C14 → `suggestions_audio_catalog` | 8 + 1 class | 8,189 | 9/9 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 14 sites / 3 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
-| CP2 | this commit | C20 → `shelf_watch_service` | 6 | 8,060 | 6/6 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 10 sites / 4 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP2 | afeaaba9 | C20 → `shelf_watch_service` | 6 | 8,060 | 6/6 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 3 target edits; 10 sites / 4 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
+| CP3 | this commit | C13 → `storyteller_library_watch` | 4 | 7,461 | 4/4 identical | 0 unresolved / 0 MODULE-SELF | 195/195 identical | 4 target edits; 4 sites / 2 names proven | 7906 passed / 15 skipped / 0 failures; Python exit 0 |
 
 ### Remaining
 
-C13, C15, C21, C27, C22, C24, C31, C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
+C15, C21, C27, C22, C24, C31, C11, C35, C30, C28, C40, C10, C02, C03, C01, C04. C23 remains intentionally skipped (31 lines; no module justified).
 
 ### Skipped
 
@@ -70,6 +73,26 @@ Raising-original proofs (source restored after each run; each entry below passed
 - `_watch_suggestion_review` — 1 sites, Python exit 0; `tests/test_suggestions_search_tab.py:208` → `src.web_server._watch_suggestion_review`. 1 passed, 1 warning in 1.28s.
 
 Ignored evidence: `.local-review-notes/architecture-phase4b/c20-full.log`, `shelf_watch_service-gates.json`, `shelf_watch_service-proof-results.json` and per-name proof logs. Deployment requirement: **restart**; no integration/deploy/live access performed.
+
+#### CP3 verified — C13 (`storyteller_library_watch`)
+
+Moved 4; all 4 facade/module objects identical. All retained definitions, state initializers, imports and non-definition statements are AST-unchanged. No constants/state moved. Move-check 4/4; name-check 0 unresolved / 0 MODULE-SELF; offline route map 195/195 identical. Full suite: **7906 passed, 15 skipped, 15 warnings in 187.88s (0:03:07)**; Python **exit 0**, captured immediately.
+
+Focused touched-test-file run: **69 passed, 1 warning in 1.83s**, Python exit 0.
+
+Test target edits (all other lines/assertions unchanged):
+
+- `patch("src.web.storyteller_library_watch._upsert_storyteller_mapping",`
+- `patch("src.web.storyteller_library_watch._storyteller_auto_link_candidates", return_value=0), \`
+- `monkeypatch.setattr("src.web.storyteller_library_watch._upsert_storyteller_mapping", Mock(return_value=(None, "download failed", 500)))`
+- `monkeypatch.setattr("src.web.storyteller_library_watch._upsert_storyteller_mapping", upsert)`
+
+Raising-original proofs (source restored after each run; each entry below passed through mocks while the original raised):
+
+- `_storyteller_auto_link_candidates` — 1 sites, Python exit 0; `tests/test_storyteller_519.py:356` → `src.web.storyteller_library_watch._storyteller_auto_link_candidates`. 1 passed, 1 warning in 0.94s.
+- `_upsert_storyteller_mapping` — 3 sites, Python exit 0; `tests/test_storyteller_519.py:266` → `src.web.storyteller_library_watch._upsert_storyteller_mapping`; `tests/test_storyteller_519.py:624` → `src.web.storyteller_library_watch._upsert_storyteller_mapping`; `tests/test_storyteller_519.py:726` → `src.web.storyteller_library_watch._upsert_storyteller_mapping`. 6 passed, 1 warning in 0.96s.
+
+Ignored evidence: `.local-review-notes/architecture-phase4b/c13-full.log`, `storyteller_library_watch-gates.json`, `storyteller_library_watch-proof-results.json` and per-name proof logs. Deployment requirement: **restart**; no integration/deploy/live access performed.
 
 ### Current cluster inventory and interception audit
 
