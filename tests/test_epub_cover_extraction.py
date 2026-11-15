@@ -150,3 +150,26 @@ def test_concurrent_requests_extract_once(tmp_path, monkeypatch):
         release.set()
         assert first.result(timeout=10) == second.result(timeout=10) == b'cover bytes'
     assert parser.extract_cover.call_count == 1
+
+
+def test_cached_cover_does_not_wait_for_colliding_cold_request(tmp_path, monkeypatch):
+    from src.web.routes import covers
+
+    filename = 'cached.jpg'
+    (tmp_path / filename).write_bytes(b'cached cover')
+    monkeypatch.setattr(covers, '_WEB_MODULE', SimpleNamespace(
+        COVERS_DIR=tmp_path,
+        _schedule_cover_recheck=lambda _: None,
+        _send_cover_cached=lambda _: b'cached cover',
+    ))
+    locks = covers._cover_request_locks
+    cold = next(f'cold-{i}.jpg' for i in range(10000)
+                if hash(f'cold-{i}.jpg') % len(locks) == hash(filename) % len(locks))
+    lock = locks[hash(cold) % len(locks)]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        lock.acquire()
+        try:
+            response = pool.submit(covers.serve_cover, filename).result(timeout=1)
+        finally:
+            lock.release()
+    assert response == b'cached cover'
