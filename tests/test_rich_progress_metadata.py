@@ -164,6 +164,34 @@ class TestCwaCapture(unittest.TestCase):
                             parse_service_timestamp("2026-06-27T14:00:43Z"))
         self.assertEqual(state.current["status"], "Reading")
 
+    def test_unchanged_bookmark_does_not_rebuild_span_map(self):
+        """#593: more linked books than the span-map cache must not re-download kepubs."""
+        from src.sync_clients.cwa_sync_client import CWASyncClient
+        api = MagicMock()
+        api.is_configured.return_value = True
+        api.get_reading_state.return_value = {
+            "progress_percent": 0.3, "href": "c1.xhtml", "frag": "kobo.1.1",
+            "bookmark_last_modified": "2026-06-25T16:11:40Z", "status": "Reading",
+        }
+        client = CWASyncClient(api, MagicMock(), MagicMock())
+        client._resolve_uuid = lambda b: "uuid-1"
+        client._get_span_map = MagicMock(return_value={})
+        calls = []
+        import src.sync_clients.cwa_sync_client as mod
+        orig = mod.kepub_locator.progress_for_span
+        mod.kepub_locator.progress_for_span = lambda *a: calls.append(a) or 0.5
+        try:
+            first = client.get_service_state(MagicMock(abs_title="X"), None)
+            second = client.get_service_state(MagicMock(abs_title="X"), None)
+            self.assertEqual(client._get_span_map.call_count, 1)
+            self.assertEqual(second.current["chapter_progress"], first.current["chapter_progress"])
+            api.get_reading_state.return_value["frag"] = "kobo.2.1"
+            client._get_span_map.return_value = {}
+            client.get_service_state(MagicMock(abs_title="X"), None)
+            self.assertEqual(client._get_span_map.call_count, 2)
+        finally:
+            mod.kepub_locator.progress_for_span = orig
+
 
 class TestGrimmoryCapture(unittest.TestCase):
     _LIVE_SHAPED = {

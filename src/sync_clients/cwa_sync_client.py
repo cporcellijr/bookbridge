@@ -36,7 +36,10 @@ class CWASyncClient(SyncClient):
         self.delta_thresh = float(os.getenv("SYNC_DELTA_KOSYNC_PERCENT", 1)) / 100.0
         # Span maps are library-global and expensive to fetch (the kepub is ~1 MB),
         # so they are cached per Calibre id rather than re-downloaded each cycle.
-        self._span_maps = LRUCache(capacity=8)
+        self._span_maps = LRUCache(capacity=64)
+        # Last placed span per book, so an unchanged bookmark skips the span-map work
+        # entirely (a cache miss there downloads the whole kepub, #593).
+        self._span_progress = LRUCache(capacity=1024)
         self._epub_titles = LRUCache(capacity=1024)
 
     def is_configured(self) -> bool:
@@ -184,9 +187,18 @@ class CWASyncClient(SyncClient):
         # bridge normalizes against. Convert it back to an in-chapter progression so
         # the read lands where the reader actually is, rather than at the chapter
         # start the bare href would resolve to.
-        chapter_progress = self._chapter_progress_from_span(
-            uuid, state.get("href"), state.get("frag")
+        bookmark_key = (
+            state.get("bookmark_last_modified"), state.get("href"), state.get("frag")
         )
+        cached_progress = self._span_progress.get(uuid)
+        if bookmark_key[0] and cached_progress and cached_progress[0] == bookmark_key:
+            chapter_progress = cached_progress[1]
+        else:
+            chapter_progress = self._chapter_progress_from_span(
+                uuid, state.get("href"), state.get("frag")
+            )
+            if bookmark_key[0] and chapter_progress is not None:
+                self._span_progress.put(uuid, (bookmark_key, chapter_progress))
         if chapter_progress is not None:
             current["chapter_progress"] = chapter_progress
         # Rich metadata (capture-only): the bookmark's own modification time is
