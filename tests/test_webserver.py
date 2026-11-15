@@ -1966,7 +1966,9 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(first["name"], "The Reader's Copy.epub")
         self.assertEqual(first["display_name"], "The Reader's Copy - A. Author")
         source = self._read_template_source('suggestions.html')
-        self.assertIn("card.onclick = () => selectEbookCard(card, ebookFilename, displayName", source)
+        self.assertIn("card.onclick = () => {", source)
+        self.assertIn("selectEbookCard(card, ebookFilename, displayName", source)
+        self.assertIn("card.onclick = () => chooseProviderEbook(card, { ...match, source, source_id: sourceId, display_name: displayName }, fileLabel)", source)
         self.assertNotIn('onclick="selectEbookCard(', source)
 
     def test_search_finds_quoted_and_plain_greene_shorts_editions(self):
