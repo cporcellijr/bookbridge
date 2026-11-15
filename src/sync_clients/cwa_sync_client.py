@@ -191,7 +191,9 @@ class CWASyncClient(SyncClient):
             state.get("bookmark_last_modified"), state.get("href"), state.get("frag")
         )
         cached_progress = self._span_progress.get(uuid)
-        if bookmark_key[0] and cached_progress and cached_progress[0] == bookmark_key:
+        if not env_truthy("CWA_KOBO_SPAN_SYNC", "true"):
+            chapter_progress = None
+        elif bookmark_key[0] and cached_progress and cached_progress[0] == bookmark_key:
             chapter_progress = cached_progress[1]
         else:
             chapter_progress = self._chapter_progress_from_span(
