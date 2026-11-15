@@ -60,7 +60,7 @@ from src.utils.transcriber import TranscriptionCancelled
 from src.utils.source_fingerprint import AcquiredPaths, SourceAudioChanged, verify_unchanged
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
 from src.utils.progress_metadata import state_metadata_kwargs
-from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename
+from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename, normalize_href
 from src.utils.fixed_page_progress import coerce_page, is_cbz_book, is_cbz_filename
 from src.utils.ebook_sources import (
     is_grimmory_source,
@@ -1331,10 +1331,10 @@ class SyncManager:
             if not spine_map:
                 return None, None
 
-            href_norm = str(href).lower().strip()
+            href_norm = normalize_href(href).lower()
             target_item = None
             for item in spine_map:
-                item_href = str(item.get("href", "")).lower().strip()
+                item_href = normalize_href(item.get("href", "")).lower()
                 if not item_href:
                     continue
                 if href_norm in item_href or item_href in href_norm:
