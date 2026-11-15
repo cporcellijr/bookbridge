@@ -38,6 +38,20 @@ class TestNewLibrary(unittest.TestCase):
         self.service.link_user_book(self.reader.id, "library-book")
         self.service.link_user_book(self.reader.id, "library-finished")
 
+    def test_cards_mark_read_along_books_for_the_format_filter(self):
+        book = self.service.get_book("library-finished")
+        book.storyteller_uuid = "00000000-0000-0000-0000-000000000001"
+        self.service.save_book(book)
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        page = self.client.get("/").get_data(as_text=True)
+        cards = {abs_id: card for card, abs_id in re.findall(
+            r'(<article class="book-card[^>]*data-abs-id="([^"]+)"[^>]*>)', page)}
+        self.assertIn('data-readalong="true"', cards["library-finished"])
+        self.assertIn('data-readalong="false"', cards["library-book"])
+        self.assertIn('<option value="readalong">Has read-along</option>', page)
+        self.assertNotIn('value="has_audio"', page)
+
     def test_hero_rendered_and_grid_book_excluded_without_splitting_series(self):
         self.service.save_state(State(abs_id="library-book", client_name="abs", percentage=.42,
             timestamp=1512, last_updated=1793800300, user_id=self.reader.id))
@@ -923,6 +937,7 @@ class TestNewLibrary(unittest.TestCase):
             "clearAuthorQuery", "clearSeriesQuery", "clearRerun", "clearFocus", "popoverReposition",
             "activeFacet", "activeSearch", "activeAttention", "disableClear",
             "hideReset", "preserveSort", "preserveGrouping",
+            "toggle", "anyValue", "storage", "label", "keepOpen",
         ):
             with self.subTest(mutation=mutation):
                 env = os.environ.copy()
@@ -1170,9 +1185,11 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('id="search-handoff-link"', page)
         self.assertIn('id="attention-only-filter"', page)
         self.assertNotIn('<option value="needs_attention"', page)
-        for value in ("all", "paired", "has_audio", "audiobook_only", "ebook_only", "title", "author", "series", "progress", "reading", "last_sync", "added", "rating"):
+        self.assertNotIn('<option value="has_audio"', page)
+        for value in ("all", "paired", "readalong", "audiobook_only", "ebook_only", "title", "author", "series", "progress", "reading", "last_sync", "added", "rating"):
             self.assertIn(f'<option value="{value}"', page)
-        self.assertIn("candidate.format === 'needs_attention'", scripts)
+        self.assertIn("candidate.format.includes('needs_attention')", scripts)
+        self.assertIn("abs_kosync_library_filters", scripts)
         self.assertIn('needsAttention(card)', scripts)
         for label in (
             "Title", "Author", "Series", "Progress",

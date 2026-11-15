@@ -189,13 +189,7 @@
                 const total = cards.length;
                 const shown = cards.reduce(
                     (n, card) => n + (card.classList.contains('hidden') ? 0 : 1), 0);
-                const active = (statusFilter?.value !== 'all')
-                    || (filterSelect?.value !== 'all')
-                    || (seriesFilter?.value !== 'all')
-                    || (authorFilter?.value !== 'all')
-                    || !!attentionOnlyFilter?.checked
-                    || !!dashboardSearch?.value.trim();
-                filterCount.textContent = active
+                filterCount.textContent = hasActiveLibraryFilters()
                     ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})
                     : '';
             }
@@ -220,7 +214,6 @@
 
             function applyFacetCounts(select, cards, matches) {
                 if (!select) return;
-                const selected = select.value;
 
                 Array.from(select.querySelectorAll('option')).forEach(option => {
                     const label = facetOptionBaseLabel(option);
@@ -237,7 +230,7 @@
                     option.textContent = label + ' (' + count + ')';
                     // Never hide the current selection: the reader has to be able to
                     // see what they picked and undo it, even once it matches nothing.
-                    const keep = count > 0 || option.value === selected;
+                    const keep = count > 0 || option.selected;
                     option.hidden = !keep;
                     option.disabled = !keep;
                 });
@@ -253,14 +246,37 @@
             function updateFacetOptions() {
                 if (!seriesFilter && !authorFilter) return;
                 const cards = distinctBookCards();
-                const reachable = cards.filter(card =>
-                    !attentionOnlyFilter?.checked || needsAttention(card));
-                applyFacetCounts(seriesFilter, reachable, matchesSeriesFilter);
-                applyFacetCounts(authorFilter, reachable, matchesAuthorFilter);
+                applyFacetCounts(seriesFilter, cards.filter(card => passesLibraryFilters(card, 'series')), matchesSeriesFilter);
+                applyFacetCounts(authorFilter, cards.filter(card => passesLibraryFilters(card, 'author')), matchesAuthorFilter);
+            }
+
+            // Picked values in one filter group; an empty list means All.
+            function groupValues(select) {
+                return select ? Array.from(select.options)
+                    .filter(option => option.selected && option.value !== 'all')
+                    .map(option => option.value) : [];
+            }
+
+            function setGroupValues(select, values) {
+                if (!select) return;
+                Array.from(select.options).forEach(option => { option.selected = values.includes(option.value); });
+            }
+
+            // Any pick within a group, every group across them.
+            function matchesAnyValue(values, entry, matches) {
+                return !values.length || values.some(value => matches(entry, value));
+            }
+
+            function passesLibraryFilters(card, skipGroup) {
+                const matchers = {status: matchesStatusFilter, format: matchesFormatFilter,
+                                  author: matchesAuthorFilter, series: matchesSeriesFilter};
+                return (!attentionOnlyFilter?.checked || needsAttention(card))
+                    && Object.entries(matchers).every(([group, matches]) => group === skipGroup
+                        || matchesAnyValue(groupValues(filterGroups[group]), card, matches));
             }
 
             function hasActiveLibraryFilters() {
-                return Object.values(filterGroups).some(select => select && select.value !== 'all')
+                return Object.values(filterGroups).some(select => groupValues(select).length > 0)
                     || !!dashboardSearch?.value.trim()
                     || (attentionOnlyFilter?.checked === true);
             }
@@ -269,12 +285,10 @@
                 if (!filterButtonLabel) return;
                 const defaultLabel = {{ _('Filter')|tojson }};
                 let label = defaultLabel;
-                for (const [group, select] of Object.entries(filterGroups)) {
-                    if (!select || select.value === 'all') continue;
-                    const choice = Array.from(select.options).find(option => option.value === select.value);
-                    if (choice) label += ' · ' + facetOptionBaseLabel(choice);
-                    break;
-                }
+                const picked = Object.values(filterGroups).flatMap(select => select
+                    ? Array.from(select.options).filter(option => option.selected && option.value !== 'all') : []);
+                if (picked.length === 1) label += ' · ' + facetOptionBaseLabel(picked[0]);
+                else if (picked.length > 1) label += ' · ' + picked.length;
                 filterButtonLabel.textContent = label;
                 const active = hasActiveLibraryFilters();
                 filterButton?.classList.toggle('is-active', active);
@@ -312,11 +326,13 @@
             function chooseLibraryFilter(group, value) {
                 const select = filterGroups[group];
                 if (!select) return;
-                for (const [key, control] of Object.entries(filterGroups)) {
-                    if (control) control.value = key === group ? value : 'all';
-                }
+                const picked = groupValues(select);
+                setGroupValues(select, value === 'all' ? []
+                    : picked.includes(value) ? picked.filter(item => item !== value) : [...picked, value]);
                 filterBooks();
-                closeFilterPanel();
+                // The option buttons were rebuilt; keep focus on the one just toggled.
+                const holder = document.getElementById('filter-' + group + '-options');
+                Array.from(holder?.children || []).find(button => button.dataset.value === value)?.focus();
             }
 
             function renderFilterOptions() {
@@ -336,7 +352,9 @@
                         button.type = 'button';
                         button.className = 'library-filter-option';
                         button.textContent = option.textContent;
-                        button.setAttribute('aria-pressed', option.value === select.value ? 'true' : 'false');
+                        button.dataset.value = option.value;
+                        const pressed = option.value === 'all' ? !groupValues(select).length : option.selected;
+                        button.setAttribute('aria-pressed', pressed ? 'true' : 'false');
                         button.addEventListener('click', () => chooseLibraryFilter(group, option.value));
                         holder.appendChild(button);
                     });
@@ -348,26 +366,23 @@
                 return !!select && Array.from(select.options).some(option => option.value === value);
             }
 
+            // Older saves hold one value per group; current ones hold a list.
             function normalizeSavedLibraryFilters(saved, legacyFormat) {
+                const list = value => (Array.isArray(value) ? value : [value]).filter(item => item && item !== 'all');
                 const candidate = {
-                    status: saved?.status || 'all',
-                    format: saved?.format || (legacyFormat === 'audiobook' ? 'has_audio' : legacyFormat) || 'all',
-                    author: saved?.author || 'all',
-                    series: saved?.series || 'all'
+                    status: list(saved?.status),
+                    format: list(saved?.format || (legacyFormat === 'audiobook' ? 'has_audio' : legacyFormat)),
+                    author: list(saved?.author),
+                    series: list(saved?.series)
                 };
-                let attention = !!saved?.attention;
-                if (candidate.format === 'needs_attention') {
-                    candidate.format = 'all';
-                    attention = true;
-                }
-                if (candidate.series === 'standalone') candidate.series = 'none';
-                else if (candidate.series === 'in_series') candidate.series = 'all';
+                const attention = !!saved?.attention || candidate.format.includes('needs_attention');
+                // "Has Audio" was retired: it is exactly these two formats.
+                candidate.format = candidate.format.flatMap(value =>
+                    value === 'has_audio' ? ['paired', 'audiobook_only'] : [value]);
+                candidate.series = candidate.series.map(value => value === 'standalone' ? 'none' : value);
                 for (const group of Object.keys(candidate)) {
-                    if (!isValidLibraryFilter(group, candidate[group])) candidate[group] = 'all';
-                }
-                const active = Object.keys(candidate).find(group => candidate[group] !== 'all');
-                for (const group of Object.keys(candidate)) {
-                    if (group !== active) candidate[group] = 'all';
+                    candidate[group] = [...new Set(candidate[group])]
+                        .filter(value => isValidLibraryFilter(group, value));
                 }
                 return {...candidate, attention};
             }
@@ -385,7 +400,8 @@
                 });
                 filterBackdrop?.addEventListener('click', () => closeFilterPanel());
                 document.addEventListener('click', event => {
-                    if (filterPanel && !filterPanel.hidden && !filterHost.contains(event.target)) {
+                    // composedPath, not contains: a toggled option button is rebuilt mid-click.
+                    if (filterPanel && !filterPanel.hidden && !event.composedPath().includes(filterHost)) {
                         closeFilterPanel(false);
                     }
                 });
@@ -403,7 +419,7 @@
 
             function clearLibraryFilters(focusTrigger = false) {
                 for (const select of Object.values(filterGroups)) {
-                    if (select) select.value = 'all';
+                    setGroupValues(select, []);
                 }
                 if (dashboardSearch) dashboardSearch.value = '';
                 if (attentionOnlyFilter) attentionOnlyFilter.checked = false;
@@ -451,11 +467,8 @@
             function matchesFormatFilter(card, formatValue) {
                 if (formatValue === 'all') return true;
                 if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';
-                const syncMode = card.dataset.syncMode || 'audiobook';
-                if (formatValue === 'has_audio') {
-                    return syncMode === 'audiobook' || syncMode === 'audiobook_only';
-                }
-                return syncMode === formatValue;
+                if (formatValue === 'readalong') return card.dataset.readalong === 'true';
+                return (card.dataset.syncMode || 'audiobook') === formatValue;
             }
 
             // 'all', 'none' (no series at all), or 'series:<name>' for one named series.
@@ -492,18 +505,18 @@
             }
 
             function filterBooks() {
-                const filterValue = filterSelect.value;
-                const statusValue = statusFilter ? statusFilter.value : 'all';
+                const filterValues = groupValues(filterSelect);
+                const statusValues = groupValues(statusFilter);
                 const groupedStatus = new Map();
                 if (!document.body.classList.contains('series-grouping-off')) {
                     document.querySelectorAll('.series-group').forEach(group => {
-                        const matches = matchesStatusFilter(group, statusValue);
+                        const matches = matchesAnyValue(statusValues, group, matchesStatusFilter);
                         group.querySelectorAll('.book-card').forEach(card =>
                             groupedStatus.set(card, matches));
                     });
                 }
-                const seriesValue = seriesFilter ? seriesFilter.value : 'all';
-                const authorValue = authorFilter ? authorFilter.value : 'all';
+                const seriesValues = groupValues(seriesFilter);
+                const authorValues = groupValues(authorFilter);
                 const searchString = dashboardSearch ? dashboardSearch.value.toLowerCase() : '';
 
                 // Cards clearing every non-search predicate. A series-name search may stand
@@ -524,10 +537,10 @@
                     const seriesName = (card.dataset.seriesName || '').toLowerCase();
 
                     let isVisible = (groupedStatus.has(card)
-                            ? groupedStatus.get(card) : matchesStatusFilter(card, statusValue))
-                        && matchesFormatFilter(card, filterValue)
-                        && matchesSeriesFilter(card, seriesValue)
-                        && matchesAuthorFilter(card, authorValue)
+                            ? groupedStatus.get(card) : matchesAnyValue(statusValues, card, matchesStatusFilter))
+                        && matchesAnyValue(filterValues, card, matchesFormatFilter)
+                        && matchesAnyValue(seriesValues, card, matchesSeriesFilter)
+                        && matchesAnyValue(authorValues, card, matchesAuthorFilter)
                         && (!attentionOnlyFilter?.checked || needsAttention(card));
                     if (isVisible) {
                         passesFilters.add(card);
@@ -582,12 +595,13 @@
                 // The first grouping pass must not overwrite saved filters before restore.
                 if (filterInitialized) {
                     try {
-                        localStorage.setItem('abs_kosync_filters', JSON.stringify({
-                            format: filterValue,
-                            series: seriesValue,
-                            author: authorValue,
+                        // Lists live under their own key; Classic keeps reading one value from abs_kosync_filters.
+                        localStorage.setItem('abs_kosync_library_filters', JSON.stringify({
+                            format: filterValues,
+                            series: seriesValues,
+                            author: authorValues,
                             attention: attentionOnlyFilter ? attentionOnlyFilter.checked : savedAttentionPreference,
-                            status: statusValue
+                            status: statusValues
                         }));
                     } catch (e) {
                         console.debug('LocalStorage error:', e);
@@ -964,12 +978,8 @@
                 if (!enabled) applySeriesGrouping(false);
             }
 
-            // One active facet at a time; keep the hidden selects as canonical state.
+            // The hidden multi-selects are the canonical filter state.
             if (filterSelect) {
-                for (const [group, select] of Object.entries(filterGroups)) {
-                    if (select) select.addEventListener('change', () =>
-                        chooseLibraryFilter(group, select.value));
-                }
                 if (attentionOnlyFilter) attentionOnlyFilter.addEventListener('change', () => {
                     savedAttentionPreference = attentionOnlyFilter.checked;
                     filterBooks();
@@ -978,7 +988,8 @@
                 let savedFilters = null;
                 let legacyFormat = null;
                 try {
-                    const raw = localStorage.getItem('abs_kosync_filters');
+                    const raw = localStorage.getItem('abs_kosync_library_filters')
+                        || localStorage.getItem('abs_kosync_filters');
                     if (raw) savedFilters = JSON.parse(raw);
                     else legacyFormat = localStorage.getItem('abs_kosync_filter');
                 } catch (e) {
@@ -986,7 +997,7 @@
                 }
                 const restored = normalizeSavedLibraryFilters(savedFilters, legacyFormat);
                 for (const [group, select] of Object.entries(filterGroups)) {
-                    if (select) select.value = restored[group];
+                    setGroupValues(select, restored[group]);
                 }
                 savedAttentionPreference = restored.attention;
                 if (attentionOnlyFilter) attentionOnlyFilter.checked = restored.attention;
