@@ -184,3 +184,25 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
             if entry.get("book_id") and (preflights or {}).get(entry["book_id"]):
                 entry["preflight"] = preflights[entry["book_id"]]
     return sections
+
+
+def acquisition_job_needs_choice(job: dict) -> bool:
+    """True when a saved book request waits on the reader: a release pick, an edition choice or a failed submission."""
+    for kind, prefix in (("ebook", "ebook"), ("audiobook", "audio")):
+        if job.get(f"{prefix}_submission_state") in ("needs_release", "failed"):
+            return True
+        if job.get(f"{prefix}_library_state") == "needs_review" and (job.get("review_candidates") or {}).get(kind):
+            return True
+    return any(
+        receipt.get("decision_action") == "pick_release" and not receipt.get("dismissed")
+        and receipt.get("status") not in ("cancelled", "paired", "failed", "declined")
+        for receipt in job.get("requests") or []
+    )
+
+
+def order_acquisition_jobs(jobs: list[dict], bridge_statuses: dict) -> list[dict]:
+    """Flag each job ``needs_choice``/``done`` and order: needs a choice, in progress, done (newest first within each)."""
+    for job in jobs:
+        job["needs_choice"] = acquisition_job_needs_choice(job)
+        job["done"] = bool(job.get("linked_abs_id")) and bridge_statuses.get(job["linked_abs_id"]) == "active"
+    return sorted(jobs, key=lambda job: 0 if job["needs_choice"] else 2 if job["done"] else 1)

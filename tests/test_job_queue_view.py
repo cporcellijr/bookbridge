@@ -13,7 +13,9 @@ from unittest.mock import patch
 
 from src.db.database_service import DatabaseService
 from src.db.models import Book, Job, JOB_KIND_READALONG
-from src.services.job_queue_view import build_job_queue_view
+from src.services.job_queue_view import (
+    acquisition_job_needs_choice, build_job_queue_view, order_acquisition_jobs,
+)
 from src.utils.user_context import set_current_user_id, reset_current_user_id
 from tests.test_webserver import MockContainer
 
@@ -279,7 +281,18 @@ class JobQueueRouteTests(unittest.TestCase):
                 self.assertIn('data-provider-action="dismiss-receipt"', markup)
                 self.assertIn('data-provider-help', markup)
                 self.assertIn('data-provider-settings', markup)
-                self.assertIn("Dismiss only hides this job; provider requests continue.", markup)
+                self.assertIn("Hide only removes this request from the list; provider requests continue.", markup)
+                self.assertNotIn("Dismiss job", markup)
+                # Finished request collapses under its header; waiting-on-you sorts first.
+                self.assertIn(f'<details class="acquisition-job-more" data-job-id="{paired["id"]}">', markup)
+                self.assertIn(f'href="/book/paired-bridge-book">Open book</a>', markup)
+                self.assertRegex(markup, rf'data-job-id="{paired["id"]}">\s*Clear</button>')
+                self.assertRegex(markup, rf'data-job-id="{retryable["id"]}">\s*Hide</button>')
+                self.assertIn("Needs your choice", markup)
+                self.assertLess(markup.index(f'id="acquisition-job-{review["id"]}"'),
+                                markup.index(f'id="acquisition-job-{retryable["id"]}"'))
+                self.assertLess(markup.index(f'id="acquisition-job-{retryable["id"]}"'),
+                                markup.index(f'id="acquisition-job-{paired["id"]}"'))
                 self.assertNotIn("Private Acquisition", markup)
                 self.assertNotIn("RAW_INTERNAL_REASON_SENTINEL", markup)
                 self.assertNotIn("RAW_SCAN_REASON_SENTINEL", markup)
@@ -513,6 +526,29 @@ class JobQueueRouteTests(unittest.TestCase):
             r'data-provider-action="cancel-receipt"\s+data-receipt-id="(\d+)"', markup)}
         self.assertIn(ids["reviewing-audio"], cancellable)
         self.assertNotIn(ids["delivered-ebook"], cancellable)
+
+    def test_library_header_links_book_requests_that_need_a_choice(self):
+        """A release pick waiting in a book request is announced on the Library page, owner only."""
+        picking = self.db.create_acquisition_job(self.alice.id, "Pick Me", ["audiobook"])
+        self.db.add_acquisition_request_to_job(self.alice.id, picking["id"], {
+            "service": "BookOrbit", "media_kind": "audiobook", "remote_kind": "request",
+            "remote_id": "pick-1", "status": "waiting", "remote_status": "searching",
+            "decision_action": "pick_release",
+        })
+        self.db.create_acquisition_job(self.alice.id, "Just Waiting", ["ebook"])
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        for mode in ("classic", "new"):
+            with self.subTest(mode=mode):
+                self.db.set_user_credential(self.alice.id, "UI_MODE", mode)
+                page = html.unescape(self.client.get("/").get_data(as_text=True))
+                self.assertIn("Needs your choice", page)
+                self.assertIn(f'/job-queue?acquisition_job={picking["id"]}', page)
+        self.client.get("/logout")
+        self.client.post("/login", data={"username": "bob", "password": "pw-bob"})
+        for mode in ("classic", "new"):
+            with self.subTest(user="bob", mode=mode):
+                self.db.set_user_credential(self.bob.id, "UI_MODE", mode)
+                self.assertNotIn("Needs your choice", self.client.get("/").get_data(as_text=True))
 
     def test_preflight_ui_is_scoped_and_ack_is_only_for_current_pair(self):
         from src.services.transcription_preflight import (
@@ -980,3 +1016,40 @@ class JobQueueRouteTests(unittest.TestCase):
                     fail, [{"abs_title": "Broken job"}], label="batch-match-process",
                 )
         self.assertFalse(ws._VISIBLE_BATCHES)
+
+
+class AcquisitionJobOrderingTests(unittest.TestCase):
+    """Which saved book requests wait on the reader, and how Processing orders them."""
+
+    def _job(self, **fields):
+        return {"id": fields.pop("id", "j"), "requests": [], "review_candidates": {}, **fields}
+
+    def test_needs_choice_states(self):
+        pick = {"decision_action": "pick_release", "status": "waiting", "dismissed": False}
+        self.assertTrue(acquisition_job_needs_choice(self._job(requests=[pick])))
+        self.assertTrue(acquisition_job_needs_choice(self._job(audio_submission_state="needs_release")))
+        self.assertTrue(acquisition_job_needs_choice(self._job(ebook_submission_state="failed")))
+        self.assertTrue(acquisition_job_needs_choice(self._job(
+            audio_library_state="needs_review", review_candidates={"audiobook": [{"source_id": "x"}]})))
+
+    def test_no_choice_when_nothing_to_act_on(self):
+        self.assertFalse(acquisition_job_needs_choice(self._job(ebook_submission_state="accepted")))
+        self.assertFalse(acquisition_job_needs_choice(self._job(audio_library_state="needs_review")))
+        for receipt in (
+            {"decision_action": "pick_release", "status": "waiting", "dismissed": True},
+            {"decision_action": "pick_release", "status": "cancelled", "dismissed": False},
+            {"decision_action": "pick_release", "status": "paired", "dismissed": False},
+            {"decision_action": "wait", "status": "waiting", "dismissed": False},
+        ):
+            with self.subTest(receipt=receipt):
+                self.assertFalse(acquisition_job_needs_choice(self._job(requests=[receipt])))
+
+    def test_order_needs_choice_then_running_then_done(self):
+        done = self._job(id="done", linked_abs_id="b1")
+        linked_processing = self._job(id="linked-processing", linked_abs_id="b2")
+        running = self._job(id="running")
+        choice = self._job(id="choice", ebook_submission_state="needs_release")
+        ordered = order_acquisition_jobs([done, linked_processing, running, choice],
+                                         {"b1": "active", "b2": "processing"})
+        self.assertEqual([job["id"] for job in ordered], ["choice", "linked-processing", "running", "done"])
+        self.assertEqual([job["done"] for job in ordered], [False, False, False, True])

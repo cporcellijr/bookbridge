@@ -29,6 +29,9 @@
             {% if processing.items %}
             <a class="meta-link processing-meta" href="{{ url_for('job_queue_page') }}">{{ _('Processing') }} <span class="count">{{ processing.items|length }}</span></a>
             {% endif %}
+            {% if acquisition_choice_jobs %}
+            <a class="meta-link acquisition-choice-meta" href="{{ url_for('job_queue_page', acquisition_job=acquisition_choice_jobs[0].id) }}">{{ _('Needs your choice') }} <span class="count">{{ acquisition_choice_jobs|length }}</span></a>
+            {% endif %}
             {% if attention.items %}
             <details id="needs-attention">
                 <summary class="meta-link">{{ _('Needs attention') }} <span class="count">{{ attention.items|length }}</span></summary>
