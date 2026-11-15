@@ -7,7 +7,8 @@ from typing import Optional
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup, Tag
-from lxml import html
+from lxml import etree, html
+from urllib.parse import unquote, urlsplit
 import hashlib
 import json
 import logging
@@ -613,50 +614,69 @@ class EbookParser:
             return hashlib.md5(filename.encode('utf-8'), usedforsecurity=False).hexdigest()
         return self._compute_koreader_hash_from_bytes(content)
 
-    def extract_cover(self, filepath, output_path):
-        """
-        Extract cover image from EPUB to output_path.
-        Returns True if successful, False otherwise.
-        """
+    def extract_cover(self, filepath: str | Path, output_path: str | Path) -> bool:
+        """Extract only EPUB cover metadata and image, never embedded audio."""
+        temporary_path = None
         try:
             filepath = Path(filepath)
-            # 1. Try to get cover from metadata using ebooklib
-            try:
-                book = _read_epub(str(filepath))
-                # Check for cover item
-                cover_item = None
+            with zipfile.ZipFile(filepath) as archive:
+                def read_entry(name, limit):
+                    if archive.getinfo(name).file_size > limit:
+                        raise ValueError(f"Cover extraction entry exceeds {limit} bytes")
+                    with archive.open(name) as entry:
+                        data = entry.read(limit + 1)
+                    if len(data) > limit:
+                        raise ValueError("Cover extraction entry exceeds size limit")
+                    return data
 
-                # Method A: get_item_with_id('cover') or similar
-                # ebooklib doesn't have a standard 'get_cover' but often it's in the manifest
+                def parse_metadata(name):
+                    return etree.fromstring(
+                        read_entry(name, 2 * 1024 * 1024),
+                        parser=etree.XMLParser(resolve_entities=False, no_network=True),
+                    )
 
-                # Method B: Iterate items
-                for item in book.get_items():
-                    if item.get_type() == ebooklib.ITEM_IMAGE:
-                        # naive check: is it named "cover"?
-                        if 'cover' in item.get_name().lower():
-                            cover_item = item
-                            break
-                    if item.get_type() == ebooklib.ITEM_COVER:
-                        cover_item = item
-                        break
-
-                if cover_item:
-                    with open(output_path, 'wb') as f:
-                        f.write(cover_item.get_content())
+                container = parse_metadata('META-INF/container.xml')
+                roots = container.xpath('//*[local-name()="rootfile"]/@full-path')
+                if not roots:
+                    return False
+                opf_path = roots[0]
+                package = parse_metadata(opf_path)
+                images = package.xpath(
+                    '//*[local-name()="manifest"]/*[local-name()="item"]'
+                    '[starts-with(@media-type, "image/")]'
+                )
+                cover_ids = package.xpath(
+                    '//*[local-name()="metadata"]/*[local-name()="meta"]'
+                    '[@name="cover"]/@content'
+                )
+                candidates = [item for item in images if 'cover-image' in item.get('properties', '').split()]
+                candidates += [item for item in images if item.get('id') in cover_ids]
+                candidates += [item for item in images if 'cover' in item.get('href', '').lower()]
+                for item in candidates:
+                    href = urlsplit(item.get('href', ''))
+                    if href.scheme or href.netloc:
+                        continue
+                    name = posixpath.normpath(posixpath.join(posixpath.dirname(opf_path), unquote(href.path)))
+                    if name.startswith(('/', '../')) or name not in archive.namelist():
+                        continue
+                    data = read_entry(name, 32 * 1024 * 1024)
+                    if not data:
+                        continue
+                    output_path = Path(output_path)
+                    with tempfile.NamedTemporaryFile(dir=output_path.parent, delete=False) as output:
+                        temporary_path = output.name
+                        output.write(data)
+                    os.replace(temporary_path, output_path)
+                    temporary_path = None
                     logger.debug(f"Extracted cover for {filepath.name}")
                     return True
-            except Exception as e:
-                logger.debug(f"ebooklib cover extraction failed for {filepath.name}: {e}")
-
-            # 2. Fallback: ZipFile (if ebooklib fails or returns nothing)
-            # (ebooklib is basically a zip wrapper anyway, but sometimes direct zip access is easier if we just want the file)
-            # For now, let's stick to the attempt above. If valid EPUB, ebooklib should handle it.
-
-            return False
-
+                return False
         except Exception as e:
             logger.error(f"❌ Error extracting cover from '{filepath}': {e}", exc_info=True)
             return False
+        finally:
+            if temporary_path is not None:
+                os.unlink(temporary_path)
 
     def _build_href_resolver(self, str_path):
         """Return a fn mapping an ebooklib OPF-relative href to its full archive
