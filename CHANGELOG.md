@@ -25,6 +25,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **CWA sync no longer re-downloads every book on every poll.** With more than eight books linked
+  to Calibre-Web-Automated, each sync pass fetched every book's full Kobo file again, which could
+  freeze CWA while it repacked them and pause CWA progress sync. Unchanged bookmarks now reuse the
+  last position, and the cache holds more books. (#593)
+
 - **Readium reading positions resolve correctly when chapter filenames are URL-encoded.**
   Readers such as AudioBooth can now match encoded chapter links against the EPUB spine
   instead of falling back to a less accurate whole-book percentage.
