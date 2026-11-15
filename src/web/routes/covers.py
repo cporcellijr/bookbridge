@@ -40,8 +40,12 @@ def register(app: Any, web_module: Any) -> None:
 _cover_request_locks = tuple(threading.Lock() for _ in range(64))
 
 
-def serve_cover(filename):
+def serve_cover(filename: str) -> Any:
     """Coalesce concurrent lazy extractions with a bounded set of locks."""
+    web = _web_server()
+    if (web.COVERS_DIR / filename).exists():
+        web._schedule_cover_recheck(filename.replace('.jpg', ''))
+        return web._send_cover_cached(filename)
     with _cover_request_locks[hash(filename) % len(_cover_request_locks)]:
         return _serve_cover_locked(filename)
 
