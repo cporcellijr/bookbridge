@@ -194,6 +194,7 @@ class Book(Base):
     synopsis_checked_at = Column(Float, nullable=True)  # epoch of the last lookup; empty results are retried
     ebook_source = Column(String(32), nullable=True)
     ebook_source_id = Column(String(255), nullable=True)
+    ebook_source_file_id = Column(String(255), nullable=True)
     original_ebook_filename = Column(String(500))
     kosync_doc_id = Column(String(255), index=True)
     transcript_file = Column(String(500))
@@ -244,7 +245,8 @@ class Book(Base):
                  transcript_source: str = None,
                  storyteller_uuid: str = None, bookfusion_id: str = None, abs_ebook_item_id: str = None,
                  series_name: str = None, series_sequence: float = None,
-                 user_id: int = None, alignment_queue_position: float = None):
+                 user_id: int = None, alignment_queue_position: float = None,
+                 ebook_source_file_id: str = None):
         self.abs_id = abs_id
         self.abs_title = abs_title
         self.audio_source = audio_source
@@ -257,6 +259,7 @@ class Book(Base):
         self.ebook_filename = ebook_filename
         self.ebook_source = ebook_source
         self.ebook_source_id = ebook_source_id
+        self.ebook_source_file_id = ebook_source_file_id
         self.original_ebook_filename = original_ebook_filename
         self.kosync_doc_id = kosync_doc_id
         self.transcript_file = transcript_file

@@ -3114,7 +3114,9 @@ def resolve_ebook_identifiers(
         return meta
 
     try:
-        content = client.download_book(source_id)
+        from src.utils.provider_ebook_files import mapped_ebook_selection
+        selection = mapped_ebook_selection(book) if source in {"bookorbit", "booklore", "grimmory"} else {}
+        content = client.download_book(source_id, **selection)
     except Exception as exc:
         logger.warning("Library download for ebook metadata failed (%s/%s): %s", source, source_id, exc, exc_info=True)
         return meta

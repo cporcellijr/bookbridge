@@ -50,6 +50,12 @@ def match():
         selected_filename = (web.request.form.get('ebook_filename') or '').strip() or None
         ebook_source = (web.request.form.get('ebook_source') or web.request.form.get('source_type') or '').strip() or None
         ebook_source_id = (web.request.form.get('ebook_source_id') or web.request.form.get('source_id') or '').strip() or None
+        ebook_source_file_id = (web.request.form.get('ebook_source_file_id') or '').strip() or None
+        if ebook_source_file_id and web.normalize_ebook_source(ebook_source) not in {'BookOrbit', 'Booklore'}:
+            return "File selection is not supported for this ebook source", 400
+        if ebook_source_file_id:
+            from src.utils.provider_ebook_files import explicit_ebook_file_id
+            ebook_source_file_id = explicit_ebook_file_id(web.uc(), ebook_source, ebook_source_id, ebook_source_file_id)
         source_path = (web.request.form.get('ebook_source_path') or web.request.form.get('source_path') or '').strip() or None
         storyteller_uuid = (web.request.form.get('storyteller_uuid') or '').strip() or None
         forge_stage_mode = (web.request.form.get('forge_stage_mode') or '').strip() or None
@@ -167,6 +173,7 @@ def match():
                 ebook_source_id=ebook_source_id,
                 storyteller_uuid=storyteller_uuid,
                 ebook_source_path=source_path,
+                ebook_source_file_id=ebook_source_file_id,
             )
             if err_msg:
                 return err_msg, err_code
@@ -213,6 +220,7 @@ def match():
                 ebook_source=ebook_source,
                 ebook_source_id=ebook_source_id,
                 duration=0.0,
+                ebook_source_file_id=ebook_source_file_id,
             )
             if err_msg:
                 return err_msg, err_code
@@ -232,6 +240,8 @@ def match():
             source_path = web._submitted_ebook_path(web.request.form.get('source_path')) or source_path
             source_id = web.request.form.get('source_id')
             text_item = web._build_forge_text_item(source_type, source_id, source_path, original_filename)
+            if ebook_source_file_id:
+                text_item['ebook_source_file_id'] = ebook_source_file_id
             normalized_source_type = text_item.get("source")
 
             initial_booklore_id = source_id if normalized_source_type == 'Booklore' else None
@@ -241,6 +251,7 @@ def match():
                 bookorbit_id=source_id if normalized_source_type == 'BookOrbit' else None,
                 kavita_id=source_id if normalized_source_type == 'Kavita' else None,
                 source_path=source_path,
+                ebook_source_file_id=ebook_source_file_id,
             )
 
             if not kosync_doc_id:
@@ -275,6 +286,7 @@ def match():
                     audio_duration=audio_duration,
                     ebook_source=normalized_source_type or None,
                     ebook_source_id=(source_id or '').strip() or None,
+                    ebook_source_file_id=ebook_source_file_id,
                 )
                 web.database_service.save_book(book)
                 web._record_forge_match_job(forge_id, progress=0.02, last_error="Queued Forge & Match")
@@ -303,6 +315,7 @@ def match():
                     duration=web.manager.get_duration(selected_ab),
                     ebook_source=normalized_source_type or None,
                     ebook_source_id=(source_id or '').strip() or None,
+                    ebook_source_file_id=ebook_source_file_id,
                 )
                 web.database_service.save_book(book)
                 web._record_forge_match_job(abs_id, progress=0.02, last_error="Queued Forge & Match")
@@ -371,10 +384,11 @@ def match():
             # Compute KOSync ID (Grimmory API first, filesystem fallback)
             kosync_doc_id = web.get_kosync_id_for_ebook(
                 ebook_filename,
-                booklore_id,
+                ebook_source_id if web.is_grimmory_source(ebook_source) else booklore_id,
                 bookorbit_id=ebook_source_id if ebook_source == 'BookOrbit' else None,
                 kavita_id=ebook_source_id if ebook_source == 'Kavita' else None,
                 source_path=source_path,
+                ebook_source_file_id=ebook_source_file_id,
             )
 
         if not kosync_doc_id and joins_existing:
@@ -388,7 +402,10 @@ def match():
         # preserve it. This respects manual overrides via update_hash and
         # prevents re-match from reverting a user's custom hash.
         current_book_entry = web.database_service.get_book(abs_id)
-        if current_book_entry and current_book_entry.kosync_doc_id:
+        from src.utils.provider_ebook_files import same_ebook_selection
+        if current_book_entry and current_book_entry.kosync_doc_id and same_ebook_selection(
+            current_book_entry, selected_filename, ebook_source, ebook_source_id, ebook_source_file_id,
+        ):
             web.logger.info(f"🔄 Preserving existing hash '{current_book_entry.kosync_doc_id}' for '{abs_id}' instead of new hash '{kosync_doc_id}'")
             kosync_doc_id = current_book_entry.kosync_doc_id
         if current_book_entry and not original_ebook_filename:
@@ -496,6 +513,7 @@ def match():
             abs_ebook_item_id=abs_ebook_item_id,
             ebook_source=ebook_source,
             ebook_source_id=ebook_source_id,
+            ebook_source_file_id=ebook_source_file_id,
             series_name=_match_series_name,
             series_sequence=_match_series_seq,
         )

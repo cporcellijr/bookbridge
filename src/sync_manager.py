@@ -2262,6 +2262,10 @@ class SyncManager:
         )
 
         try:
+            from src.utils.provider_ebook_files import mapped_ebook_selection
+            selection = mapped_ebook_selection(book)
+            if selection and normalized_source in {"BookOrbit", "Booklore"}:
+                return cached_path if client.download_ebook_to_path(ebook_source_id, output_path=cached_path, **selection) else None
             content = client.download_book(ebook_source_id)
         except Exception as e:
             logger.warning(
@@ -2354,7 +2358,8 @@ class SyncManager:
         )
         if by_id_result is not None:
             return by_id_result
-        if (mapped_book and is_grimmory_source(getattr(mapped_book, "ebook_source", None))
+        from src.utils.provider_ebook_files import mapped_ebook_selection
+        if (mapped_book and (is_grimmory_source(getattr(mapped_book, "ebook_source", None)) or mapped_ebook_selection(mapped_book))
                 and getattr(mapped_book, "ebook_source_id", None)):
             return None
 
@@ -3477,7 +3482,7 @@ class SyncManager:
             getattr(current, field, None) == getattr(expected, field, None)
             for field in (
                 "status", "audio_source", "audio_source_id", "audio_duration",
-                "duration", "ebook_source", "ebook_source_id", "ebook_filename",
+                "duration", "ebook_source", "ebook_source_id", "ebook_source_file_id", "ebook_filename",
                 "original_ebook_filename", "kosync_doc_id", "sync_mode",
             )
         )

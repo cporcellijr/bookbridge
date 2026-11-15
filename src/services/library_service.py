@@ -133,7 +133,16 @@ class LibraryService:
                                             logger.info(f"   ✅ Priority 0 (Explicit mapping): Downloaded to {cache_path}")
                                             return str(cache_path)
                                     return None
-                                content = client.download_book(book.ebook_source_id)
+                                from src.utils.provider_ebook_files import mapped_ebook_selection
+                                selection = mapped_ebook_selection(book)
+                                if selection and normalized_source in {"BookOrbit", "Booklore"}:
+                                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                                    if (client.download_ebook_to_path(book.ebook_source_id, output_path=cache_path, **selection)
+                                            and cache_path.is_file() and self._is_epub_file(str(cache_path))):
+                                        return str(cache_path)
+                                    return None
+                                else:
+                                    content = client.download_book(book.ebook_source_id)
                                 if content:
                                     cache_path.parent.mkdir(parents=True, exist_ok=True)
                                     cache_path.write_bytes(content)

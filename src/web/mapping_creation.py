@@ -49,6 +49,7 @@ def _create_or_update_library_audio_mapping(
     ebook_source_id,
     storyteller_uuid,
     ebook_source_path=None,
+    ebook_source_file_id=None,
 ):
     """Create/refresh a mapping whose audio lives on a library provider
     (Grimmory or BookOrbit) instead of ABS."""
@@ -101,9 +102,13 @@ def _create_or_update_library_audio_mapping(
             bookorbit_id=ebook_source_id if ebook_source == "BookOrbit" else None,
             kavita_id=ebook_source_id if ebook_source == "Kavita" else None,
             source_path=ebook_source_path,
+            ebook_source_file_id=ebook_source_file_id,
         )
 
-    if existing_book and existing_book.kosync_doc_id:
+    from src.utils.provider_ebook_files import same_ebook_selection
+    if existing_book and existing_book.kosync_doc_id and same_ebook_selection(
+        existing_book, original_ebook_filename, ebook_source, ebook_source_id, ebook_source_file_id,
+    ):
         kosync_doc_id = existing_book.kosync_doc_id
 
     if not kosync_doc_id:
@@ -152,6 +157,8 @@ def _create_or_update_library_audio_mapping(
     target_book.audio_duration = audio_duration if audio_duration is not None else target_book.audio_duration
     target_book.audio_provider_book_id = str(audio_provider_book_id or audio_source_id)
     target_book.audio_provider_file_id = str(audio_provider_file_id) if audio_provider_file_id else target_book.audio_provider_file_id
+    from src.utils.provider_ebook_files import apply_ebook_file_selection
+    apply_ebook_file_selection(target_book, original_ebook_filename or resolved_ebook_filename, ebook_source_id, ebook_source_file_id)
     target_book.ebook_filename = resolved_ebook_filename
     target_book.original_ebook_filename = original_ebook_filename or target_book.original_ebook_filename
     target_book.ebook_source = ebook_source or target_book.ebook_source
@@ -321,6 +328,7 @@ def _create_or_update_audio_only_mapping(
         "ebook_filename",
         "ebook_source",
         "ebook_source_id",
+        "ebook_source_file_id",
         "original_ebook_filename",
         "kosync_doc_id",
         "transcript_file",

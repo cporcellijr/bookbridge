@@ -569,6 +569,17 @@ class ForgeService:
         logger.info(f"{context}: Copied local source '{src_path.name}'")
         return "copy"
 
+    def _stage_provider_ebook(self, client, book_id, text_item, output_path, fallback_filename=None):
+        file_id = text_item.get("ebook_source_file_id")
+        if file_id:
+            filename = self._extract_original_filename(text_item, fallback_filename)
+            return client.download_ebook_to_path(book_id, filename, output_path, ebook_file_id=file_id)
+        content = client.download_book(book_id)
+        if not content:
+            return False
+        output_path.write_bytes(content)
+        return True
+
     @staticmethod
     def _extract_original_filename(text_item, fallback_filename=None):
         """
@@ -1275,9 +1286,7 @@ class ForgeService:
             elif source == 'Booklore':
                 booklore_id = text_item.get('booklore_id')
                 if booklore_id:
-                    content = self.booklore_client.download_book(booklore_id)
-                    if content:
-                        epub_path.write_bytes(content)
+                    if self._stage_provider_ebook(self.booklore_client, booklore_id, text_item, epub_path):
                         text_success = True
                         logger.info(f"⚡ Forge: Grimmory epub downloaded")
                     else:
@@ -1285,9 +1294,7 @@ class ForgeService:
             elif source == 'BookOrbit':
                 bookorbit_id = text_item.get('bookorbit_id') or text_item.get('source_id')
                 if bookorbit_id and self.bookorbit_client:
-                    content = self.bookorbit_client.download_book(bookorbit_id)
-                    if content:
-                        epub_path.write_bytes(content)
+                    if self._stage_provider_ebook(self.bookorbit_client, bookorbit_id, text_item, epub_path):
                         text_success = True
                         logger.info("⚡ Forge: BookOrbit epub downloaded")
                     else:
@@ -1531,14 +1538,11 @@ class ForgeService:
                     )
                 self._stage_local_file(src_path, epub_path, stage_mode, "Auto-Forge")
             elif source == 'Booklore':
-                content = self.booklore_client.download_book(text_item.get('booklore_id'))
-                if content: epub_path.write_bytes(content)
+                if not self._stage_provider_ebook(self.booklore_client, text_item.get('booklore_id'), text_item, epub_path, original_ebook_filename):
+                    raise Exception("Failed to download selected Grimmory ebook")
             elif source == 'BookOrbit':
                 bookorbit_id = text_item.get('bookorbit_id') or text_item.get('source_id')
-                content = self.bookorbit_client.download_book(bookorbit_id) if self.bookorbit_client and bookorbit_id else None
-                if content:
-                    epub_path.write_bytes(content)
-                else:
+                if not (self.bookorbit_client and bookorbit_id and self._stage_provider_ebook(self.bookorbit_client, bookorbit_id, text_item, epub_path, original_ebook_filename)):
                     logger.error(f"❌ Auto-Forge: BookOrbit download failed for '{bookorbit_id or 'unknown'}'")
             elif source == 'Kavita':
                 kavita_id = text_item.get('kavita_id') or text_item.get('source_id')

@@ -1,0 +1,30 @@
+<dialog id="ebookEditionDialog" class="edition-picker" aria-labelledby="editionPickerTitle" aria-describedby="editionPickerHelp">
+    <header class="edition-picker-header">
+        <div>
+            <span class="edition-picker-provider" data-edition-provider></span>
+            <h2 id="editionPickerTitle">{{ _('Choose an edition') }}</h2>
+            <p class="edition-picker-book" data-edition-book></p>
+        </div>
+        <button type="button" class="edition-picker-close" data-edition-cancel aria-label="{{ _('Close') }}">×</button>
+    </header>
+    <p id="editionPickerHelp" class="edition-picker-help">{{ _('Choose the file you want to read. Its text and timings will be used for synchronization.') }}</p>
+    <fieldset class="edition-picker-options" data-edition-options>
+        <legend class="edition-picker-sr">{{ _('Available editions') }}</legend>
+    </fieldset>
+    <p class="edition-picker-warning" data-edition-warning hidden>{{ _('Grimmory does not identify which EPUB produced its progress. This edition can supply text and timings for ABS/KoSync, but ambiguous Grimmory progress will not be synchronized.') }}</p>
+    <footer class="edition-picker-footer">
+        <span class="edition-picker-selection" data-edition-selection aria-live="polite">{{ _('Select an edition to continue') }}</span>
+        <div class="edition-picker-actions">
+            <button type="button" class="btn btn-secondary" data-edition-cancel>{{ _('Cancel') }}</button>
+            <button type="button" class="btn btn-primary" data-edition-confirm disabled>{{ _('Use this edition') }}</button>
+        </div>
+    </footer>
+</dialog>
+<script type="application/json" id="editionPickerLabels">{{ {
+    'readAlong': _('Read-along EPUB'), 'text': _('Text EPUB'), 'epub': _('EPUB'), 'comic': _('Comic archive'),
+    'audioTimings': _('Embedded audio and synchronized text'), 'textOnly': _('Text only'), 'publication': _('Ebook publication'),
+    'primary': _('Primary'), 'emptySelection': _('Select an edition to continue'),
+    'noFiles': _('No supported editions are available. Refresh the library and try again.'),
+    'loadError': _('Could not load editions. Select the book to retry.')
+}|tojson }}</script>
+<script src="/static/js/provider-edition-picker.js"></script>

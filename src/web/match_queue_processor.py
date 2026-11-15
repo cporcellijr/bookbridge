@@ -69,6 +69,8 @@ def _process_forge_only_queue(queue_items, forge_stage_mode=None):
             resolved_path = web.find_ebook_file(original_filename)
             source_path = str(resolved_path) if resolved_path else ''
         text_item = web._build_forge_text_item(source_type, source_id, source_path, original_filename)
+        if item.get('ebook_source_file_id'):
+            text_item['ebook_source_file_id'] = item['ebook_source_file_id']
 
         if audio_source in web._LIBRARY_AUDIO_SOURCES:
             audio_source_id = (item.get('audio_source_id') or '').strip()
@@ -180,6 +182,7 @@ def _process_batch_queue(queue_items):
                 ebook_source_id=item.get('ebook_source_id'),
                 storyteller_uuid=item.get('storyteller_uuid'),
                 ebook_source_path=item.get('ebook_source_path'),
+                ebook_source_file_id=item.get('ebook_source_file_id'),
             )
             if err_msg:
                 web.logger.warning(
@@ -238,10 +241,11 @@ def _process_batch_queue(queue_items):
             _item_ebook_source = (item.get('ebook_source') or '').strip() or None
             kosync_doc_id = web.get_kosync_id_for_ebook(
                 ebook_filename,
-                booklore_id,
+                item.get('ebook_source_id') if web.is_grimmory_source(_item_ebook_source) else booklore_id,
                 bookorbit_id=item.get('ebook_source_id') if _item_ebook_source == 'BookOrbit' else None,
                 kavita_id=item.get('ebook_source_id') if _item_ebook_source == 'Kavita' else None,
                 source_path=item.get('ebook_source_path'),
+                ebook_source_file_id=item.get('ebook_source_file_id'),
             )
 
         if not kosync_doc_id:
@@ -251,7 +255,10 @@ def _process_batch_queue(queue_items):
         # Hash Preservation for Batch Match: respect existing hash
         # (including manual overrides) to prevent re-match from reverting.
         current_book_entry = web.database_service.get_book(item['abs_id'])
-        if current_book_entry and current_book_entry.kosync_doc_id:
+        from src.utils.provider_ebook_files import same_ebook_selection
+        if current_book_entry and current_book_entry.kosync_doc_id and same_ebook_selection(
+            current_book_entry, original_ebook_filename or ebook_filename, item.get('ebook_source'), item.get('ebook_source_id'), item.get('ebook_source_file_id'),
+        ):
             web.logger.info(f"🔄 Preserving existing hash '{current_book_entry.kosync_doc_id}' for '{item['abs_id']}' instead of new hash '{kosync_doc_id}'")
             kosync_doc_id = current_book_entry.kosync_doc_id
         access = web._existing_mapping_access(
@@ -297,6 +304,7 @@ def _process_batch_queue(queue_items):
             original_ebook_filename=original_ebook_filename,
             ebook_source=item.get('ebook_source'),
             ebook_source_id=item.get('ebook_source_id'),
+            ebook_source_file_id=item.get('ebook_source_file_id'),
         )
 
         web.database_service.save_book(book)
@@ -390,6 +398,7 @@ def _process_forge_match_queue(queue_items):
                     ebook_source_id=item.get('ebook_source_id'),
                     storyteller_uuid=storyteller_uuid,
                     ebook_source_path=item.get('ebook_source_path'),
+                    ebook_source_file_id=item.get('ebook_source_file_id'),
                 )
                 if err_msg:
                     web.logger.warning(
@@ -497,6 +506,7 @@ def _process_forge_match_queue(queue_items):
                 original_ebook_filename=original_ebook_filename,
                 ebook_source=item.get('ebook_source'),
                 ebook_source_id=item.get('ebook_source_id'),
+                ebook_source_file_id=item.get('ebook_source_file_id'),
             )
 
             web.database_service.save_book(book)
@@ -561,12 +571,15 @@ def _process_forge_match_queue(queue_items):
             continue
 
         text_item = web._build_forge_text_item(source_type, source_id, source_path, original_filename)
+        if item.get('ebook_source_file_id'):
+            text_item['ebook_source_file_id'] = item['ebook_source_file_id']
         initial_booklore_id = source_id if text_item.get('source') == 'Booklore' else None
         kosync_doc_id = web.get_kosync_id_for_ebook(
             original_filename,
             initial_booklore_id,
             bookorbit_id=source_id if text_item.get('source') == 'BookOrbit' else None,
             kavita_id=source_id if text_item.get('source') == 'Kavita' else None,
+            ebook_source_file_id=item.get('ebook_source_file_id'),
             source_path=source_path,
         )
         if not kosync_doc_id:
@@ -610,6 +623,7 @@ def _process_forge_match_queue(queue_items):
                 audio_duration=audio_duration,
                 ebook_source=item.get('ebook_source'),
                 ebook_source_id=item.get('ebook_source_id'),
+                ebook_source_file_id=item.get('ebook_source_file_id'),
             )
             web.database_service.save_book(book)
             web._claim_book_for_user_id(web.get_current_user_id(), book.abs_id)
@@ -663,6 +677,7 @@ def _process_forge_match_queue(queue_items):
                 audio_duration=audio_duration,
                 ebook_source=item.get('ebook_source'),
                 ebook_source_id=item.get('ebook_source_id'),
+                ebook_source_file_id=item.get('ebook_source_file_id'),
             )
             web.database_service.save_book(book)
             web._claim_book_for_user_id(web.get_current_user_id(), book.abs_id)

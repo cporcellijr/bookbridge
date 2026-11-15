@@ -613,7 +613,7 @@ class BookOrbitClient:
         Returns raw hit dicts ``{id, title, authors, formats:[...]}``."""
         return self._search_raw(search_term, limit)
 
-    def search_ebooks(self, search_term: str, limit: int = 20, *, strict: bool = False) -> list:
+    def search_ebooks(self, search_term: str, limit: int = 20, *, strict: bool = False, include_files: bool = False) -> list:
         """Targeted server-side ebook search for the manual-match picker.
 
         Mirrors BookloreClient.search_books: query BookOrbit's metadata search,
@@ -635,7 +635,13 @@ class BookOrbitClient:
                 },
             )
             if enriched:
-                out.append(enriched)
+                if include_files:
+                    from src.utils.provider_ebook_files import ebook_files
+                    for file in ebook_files(self.get_book_detail(hit.get("id")), "BookOrbit"):
+                        out.append(dict(enriched, fileName=file["filename"],
+                                        sourceFileId=file["id"], ebookFileId=file["id"]))
+                else:
+                    out.append(enriched)
             elif strict:
                 raise RuntimeError("BookOrbit ebook search result could not be verified")
         return out
@@ -1425,7 +1431,7 @@ class BookOrbitClient:
             return None, None
         return rich["pct"], rich["cfi"]
 
-    def get_ebook_progress_rich(self, book_id) -> Optional[dict]:
+    def get_ebook_progress_rich(self, book_id, ebook_filename=None, ebook_file_id=None) -> Optional[dict]:
         """Ebook progress plus BookOrbit's own metadata, or None on failure.
 
         GET /books/:id/progress returns a LIST of per-file entries
@@ -1440,6 +1446,14 @@ class BookOrbitClient:
             "pct": 0.0, "cfi": None, "updated_at": None,
             "file_id": None, "page_number": None, "koreader_progress": None,
         }
+        selected_id = None
+        if ebook_filename:
+            from src.utils.provider_ebook_files import select_ebook_file
+            selected = select_ebook_file(self.get_book_detail(book_id, force=True, fresh_only=True), "BookOrbit", ebook_filename, ebook_file_id)
+            if not selected:
+                return None
+            selected_id = selected["id"]
+            baseline["file_id"] = selected_id
         resp = self._make_request("GET", f"/api/v1/books/{book_id}/progress")
         if not resp:
             return None
@@ -1457,7 +1471,7 @@ class BookOrbitClient:
         if not entries:
             return dict(baseline)
 
-        ebook_file_id = self._resolve_primary_file_id(book_id, "ebook")
+        ebook_file_id = selected_id if ebook_filename else self._resolve_primary_file_id(book_id, "ebook")
         if ebook_file_id is not None:
             chosen = next((e for e in entries if e.get("fileId") == ebook_file_id), None)
             if chosen is None:
@@ -1501,8 +1515,16 @@ class BookOrbitClient:
         (never-started book) the write is unconditional.
         """
         book_id = book_info.get("id")
-        file_id = self._resolve_primary_file_id(book_id, "ebook")
-        if file_id is None:
+        filename = book_info.get("bridgeEbookFilename")
+        if filename:
+            from src.utils.provider_ebook_files import select_ebook_file
+            selected = select_ebook_file(self.get_book_detail(book_id, force=True, fresh_only=True), "BookOrbit", filename, book_info.get("bridgeEbookFileId"))
+            if not selected:
+                return False
+            file_id = selected["id"]
+        else:
+            file_id = self._resolve_primary_file_id(book_id, "ebook")
+        if file_id is None and not filename:
             file_id = book_info.get("ebookFileId")
         if file_id is None:
             cached_id = book_info.get("primaryFileId")
@@ -1835,9 +1857,14 @@ class BookOrbitClient:
     # Ebook download (for KOSync hash computation in BookMappingService)
     # ------------------------------------------------------------------
 
-    def download_book(self, book_id) -> Optional[bytes]:
+    def download_book(self, book_id, ebook_filename=None, ebook_file_id=None) -> Optional[bytes]:
         """Download the primary ebook file's bytes, or None."""
-        file_id = self._resolve_primary_file_id(book_id, "ebook")
+        if ebook_filename:
+            from src.utils.provider_ebook_files import select_ebook_file
+            file = select_ebook_file(self.get_book_detail(book_id, force=True, fresh_only=True), "BookOrbit", ebook_filename, ebook_file_id)
+            file_id = file["id"] if file else None
+        else:
+            file_id = self._resolve_primary_file_id(book_id, "ebook")
         if file_id is None:
             logger.warning("BookOrbit: no primary ebook file to download for book %s", book_id)
             return None
@@ -1847,6 +1874,12 @@ class BookOrbitClient:
         status = resp.status_code if resp else "no response"
         logger.error("BookOrbit ebook download failed: file %s status=%s", file_id, status)
         return None
+
+    def download_ebook_to_path(self, book_id, ebook_filename, output_path, *, ebook_file_id=None) -> bool:
+        """Stream the exact selected publication, including large read-alongs."""
+        from src.utils.provider_ebook_files import select_ebook_file
+        selected = select_ebook_file(self.get_book_detail(book_id, force=True, fresh_only=True), "BookOrbit", ebook_filename, ebook_file_id)
+        return bool(selected and self.download_file_to_path(selected["id"], output_path))
 
     def download_file_to_path(self, file_id, output_path) -> bool:
         """Stream-download any book file (audio tracks included) directly to disk.

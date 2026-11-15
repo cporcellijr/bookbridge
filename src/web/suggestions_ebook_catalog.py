@@ -233,6 +233,17 @@ def get_searchable_ebooks(
                 else:
                     books = booklore_client.get_all_books()
             if books:
+                if search_term:
+                    from src.utils.provider_ebook_files import ebook_files
+                    expanded = []
+                    for book in books:
+                        files = ebook_files(book, "Booklore")
+                        # Older Grimmory servers expose only a legacy primary filename.
+                        if not files:
+                            expanded.append(book)
+                        for file in files:
+                            expanded.append(dict(book, fileName=file["filename"], sourceFileId=file["id"]))
+                    books = expanded
                 for b in books:
                     fname = b.get('fileName', '')
                     if web.is_linkable_ebook_filename(fname):
@@ -274,7 +285,7 @@ def get_searchable_ebooks(
     if bookorbit_configured:
         try:
             if search_term:
-                bo_books = bookorbit_client.search_ebooks(search_term)
+                bo_books = bookorbit_client.search_ebooks(search_term, include_files=True)
                 local_index = None
             else:
                 if discovery and full_refresh and "audio" not in source_states.get("BookOrbit", {}).get("roles", {}):
