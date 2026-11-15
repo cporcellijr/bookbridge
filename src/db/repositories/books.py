@@ -32,7 +32,7 @@ logger = logging.getLogger('src.db.database_service')
 
 _EBOOK_INPUT_RECOVERY_IDENTITY_FIELDS = (
     "abs_id", "audio_source", "audio_source_id", "audio_duration", "duration",
-    "ebook_source", "ebook_source_id", "ebook_filename", "original_ebook_filename",
+    "ebook_source", "ebook_source_id", "ebook_source_file_id", "ebook_filename", "original_ebook_filename",
     "kosync_doc_id", "sync_mode",
 )
 
@@ -628,7 +628,7 @@ class BooksMixin:
                 for attr in ['abs_title', 'audio_source', 'audio_source_id', 'audio_title',
                            'audio_cover_url', 'audio_duration', 'audio_provider_book_id',
                            'audio_provider_file_id', 'ebook_filename', 'ebook_source',
-                           'ebook_source_id', 'original_ebook_filename', 'kosync_doc_id',
+                           'ebook_source_id', 'ebook_source_file_id', 'original_ebook_filename', 'kosync_doc_id',
                            'transcript_file', 'status', 'duration', 'sync_mode',
                            'transcript_source', 'storyteller_uuid', 'bookfusion_id', 'abs_ebook_item_id',
                            'series_name', 'series_sequence']:
@@ -656,7 +656,7 @@ class BooksMixin:
                 'abs_title', 'audio_source', 'audio_source_id', 'audio_title',
                 'audio_cover_url', 'audio_duration', 'audio_provider_book_id',
                 'audio_provider_file_id', 'ebook_filename', 'ebook_source',
-                'ebook_source_id', 'original_ebook_filename', 'kosync_doc_id',
+                'ebook_source_id', 'ebook_source_file_id', 'original_ebook_filename', 'kosync_doc_id',
                 'transcript_file', 'status', 'duration', 'sync_mode',
                 'transcript_source', 'storyteller_uuid', 'bookfusion_id',
                 'abs_ebook_item_id', 'series_name', 'series_sequence',
@@ -1273,7 +1273,7 @@ class BooksMixin:
         filters = [Book.abs_id == abs_id, job_unchanged, alignment_unchanged]
         for field in (
             "status", "audio_source", "audio_source_id", "audio_duration",
-            "duration", "ebook_source", "ebook_source_id", "ebook_filename",
+            "duration", "ebook_source", "ebook_source_id", "ebook_source_file_id", "ebook_filename",
             "original_ebook_filename", "kosync_doc_id", "sync_mode",
         ):
             value = getattr(expected_book, field)

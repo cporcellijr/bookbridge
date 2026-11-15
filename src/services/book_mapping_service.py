@@ -15,6 +15,7 @@ from typing import Optional
 
 from src.db.models import Book
 from src.utils.ebook_utils import is_comic_ebook_filename
+from src.utils.ebook_sources import is_grimmory_source
 from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.series_metadata import resolve_series_for_book
 
@@ -65,8 +66,8 @@ class BookMappingService:
             return None
 
     def _compute_kosync_id(self, ebook_filename: str, source_ebook_id: Optional[str],
-                           source_name: Optional[str] = 'BookLore',
-                           user_id: Optional[int] = None) -> Optional[str]:
+                            source_name: Optional[str] = 'BookLore',
+                            user_id: Optional[int] = None, ebook_source_file_id=None) -> Optional[str]:
         """Compute the KOSync document hash for a library-hosted ebook.
 
         Mirrors the library-API branch of `get_kosync_id_for_ebook` in
@@ -83,7 +84,11 @@ class BookMappingService:
         if not client or not client.is_configured():
             return None
         try:
-            content = client.download_book(source_ebook_id)
+            if ebook_source_file_id and (source_name == 'BookOrbit' or is_grimmory_source(source_name)):
+                from src.utils.provider_ebook_files import hash_selected_ebook
+                return hash_selected_ebook(client, self.ebook_parser, source_ebook_id, ebook_filename, ebook_source_file_id)
+            else:
+                content = client.download_book(source_ebook_id)
         except Exception as e:
             logger.warning(f"Shelf-watch: {source_name} download failed for kosync hash: {e}", exc_info=True)
             return None
@@ -188,6 +193,7 @@ class BookMappingService:
         kosync_doc_id: Optional[str] = None,
         user_id: Optional[int] = None,
         abs_ebook_item_id: Optional[str] = None,
+        ebook_source_file_id: Optional[str] = None,
     ) -> Optional[Book]:
         """Create or update a full sync mapping for a shelf-watch auto-match.
 
@@ -210,7 +216,7 @@ class BookMappingService:
         # directly; library-anchored callers compute it from the source download.
         source_ebook_id = booklore_ebook_id or ebook_source_id
         kosync_doc_id = kosync_doc_id or self._compute_kosync_id(
-            ebook_filename, source_ebook_id, ebook_source, user_id=user_id,
+            ebook_filename, source_ebook_id, ebook_source, user_id=user_id, ebook_source_file_id=ebook_source_file_id,
         )
         if not kosync_doc_id:
             # Every shelf-watch pass retries the same candidate, so repeats drop to DEBUG.
@@ -285,7 +291,10 @@ class BookMappingService:
                 )
             return existing_book
 
-        if existing_book and existing_book.kosync_doc_id:
+        from src.utils.provider_ebook_files import same_ebook_selection
+        if existing_book and existing_book.kosync_doc_id and same_ebook_selection(
+            existing_book, ebook_filename, ebook_source, ebook_source_id, ebook_source_file_id,
+        ):
             kosync_doc_id = existing_book.kosync_doc_id
 
         target_book.abs_title = audio_title or target_book.abs_title or bridge_key
@@ -309,6 +318,8 @@ class BookMappingService:
                 preserve_shared_orbit_id = False
         if not preserve_shared_orbit_id:
             target_book.ebook_source_id = ebook_source_id or target_book.ebook_source_id
+            if ebook_source_file_id is not None:
+                target_book.ebook_source_file_id = ebook_source_file_id
         target_book.kosync_doc_id = kosync_doc_id
         target_book.status = "pending"
         target_book.sync_mode = "audiobook"
@@ -408,6 +419,7 @@ class BookMappingService:
         booklore_ebook_id: Optional[str] = None,
         kosync_doc_id: Optional[str] = None,
         user_id: Optional[int] = None,
+        ebook_source_file_id: Optional[str] = None,
     ) -> Optional[Book]:
         """Create an ebook-only mapping when no audio candidate was found.
 
@@ -425,6 +437,7 @@ class BookMappingService:
         kosync_doc_id = kosync_doc_id or self._compute_kosync_id(
             ebook_filename, booklore_ebook_id or ebook_source_id, ebook_source,
             user_id=user_id,
+            ebook_source_file_id=ebook_source_file_id,
         )
         if not kosync_doc_id:
             logger.warning(
@@ -484,6 +497,7 @@ class BookMappingService:
             original_ebook_filename=ebook_filename,
             ebook_source=ebook_source,
             ebook_source_id=ebook_source_id,
+            ebook_source_file_id=ebook_source_file_id,
             kosync_doc_id=kosync_doc_id,
             status="pending",
             series_name=series_name,

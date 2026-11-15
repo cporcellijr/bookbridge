@@ -269,13 +269,70 @@
             });
     }
 
-    function setSelectedEbook(filename, displayName, source = '', sourceId = '', sourcePath = '') {
+    let editionPicker = null;
+    let editionChoiceSequence = 0;
+    let editionSelectionPending = false;
+
+    function cancelEditionChoice() {
+        editionChoiceSequence += 1;
+        editionSelectionPending = false;
+        if (editionPicker) editionPicker.cancel();
+    }
+
+    function groupEbookMatches(matches) {
+        return window.BookBridgeEditionPicker ? window.BookBridgeEditionPicker.groupMatches(matches) : matches;
+    }
+
+    async function chooseProviderEbook(card, match, label) {
+        const sequence = ++editionChoiceSequence;
+        editionSelectionPending = true;
+        card.setAttribute('aria-busy', 'true');
+        label.classList.remove('is-error');
+        label.textContent = {{ _('Loading editions…')|tojson }};
+        updateAddButton();
+        try {
+            if (!editionPicker) editionPicker = new window.BookBridgeEditionPicker(
+                document.getElementById('ebookEditionDialog'),
+                JSON.parse(document.getElementById('editionPickerLabels').textContent),
+            );
+            const file = await editionPicker.choose({
+                source: match.source, sourceId: match.source_id,
+                title: match.display_name || match.ebook_filename,
+                currentFileId: card.dataset.editionConfirmed ? card.dataset.sourceFileId : null,
+                opener: card,
+                allowComics: !(document.getElementById('selected_audiobook_id').value || document.getElementById('selected_audio_source').value),
+            });
+            if (sequence !== editionChoiceSequence || !card.isConnected) return;
+            if (file) {
+                card.dataset.value = file.filename;
+                card.dataset.sourcePath = '';
+                card.dataset.sourceFileId = file.id == null ? '' : String(file.id);
+                card.dataset.editionConfirmed = 'true';
+                selectEbookCard(card, file.filename, match.display_name, match.source, match.source_id, '', file.id);
+            }
+            label.textContent = card.dataset.editionConfirmed ? card.dataset.value : {{ _('Choose an edition')|tojson }};
+            label.title = card.dataset.editionConfirmed ? card.dataset.value : '';
+        } catch (error) {
+            if (sequence !== editionChoiceSequence || error.name === 'AbortError') return;
+            label.textContent = {{ _('Could not load editions. Select the book to retry.')|tojson }};
+            label.classList.add('is-error');
+        } finally {
+            card.removeAttribute('aria-busy');
+            if (sequence === editionChoiceSequence) {
+                editionSelectionPending = false;
+                updateAddButton();
+            }
+        }
+    }
+
+    function setSelectedEbook(filename, displayName, source = '', sourceId = '', sourcePath = '', sourceFileId = '') {
         const hasSelection = !!filename;
         if (hasSelection) setAudioOnly(false);
         document.getElementById('selected_ebook_filename').value = hasSelection ? filename : '';
         document.getElementById('selected_ebook_display_name').value = hasSelection ? (displayName || filename) : '';
         document.getElementById('selected_ebook_source').value = hasSelection ? (source || '') : '';
         document.getElementById('selected_ebook_source_id').value = hasSelection ? (sourceId || '') : '';
+        document.getElementById('selected_ebook_source_file_id').value = hasSelection ? (sourceFileId || '') : '';
         document.getElementById('selected_ebook_source_path').value = hasSelection ? (sourcePath || '') : '';
         updateAddButton();
     }
@@ -284,10 +341,10 @@
         document.querySelectorAll('#ebookCardGrid .ebook-card').forEach((card) => card.classList.remove('selected'));
     }
 
-    function selectEbookCard(element, filename, displayName, source, sourceId, sourcePath) {
+    function selectEbookCard(element, filename, displayName, source, sourceId, sourcePath, sourceFileId = '') {
         clearSelectedEbookCards();
         if (element) element.classList.add('selected');
-        setSelectedEbook(filename, displayName, source, sourceId, sourcePath);
+        setSelectedEbook(filename, displayName, source, sourceId, sourcePath, sourceFileId);
     }
 
     function setAudioOnly(on) {
@@ -296,6 +353,7 @@
 
     // "Audio only" maps the audiobook with no ebook; picking it drops any ebook or Storyteller choice.
     function selectAudioOnly(element) {
+        cancelEditionChoice();
         clearSelectedEbookCards();
         setSelectedEbook('', '', '', '');
         const noneCard = document.querySelector('#storytellerCardGrid .st-card.ghost-card');
@@ -311,7 +369,7 @@
         const hasEbook = !!document.getElementById('selected_ebook_filename').value;
         const hasStoryteller = !!document.getElementById('selected_storyteller_uuid').value;
         const audioOnly = document.getElementById('selected_audio_only').value === 'true';
-        document.getElementById('addToQueueBtn').disabled = !(hasEbook || hasStoryteller || (audioOnly && hasAudio));
+        document.getElementById('addToQueueBtn').disabled = editionSelectionPending || !(hasEbook || hasStoryteller || (audioOnly && hasAudio));
     }
 
 
@@ -494,6 +552,7 @@
         const source = match.source || inferSourceFromFilename(ebookFilename);
         const sourceId = match.source_id || '';
         const sourcePath = match.source_path || match.path || '';
+        const sourceFileId = ['bookorbit', 'booklore', 'grimmory'].includes(String(source).toLowerCase()) ? (match.source_file_id || '') : '';
         const matchReason = match.match_reason || '';
         const author = match.author || '';
         const language = (match.language || '').toString().trim();
@@ -507,7 +566,19 @@
         card.dataset.source = source || '';
         card.dataset.sourceId = sourceId || '';
         card.dataset.sourcePath = sourcePath || '';
-        card.onclick = () => selectEbookCard(card, ebookFilename, displayName, source, sourceId, sourcePath);
+        card.dataset.sourceFileId = sourceFileId;
+        card.onclick = () => {
+            cancelEditionChoice();
+            selectEbookCard(card, ebookFilename, displayName, source, sourceId, sourcePath, sourceFileId);
+        };
+        card.tabIndex = 0;
+        card.setAttribute('role', 'button');
+        card.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                card.click();
+            }
+        });
 
         const icon = document.createElement('div');
         icon.className = 'ebook-icon';
@@ -537,12 +608,20 @@
         if (matchReason === 'same_folder') addBadge('samefolder', {{ _('Same folder')|tojson }});
         if (matchReason === 'same_folder_ambiguous') addBadge('samefolder', {{ _('Same folder?')|tojson }});
         if (matchReason === 'same_series') addBadge('sameseries', {{ _('Same series')|tojson }}, {{ _('Same series and number as the audiobook')|tojson }});
-        if (ebookFilename.toLowerCase().endsWith('.readalong.epub')) addBadge('unknown', '🔊 ' + {{ _('Read-along')|tojson }}, {{ _('Generated read-along copy with embedded audio, not the standard EPUB')|tojson }});
+        if (!['bookorbit', 'booklore', 'grimmory'].includes(String(source).toLowerCase()) && ebookFilename.toLowerCase().endsWith('.readalong.epub')) addBadge('unknown', '🔊 ' + {{ _('Read-along')|tojson }}, {{ _('Generated read-along copy with embedded audio, not the standard EPUB')|tojson }});
 
         if (badges.childElementCount) card.appendChild(badges);
         card.appendChild(icon);
         card.appendChild(title);
         card.appendChild(subtitle);
+        if (['bookorbit', 'booklore', 'grimmory'].includes(String(source).toLowerCase())) {
+            const fileLabel = document.createElement('div');
+            fileLabel.className = 'ebook-edition-label';
+            fileLabel.textContent = {{ _('Choose an edition')|tojson }};
+            fileLabel.setAttribute('aria-live', 'polite');
+            card.appendChild(fileLabel);
+            card.onclick = () => chooseProviderEbook(card, { ...match, source, source_id: sourceId, display_name: displayName }, fileLabel);
+        }
 
         if (author && scoreText) {
             const confidence = document.createElement('div');
@@ -554,6 +633,7 @@
     }
 
     function clearSelection() {
+        cancelEditionChoice();
         selectedSuggestionId = null;
         selectedSearchIndex = null;
         setAudioOnly(false);
@@ -607,7 +687,7 @@
         document.getElementById('selectedCover').src = suggestion.audio_cover_url || suggestion.cover_url || '';
         renderStorytellerOptions(suggestion);
 
-        const matches = [...suggestion.matches].sort((a, b) => (b.score || 0) - (a.score || 0));
+        const matches = groupEbookMatches([...suggestion.matches].sort((a, b) => (b.score || 0) - (a.score || 0)));
         const grid = document.getElementById('ebookCardGrid');
         const emptyLabel = document.getElementById('ebookGridEmpty');
         grid.innerHTML = '';
@@ -618,14 +698,7 @@
             emptyLabel.classList.add('hidden');
             const firstCard = grid.querySelector('.ebook-card');
             if (firstCard) {
-                selectEbookCard(
-                    firstCard,
-                    firstCard.dataset.value || '',
-                    firstCard.dataset.displayName || '',
-                    firstCard.dataset.source || '',
-                    firstCard.dataset.sourceId || '',
-                    firstCard.dataset.sourcePath || '',
-                );
+                firstCard.click();
             }
         } else {
             setSelectedEbook('', '', '', '');
@@ -683,19 +756,21 @@
             card.onclick = () => selectAudioOnly(card);
             grid.appendChild(card);
         }
-        view.ebooks.forEach((ebook) => grid.appendChild(buildEbookCard({
+        const ebookChoices = groupEbookMatches(view.ebooks.map((ebook) => ({
             ebook_filename: ebook.name,
             display_name: ebook.display_name,
             source: ebook.source,
             source_id: ebook.source_id,
             source_path: ebook.path,
+            source_file_id: ebook.source_file_id,
             author: ebook.authors,
             language: ebook.language,
             linked: !!ebook.abs_identifier,
         })));
+        ebookChoices.forEach((choice) => grid.appendChild(buildEbookCard(choice)));
         emptyLabel.textContent = T.noSearchEbooks;
-        emptyLabel.classList.toggle('hidden', view.ebooks.length > 0);
-        if (view.ebooks.length === 1) {
+        emptyLabel.classList.toggle('hidden', ebookChoices.length > 0);
+        if (ebookChoices.length === 1) {
             const only = grid.querySelector('.ebook-card:not(.audio-only-card)');
             if (only) only.click();
         }

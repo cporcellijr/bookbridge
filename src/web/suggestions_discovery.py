@@ -106,7 +106,9 @@ def _suggestions_ebook_result(entry: dict) -> Optional[EbookResult]:
         detail = client.get_book_detail(source_id, force=True, fresh_only=True)
         if not detail:
             return None
-        primary = client._primary_file(detail, kind="ebook") or {}
+        from src.utils.provider_ebook_files import select_ebook_file
+        primary = select_ebook_file(detail, "BookOrbit", filename) if filename else client._primary_file(detail, kind="ebook")
+        primary = primary or {}
         expected = web._first_not_none(entry.get("source_file_id"), entry.get("ebook_file_id"))
         if expected is not None and str(primary.get("id")) != str(expected):
             return None
@@ -144,16 +146,21 @@ def _resolve_suggestions_redesign_ebook_create(entry: dict) -> Optional[dict]:
         kosync_id = parser.get_kosync_id(web.Path(selected.path))
     elif source in {"Booklore", "Kavita"}:
         client = clients.booklore_client if source == "Booklore" else clients.kavita_client
-        content = client.download_book(source_id)
-        if content:
-            kosync_id = parser.get_kosync_id_from_bytes(selected.name, content)
+        if source == "Booklore" and entry.get("source_file_id") is not None:
+            from src.utils.provider_ebook_files import hash_selected_ebook
+            kosync_id = hash_selected_ebook(client, parser, source_id, selected.name, entry["source_file_id"])
+        else:
+            content = client.download_book(source_id)
+            if content:
+                kosync_id = parser.get_kosync_id_from_bytes(selected.name, content)
     else:
         with tempfile.TemporaryDirectory(prefix="suggestions-ebook-") as directory:
             target = web.Path(directory) / ("selected" + web.Path(selected.name).suffix)
             if source == "BookOrbit":
                 client = clients.bookorbit_client
                 detail = client.get_book_detail(source_id, force=True, fresh_only=True)
-                primary = client._primary_file(detail or {}, kind="ebook") or {}
+                from src.utils.provider_ebook_files import select_ebook_file
+                primary = select_ebook_file(detail, "BookOrbit", selected.name) or {}
                 expected = web._first_not_none(entry.get("source_file_id"), entry.get("ebook_file_id"))
                 if expected is not None and str(primary.get("id")) != str(expected):
                     return None
@@ -183,6 +190,7 @@ def _resolve_suggestions_redesign_ebook_create(entry: dict) -> Optional[dict]:
         "ebook_filename": selected.name, "ebook_source": source,
         "ebook_source_id": source_id, "ebook_source_path": str(selected.path or ""),
         "precomputed_kosync_doc_id": kosync_id,
+        "ebook_source_file_id": str(entry["source_file_id"]) if source in {"BookOrbit", "Booklore"} and entry.get("source_file_id") is not None else None,
     }
 
 

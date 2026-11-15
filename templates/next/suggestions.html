@@ -3,7 +3,7 @@
 {% set active_page = 'suggestions' %}
 {% set tabs_shown = available_tabs|default(['pairs', 'ebook_only', 'search']) %}
 {% block title %}{{ _('Discover') }} · BookBridge{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/css/next-discover.css"><link rel="stylesheet" href="/static/css/acquisition-intake.css">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/next-discover.css"><link rel="stylesheet" href="/static/css/acquisition-intake.css"><link rel="stylesheet" href="/static/css/provider-edition-picker.css">{% endblock %}
 {% block content %}
 
 <div class="suggestions-wrap discover-page">
@@ -190,6 +190,7 @@
                         <input type="hidden" name="ebook_display_name" id="selected_ebook_display_name" value="">
                         <input type="hidden" name="ebook_source" id="selected_ebook_source" value="">
                         <input type="hidden" name="ebook_source_id" id="selected_ebook_source_id" value="">
+                        <input type="hidden" name="ebook_source_file_id" id="selected_ebook_source_file_id" value="">
                         <input type="hidden" name="ebook_source_path" id="selected_ebook_source_path" value="">
                         <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
                         <input type="hidden" name="audio_only" id="selected_audio_only" value="">
@@ -229,6 +230,7 @@
     </div>
 </div>
 
+{% include '_provider_edition_picker.html' %}
 {% if storyteller_enabled %}
 <div class="modal-overlay" id="forgeStageModal" aria-hidden="true">
     <div class="modal modal-card" role="dialog" aria-modal="true" aria-labelledby="forgeStageTitle">

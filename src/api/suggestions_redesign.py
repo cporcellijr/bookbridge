@@ -146,6 +146,7 @@ def suggestions_search():
             {
                 "name": eb.name or "",
                 "display_name": getattr(eb, "display_name", None) or eb.name or "",
+                "source_file_id": getattr(eb, "source_file_id", None),
                 "title": eb.title or "",
                 "subtitle": eb.subtitle or "",
                 "authors": eb.authors or "",

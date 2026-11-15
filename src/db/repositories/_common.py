@@ -13,6 +13,7 @@ MANIFEST_RELEVANT_BOOK_FIELDS = (
     "sync_mode",
     "ebook_source",
     "ebook_source_id",
+    "ebook_source_file_id",
 )
 
 def _manifest_signature(book) -> tuple:
