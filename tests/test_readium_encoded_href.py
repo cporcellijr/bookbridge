@@ -69,6 +69,16 @@ class TestEncodedHrefResolution(unittest.TestCase):
         txt = self.parser.resolve_href_progression("book.epub", RAW, 0.5)
         self.assertEqual(txt, ("B" * 50) + ("C" * 100))
 
+    def test_resolve_locator_id_matches_encoded_href_or_spine_entry(self):
+        self.spine[1]["content"] = b'<html><body><p id="anchor">' + b"B" * 100 + b'</p></body></html>'
+        for locator_href, spine_href in ((ENCODED, RAW), (RAW, ENCODED)):
+            with self.subTest(locator_href=locator_href):
+                self.spine[1]["href"] = spine_href
+                self.assertEqual(
+                    self.parser.resolve_locator_id("book.epub", locator_href, "anchor"),
+                    ("B" * 100) + ("C" * 100),
+                )
+
     def test_sync_manager_offset_uses_the_chapter_not_the_percentage(self):
         fake_self = SimpleNamespace(
             ebook_parser=self.parser,
