@@ -170,13 +170,33 @@ class ComicAudiobookPairingTest(unittest.TestCase):
 
     def test_queue_keeps_explicit_provider_file_id(self):
         import src.web_server as ws
-        clients = SimpleNamespace(storyteller_client=MagicMock(is_configured=MagicMock(return_value=False)))
+        bookorbit = MagicMock()
+        bookorbit.get_book_detail.return_value = {'id': 7, 'files': [
+            {'id': 10, 'filename': 'plain.epub', 'role': 'primary'},
+            {'id': 20, 'filename': 'readaloud.epub'},
+        ]}
+        clients = SimpleNamespace(storyteller_client=MagicMock(is_configured=MagicMock(return_value=False)),
+                                  bookorbit_client=bookorbit, booklore_client=MagicMock())
         form = {'ebook_filename': 'readaloud.epub', 'ebook_source': 'BookOrbit',
                 'ebook_source_id': '7', 'ebook_source_file_id': '20'}
         with self.app.test_request_context('/add-book', method='POST', data=form):
             item = ws._queue_item_from_match_form(clients)
         self.assertEqual(item['ebook_source_id'], '7')
         self.assertEqual(item['ebook_source_file_id'], '20')
+
+    def test_queue_leaves_a_single_ebook_book_unpinned(self):
+        import src.web_server as ws
+        bookorbit = MagicMock()
+        bookorbit.get_book_detail.return_value = {'id': 7, 'files': [
+            {'id': 20, 'filename': 'readaloud.epub', 'role': 'primary'},
+        ]}
+        clients = SimpleNamespace(storyteller_client=MagicMock(is_configured=MagicMock(return_value=False)),
+                                  bookorbit_client=bookorbit, booklore_client=MagicMock())
+        form = {'ebook_filename': 'readaloud.epub', 'ebook_source': 'BookOrbit',
+                'ebook_source_id': '7', 'ebook_source_file_id': '20'}
+        with self.app.test_request_context('/add-book', method='POST', data=form):
+            item = ws._queue_item_from_match_form(clients)
+        self.assertIsNone(item['ebook_source_file_id'])
 
 
 if __name__ == '__main__':

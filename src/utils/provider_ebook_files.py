@@ -85,6 +85,53 @@ def mapped_ebook_selection(book):
     return {"ebook_filename": filename, "ebook_file_id": str(file_id)}
 
 
+def provider_book_detail(client, source, book_id):
+    """Fresh provider detail for one book, or None when it cannot be read."""
+    if source == "BookOrbit":
+        return client.get_book_detail(book_id, force=True, fresh_only=True)
+    response = client._make_request("GET", f"/api/v1/books/{book_id}")
+    if response is None or response.status_code != 200:
+        return None
+    return client._parse_json_response(response, "ebook file picker")
+
+
+def explicit_ebook_file_id(clients, source, book_id, file_id):
+    """Pin a file only when the provider book offers a choice of ebooks.
+
+    A book whose only ebook is the picked file keeps following the provider's
+    primary, so a replaced or renamed file does not stop its sync. An unreadable
+    detail keeps the pick, which then fails closed rather than guessing.
+    """
+    from src.utils.ebook_sources import normalize_ebook_source
+
+    if file_id is None or str(file_id).strip() == "":
+        return None
+    source = normalize_ebook_source(source)
+    client = clients.bookorbit_client if source == "BookOrbit" else clients.booklore_client
+    try:
+        detail = provider_book_detail(client, source, book_id)
+    except Exception:
+        detail = None
+    files = ebook_files(detail, source) if isinstance(detail, dict) else None
+    if files is not None and len(files) == 1 and str(files[0]["id"]) == str(file_id):
+        return None
+    return str(file_id)
+
+
+def apply_ebook_file_selection(book, filename, source_id, file_id):
+    """Record an explicit pick; drop a pin that no longer names the mapped file.
+
+    Call before the mapping's filename and source id are overwritten.
+    """
+    if file_id is not None:
+        book.ebook_source_file_id = str(file_id)
+        return
+    old_name = getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
+    old_id = getattr(book, "ebook_source_id", None)
+    if (filename and filename != old_name) or (source_id and str(source_id) != str(old_id or "")):
+        book.ebook_source_file_id = None
+
+
 def hash_selected_ebook(client, parser, book_id, filename, file_id=None):
     """Hash a streamed publication without buffering its embedded audio in RAM."""
     import tempfile

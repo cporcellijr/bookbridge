@@ -303,6 +303,8 @@ class BookMappingService:
         target_book.audio_duration = audio_duration if audio_duration is not None else target_book.audio_duration
         if audio_provider_file_id:
             target_book.audio_provider_file_id = str(audio_provider_file_id)
+        from src.utils.provider_ebook_files import apply_ebook_file_selection
+        apply_ebook_file_selection(target_book, ebook_filename, ebook_source_id, ebook_source_file_id)
         target_book.ebook_filename = ebook_filename
         target_book.original_ebook_filename = ebook_filename
         target_book.ebook_source = ebook_source or target_book.ebook_source
@@ -318,8 +320,6 @@ class BookMappingService:
                 preserve_shared_orbit_id = False
         if not preserve_shared_orbit_id:
             target_book.ebook_source_id = ebook_source_id or target_book.ebook_source_id
-            if ebook_source_file_id is not None:
-                target_book.ebook_source_file_id = ebook_source_file_id
         target_book.kosync_doc_id = kosync_doc_id
         target_book.status = "pending"
         target_book.sync_mode = "audiobook"

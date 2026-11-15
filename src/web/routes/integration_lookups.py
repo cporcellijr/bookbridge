@@ -41,7 +41,7 @@ def get_provider_ebook_files(source, book_id):
     """List files through the acting reader's own provider credentials."""
     web = _web_server()
     from src.utils.ebook_sources import normalize_ebook_source
-    from src.utils.provider_ebook_files import ebook_files
+    from src.utils.provider_ebook_files import ebook_files, provider_book_detail
 
     source = normalize_ebook_source(source)
     if source not in {"BookOrbit", "Booklore"}:
@@ -51,11 +51,7 @@ def get_provider_ebook_files(source, book_id):
         client = clients.bookorbit_client if source == "BookOrbit" else clients.booklore_client
         if not client or not client.is_configured():
             return web.jsonify({"error": "Ebook source unavailable"}), 409
-        if source == "BookOrbit":
-            detail = client.get_book_detail(book_id, force=True, fresh_only=True)
-        else:
-            response = client._make_request("GET", f"/api/v1/books/{book_id}")
-            detail = client._parse_json_response(response, "ebook file picker") if response is not None and response.status_code == 200 else None
+        detail = provider_book_detail(client, source, book_id)
         if not isinstance(detail, dict):
             return web.jsonify({"error": "Could not verify ebook files"}), 502
         return web.jsonify({"files": ebook_files(detail, source)})

@@ -520,6 +520,8 @@ def _upsert_storyteller_mapping(
         ebook_source_id=selected_ebook_source_id,
     )
     target_book.abs_title = abs_title or target_book.abs_title or web.Path(resolved_ebook_filename).stem
+    from src.utils.provider_ebook_files import apply_ebook_file_selection
+    apply_ebook_file_selection(target_book, original_ebook_filename, selected_ebook_source_id, ebook_source_file_id)
     target_book.ebook_filename = resolved_ebook_filename
     target_book.kosync_doc_id = kosync_doc_id
     if selected_ebook_source:
@@ -528,8 +530,6 @@ def _upsert_storyteller_mapping(
         target_book.ebook_source_id = selected_ebook_source_id
         if selected_ebook_source == "ABS":
             target_book.abs_ebook_item_id = selected_ebook_source_id
-    if ebook_source_file_id is not None:
-        target_book.ebook_source_file_id = ebook_source_file_id
 
     if original_ebook_filename:
         target_book.original_ebook_filename = original_ebook_filename

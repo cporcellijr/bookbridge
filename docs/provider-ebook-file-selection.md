@@ -29,7 +29,11 @@ you actually intend to replace ABS as the mapping's audio provider.
 The persisted selection uses the provider book ID, `ebook_source_file_id` and
 exact source filename (`original_ebook_filename`, or `ebook_filename` without an
 original). A nullable-column migration leaves all existing mappings unpinned,
-with their existing behavior. New explicit selections are verified within the
+with their existing behavior. A selection is pinned only when the provider book
+offers more than one ebook file; a book whose only ebook is the chosen file stays
+unpinned and keeps following the provider's primary, so replacing that file does
+not stop its sync. Rematching a mapping to a different file or provider book
+without a new pick clears an old pin. Pinned selections are verified within the
 book's freshly fetched metadata for downloads and BookOrbit progress. Missing,
 replaced, or ambiguous files fail closed rather than
 silently substituting whichever EPUB is now primary. This deliberately does not

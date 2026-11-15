@@ -239,3 +239,88 @@ def test_file_endpoint_never_falls_back_when_reader_connections_fail(monkeypatch
     with Flask(__name__).test_request_context():
         _, status = integration_lookups.get_provider_ebook_files("BookOrbit", 7)
     assert status == 403
+
+
+def test_rematch_to_another_file_without_a_pick_drops_the_stale_pin():
+    from src.db.models import Book
+    from tests.test_book_mapping_service import _build_service
+    pinned = Book(abs_id="abs-item-1", ebook_filename="readaloud.epub", original_ebook_filename="readaloud.epub",
+                  ebook_source="BookLore", ebook_source_id="123", ebook_source_file_id="20", kosync_doc_id="old")
+    svc, *_ = _build_service(db_existing=pinned)
+    saved = svc.create_audio_mapping_from_match(
+        audio_source="ABS", audio_source_id="abs-item-1", audio_title="Book", ebook_filename="other.epub",
+        audio_duration=3600.0, ebook_source="BookLore", ebook_source_id="124", booklore_ebook_id="124",
+    )
+    assert saved.ebook_filename == "other.epub"
+    assert saved.ebook_source_file_id is None
+
+
+def test_pin_survives_a_refresh_of_the_same_file_and_follows_a_new_pick():
+    from src.utils.provider_ebook_files import apply_ebook_file_selection
+    book = SimpleNamespace(original_ebook_filename="readaloud.epub", ebook_filename="readaloud.epub",
+                           ebook_source_id="7", ebook_source_file_id="20")
+    apply_ebook_file_selection(book, "readaloud.epub", "7", None)
+    assert book.ebook_source_file_id == "20"
+    apply_ebook_file_selection(book, None, None, None)
+    assert book.ebook_source_file_id == "20"
+    apply_ebook_file_selection(book, "readaloud.epub", "8", None)
+    assert book.ebook_source_file_id is None
+    apply_ebook_file_selection(book, "plain.epub", "7", 10)
+    assert book.ebook_source_file_id == "10"
+
+
+@pytest.mark.parametrize("source,detail", [("BookOrbit", orbit_detail), ("Grimmory", grimmory_detail)])
+def test_only_a_book_with_a_choice_of_ebooks_is_pinned(source, detail):
+    from src.utils.provider_ebook_files import explicit_ebook_file_id
+    client = MagicMock()
+    clients = SimpleNamespace(bookorbit_client=client, booklore_client=client)
+    single = {"id": 7, "files": [{"id": 10, "filename": "plain.epub", "role": "primary"}]} if source == "BookOrbit" \
+        else {"id": 7, "primaryFile": {"id": 10, "fileName": "plain.epub"}}
+    for body, file_id, expected in ((detail(), 20, "20"), (single, 10, None), (None, 10, "10")):
+        client.get_book_detail.return_value = body
+        client._make_request.return_value = response(body, 200 if body else 500)
+        client._parse_json_response.return_value = body
+        assert explicit_ebook_file_id(clients, source, 7, file_id) == expected
+    assert explicit_ebook_file_id(clients, source, 7, None) is None
+
+
+def test_grimmory_alternate_progress_warning_does_not_repeat_every_cycle(caplog):
+    import logging
+    from src.utils.logging_utils import get_persistent_condition_logger
+    get_persistent_condition_logger().reset()
+    client = BookloreClient()
+    with patch.object(client, "_make_request", return_value=response(grimmory_detail())), \
+         caplog.at_level(logging.DEBUG, logger="src.api.booklore_client"):
+        for _ in range(3):
+            assert client.get_progress_rich_by_book_id(7, ebook_filename="readaloud.epub") is None
+    loud = [r for r in caplog.records if r.levelno >= logging.WARNING and "cannot identify progress" in r.getMessage()]
+    assert len(loud) == 1
+    get_persistent_condition_logger().reset()
+
+
+def test_grimmory_alternate_write_is_skipped_but_a_missing_file_fails():
+    from src.api.booklore_client import ProgressWriteOutcome
+    client = BookloreClient()
+    with patch.object(client, "get_book_by_id", return_value={"id": 7, "fileName": "plain.epub"}), \
+         patch.object(client, "_make_request", return_value=response(grimmory_detail())):
+        assert client.update_progress_by_book_id(7, 0.5, ebook_filename="readaloud.epub", ebook_file_id="20") \
+            is ProgressWriteOutcome.SKIPPED
+        assert client.update_progress_by_book_id(7, 0.5, ebook_filename="removed.epub", ebook_file_id="99") is False
+
+
+def test_grimmory_annotation_sync_downloads_the_pinned_file(tmp_path):
+    from src.services.annotation_sync_service import AnnotationSyncService
+    pinned = SimpleNamespace(abs_id="abs7", ebook_source="Grimmory", ebook_source_id="7", kosync_doc_id="a" * 32,
+                             original_ebook_filename="readaloud.epub", ebook_filename="readaloud.epub",
+                             ebook_source_file_id="20", abs_title="Book")
+    db = MagicMock()
+    db.get_linked_abs_ids.return_value = ["abs7"]
+    db.get_books_by_status.return_value = [pinned]
+    parser = MagicMock()
+    parser.resolve_book_path.side_effect = FileNotFoundError
+    service = AnnotationSyncService(db, ebook_parser=parser, epub_cache_dir=tmp_path)
+    [candidate] = service._candidate_booklore_books(1)
+    client = MagicMock()
+    client.download_book.return_value = b"alternate bytes"
+    service._resolve_booklore_epub_path(client, candidate)
+    client.download_book.assert_called_once_with("7", ebook_filename="readaloud.epub", ebook_file_id="20")

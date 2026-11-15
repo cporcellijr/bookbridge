@@ -53,6 +53,9 @@ def match():
         ebook_source_file_id = (web.request.form.get('ebook_source_file_id') or '').strip() or None
         if ebook_source_file_id and web.normalize_ebook_source(ebook_source) not in {'BookOrbit', 'Booklore'}:
             return "File selection is not supported for this ebook source", 400
+        if ebook_source_file_id:
+            from src.utils.provider_ebook_files import explicit_ebook_file_id
+            ebook_source_file_id = explicit_ebook_file_id(web.uc(), ebook_source, ebook_source_id, ebook_source_file_id)
         source_path = (web.request.form.get('ebook_source_path') or web.request.form.get('source_path') or '').strip() or None
         storyteller_uuid = (web.request.form.get('storyteller_uuid') or '').strip() or None
         forge_stage_mode = (web.request.form.get('forge_stage_mode') or '').strip() or None

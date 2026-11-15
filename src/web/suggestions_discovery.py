@@ -142,13 +142,17 @@ def _resolve_suggestions_redesign_ebook_create(entry: dict) -> Optional[dict]:
     parser = web.container.ebook_parser()
     clients = web._scan_user_clients() if source != "Local File" else None
     kosync_id = None
+    pinned_file_id = None
+    if source in {"BookOrbit", "Booklore"}:
+        from src.utils.provider_ebook_files import explicit_ebook_file_id
+        pinned_file_id = explicit_ebook_file_id(clients, source, source_id, entry.get("source_file_id"))
     if source == "Local File":
         kosync_id = parser.get_kosync_id(web.Path(selected.path))
     elif source in {"Booklore", "Kavita"}:
         client = clients.booklore_client if source == "Booklore" else clients.kavita_client
-        if source == "Booklore" and entry.get("source_file_id") is not None:
+        if pinned_file_id is not None:
             from src.utils.provider_ebook_files import hash_selected_ebook
-            kosync_id = hash_selected_ebook(client, parser, source_id, selected.name, entry["source_file_id"])
+            kosync_id = hash_selected_ebook(client, parser, source_id, selected.name, pinned_file_id)
         else:
             content = client.download_book(source_id)
             if content:
@@ -190,7 +194,7 @@ def _resolve_suggestions_redesign_ebook_create(entry: dict) -> Optional[dict]:
         "ebook_filename": selected.name, "ebook_source": source,
         "ebook_source_id": source_id, "ebook_source_path": str(selected.path or ""),
         "precomputed_kosync_doc_id": kosync_id,
-        "ebook_source_file_id": str(entry["source_file_id"]) if source in {"BookOrbit", "Booklore"} and entry.get("source_file_id") is not None else None,
+        "ebook_source_file_id": pinned_file_id,
     }
 
 

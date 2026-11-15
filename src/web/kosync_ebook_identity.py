@@ -71,9 +71,10 @@ def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=
             if content:
                 kosync_id = web.container.ebook_parser().get_kosync_id_from_bytes(ebook_filename, content)
                 if kosync_id:
+                    web.logger.debug(f"🔍 Computed KOSync ID from Grimmory download: '{kosync_id}'")
                     return kosync_id
-        except Exception:
-            web.logger.warning("Could not hash Grimmory primary ebook; checking legacy fallbacks", exc_info=True)
+        except Exception as e:
+            web.logger.warning(f"⚠️ Failed to get KOSync ID from Grimmory, falling back to filesystem: {e}", exc_info=True)
 
     # Fall back to filesystem. When a queue item carries the selected local source path,
     # prefer it over filename-only globbing so duplicate basenames do not hash the wrong book.

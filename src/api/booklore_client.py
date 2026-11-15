@@ -16,7 +16,7 @@ from src.utils.file_transfers import (
     response_declares_size,
     stream_response_to_path,
 )
-from src.utils.logging_utils import sanitize_log_data
+from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.ebook_sources import (
     is_grimmory_source,
     is_storyteller_filename,
@@ -2372,11 +2372,19 @@ class BookloreClient:
         if ebook_filename:
             from src.utils.provider_ebook_files import grimmory_progress_file
             selected = grimmory_progress_file(data, ebook_filename, ebook_file_id)
+            condition_key = f"grimmory-unidentified-file-progress:{book_id}"
             if not selected:
                 # This API exposes book-level merged EPUB progress, not the file
                 # it came from. Never interpret a primary's CFI in an alternate DOM.
-                logger.warning("Grimmory cannot identify progress for alternate/missing/ambiguous ebook '%s'; keeping its ABS/KoSync mapping", sanitize_log_data(ebook_filename))
+                get_persistent_condition_logger().warn(
+                    logger, condition_key,
+                    "Grimmory cannot identify progress for alternate/missing/ambiguous ebook '%s'; keeping its ABS/KoSync mapping",
+                    sanitize_log_data(ebook_filename),
+                )
                 return None
+            get_persistent_condition_logger().resolve(
+                logger, condition_key, "Grimmory progress for '%s' is identifiable again", sanitize_log_data(ebook_filename),
+            )
 
         # Reuse this same detail for an immediately following write. Identity is
         # still the requested id; caching only removes a redundant hydration GET.
@@ -2732,12 +2740,14 @@ class BookloreClient:
         """
         book = self.get_book_by_id(book_id)
         if ebook_filename:
-            from src.utils.provider_ebook_files import grimmory_progress_file
+            from src.utils.provider_ebook_files import grimmory_progress_file, select_ebook_file
             response = self._make_request("GET", f"/api/v1/books/{book_id}")
             detail = self._parse_json_response(response, "ebook progress target") if response is not None and response.status_code == 200 else None
             selected = grimmory_progress_file(detail, ebook_filename, ebook_file_id)
             if not selected:
-                return False
+                # A present alternate is a known API limit (skip); a missing file is a failure.
+                exists = select_ebook_file(detail, "Booklore", ebook_filename, ebook_file_id)
+                return ProgressWriteOutcome.SKIPPED if exists else False
             self._process_book_detail(detail)
             book = self.get_book_by_id(book_id, allow_refresh=False)
         if not book:
