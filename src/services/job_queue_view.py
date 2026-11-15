@@ -187,16 +187,23 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
 
 
 def acquisition_job_needs_choice(job: dict) -> bool:
-    """True when a saved book request waits on the reader: a release pick, an edition choice or a failed submission."""
+    """True when a saved book request waits on the reader: a release pick, an edition choice or a failed request."""
+    requests = job.get("requests") or []
     for kind, prefix in (("ebook", "ebook"), ("audiobook", "audio")):
         if job.get(f"{prefix}_submission_state") in ("needs_release", "failed"):
             return True
         if job.get(f"{prefix}_library_state") == "needs_review" and (job.get("review_candidates") or {}).get(kind):
             return True
+        # Accepted, then the provider failed or declined it: the panel offers a new request.
+        half = [r for r in requests if r.get("media_kind") == kind]
+        if (kind in (job.get("formats") or []) and not job.get(f"{prefix}_source_id") and half
+                and all(r.get("status") in ("failed", "declined", "cancelled") for r in half)
+                and any(r.get("status") in ("failed", "declined") and not r.get("dismissed") for r in half)):
+            return True
     return any(
         receipt.get("decision_action") == "pick_release" and not receipt.get("dismissed")
         and receipt.get("status") not in ("cancelled", "paired", "failed", "declined")
-        for receipt in job.get("requests") or []
+        for receipt in requests
     )
 
 

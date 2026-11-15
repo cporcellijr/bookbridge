@@ -1031,6 +1031,9 @@ class AcquisitionJobOrderingTests(unittest.TestCase):
         self.assertTrue(acquisition_job_needs_choice(self._job(ebook_submission_state="failed")))
         self.assertTrue(acquisition_job_needs_choice(self._job(
             audio_library_state="needs_review", review_candidates={"audiobook": [{"source_id": "x"}]})))
+        self.assertTrue(acquisition_job_needs_choice(self._job(
+            formats=["ebook"], ebook_submission_state="accepted",
+            requests=[{"media_kind": "ebook", "status": "failed", "dismissed": False}])))
 
     def test_no_choice_when_nothing_to_act_on(self):
         self.assertFalse(acquisition_job_needs_choice(self._job(ebook_submission_state="accepted")))
@@ -1040,9 +1043,11 @@ class AcquisitionJobOrderingTests(unittest.TestCase):
             {"decision_action": "pick_release", "status": "cancelled", "dismissed": False},
             {"decision_action": "pick_release", "status": "paired", "dismissed": False},
             {"decision_action": "wait", "status": "waiting", "dismissed": False},
+            {"media_kind": "ebook", "status": "failed", "dismissed": True},
+            {"media_kind": "ebook", "status": "cancelled", "dismissed": False},
         ):
             with self.subTest(receipt=receipt):
-                self.assertFalse(acquisition_job_needs_choice(self._job(requests=[receipt])))
+                self.assertFalse(acquisition_job_needs_choice(self._job(formats=["ebook"], requests=[receipt])))
 
     def test_order_needs_choice_then_running_then_done(self):
         done = self._job(id="done", linked_abs_id="b1")

@@ -32,7 +32,7 @@
 .acquisition-job-card{padding:18px 20px;border-top:1px solid var(--border);scroll-margin-top:24px}
 .acquisition-job-card:first-child{border-top:0}
 .acquisition-job-focused{outline:2px solid var(--accent);outline-offset:-2px}
-.acquisition-job-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.acquisition-job-heading{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:8px 16px}
 .acquisition-job-heading h3{margin:0;font-size:1.05rem;overflow-wrap:anywhere}
 .acquisition-job-heading h3{flex:1}
 .acquisition-job-tag{align-self:center;font-size:.8rem;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted);white-space:nowrap}
