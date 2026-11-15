@@ -20,6 +20,58 @@ def orbit_detail():
     ]}
 
 
+def test_catalog_keeps_all_ebook_names_without_detail_requests():
+    client = BookOrbitClient()
+    detail = orbit_detail()
+    detail['files'].extend([
+        {'id': 40, 'filename': 'comic.cbz', 'format': 'cbz'},
+        {'id': 50, 'filename': '../invalid.epub', 'format': 'epub'},
+    ])
+    info = client._build_light_info(detail)
+    with patch.object(client, 'get_all_books', return_value=[info]), \
+         patch.object(client, 'get_book_detail') as get_detail:
+        assert client.get_all_ebooks()[0]['ebookFilenames'] == ['plain.epub', 'readaloud.epub', 'comic.cbz']
+    get_detail.assert_not_called()
+
+
+def test_enriched_search_keeps_non_primary_names():
+    client = BookOrbitClient()
+    with patch.object(client, 'get_book_detail', return_value=orbit_detail()):
+        assert client._enrich_ebook(7, {})['ebookFilenames'] == ['plain.epub', 'readaloud.epub']
+
+
+@pytest.mark.parametrize('query', ['', 'Story'])
+@pytest.mark.parametrize('confirmed', [False, True])
+def test_bookorbit_non_primary_files_are_not_local_choices(tmp_path, monkeypatch, query, confirmed):
+    import src.web_server as web
+
+    for name in ('Story.epub', 'Story-enhanced.epub', 'Story-other.epub', 'Story.cbz'):
+        (tmp_path / name).write_bytes(b'local publication')
+    provider = MagicMock()
+    provider.is_configured.return_value = True
+    books = [{'id': 7, 'title': 'Story', 'fileName': 'Story-enhanced.epub',
+              'ebookFilenames': ['Story.epub', 'Story-enhanced.epub'] if confirmed else []}]
+    provider.get_all_ebooks.return_value = books
+    provider.search_ebooks.return_value = books
+    disabled = SimpleNamespace(is_configured=lambda: False)
+    clients = SimpleNamespace(bookorbit_client=provider, booklore_client=disabled,
+                              bookfusion_client=disabled, kavita_client=disabled,
+                              abs_client=None, library_service=None)
+    monkeypatch.setattr(web, '_scan_user_clients', lambda: clients)
+    monkeypatch.setattr(web, 'acting_user_is_regular', lambda db: False)
+    monkeypatch.setattr(web, 'database_service', None, raising=False)
+    monkeypatch.setattr(web, 'EBOOK_DIR', tmp_path, raising=False)
+    monkeypatch.setattr(web, '_build_local_ebook_title_index', lambda *args: {})
+    results = web.get_searchable_ebooks(query)
+    local_names = {item.name for item in results if item.source == 'Local File'}
+    assert ('Story.epub' not in local_names) is confirmed
+    assert 'Story-other.epub' in local_names
+    if confirmed:
+        assert 'Story.cbz' in local_names  # An alias must not hide a different format by stem.
+    assert sum(item.source == 'BookOrbit' for item in results) == 1
+    provider.get_book_detail.assert_not_called()
+
+
 def grimmory_detail():
     return {"id": 7, "primaryFile": {"id": 10, "fileName": "plain.epub", "bookType": "EPUB"},
             "alternativeFormats": [{"id": 20, "fileName": "readaloud.epub", "bookType": "EPUB"}],
