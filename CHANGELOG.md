@@ -25,6 +25,16 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Readium reading positions resolve correctly when chapter filenames are URL-encoded.**
+  Readers such as AudioBooth can now match encoded chapter links against the EPUB spine
+  instead of falling back to a less accurate whole-book percentage.
+  Contributed by [@josephyancey](https://github.com/josephyancey) in #594.
+
+- **Extracting covers from large read-aloud EPUBs no longer loads their embedded narration.**
+  Cover reads are bounded, existing artwork survives extraction failures, and concurrent
+  requests for a missing cover share one extraction.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #595.
+
 - **Short reading sessions in KOReader sync again in long books.** A few pages in a long
   novel can be under the 0.5% threshold but still past the 2,000-character backstop, and
   that backstop never fired for KOReader: the bridge saved the device's new position before
