@@ -81,7 +81,7 @@ def is_comic_ebook_filename(name: str | None) -> bool:
     return str(name or '').strip().lower().endswith(tuple(COMIC_EBOOK_EXTENSIONS))
 
 
-def normalize_href(href) -> str:
+def normalize_href(href: str | None) -> str:
     """Percent-decode a locator/spine href so the two can be compared.
 
     Readium-based readers (AudioBooth among them) store the chapter href
