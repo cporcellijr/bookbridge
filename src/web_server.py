@@ -1359,6 +1359,8 @@ from src.web.dashboard_context import (
     _hero_daily_totals,
     _hero_listening_piece,
     _hero_reading_piece,
+    _hero_ebook_fraction,
+    _hero_streak_days,
 )
 
 

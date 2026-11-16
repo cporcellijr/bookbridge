@@ -9,7 +9,7 @@ const changes = {
   series: ["const heroHidden = card.dataset.heroExcluded === 'true' && !card.closest?.('.series-group');",
            "const heroHidden = card.dataset.heroExcluded === 'true';"],
   eligible: ["rows.filter(row => heroIsInProgress(row) &&", "rows.filter(row => true &&"],
-  progress: ["heroRoot.querySelector('.hero-percent').textContent = percentage.toFixed(1) + '%';",
+  progress: ["heroRoot.querySelector('.hero-percent').textContent = Math.floor(percentage) + '%';",
              "heroRoot.querySelector('.hero-percent').textContent = '0%';"],
   restore: ["else delete card.dataset.heroExcluded;", "else card.dataset.heroExcluded = 'true';"],
   count: ["if (absId && !heroHidden && !seen.has(absId))", "if (absId && !seen.has(absId))"],
@@ -31,7 +31,7 @@ const code = source.slice(start, stop)
   .replace(/\{\{\s*_\('([^']*)'\)\|tojson\s*\}\}/g, (_, value) => JSON.stringify(value));
 const node = () => ({textContent: '', hidden: false});
 const ui = {
-  '.hero-title': node(), '.hero-author': node(), '.hero-service': node(), '.hero-percent': node(),
+  '.hero-title': node(), '.hero-author': node(), '.hero-percent': node(),
   '.hero-cover': {children: [], replaceChildren(...items) {this.children = items;}},
   '.library-hero-link': {href: '/book/a', setAttribute(key,value) {this[key] = value;}},
 };
@@ -85,8 +85,8 @@ context.refreshHeroFromPoll([
   row('c', 100, 300), row('d', 0, 400),
 ], map);
 assert.equal(hero.dataset.absId, 'a', 'Quiet poll and finished/unstarted rows do not swap');
-assert.equal(ui['.hero-percent'].textContent, '36.0%', 'Quiet poll updates percent in place');
-assert.equal(ui['.hero-service'].textContent, 'Audiobookshelf', 'Hero has the exact leader');
+assert.equal(ui['.hero-percent'].textContent, '36%', 'Quiet poll updates percent in place');
+assert.equal(hero.dataset.service, 'Audiobookshelf', 'Hero has the exact leader');
 assert.equal(sorting, 0, 'Quiet poll does not resort the grid');
 const unpropagated = row('b', 25, 0);
 unpropagated.last_sync_unix = 9999;
@@ -109,7 +109,7 @@ assert.equal(countScope.distinctBookCards().length, 3, 'Grid count follows new h
 assert.equal(ui['.hero-title'].textContent, 'B title', 'New hero uses grid title');
 assert.equal(ui['.hero-cover'].children[0].id, 'b', 'New hero copies on-page cover');
 assert.equal(ui['.library-hero-link'].href, '/book/b', 'New hero opens the book window');
-assert.equal(ui['.hero-percent'].textContent, '27.0%', 'New hero progress updated in place');
+assert.equal(ui['.hero-percent'].textContent, '27%', 'New hero progress updated in place');
 assert.equal(sorting, 1);
 assert(filtering >= 2);
 
@@ -117,7 +117,7 @@ context.refreshHeroFromPoll([
   row('a', 37, 100), row('b', 29, 111), row('c', 100, 888), row('d', 0, 999),
 ], map);
 assert.equal(hero.dataset.absId, 'b', 'No later eligible movement retains hero');
-assert.equal(ui['.hero-percent'].textContent, '29.0%', 'Continued polling refreshes numbers');
+assert.equal(ui['.hero-percent'].textContent, '29%', 'Continued polling refreshes numbers');
 assert.equal(sorting, 1, 'No redundant sort on no-swap');
 context.refreshHeroFromPoll([row('a', 37, 111), row('b', 100, 111)], map);
 assert.equal(hero.dataset.absId, 'b', 'A finished hero stays until another book moves');

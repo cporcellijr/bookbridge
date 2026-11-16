@@ -1011,9 +1011,8 @@
 
             const heroRoot = document.getElementById('library-hero');
 
-            // P16d: content is client-only and never participates in the dashboard build.
-            const heroContent = heroRoot?.querySelector('.hero-content');
-            const heroOrder = ['synopsis', 'bars', 'listened', 'pages'];
+            // Optional pieces load after first paint and never take part in the dashboard build.
+            const heroOrder = ['synopsis', 'stats', 'streak'];
             const heroChosen = heroOrder.filter(key =>
                 (heroRoot?.dataset.heroContent || '').split(',').includes(key));
             const heroServiceNames = {
@@ -1022,6 +1021,11 @@
                 booklore: 'Grimmory', bookloreaudio: 'Grimmory',
                 kavita: 'Kavita', cwa: 'Calibre-Web', bookfusion: 'BookFusion',
                 kosync: 'KOReader', storyteller: 'Storyteller'
+            };
+            const heroSlotOrder = ['audio', 'ebook', 'koreader', 'readalong'];
+            const heroSlotLabels = {
+                audio: {{ _('Audio')|tojson }}, ebook: {{ _('Ebook')|tojson }},
+                koreader: 'KOReader', readalong: {{ _('Read-along')|tojson }}
             };
             let heroSlots = [];
             try { heroSlots = JSON.parse(heroRoot?.dataset.heroSlots || '[]'); } catch (_) { /* no slots */ }
@@ -1033,6 +1037,15 @@
                 const minutes = Math.max(0, Math.round(Number(seconds || 0) / 60));
                 const hours = Math.floor(minutes / 60);
                 return hours ? hours + 'h ' + (minutes % 60) + 'm' : minutes + 'm';
+            }
+
+            function heroAgo(unix) {
+                if (!(Number(unix) > 0)) return '';
+                const seconds = Math.max(0, Date.now() / 1000 - Number(unix));
+                if (seconds < 60) return {{ _('just now')|tojson }};
+                if (seconds < 3600) return bbFormat({{ _('{n}m ago')|tojson }}, {n: Math.floor(seconds / 60)});
+                if (seconds < 86400) return bbFormat({{ _('{n}h ago')|tojson }}, {n: Math.floor(seconds / 3600)});
+                return bbFormat({{ _('{n}d ago')|tojson }}, {n: Math.floor(seconds / 86400)});
             }
 
             function heroSlotRows(row, card) {
@@ -1064,91 +1077,198 @@
                 return element;
             }
 
-            function heroMiniProgress() {
-                const mini = heroRoot?.querySelector('.hero-mini-track');
-                if (!mini) return;
-                mini.hidden = heroChosen.includes('bars');
-                const pct = parseFloat(heroRoot.querySelector('.hero-percent')?.textContent || '0');
-                const fill = mini.querySelector('span');
-                if (fill) fill.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+            function heroClamp(pct) {
+                return Math.max(0, Math.min(100, Number(pct) || 0));
+            }
+
+            function heroKnownSlots() {
+                return heroSlots.filter(slot => slot.linked !== false && slot.pct != null &&
+                    Number.isFinite(Number(slot.pct)))
+                    .sort((a, b) => heroSlotOrder.indexOf(a.key) - heroSlotOrder.indexOf(b.key));
+            }
+
+            function heroLeaderSlot(known) {
+                return known.find(slot => slot.last) ||
+                    known.find(slot => slot.key === heroRoot?.dataset.leaderSlot) || null;
+            }
+
+            // Time left for audio, else pages left from the reading position.
+            function heroLeft(known) {
+                const audio = known.find(slot => slot.key === 'audio');
+                const duration = Number(heroRoot?.dataset.duration || 0);
+                if (audio && duration > 0) {
+                    const amount = duration * (1 - heroClamp(audio.pct) / 100);
+                    return {amount, unit: 'seconds', text: bbFormat({{ _('{left} left')|tojson }}, {left: heroTime(amount)})};
+                }
+                const reading = known.find(slot => slot.key === 'koreader') || known.find(slot => slot.key === 'ebook');
+                const pages = Number(heroRoot?.dataset.pages || 0);
+                if (reading && pages > 0) {
+                    const amount = Math.round(pages * (1 - heroClamp(reading.pct) / 100));
+                    return {amount, unit: 'pages', text: bbFormat({{ _('{pages} pages left')|tojson }}, {pages: amount})};
+                }
+                return null;
+            }
+
+            // A finish date only from this week's own pace, never a guess.
+            function heroFinish(left) {
+                const piece = left.unit === 'seconds' ? heroPieces.listened : heroPieces.pages;
+                const week = Number(piece?.week || 0);
+                if (!(week > 0) || !(left.amount > 0)) return '';
+                const today = new Date();
+                const daysThisWeek = ((today.getDay() + 6) % 7) + 1;
+                const days = Math.ceil(left.amount / (week / daysThisWeek));
+                if (!Number.isFinite(days) || days > 365) return '';
+                const finish = new Date(today.getFullYear(), today.getMonth(), today.getDate() + days);
+                return bbFormat({{ _('done ~{date}')|tojson }}, {
+                    date: finish.toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
+                });
+            }
+
+            function paintHeroBase() {
+                if (!heroRoot || heroRoot.hidden) return;
+                const known = heroKnownSlots();
+                const leader = heroLeaderSlot(known);
+                const moved = heroRoot.querySelector('.hero-moved');
+                if (moved) {
+                    const service = heroRoot.dataset.service || '';
+                    const listening = (leader?.key || heroRoot.dataset.leaderSlot) === 'audio';
+                    const where = !service ? {{ _('Currently reading')|tojson }} : bbFormat(listening
+                        ? {{ _('Listening on {service}')|tojson }} : {{ _('Reading on {service}')|tojson }}, {service});
+                    const ago = heroAgo(heroRoot.dataset.movementAt);
+                    moved.textContent = ago ? where + ' · ' + ago : where;
+                }
+                const leftNode = heroRoot.querySelector('.hero-left');
+                if (leftNode) {
+                    const left = heroLeft(known);
+                    leftNode.textContent = left ? [left.text, heroFinish(left)].filter(Boolean).join(' · ') : '';
+                    leftNode.hidden = !left;
+                }
+                const track = heroRoot.querySelector('.hero-track');
+                const fill = track?.querySelector('.hero-track-fill');
+                if (!fill) return;
+                track.dataset.leader = leader?.key || '';
+                fill.style.width = heroClamp(heroRoot.dataset.percent) + '%';
+                track.replaceChildren(fill, ...known.filter(slot => slot !== leader).map(slot => {
+                    const mark = heroElement('span', 'hero-track-mark');
+                    mark.dataset.slot = slot.key;
+                    mark.style.left = heroClamp(slot.pct) + '%';
+                    return mark;
+                }));
+                const legend = heroRoot.querySelector('.hero-legend');
+                if (!legend) return;
+                legend.replaceChildren(...known.map(slot => {
+                    const item = heroElement('span', 'hero-legend-item');
+                    item.dataset.slot = slot.key;
+                    if (slot.service) item.title = slot.service;
+                    item.append(heroElement('span', 'hero-legend-swatch'),
+                        heroElement('span', '', heroSlotLabels[slot.key] + ' ' + Math.floor(Number(slot.pct)) + '%'));
+                    return item;
+                }));
+                legend.hidden = known.length < 2;
+            }
+
+            function heroSetRating(value) {
+                const rating = parseFloat(value);
+                const known = Number.isFinite(rating);
+                const stars = heroRoot?.querySelector('.hero-rating');
+                if (stars) {
+                    stars.hidden = !known;
+                    if (known) stars.setAttribute('aria-label', bbFormat({{ _('Rated {rating} of 5')|tojson }}, {rating: rating.toFixed(1)}));
+                    stars.querySelector('.hero-stars')?.style.setProperty('--hero-stars', (known ? rating * 20 : 0) + '%');
+                    const number = stars.querySelector('.hero-rating-value');
+                    if (number) number.textContent = known ? rating.toFixed(1) : '';
+                }
+                const phone = heroRoot?.querySelector('.hero-phone-rating');
+                if (phone) {
+                    phone.hidden = !known;
+                    phone.textContent = known ? '★ ' + rating.toFixed(1) : '';
+                }
+            }
+
+            // Square audiobook art sits whole on a blurred copy of itself instead of being cropped.
+            function heroFitCover() {
+                const cover = heroRoot?.querySelector('.hero-cover');
+                if (!cover?.querySelector) return;
+                cover.querySelector('.hero-cover-backdrop')?.remove();
+                cover.classList.remove('is-square');
+                const image = cover.querySelector('.cover-image');
+                if (!image) return;
+                const fit = () => {
+                    if (!image.isConnected || !image.naturalWidth || cover.querySelector('.hero-cover-backdrop')) return;
+                    if (image.naturalWidth / image.naturalHeight < 0.85) return;
+                    const backdrop = image.cloneNode(false);
+                    backdrop.className = 'hero-cover-backdrop';
+                    backdrop.removeAttribute('onerror');
+                    backdrop.removeAttribute('data-thumb-url');
+                    backdrop.hidden = false;
+                    backdrop.setAttribute('aria-hidden', 'true');
+                    cover.classList.add('is-square');
+                    cover.prepend(backdrop);
+                };
+                image.addEventListener('load', fit);
+                if (image.complete) fit();
+            }
+
+            function heroStat(key, label, value, unit, meta) {
+                const group = heroElement('div', 'hero-stat hero-stat-' + key);
+                group.append(heroElement('span', 'hero-stat-label', label));
+                const number = heroElement('strong', 'hero-stat-value', value);
+                if (unit) number.append(heroElement('span', 'hero-stat-unit', ' ' + unit));
+                group.append(number);
+                meta.forEach(line => group.append(heroElement('span', 'hero-stat-meta', line)));
+                return group;
             }
 
             function renderHeroPieces() {
-                if (!heroContent || !heroRoot || heroRoot.hidden) return;
-                const pieces = [];
-                heroChosen.forEach(key => {
-                    const data = key === 'bars' ? heroSlots.filter(slot =>
-                        slot.linked && slot.pct != null && Number.isFinite(Number(slot.pct))
-                    ).sort((a, b) => ['audio', 'ebook', 'koreader', 'readalong'].indexOf(a.key) -
-                        ['audio', 'ebook', 'koreader', 'readalong'].indexOf(b.key)) : heroPieces[key];
-                    if (!data || (Array.isArray(data) && !data.length)) return;
-                    const section = heroElement('section', 'hero-piece hero-piece-' + key);
-                    const names = {
-                        synopsis: {{ _('About this book')|tojson }},
-                        bars: {{ _('Where you are')|tojson }},
-                        listened: {{ _('Listening')|tojson }},
-                        pages: {{ _('Reading')|tojson }}
-                    };
-                    section.append(heroElement('span', 'hero-piece-label', names[key]));
-                    if (key === 'synopsis') {
-                        if (!data.text) return;
-                        section.append(heroElement('p', 'hero-synopsis-text', data.text));
-                    } else if (key === 'bars') {
-                        const labels = {
-                            ebook: {{ _('Ebook')|tojson }}, audio: {{ _('Audiobook')|tojson }},
-                            readalong: {{ _('Read-along')|tojson }}, koreader: 'KOReader'
-                        };
-                        data.forEach(slot => {
-                            const row = heroElement('div', 'hero-app-row' + (slot.last ? ' is-leader' : ''));
-                            const name = slot.key === 'ebook' && slot.service
-                                ? labels.ebook + ' · ' + slot.service : labels[slot.key];
-                            row.append(heroElement('span', '', name));
-                            row.append(heroElement('strong', '', Number(slot.pct).toFixed(1) + '%'));
-                            const track = heroElement('span', 'hero-app-track');
-                            const fill = heroElement('span');
-                            fill.style.width = Math.max(0, Math.min(100, Number(slot.pct))) + '%';
-                            track.append(fill);
-                            row.append(track);
-                            section.append(row);
-                        });
-                    } else if (key === 'listened') {
-                        if (!(Number(data.seconds) > 0)) return;
-                        section.append(heroElement('strong', 'hero-piece-value', heroTime(data.seconds)));
-                        if (data.lengthSeconds) {
-                            const meta = data.leftSeconds != null
+                if (!heroRoot || heroRoot.hidden) return;
+                const synopsis = heroRoot.querySelector('.hero-synopsis');
+                if (synopsis) {
+                    const text = heroChosen.includes('synopsis') ? heroPieces.synopsis?.text : '';
+                    synopsis.textContent = text || '';
+                    synopsis.hidden = !text;
+                }
+                const stats = heroRoot.querySelector('.hero-stats');
+                if (stats) {
+                    const groups = [];
+                    const listened = heroChosen.includes('stats') ? heroPieces.listened : null;
+                    if (listened && Number(listened.seconds) > 0) {
+                        const meta = [];
+                        if (listened.lengthSeconds) {
+                            meta.push(listened.leftSeconds != null
                                 ? bbFormat({{ _('of {length} · {left} left')|tojson }}, {
-                                    length: heroTime(data.lengthSeconds), left: heroTime(data.leftSeconds)})
-                                : bbFormat({{ _('of {length}')|tojson }}, {length: heroTime(data.lengthSeconds)});
-                            section.append(heroElement('span', 'hero-piece-meta', meta));
+                                    length: heroTime(listened.lengthSeconds), left: heroTime(listened.leftSeconds)})
+                                : bbFormat({{ _('of {length}')|tojson }}, {length: heroTime(listened.lengthSeconds)}));
                         }
-                        if (data.week != null && data.today != null) {
-                            section.append(heroElement('span', 'hero-piece-meta',
-                                bbFormat({{ _('This week {week} · Today {today}')|tojson }}, {
-                                    week: heroTime(data.week), today: heroTime(data.today)
-                                })));
+                        if (Number(listened.week) > 0 || Number(listened.today) > 0) {
+                            meta.push(bbFormat({{ _('This week {week} · Today {today}')|tojson }}, {
+                                week: heroTime(listened.week), today: heroTime(listened.today)}));
                         }
-                    } else if (key === 'pages') {
-                        if (!(Number(data.read) > 0)) return;
-                        section.append(heroElement('strong', 'hero-piece-value', data.read));
-                        if (data.total) {
-                            section.append(heroElement('span', 'hero-piece-meta',
-                                bbFormat({{ _('of {total} · about {left} to go')|tojson }}, {
-                                    total: data.total, left: data.left
-                                })));
-                        }
-                        if (data.week != null && data.today != null) {
-                            section.append(heroElement('span', 'hero-piece-meta',
-                                bbFormat({{ _('This week {week} · Today {today}')|tojson }}, {
-                                    week: data.week, today: data.today
-                                })));
-                        }
+                        groups.push(heroStat('listened', {{ _('Listening')|tojson }}, heroTime(listened.seconds), '', meta));
                     }
-                    pieces.push(section);
-                });
-                heroContent.replaceChildren(...pieces);
-                heroContent.hidden = pieces.length === 0;
-                heroContent.dataset.visibleCount = String(pieces.length);
-                heroMiniProgress();
+                    const pages = heroChosen.includes('stats') ? heroPieces.pages : null;
+                    if (pages && Number(pages.read) > 0) {
+                        const meta = [];
+                        if (pages.total) {
+                            meta.push(pages.left != null
+                                ? bbFormat({{ _('of {total} · about {left} to go')|tojson }}, {total: pages.total, left: pages.left})
+                                : bbFormat({{ _('of {total}')|tojson }}, {total: pages.total}));
+                        }
+                        if (Number(pages.week) > 0 || Number(pages.today) > 0) {
+                            meta.push(bbFormat({{ _('This week {week} · Today {today}')|tojson }}, {
+                                week: pages.week, today: pages.today}));
+                        }
+                        groups.push(heroStat('pages', {{ _('Reading')|tojson }}, pages.read, {{ _('pages')|tojson }}, meta));
+                    }
+                    const streak = heroChosen.includes('streak') ? Number(heroPieces.streak?.days || 0) : 0;
+                    if (streak > 0) {
+                        groups.push(heroStat('streak', {{ _('Streak')|tojson }}, streak === 1
+                            ? {{ _('1 day')|tojson }} : bbFormat({{ _('{n} days')|tojson }}, {n: streak}),
+                            '', [{{ _('All books')|tojson }}]));
+                    }
+                    stats.replaceChildren(...groups);
+                    stats.hidden = groups.length === 0;
+                }
+                paintHeroBase();
             }
 
             function loadHeroContent() {
@@ -1157,12 +1277,9 @@
                 heroController = null;
                 heroPieces = {};
                 if (!heroRoot?.dataset.absId || heroRoot.hidden) return;
-                if (window.matchMedia?.('(max-width: 760px)').matches) {
-                    if (heroContent) heroContent.hidden = true;
-                    return;
-                }
                 renderHeroPieces();
-                if (!heroChosen.some(key => key !== 'bars')) return;
+                // Phones keep the simple hero, so they never fetch its pieces.
+                if (window.matchMedia?.('(max-width: 760px)').matches || !heroChosen.length) return;
                 const absId = heroRoot.dataset.absId;
                 heroController = new AbortController();
                 fetch('/api/library/hero/' + encodeURIComponent(absId), {
@@ -1179,10 +1296,6 @@
             }
 
             function heroUpdateSlots(row) {
-                if (!heroChosen.includes('bars')) {
-                    heroMiniProgress();
-                    return;
-                }
                 const existing = heroSlots;
                 const refreshed = heroSlotRows(row, null);
                 heroSlots = refreshed.map(slot => {
@@ -1194,7 +1307,7 @@
                         pct: slot.pct != null ? slot.pct : old?.pct,
                     };
                 });
-                renderHeroPieces();
+                paintHeroBase();
             }
 
             function heroIsInProgress(row) {
@@ -1245,6 +1358,16 @@
                 }));
                 heroRoot.querySelector('.hero-title').textContent = title;
                 heroRoot.querySelector('.hero-author').textContent = author;
+                const series = heroRoot.querySelector('.hero-series');
+                if (series) {
+                    const name = card.dataset.seriesName || '';
+                    const number = Number(card.dataset.seriesSequence || NaN);
+                    series.textContent = name && Number.isFinite(number) ? name + ' #' + number : name;
+                    series.hidden = !name;
+                }
+                heroSetRating(card.dataset.rating || '');
+                heroRoot.dataset.duration = card.dataset.duration || '0';
+                heroRoot.dataset.pages = card.dataset.pages || '';
                 const coverNodes = ['.cover-image', '.typographic-cover']
                     .map(selector => cover?.querySelector(selector)).filter(Boolean)
                     .map(node => node.cloneNode(true));
@@ -1268,9 +1391,12 @@
                             if (pendingThumb.isConnected) pendingThumb.src = url.replace('/covers/thumb/', '/covers/');
                         });
                 }
+                heroFitCover();
                 heroRoot.dataset.absId = String(row.abs_id);
                 heroRoot.dataset.movementAt = String(heroMovementTime(row));
                 heroRoot.dataset.markerAt = String(Number(row.last_slot_unix || 0));
+                heroRoot.dataset.service = row.last_slot_service || '';
+                heroRoot.dataset.leaderSlot = row.last_slot || '';
                 heroRoot.hidden = false;
                 heroSlots = heroSlotRows(row, card);
                 loadHeroContent();
@@ -1278,15 +1404,15 @@
 
             function updateHeroProgress(row) {
                 if (!heroRoot || !row || heroRoot.hidden) return;
-                const service = heroRoot.querySelector('.hero-service');
                 const leader = (row.last_slot_client || '').toLowerCase();
                 const client = leader.startsWith('kosync') || leader === 'bridgesync_plugin' ? 'kosync' : leader;
                 const state = (row.states || {})[client];
                 const percentage = state && state.percentage != null
                     ? Number(state.percentage) : Number(row.unified_progress || 0);
-                service.textContent = row.last_slot_service || '';
-                service.hidden = !row.last_slot_service;
-                heroRoot.querySelector('.hero-percent').textContent = percentage.toFixed(1) + '%';
+                if (row.last_slot_service) heroRoot.dataset.service = row.last_slot_service;
+                if (row.last_slot) heroRoot.dataset.leaderSlot = row.last_slot;
+                heroRoot.dataset.percent = String(percentage);
+                heroRoot.querySelector('.hero-percent').textContent = Math.floor(percentage) + '%';
                 heroRoot.dataset.movementAt = String(Math.max(
                     Number(heroRoot.dataset.movementAt || 0), heroMovementTime(row)));
                 heroRoot.dataset.markerAt = String(Math.max(
@@ -1316,6 +1442,8 @@
             if (heroRoot?.dataset.absId) {
                 excludeHeroFromGrid(heroRoot.dataset.absId);
                 filterBooks();
+                paintHeroBase();
+                heroFitCover();
                 // Two turns after layout, so the initial Library paint is never blocked.
                 const afterPaint = () => window.setTimeout(loadHeroContent, 0);
                 if (window.requestAnimationFrame) window.requestAnimationFrame(afterPaint);
