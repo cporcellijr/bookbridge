@@ -45,7 +45,7 @@ def test_enriched_search_keeps_non_primary_names():
 def test_bookorbit_non_primary_files_are_not_local_choices(tmp_path, monkeypatch, query, confirmed):
     import src.web_server as web
 
-    for name in ('Story.epub', 'Story-enhanced.epub', 'Story-other.epub', 'Story.cbz'):
+    for name in ('Story.epub', 'Story-enhanced.epub', 'Story-other.epub'):
         (tmp_path / name).write_bytes(b'local publication')
     provider = MagicMock()
     provider.is_configured.return_value = True
@@ -67,7 +67,12 @@ def test_bookorbit_non_primary_files_are_not_local_choices(tmp_path, monkeypatch
     assert ('Story.epub' not in local_names) is confirmed
     assert 'Story-other.epub' in local_names
     if confirmed:
-        assert 'Story.cbz' in local_names  # An alias must not hide a different format by stem.
+        # Added only now: the local stem dedupe keeps whichever of Story.cbz and Story.epub
+        # the filesystem lists first, and that order differs by OS.
+        (tmp_path / 'Story.cbz').write_bytes(b'local publication')
+        rescan = {item.name for item in web.get_searchable_ebooks(query) if item.source == 'Local File'}
+        assert 'Story.cbz' in rescan  # An alias must not hide a different format by stem.
+        assert 'Story.epub' not in rescan
     assert sum(item.source == 'BookOrbit' for item in results) == 1
     provider.get_book_detail.assert_not_called()
 
