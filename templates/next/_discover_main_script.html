@@ -994,6 +994,8 @@
                 group: params.get('group') !== 'flat',
             });
         }
+        // Back from Match All: the matched books are already queued, so don't re-run the old search.
+        if (document.querySelector('.discover-process-summary')) tabState.search.q = '';
         const hidden = readJson(sessionStore, 'suggestions_hidden') || {};
         const expanded = readJson(localStore, 'suggestions_expanded') || {};
         TABS.forEach((tab) => {
