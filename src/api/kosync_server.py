@@ -1955,7 +1955,11 @@ def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
         previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
         # Keep the percentage the cycle last saw, across several PUTs, so the cycle
         # measures (and accumulates) movement from it instead of seeing a delta of 0.
-        metadata = state_metadata_kwargs({"synced_pct": get_kosync_synced_pct(previous)})
+        # Keep an approved rewind's cutoff too, as the cycle's own writes do.
+        metadata = state_metadata_kwargs({
+            "synced_pct": get_kosync_synced_pct(previous),
+            "kosync_approved_rewind_at": get_kosync_approved_rewind_at(previous),
+        })
         if is_cbz_book(book):
             # PUT updates the wire position immediately. Retain the last synced
             # page until the cycle consumes it, including across several PUTs,
