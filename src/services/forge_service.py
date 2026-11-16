@@ -2135,6 +2135,22 @@ class ForgeService:
             return self
         return self._for_client_bundle(bundle)
 
+    @staticmethod
+    def sweep_orphaned_staging() -> int:
+        """Remove staging folders a previous process left behind (startup only, no forge is running yet)."""
+        tmp = Path(tempfile.gettempdir())
+        removed = 0
+        try:
+            for entry in tmp.glob(".forge_tus_*"):
+                if entry.is_dir():
+                    shutil.rmtree(entry, ignore_errors=True)
+                    removed += 1
+        except OSError as exc:
+            logger.warning("Forge & Match: could not sweep leftover staging folders: %s", exc, exc_info=True)
+        if removed:
+            logger.info("Forge & Match: removed %d leftover staging folder(s) from a previous run", removed)
+        return removed
+
     def resume_pending_forge_matches(self, user_client_registry=None) -> int:
         """Re-attach Forge & Match work left behind by a previous run.
 

@@ -2385,6 +2385,7 @@ if __name__ == '__main__':
     # that finalizes the forge does not, so resume it here. The registry lets
     # each book resume on its owner's clients (multi-user), not just the admin's.
     try:
+        container.forge_service().sweep_orphaned_staging()
         container.forge_service().resume_pending_forge_matches(
             user_client_registry=container.user_client_registry()
         )

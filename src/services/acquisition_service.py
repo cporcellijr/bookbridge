@@ -124,7 +124,7 @@ class AcquisitionService:
         self._adoption_scanned: dict[int, datetime] = {}
         self._adoption_active: dict[int, bool] = {}
         self._adoption_claim_lock = Lock()
-        self._job_reconciled: dict[str, datetime] = {}
+        self._job_reconciled: dict[tuple[int, str], datetime] = {}
         self.job_reconcile_interval = JOB_RECONCILE_INTERVAL
 
     def _pending_jobs(self, user_id: int) -> list[dict]:
@@ -448,17 +448,17 @@ class AcquisitionService:
             requests = job.get("requests") or []
             if requests and all(r["status"] in _DEAD_RECEIPT for r in requests) and not job.get("scan_state"):
                 continue  # every provider request ended without a delivery; nothing can arrive
-            last = self._job_reconciled.get(job["id"])
+            last = self._job_reconciled.get((user_id, job["id"]))
             if last is not None and now - last < self.job_reconcile_interval:
                 continue
-            self._job_reconciled[job["id"]] = now
+            self._job_reconciled[(user_id, job["id"])] = now
             try:
                 self._reconcile_job(user_id, job, clients)
             except Exception:
                 logger.warning("📥 Acquisition: user %s job %s could not reconcile", user_id, job["id"], exc_info=True)
         live = {job["id"] for job in jobs}
-        for job_id in [key for key in self._job_reconciled if key not in live]:
-            self._job_reconciled.pop(job_id, None)
+        for key in [k for k in self._job_reconciled if k[0] == user_id and k[1] not in live]:
+            self._job_reconciled.pop(key, None)
 
     def _reconcile_linked_receipts(self, user_id: int, job: dict, clients: Any) -> None:
         """Retain late provider arrivals without inventing their library provenance.
