@@ -232,3 +232,13 @@ class TestDiscoverPhoneQueueBar(unittest.TestCase):
         self.assertIn('scrollIntoView', template)
         self.assertIn('queueCount', template)
         self.assertIn('.discover-queue-bar:not([hidden]) { position: fixed;', css)
+
+
+class TestDiscoverTabletEbookRows(unittest.TestCase):
+    """Tablet-width ebook rows put their five buttons below the title instead of squeezing it."""
+
+    def test_narrow_results_list_stacks_ebook_row_actions(self):
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('.discover-page .results-list { container-type: inline-size; }', css)
+        rule = css[css.index('@container (max-width: 900px)'):]
+        self.assertIn('"actions actions actions actions"', rule[:rule.index('}')])

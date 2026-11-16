@@ -65,9 +65,11 @@
     function syncHeroChoices(form, value) {
         var values = value ? value.split(',') : [];
         var checks = form.querySelectorAll('[data-hero-piece]');
+        // The streak sits in the book stats row, so it needs book stats.
+        if (!values.includes('stats')) values = values.filter(function (key) { return key !== 'streak'; });
         checks.forEach(function (check) {
             check.checked = values.includes(check.value);
-            check.disabled = !check.checked && values.length >= 2;
+            check.disabled = check.value === 'streak' && !values.includes('stats');
         });
         var hidden = form.querySelector('input[name="UI_HERO_CONTENT"]');
         if (hidden) hidden.value = values.join(',');

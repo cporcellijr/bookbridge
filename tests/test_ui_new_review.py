@@ -22,12 +22,15 @@ class TestP9ReviewFixes(unittest.TestCase):
                 self.assertNotRegex(text, r"btn\.innerHTML = '(❌|⏳) ' \+ (stagePrefix|label|\(data\.error)")
                 self.assertEqual(text.count("btn.textContent = '❌ '"), 4)
 
-    def test_has_audio_format_is_visible_and_attention_is_separate(self):
+    def test_format_options_are_multi_select_and_attention_is_separate(self):
         page = source("templates/next/index.html")
         dropdown = re.search(r'<select id="filter-select"([^>]*)>(.*?)</select>', page, re.S)
         self.assertIsNotNone(dropdown)
         self.assertNotIn("hidden", dropdown.group(1))
-        self.assertIn('<option value="has_audio">', dropdown.group(2))
+        self.assertIn("multiple", dropdown.group(1))
+        # "Has Audio" is retired: Listening and reading + Audio only cover it.
+        self.assertNotIn('value="has_audio"', dropdown.group(2))
+        self.assertIn('<option value="readalong">', dropdown.group(2))
         self.assertNotIn('value="needs_attention"', dropdown.group(2))
         self.assertIn('id="attention-only-filter"', page)
         self.assertNotIn("data-format=", page)

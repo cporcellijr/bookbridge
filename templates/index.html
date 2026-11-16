@@ -2328,6 +2328,15 @@
             // Initial check
             document.addEventListener('DOMContentLoaded', checkForgeStatus);
         </script>
+        {% if acquisition_choice_jobs %}
+        <a class="suggestions-banner acquisition-choice-banner" href="{{ url_for('job_queue_page', acquisition_job=acquisition_choice_jobs[0].id) }}" style="text-decoration: none; color: inherit;">
+            <div class="suggestions-title-group">
+                <h2 class="suggestions-title">📥 {{ _('Needs your choice') }}</h2>
+                <span class="count-badge">{{ acquisition_choice_jobs|length }}</span>
+            </div>
+            <div class="banner-hint"><span>{{ _('Book requests') }}</span><span class="chevron">→</span></div>
+        </a>
+        {% endif %}
         {% if suggestions %}
         <div id="suggestions-section">
             <div class="suggestions-banner" id="suggestions-banner">

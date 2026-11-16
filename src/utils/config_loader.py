@@ -210,7 +210,7 @@ DEFAULT_CONFIG = {
     'UI_SHOW_RATINGS': 'true',
     'UI_SHOW_TITLES': 'true',
     'UI_SHOW_HERO': 'true',
-    'UI_HERO_CONTENT': 'bars,listened',
+    'UI_HERO_CONTENT': 'stats',
     'TZ': 'America/New_York',
     'LOG_LEVEL': 'INFO',
     'DATA_DIR': '/data',

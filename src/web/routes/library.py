@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from src.services.job_queue_view import acquisition_job_needs_choice
+
 
 _WEB_MODULE = None
 
@@ -36,6 +38,10 @@ def index():
     mappings, overall_progress, integrations = web._dashboard_mappings_for_user(user)
 
     suggestions = [s for s in web.database_service.get_all_pending_suggestions(user_id=web.get_current_user_id()) if len(s.matches) > 0]
+    acquisition_choice_jobs = [
+        job for job in web.database_service.get_acquisition_jobs(user.id)
+        if acquisition_job_needs_choice(job)
+    ] if user else []
     grouped_mappings = web._group_dashboard_mappings_by_series(mappings)
     library_template = web.ui_template('index.html')
     hero_mapping = None
@@ -64,6 +70,7 @@ def index():
         integrations=integrations,
         progress=overall_progress,
         suggestions=suggestions,
+        acquisition_choice_jobs=acquisition_choice_jobs,
         app_version=web.APP_VERSION,
         update_available=update_available,
         latest_version=latest_version,

@@ -309,6 +309,7 @@ def _upsert_storyteller_mapping(
     precomputed_kosync_doc_id=None,
     ebook_source_path=None,
     create_only=False,
+    ebook_source_file_id=None,
 ):
     """
     Shared Storyteller/ebook mapping upsert for:
@@ -388,11 +389,14 @@ def _upsert_storyteller_mapping(
                 booklore_id = bl_book.get("id")
         kosync_doc_id = web.get_kosync_id_for_ebook(
             resolved_ebook_filename,
-            booklore_id,
+            selected_ebook_source_id if web.is_grimmory_source(selected_ebook_source) else booklore_id,
             bookorbit_id=selected_ebook_source_id if selected_ebook_source == "BookOrbit" else None,
             kavita_id=selected_ebook_source_id if selected_ebook_source == "Kavita" else None,
             source_path=ebook_source_path,
+            ebook_source_file_id=ebook_source_file_id,
         )
+        if ebook_source_file_id and not kosync_doc_id:
+            return None, "Could not verify selected ebook file", 409
         if not kosync_doc_id and target_book and target_book.kosync_doc_id:
             kosync_doc_id = target_book.kosync_doc_id
 
@@ -516,6 +520,8 @@ def _upsert_storyteller_mapping(
         ebook_source_id=selected_ebook_source_id,
     )
     target_book.abs_title = abs_title or target_book.abs_title or web.Path(resolved_ebook_filename).stem
+    from src.utils.provider_ebook_files import apply_ebook_file_selection
+    apply_ebook_file_selection(target_book, original_ebook_filename, selected_ebook_source_id, ebook_source_file_id)
     target_book.ebook_filename = resolved_ebook_filename
     target_book.kosync_doc_id = kosync_doc_id
     if selected_ebook_source:

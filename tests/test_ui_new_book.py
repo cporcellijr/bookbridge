@@ -273,7 +273,7 @@ P16B_LIBRARY_NEW_ONLY = (
     ('function updateFacetOptions() {', 'function clearLibraryFilters(focusTrigger = false) {'),
     ('function matchesStatusFilter(', 'function matchesFormatFilter('),
     ('function filterBooks() {', 'window.toggleSeries = function'),
-    ('// One active facet at a time', 'if (dashboardSearch) {'),
+    ('// The hidden multi-selects are the canonical filter state.', 'if (dashboardSearch) {'),
 )
 
 
@@ -327,11 +327,23 @@ P16A_LIBRARY_ALLOWED_CHANGES = (
 
 # (New lines, original Classic lines): deliberate P3 compatibility changes only.
 LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';", ''),
- ("                const active = (statusFilter?.value !== 'all')\n                    || (filterSelect?.value !== 'all')\n                    || (seriesFilter?.value !== 'all')\n                    || (authorFilter?.value !== 'all')\n                    || !!attentionOnlyFilter?.checked\n                    || !!dashboardSearch?.value.trim();\n                filterCount.textContent = active\n                    ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})\n                    : '';",
+ ("                filterCount.textContent = hasActiveLibraryFilters()\n                    ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})\n                    : '';",
   "const noun = total === 1 ? 'book' : 'books';\n"
   'filterCount.textContent = shown === total\n'
   "? total + ' ' + noun\n"
   ": shown + ' of ' + total + ' ' + noun;"),
+ # New retired "Has Audio" (Listening and reading + Audio only) and added "Has read-along".
+ ("if (formatValue === 'readalong') return card.dataset.readalong === 'true';\n"
+  "return (card.dataset.syncMode || 'audiobook') === formatValue;",
+  "const syncMode = card.dataset.syncMode || 'audiobook';\n"
+  "if (formatValue === 'has_audio') {\n"
+  "return syncMode === 'audiobook' || syncMode === 'audiobook_only';\n"
+  "}\n"
+  "return syncMode === formatValue;"),
+ # Multi-select: a facet keeps every picked option, not one select value.
+ ("if (!select) return;\nArray.from(select.querySelectorAll('option')).forEach(option => {",
+  "if (!select) return;\nconst selected = select.value;\nArray.from(select.querySelectorAll('option')).forEach(option => {"),
+ ("const keep = count > 0 || option.selected;", "const keep = count > 0 || option.value === selected;"),
  ("let savedSort = 'title';\n"
   "try { savedSort = localStorage.getItem('abs_kosync_sort') || 'title'; } catch (e) { /* storage "
   'unavailable */ }',

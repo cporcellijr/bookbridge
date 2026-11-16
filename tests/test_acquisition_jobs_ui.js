@@ -32,10 +32,25 @@ function makeHarness(decisionAction) {
                 || selector.startsWith('[data-provider-editor]')) && editorPresent ? editor : null;
         },
         contains(node) { return node === staleFocusedButton; },
+        querySelectorAll(selector) {
+            assert.equal(selector, 'details.acquisition-job-more[open]');
+            return [{ dataset: { jobId: 'kept-open' } }];
+        },
         replaceWith(updated) { currentPanel = updated; },
     };
     currentPanel = panelNode;
-    const updatedPanel = { id: 'acquisition-jobs', refreshed: true };
+    // The server opens the focused job; the reader's own open/closed choice wins on refresh.
+    const freshDetails = [
+        { dataset: { jobId: 'kept-open' }, open: false },
+        { dataset: { jobId: 'server-focused' }, open: true },
+    ];
+    const updatedPanel = {
+        id: 'acquisition-jobs', refreshed: true,
+        querySelectorAll(selector) {
+            assert.equal(selector, 'details.acquisition-job-more');
+            return freshDetails;
+        },
+    };
     const context = {
         actionActive: false,
         document: {
@@ -64,7 +79,7 @@ function makeHarness(decisionAction) {
     };
     vm.runInNewContext(testedSource, context);
     return { run: () => context.runRefresh(false), result: () => ({
-        editorPresent, fragmentRequests, currentPanel,
+        editorPresent, fragmentRequests, currentPanel, freshDetails,
     }) };
 }
 
@@ -329,6 +344,8 @@ async function verifyProviderRequestGuards() {
     assert.equal(stale.result().fragmentRequests, 1,
         'fresh job markup replaces the stale focused release action');
     assert.equal(stale.result().currentPanel.refreshed, true);
+    assert.deepEqual(stale.result().freshDetails.map((d) => d.open), [true, false],
+        'finished requests keep the expanded/collapsed state the reader left');
 
     const stillPickable = makeHarness('pick_release');
     await stillPickable.run();

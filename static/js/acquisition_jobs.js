@@ -214,6 +214,9 @@
             const updated = parsed.getElementById('acquisition-jobs');
             const current = panel();
             if (!updated || !current || (!force && activeEditor())) return;
+            // Keep each finished request expanded or collapsed the way the reader left it.
+            const openJobs = new Set([...current.querySelectorAll('details.acquisition-job-more[open]')].map((d) => d.dataset.jobId));
+            updated.querySelectorAll('details.acquisition-job-more').forEach((d) => { d.open = openJobs.has(d.dataset.jobId); });
             current.replaceWith(updated);
             window.acquisitionJobEditorActive = false;
             await refreshProviderOptions();

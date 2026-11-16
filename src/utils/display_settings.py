@@ -12,12 +12,12 @@ from src.utils.config_loader import DEFAULT_CONFIG
 _BOOL = ("true", "false")
 _TRUE_SPELLINGS = frozenset({"true", "on", "1", "yes"})
 _FALSE_SPELLINGS = frozenset({"false", "off", "0", "no"})
-_HERO_ORDER = ("synopsis", "bars", "listened", "pages")
+_HERO_ORDER = ("synopsis", "stats", "streak")
+# The two-panel hero's pieces: both halves of the stats became "stats", and the
+# per-app bars are always part of the hero now.
+_HERO_LEGACY = {"listened": "stats", "pages": "stats", "bars": ""}
 # Every valid stored value (including base-only) is an allowed configuration.
-_HERO_CHOICES = ("",) + _HERO_ORDER + (
-    "synopsis,bars", "synopsis,listened", "synopsis,pages",
-    "bars,listened", "bars,pages", "listened,pages",
-)
+_HERO_CHOICES = ("", "synopsis", "stats", "synopsis,stats", "stats,streak", "synopsis,stats,streak")
 
 DISPLAY_SETTINGS: dict[str, tuple[str, ...]] = {
     "UI_THEME": ("auto", "day", "night"),
@@ -42,9 +42,12 @@ def normalize_display_value(key: str, raw: object) -> Optional[str]:
         return None
     value = str(raw).strip().lower()
     if key == "UI_HERO_CONTENT":
-        # Empty is intentional: only the P16c base. Unknown/duplicate entries disappear.
-        choices = set(part.strip() for part in value.split(","))
-        return ",".join([piece for piece in _HERO_ORDER if piece in choices][:2])
+        # Empty is intentional: only the base hero. Unknown/duplicate entries disappear,
+        # and the streak sits in the stats row, so it needs stats.
+        choices = {_HERO_LEGACY.get(part.strip(), part.strip()) for part in value.split(",")}
+        if "stats" not in choices:
+            choices.discard("streak")
+        return ",".join(piece for piece in _HERO_ORDER if piece in choices)
     if allowed is _BOOL:
         if value in _TRUE_SPELLINGS:
             return "true"

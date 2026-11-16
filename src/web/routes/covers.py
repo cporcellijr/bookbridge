@@ -1,5 +1,6 @@
 """Covers HTTP routes registered without endpoint namespaces."""
 
+import threading
 from typing import Any
 
 
@@ -36,7 +37,20 @@ def register(app: Any, web_module: Any) -> None:
 
 
 
-def serve_cover(filename):
+_cover_request_locks = tuple(threading.Lock() for _ in range(64))
+
+
+def serve_cover(filename: str) -> Any:
+    """Coalesce concurrent lazy extractions with a bounded set of locks."""
+    web = _web_server()
+    if (web.COVERS_DIR / filename).exists():
+        web._schedule_cover_recheck(filename.replace('.jpg', ''))
+        return web._send_cover_cached(filename)
+    with _cover_request_locks[hash(filename) % len(_cover_request_locks)]:
+        return _serve_cover_locked(filename)
+
+
+def _serve_cover_locked(filename):
     """Serve cover images with lazy extraction."""
     web = _web_server()
     # Filename is likely <hash>.jpg
@@ -82,6 +96,7 @@ def serve_cover(filename):
              full_book_path = parser.resolve_book_path(book.ebook_filename)
 
              if parser.extract_cover(full_book_path, cover_path):
+                 web._cover_fresh_until[doc_hash] = web.time.time() + web._COVER_FRESH_TTL_SECONDS
                  return web._send_cover_cached(filename)
         except Exception as e:
             web.logger.debug(f"Lazy cover extraction failed: {e}")

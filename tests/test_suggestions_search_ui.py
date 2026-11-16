@@ -155,6 +155,14 @@ class SearchTemplateGuardTests(unittest.TestCase):
         self.assertIn("/suggestions?tab=search&ebook_key=", source)
         self.assertNotIn("/add-book", source)
 
+    def test_match_all_return_clears_the_last_search(self):
+        source = _source()
+        self.assertIn(
+            "if (document.querySelector('.discover-process-summary')) tabState.search.q = '';",
+            source,
+        )
+        self.assertIn('class="discover-process-summary"', (_TEMPLATES / "next" / "suggestions.html").read_text(encoding="utf-8"))
+
     def test_no_template_links_to_the_removed_page(self):
         for path in _TEMPLATES.rglob("*.html"):
             text = path.read_text(encoding="utf-8")

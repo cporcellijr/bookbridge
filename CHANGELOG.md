@@ -25,6 +25,34 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Linking an audiobook to an ebook you had already added no longer breaks the book later.**
+  The link saved the ebook-only entry's internal id as the book's Audiobookshelf ebook. That item
+  doesn't exist, so the next KOReader progress update marked the book as an error with "library
+  item no longer exists", and re-matching didn't help. Affected books are repaired on upgrade,
+  with nothing to re-match. (#597)
+
+- **CWA sync no longer re-downloads every book on every poll.** With more than eight books linked
+  to Calibre-Web-Automated, each sync pass fetched every book's full Kobo file again, which could
+  freeze CWA while it repacked them and pause CWA progress sync. Unchanged bookmarks now reuse the
+  last position, and the cache holds more books. (#593)
+
+- **Readium reading positions resolve correctly when chapter filenames are URL-encoded.**
+  Readers such as AudioBooth can now match encoded chapter links against the EPUB spine
+  instead of falling back to a less accurate whole-book percentage.
+  Contributed by [@josephyancey](https://github.com/josephyancey) in #594.
+
+- **Extracting covers from large read-aloud EPUBs no longer loads their embedded narration.**
+  Cover reads are bounded, existing artwork survives extraction failures, and concurrent
+  requests for a missing cover share one extraction.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #595.
+
+- **Short reading sessions in KOReader sync again in long books.** A few pages in a long
+  novel can be under the 0.5% threshold but still past the 2,000-character backstop, and
+  that backstop never fired for KOReader: the bridge saved the device's new position before
+  the sync check ran, so the check saw no movement. KOReader progress now syncs after about
+  2,000 characters, and page turns add up across pushes. Short books and thresholds are
+  unchanged.
+
 - **Books keep syncing after you rename them in Calibre or CWA.** Editing a book's title or
   author renames its EPUB, and the bridge used to lose the file ("Could not locate or download
   locator target EPUB" every cycle) until you matched the book again. It now remembers which
@@ -58,16 +86,19 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Pick which ebook edition pairs with an audiobook when a BookOrbit or Grimmory book holds more than one.** Selecting such a book in Discover (Classic and New) opens an edition chooser with filenames, sizes, the primary-file marker and confirmed read-along labels; a book with a single ebook is selected directly. The chosen file is remembered for hashing, matching, Forge, library downloads, KOReader delivery and BookOrbit progress in both directions; if it is later removed or replaced, that book stops syncing its ebook rather than silently switching to another file. Grimmory reports one progress value for the whole book, so its native progress is skipped for alternate editions while ABS and KOReader keep syncing. BookOrbit's other editions stay under its card instead of reappearing as separate local files. Existing mappings are unchanged. Needs a migration and restart. See `docs/provider-ebook-file-selection.md`.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #596.
 - **Acquisition jobs now discover and pair library arrivals across days and restarts** (#585, Phase D). Jobs persist the ebook and audiobook's exact source identities, edition-review choices, library import status and pairing state without discarding provider receipts or outstanding submissions. Shelfmark readers can choose an accessible **Audiobook destination library** in their own integrations: a completed Shelfmark audio delivery can request a tracked BookOrbit scan, with persistent claims, scan-history coalescing, bounded follow-ups and refusal reasons. A completed scan is not proof of a finished import; library files and reader-authorized mappings must be verified first. The picker and per-reader settings exist in both Classic and New. The additive Phase D migration and an application restart are required.
-- **New Library hero details can show up to two reader-selected pieces on desktop and tablet** (P16d).
-  Display → Layout offers Progress per app, Time listened, Pages read, and Synopsis, always
-  in the same order and with missing information omitted. The pieces fetch only after the
-  Library opens; the progress bar for the leading service stays on the base when app bars
-  are off. Phones retain the compact hero. Reader-owned listening/reading details and a
-  durable shared-catalog synopsis cache (EPUB → Audiobookshelf → BookOrbit, including
-  checked-but-empty results) keep requests scoped and avoid repeated metadata reads.
-  Classic and synchronization are unchanged. Applying the new additive migration and
-  restarting the container are required before release.
+- **The New Library hero is one card on desktop and tablet** (P16d). The cover fills the
+  card's height (square audiobook art sits on a blurred copy of itself), followed by where
+  and when the book last moved, the series and its number, a star rating, the percentage
+  with time or pages left and an estimated finish date, and a single progress bar that
+  marks where each other app is. Display → Layout offers Synopsis (two lines), Book stats
+  (listening and reading side by side) and a Reading streak across all books; anything
+  without data is left out. "Pages to go" counts from the reader's ebook position.
+  Phones keep the compact hero with the percentage, time left and rating. Earlier
+  choices carry over. Classic and synchronization are unchanged. Applying the additive
+  synopsis-cache migration and restarting the container are required before release.
 
 - **Search and Processing now follow one saved acquisition job from Get through pairing** (#585, Phases C–E). Get remembers the exact existing edition and saves one parent job before submitting either or both missing halves. BookOrbit, Shelfmark, or a mixed provider choice retains each format's receipt separately; partial and uncertain submissions stay with that job and do not trigger duplicate requests. Shelfmark's sequential Both flow respects each format/source policy. Processing shows release/approval, delivery, import, review and pairing separately, keeps provider actions attached to their owned job, and distinguishes pairing from normal Bridge processing. Manual BookOrbit release picking requires positive handback evidence; unknown automation remains pending. Both Classic and New Search surfaces clear and open the saved job after a saved response, preserve the form when no job was saved, and offer existing matching jobs. Confirmed arrivals refresh the affected search results. The Phase D migration and an application restart are required.
 

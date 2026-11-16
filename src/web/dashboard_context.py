@@ -217,7 +217,24 @@ def _hero_listening_piece(book, abs_id: str) -> dict | None:
     return payload
 
 
-def _hero_reading_piece(abs_id: str) -> dict | None:
+def _hero_ebook_fraction(abs_id: str, user_id: int | None) -> float | None:
+    """This reader's ebook position as a 0-1 fraction: KOReader first, else the newest ebook app."""
+    web = _web_server()
+    if user_id is None:
+        return None
+    states = [
+        state for state in web.database_service.get_states_for_book(abs_id, user_id=user_id)
+        if state.percentage is not None
+    ]
+    by_client = {str(state.client_name).lower(): state for state in states}
+    if "kosync" in by_client:
+        return float(by_client["kosync"].percentage)
+    ebook = [by_client[name] for name in web._FORMAT_STRIP_EBOOK_CLIENTS if name in by_client]
+    newest = max(ebook, key=lambda state: state.last_updated or 0, default=None)
+    return float(newest.percentage) if newest is not None else None
+
+
+def _hero_reading_piece(abs_id: str, user_id: int | None = None) -> dict | None:
     """Per-reader KOReader pages, enriched with catalog page totals where known."""
     web = _web_server()
     tz = web._get_stats_timezone()
@@ -235,7 +252,31 @@ def _hero_reading_piece(abs_id: str) -> dict | None:
     )
     if total and int(total) > 0:
         payload["total"] = int(total)
-        payload["left"] = max(0, int(total) - payload["read"])
+        # Pages left come from where the reader is, not from how many pages they turned:
+        # a reader who mostly listens has turned few pages but is well into the book.
+        position = _hero_ebook_fraction(abs_id, user_id)
+        if position is not None:
+            payload["left"] = max(0, round(int(total) * (1 - min(1.0, max(0.0, position)))))
     heatmap = reading.get("heatmap") or []
     payload.update(_hero_daily_totals(heatmap, len(heatmap), "pages", tz))
     return payload
+
+
+def _hero_streak_days() -> int:
+    """Days in a row, ending today, with any listening or KOReader reading (the Stats page's streak)."""
+    web = _web_server()
+    cached = web._read_cached_stats()
+    if cached is not None:
+        return int((((cached.get("combined") or {}).get("stats")) or {}).get("currentStreakDays") or 0)
+    tz = web._get_stats_timezone()
+    abs_client = web._stats_abs_client()
+    listening = abs_client.get_listening_stats() if abs_client else web._local_listening_stats(tz)
+    dates = web._activity_dates_from_daily([
+        {"date": day, "seconds": seconds}
+        for day, seconds in (((listening or {}).get("days")) or {}).items()
+    ])
+    dates |= {
+        web.datetime.fromisoformat(day).date()
+        for day in web.database_service.get_koreader_activity_dates(getattr(tz, "key", str(tz)))
+    }
+    return web._calculate_current_streak_from_dates(dates, web.datetime.now(tz).date())

@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from src.services.job_queue_view import order_acquisition_jobs
+
 
 _WEB_MODULE = None
 
@@ -51,7 +53,7 @@ def job_queue_page():
                    for status in bridge_statuses.values()):
             return web.render_template(
                 "_acquisition_jobs_panel.html",
-                acquisition_jobs=acquisition_jobs,
+                acquisition_jobs=order_acquisition_jobs(acquisition_jobs, bridge_statuses),
                 focused_acquisition_job_id=web.request.args.get("acquisition_job", ""),
                 bridge_statuses=bridge_statuses,
             )
@@ -102,7 +104,7 @@ def job_queue_page():
         if entry.get("book_id"):
             bridge_statuses[entry["book_id"]] = "processing"
     panel_context = {
-        "acquisition_jobs": acquisition_jobs,
+        "acquisition_jobs": order_acquisition_jobs(acquisition_jobs, bridge_statuses),
         "focused_acquisition_job_id": web.request.args.get("acquisition_job", ""),
         "bridge_statuses": bridge_statuses,
     }

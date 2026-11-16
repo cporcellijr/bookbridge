@@ -1,13 +1,13 @@
 """Add user-scoped BookOrbit session receipts and durable delivery.
 
 Revision ID: e9b5c7a1d023
-Revises: c4e7a2b9d1f3
+Revises: e597a1c3b2d4
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = 'e9b5c7a1d023'
-down_revision = 'c4e7a2b9d1f3'
+down_revision = 'e597a1c3b2d4'
 branch_labels = None
 depends_on = None
 

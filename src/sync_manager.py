@@ -60,7 +60,7 @@ from src.utils.transcriber import TranscriptionCancelled
 from src.utils.source_fingerprint import AcquiredPaths, SourceAudioChanged, verify_unchanged
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
 from src.utils.progress_metadata import state_metadata_kwargs
-from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename
+from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename, normalize_href
 from src.utils.fixed_page_progress import coerce_page, is_cbz_book, is_cbz_filename
 from src.utils.ebook_sources import (
     is_grimmory_source,
@@ -1333,10 +1333,10 @@ class SyncManager:
             if not spine_map:
                 return None, None
 
-            href_norm = str(href).lower().strip()
+            href_norm = normalize_href(href).lower()
             target_item = None
             for item in spine_map:
-                item_href = str(item.get("href", "")).lower().strip()
+                item_href = normalize_href(item.get("href", "")).lower()
                 if not item_href:
                     continue
                 if href_norm in item_href or item_href in href_norm:
@@ -2264,6 +2264,10 @@ class SyncManager:
         )
 
         try:
+            from src.utils.provider_ebook_files import mapped_ebook_selection
+            selection = mapped_ebook_selection(book)
+            if selection and normalized_source in {"BookOrbit", "Booklore"}:
+                return cached_path if client.download_ebook_to_path(ebook_source_id, output_path=cached_path, **selection) else None
             content = client.download_book(ebook_source_id)
         except Exception as e:
             logger.warning(
@@ -2356,7 +2360,8 @@ class SyncManager:
         )
         if by_id_result is not None:
             return by_id_result
-        if (mapped_book and is_grimmory_source(getattr(mapped_book, "ebook_source", None))
+        from src.utils.provider_ebook_files import mapped_ebook_selection
+        if (mapped_book and (is_grimmory_source(getattr(mapped_book, "ebook_source", None)) or mapped_ebook_selection(mapped_book))
                 and getattr(mapped_book, "ebook_source_id", None)):
             return None
 
@@ -3479,7 +3484,7 @@ class SyncManager:
             getattr(current, field, None) == getattr(expected, field, None)
             for field in (
                 "status", "audio_source", "audio_source_id", "audio_duration",
-                "duration", "ebook_source", "ebook_source_id", "ebook_filename",
+                "duration", "ebook_source", "ebook_source_id", "ebook_source_file_id", "ebook_filename",
                 "original_ebook_filename", "kosync_doc_id", "sync_mode",
             )
         )
