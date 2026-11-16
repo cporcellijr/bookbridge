@@ -55,10 +55,19 @@ class ABSEbookSyncClient(SyncClient):
         return not str(book.abs_id or "").strip().lower().startswith(_SYNTHETIC_KEY_PREFIXES)
 
     @staticmethod
+    def _abs_ebook_item_id(book: Book) -> str | None:
+        """Return the stored ABS ebook item, ignoring a bridge-minted key (#597)."""
+        item_id = book.abs_ebook_item_id
+        if str(item_id or "").strip().lower().startswith(_SYNTHETIC_KEY_PREFIXES):
+            return None
+        return item_id
+
+    @staticmethod
     def _resolve_target_id(book: Book) -> str:
         """Resolve the mapped ABS ebook item, including legacy direct matches."""
-        if book.abs_ebook_item_id:
-            return book.abs_ebook_item_id
+        item_id = ABSEbookSyncClient._abs_ebook_item_id(book)
+        if item_id:
+            return item_id
         if getattr(book, "ebook_source", None) == "ABS" and getattr(book, "ebook_source_id", None):
             return book.ebook_source_id
         return book.abs_id
@@ -67,7 +76,7 @@ class ABSEbookSyncClient(SyncClient):
     def _is_explicit_abs_ebook(book: Book) -> bool:
         """Return whether the mapping proves that an ABS ebook exists."""
         return bool(
-            book.abs_ebook_item_id
+            ABSEbookSyncClient._abs_ebook_item_id(book)
             or (
                 getattr(book, "ebook_source", None) == "ABS"
                 and getattr(book, "ebook_source_id", None)

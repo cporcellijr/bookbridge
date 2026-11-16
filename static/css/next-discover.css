@@ -352,3 +352,16 @@
 @media (max-width: 760px) {
     .discover-queue-bar:not([hidden]) { bottom: calc(74px + env(safe-area-inset-bottom)); }
 }
+
+/* Tablet widths: a list too narrow for the title and every action button side by side
+   puts the buttons below the title, so an auto-width action column never squeezes the title. */
+.discover-page .results-list { container-type: inline-size; }
+@media (min-width: 761px) {
+  @container (max-width: 900px) {
+    .discover-page .sugg-row.ebook-row {
+      grid-template-columns: 18px auto 40px minmax(0,1fr);
+      grid-template-areas: "check seq cover main" "check seq cover evidence" "actions actions actions actions";
+    }
+    .discover-page .sugg-row.ebook-row .row-actions { justify-content: flex-start; margin-top: 4px; }
+  }
+}

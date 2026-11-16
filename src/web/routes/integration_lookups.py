@@ -27,6 +27,7 @@ def register(app: Any, web_module: Any) -> None:
         ('/api/watch-shelves', 'get_watch_shelves', get_watch_shelves, ['GET']),
         ('/api/abs/libraries', 'get_abs_libraries', get_abs_libraries, ['GET']),
         ('/api/booklore/refresh', 'api_booklore_refresh', api_booklore_refresh, ['POST']),
+        ('/api/ebook-files/<source>/<int:book_id>', 'get_provider_ebook_files', get_provider_ebook_files, ['GET']),
     )
     for rule, endpoint, view, methods in rules:
         if methods is None:
@@ -34,6 +35,28 @@ def register(app: Any, web_module: Any) -> None:
         else:
             app.add_url_rule(rule, endpoint, view, methods=methods)
 
+
+
+def get_provider_ebook_files(source, book_id):
+    """List files through the acting reader's own provider credentials."""
+    web = _web_server()
+    from src.utils.ebook_sources import normalize_ebook_source
+    from src.utils.provider_ebook_files import ebook_files, provider_book_detail
+
+    source = normalize_ebook_source(source)
+    if source not in {"BookOrbit", "Booklore"}:
+        return web.jsonify({"error": "Unsupported ebook source"}), 400
+    try:
+        clients = web.uc()
+        client = clients.bookorbit_client if source == "BookOrbit" else clients.booklore_client
+        if not client or not client.is_configured():
+            return web.jsonify({"error": "Ebook source unavailable"}), 409
+        detail = provider_book_detail(client, source, book_id)
+        if not isinstance(detail, dict):
+            return web.jsonify({"error": "Could not verify ebook files"}), 502
+        return web.jsonify({"files": ebook_files(detail, source)})
+    except PermissionError:
+        return web.jsonify({"error": "Your library connection is unavailable"}), 403
 
 
 def get_booklore_libraries():

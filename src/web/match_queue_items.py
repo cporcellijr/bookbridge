@@ -42,6 +42,7 @@ def _create_ebook_only_mapping_from_queue_item(item):
         ebook_filename=ebook_filename,
         ebook_source=ebook_source,
         ebook_source_id=ebook_source_id,
+        ebook_source_file_id=item.get('ebook_source_file_id'),
         duration=0.0,
     )
     if err_msg:
@@ -161,6 +162,12 @@ def _queue_item_from_match_form(clients) -> "dict | None":
     ebook_source_path = (
         web.request.form.get('ebook_source_path') or web.request.form.get('source_path') or ''
     ).strip() or None
+    ebook_source_file_id = (web.request.form.get('ebook_source_file_id') or '').strip() or None
+    if ebook_source_file_id and web.normalize_ebook_source(ebook_source) not in {'BookOrbit', 'Booklore'}:
+        web.abort(400)
+    if ebook_source_file_id:
+        from src.utils.provider_ebook_files import explicit_ebook_file_id
+        ebook_source_file_id = explicit_ebook_file_id(clients, ebook_source, ebook_source_id, ebook_source_file_id)
     if audio_source and ebook_filename and web.is_comic_ebook_filename(ebook_filename):
         # Comics cannot pair with audiobooks: the audio path would see empty ebook
         # text and could queue a pointless Whisper transcription. Queue the comic
@@ -251,6 +258,7 @@ def _queue_item_from_match_form(clients) -> "dict | None":
         'ebook_display_name': ebook_display_name,
         'ebook_source': ebook_source,
         'ebook_source_id': ebook_source_id,
+        'ebook_source_file_id': ebook_source_file_id,
         'ebook_source_path': web._submitted_ebook_path(ebook_source_path),
         'storyteller_uuid': storyteller_uuid,
         'audio_only': audio_only and not (ebook_filename or storyteller_uuid),

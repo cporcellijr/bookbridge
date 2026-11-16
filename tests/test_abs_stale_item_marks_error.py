@@ -151,7 +151,7 @@ class TestABSEbookSyncClientStaleItemCode(unittest.TestCase):
             abs_title='Stale Ebook Book',
             ebook_filename='test-book.epub',
         )
-        self.book.abs_ebook_item_id = 'ebook-item-id'
+        self.book.abs_ebook_item_id = 'li_ebook_item'
 
     def test_failed_write_on_missing_item_yields_error_code(self):
         self.abs_client.update_ebook_progress.return_value = False
@@ -165,7 +165,7 @@ class TestABSEbookSyncClientStaleItemCode(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.error_code, ABS_ITEM_NOT_FOUND)
         # The ABS ebook item id, not the audiobook id, is what went stale.
-        self.abs_client.item_exists.assert_called_once_with('ebook-item-id')
+        self.abs_client.item_exists.assert_called_once_with('li_ebook_item')
 
     def test_successful_write_is_never_probed(self):
         self.abs_client.update_ebook_progress.return_value = True

@@ -3,25 +3,13 @@ Unified SQLAlchemy database service for abs-kosync-bridge.
 Direct model-based interface without dictionary conversions.
 """
 
-import hashlib
 import json
 import logging
-import math
-import os
-import re
 import threading
-import time
-import unicodedata
-import uuid
-from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List
 from contextlib import contextmanager
-from zoneinfo import ZoneInfo
 
-from sqlalchemy.exc import InvalidRequestError
-from sqlalchemy.orm.exc import StaleDataError
 
 from .models import (
     DatabaseManager,
@@ -31,104 +19,14 @@ from .models import (
     HardcoverDetails,
     StorygraphDetails,
     GoodreadsDetails,
-    Setting,
     KosyncDocument,
-    KosyncUserProgress,
-    KosyncXpathOrderCache,
-    PendingSuggestion,
-    BookloreBook,
     ReadingSession,
-    ReadingSessionBuffer,
-    KOReaderBookStat,
-    KOReaderPageStat,
-    KOReaderBookStatus,
-    KoreaderAnnotation,
-    KoreaderAnnotationDeviceState,
-    ShelfWatchScan,
-    EmbeddingCache,
-    BookAlignment,
-    BookAlignmentBackup,
     User,
-    UserCredential,
     UserBook,
-    TranscriptionPreflight,
-    BookSyncMarker,
-    CalibreLibraryFile,
-    AcquisitionRequest,
-    AcquisitionJob,
-    UserBookFusionLink,
-    UserBookOrbitLink,
     Base,
-    JOB_KIND_READALONG,
 )
-from src.services.map_quality import ALIGNMENT_QUALITY_REALIGN_THRESHOLD, quality_detail_json, score_map
-from src.utils import secret_store
-from src.utils.ebook_sources import source_name_variants
-from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
-
-# Default for adopt_kosync_document_if_unowned: None is a real owner (no user).
-
-# Reading-session buffer delivery destinations, mapped to the status column each
-# one owns. A buffered session is delivered to these independently, so one being
-# unreachable never holds up or duplicates the other.
-
-# Audio positions are exact, so 99% is the end (KOReader's page-count finish uses 95%).
-
-
-# The columns the KOReader device-sync manifest is actually built from: the book
-# is listed only while active, and each entry carries its title, the resolved
-# ebook file, and that file's content hash. A save that touches none of these
-# cannot change the manifest. This matters because the sync cycle and the
-# transcription jobs call save_book constantly to write back routine fields --
-# announcing every one of those rebuilt the whole manifest back to back.
-
-
-
-# SQLite limits bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, historically 999).
-# Use 500 to stay well under the cap with room for other query parameters.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 from .repositories.tracker_details import TrackerDetailsMixin
 from .repositories.booklore import BookloreMixin
@@ -151,27 +49,6 @@ from .repositories.acquisition import AcquisitionMixin
 from .repositories.state import StateMixin
 from .repositories.books import BooksMixin
 
-from .repositories._common import (
-    MANIFEST_RELEVANT_BOOK_FIELDS,
-    _ANY_USER,
-    _SQL_IN_CHUNK,
-    _manifest_signature,
-    _username_key,
-)
-
-from .repositories.settings import (
-    _PENDING_SHELF_ADDS_KEY,
-    _SHELF_ASSIGNMENTS_KEY,
-)
-
-from .repositories.reading_sessions import (
-    _LISTENING_FINISHED_PROGRESS,
-    _READING_SESSION_DESTINATIONS,
-)
-
-from .repositories.books import (
-    _EBOOK_INPUT_RECOVERY_IDENTITY_FIELDS,
-)
 class DatabaseService(
     TrackerDetailsMixin,
     BookloreMixin,

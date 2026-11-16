@@ -89,20 +89,26 @@ def api_library_hero(abs_id: str):
                 pieces["synopsis"] = {"text": description}
         except Exception as exc:
             web.logger.warning("Hero synopsis unavailable for %s: %s", abs_id, exc, exc_info=True)
-    if "listened" in chosen:
+    if "stats" in chosen:
         try:
             detail = web._hero_listening_piece(book, abs_id)
             if detail:
                 pieces["listened"] = detail
         except Exception as exc:
             web.logger.warning("Hero listening unavailable for %s: %s", abs_id, exc, exc_info=True)
-    if "pages" in chosen:
         try:
-            detail = web._hero_reading_piece(abs_id)
+            detail = web._hero_reading_piece(abs_id, user.id)
             if detail:
                 pieces["pages"] = detail
         except Exception as exc:
             web.logger.warning("Hero reading unavailable for %s: %s", abs_id, exc, exc_info=True)
+    if "streak" in chosen:
+        try:
+            days = web._hero_streak_days()
+            if days > 0:
+                pieces["streak"] = {"days": days}
+        except Exception as exc:
+            web.logger.warning("Hero streak unavailable: %s", exc, exc_info=True)
     return web.jsonify({"absId": abs_id, "pieces": pieces})
 
 

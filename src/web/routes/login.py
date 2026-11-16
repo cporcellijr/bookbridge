@@ -51,7 +51,7 @@ def login():
     if web.request.method == 'POST':
         username = (web.request.form.get('username') or '').strip()
         password = web.request.form.get('password') or ''
-        failure_key = (username.lower(), web.request.remote_addr or "")
+        failure_key = (username.lower()[:web._LOGIN_USERNAME_KEY_CHARS], web._client_address())
         now = web.time.time()
         with web._LOGIN_FAILURES_LOCK:
             failures = [t for t in web._LOGIN_FAILURES.get(failure_key, []) if now - t < web._LOGIN_FAILURE_WINDOW]
@@ -69,7 +69,18 @@ def login():
                 web._LOGIN_FAILURES.pop(failure_key, None)
             return web._establish_session_and_redirect(user)
         with web._LOGIN_FAILURES_LOCK:
+            web._LOGIN_FAILURES.pop(failure_key, None)
             web._LOGIN_FAILURES[failure_key] = failures + [now]
+            # Re-inserting keeps dict order = last-touched, so expired keys and, past
+            # the cap, the least recently touched ones drop from the front.
+            while web._LOGIN_FAILURES:
+                oldest = next(iter(web._LOGIN_FAILURES))
+                if (
+                    len(web._LOGIN_FAILURES) <= web._LOGIN_FAILURE_MAX_KEYS
+                    and now - web._LOGIN_FAILURES[oldest][-1] < web._LOGIN_FAILURE_WINDOW
+                ):
+                    break
+                del web._LOGIN_FAILURES[oldest]
         error = "Invalid username or password"
         web.logger.warning("Failed login attempt for username '%s' from %s", username, web.request.remote_addr)
 

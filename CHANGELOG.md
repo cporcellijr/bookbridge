@@ -25,6 +25,53 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **"Clear stale suggestions" no longer erases your "Never suggest" list.** It now removes
+  only pending suggestions for books that aren't in your library. Books you marked "Never" and
+  BookOrbit reviews you dismissed stay as they were.
+
+- **BridgeSync no longer deletes books from your e-reader when the server briefly can't find
+  them.** If the library folder or BookOrbit was unavailable while the device list was being
+  built, those books were left off it, and devices with "delete removed books" on deleted them
+  along with their reading position and highlights. The server now marks those books as
+  temporarily unavailable, and the plugin keeps them. The plugin also skips deleting anything
+  when the server sends an empty list. Update the BridgeSync plugin to 0.9.11 to get this.
+
+- **A failed update to one app is retried instead of left behind.** If writing your position
+  to an app failed (for example a brief Audiobookshelf outage), later syncs waited for you to
+  read again, leaving that app at the old spot. BookBridge now retries up to five times, and
+  only while the app that had your latest position would still lead. Separately, one app
+  returning a broken reply when positions are read at the start of a sync no longer stops
+  every other book from syncing.
+
+- **Wrong passwords from one person no longer lock everyone else out of the dashboard
+  sign-in.** Behind a reverse proxy, every visitor looked like the proxy, so five bad guesses
+  for a username blocked that username for everyone. If your proxy's address is listed under
+  Remote auth's trusted proxies, each visitor is now counted separately. The failed-login
+  record also stays a fixed size instead of growing with every new username tried.
+
+- **Changing a password now signs out that account everywhere else.** Before, a browser that
+  was already signed in stayed signed in for up to a month after you (or an admin) changed the
+  password. Now only the browser where you made the change stays signed in. Everyone signs in
+  once after updating.
+
+- **The KoSync server rejects reading positions it can't use.** A reader app that sent a
+  percentage outside 0–1 (for example `45` instead of `0.45`) had it saved as your position,
+  and every later real position then looked like a jump backwards. A text percentage or a
+  malformed request caused a server error. These requests now get a clear "invalid" reply
+  and nothing is saved.
+
+- **Your Audiobookshelf API key no longer shows up in logs.** When Audiobookshelf was
+  unreachable, a failed cover or audio download could write the full request URL, key
+  included, into the log file, the Logs page, Telegram alerts, a job's error text on
+  Processing and diagnostics. Covers now send the key in a header, and any `token=` value
+  in a logged URL is replaced with `[redacted]`.
+
+- **Linking an audiobook to an ebook you had already added no longer breaks the book later.**
+  The link saved the ebook-only entry's internal id as the book's Audiobookshelf ebook. That item
+  doesn't exist, so the next KOReader progress update marked the book as an error with "library
+  item no longer exists", and re-matching didn't help. Affected books are repaired on upgrade,
+  with nothing to re-match. (#597)
+
 - **CWA sync no longer re-downloads every book on every poll.** With more than eight books linked
   to Calibre-Web-Automated, each sync pass fetched every book's full Kobo file again, which could
   freeze CWA while it repacked them and pause CWA progress sync. Unchanged bookmarks now reuse the
@@ -80,16 +127,19 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Pick which ebook edition pairs with an audiobook when a BookOrbit or Grimmory book holds more than one.** Selecting such a book in Discover (Classic and New) opens an edition chooser with filenames, sizes, the primary-file marker and confirmed read-along labels; a book with a single ebook is selected directly. The chosen file is remembered for hashing, matching, Forge, library downloads, KOReader delivery and BookOrbit progress in both directions; if it is later removed or replaced, that book stops syncing its ebook rather than silently switching to another file. Grimmory reports one progress value for the whole book, so its native progress is skipped for alternate editions while ABS and KOReader keep syncing. BookOrbit's other editions stay under its card instead of reappearing as separate local files. Existing mappings are unchanged. Needs a migration and restart. See `docs/provider-ebook-file-selection.md`.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #596.
 - **Acquisition jobs now discover and pair library arrivals across days and restarts** (#585, Phase D). Jobs persist the ebook and audiobook's exact source identities, edition-review choices, library import status and pairing state without discarding provider receipts or outstanding submissions. Shelfmark readers can choose an accessible **Audiobook destination library** in their own integrations: a completed Shelfmark audio delivery can request a tracked BookOrbit scan, with persistent claims, scan-history coalescing, bounded follow-ups and refusal reasons. A completed scan is not proof of a finished import; library files and reader-authorized mappings must be verified first. The picker and per-reader settings exist in both Classic and New. The additive Phase D migration and an application restart are required.
-- **New Library hero details can show up to two reader-selected pieces on desktop and tablet** (P16d).
-  Display → Layout offers Progress per app, Time listened, Pages read, and Synopsis, always
-  in the same order and with missing information omitted. The pieces fetch only after the
-  Library opens; the progress bar for the leading service stays on the base when app bars
-  are off. Phones retain the compact hero. Reader-owned listening/reading details and a
-  durable shared-catalog synopsis cache (EPUB → Audiobookshelf → BookOrbit, including
-  checked-but-empty results) keep requests scoped and avoid repeated metadata reads.
-  Classic and synchronization are unchanged. Applying the new additive migration and
-  restarting the container are required before release.
+- **The New Library hero is one card on desktop and tablet** (P16d). The cover fills the
+  card's height (square audiobook art sits on a blurred copy of itself), followed by where
+  and when the book last moved, the series and its number, a star rating, the percentage
+  with time or pages left and an estimated finish date, and a single progress bar that
+  marks where each other app is. Display → Layout offers Synopsis (two lines), Book stats
+  (listening and reading side by side) and a Reading streak across all books; anything
+  without data is left out. "Pages to go" counts from the reader's ebook position.
+  Phones keep the compact hero with the percentage, time left and rating. Earlier
+  choices carry over. Classic and synchronization are unchanged. Applying the additive
+  synopsis-cache migration and restarting the container are required before release.
 
 - **Search and Processing now follow one saved acquisition job from Get through pairing** (#585, Phases C–E). Get remembers the exact existing edition and saves one parent job before submitting either or both missing halves. BookOrbit, Shelfmark, or a mixed provider choice retains each format's receipt separately; partial and uncertain submissions stay with that job and do not trigger duplicate requests. Shelfmark's sequential Both flow respects each format/source policy. Processing shows release/approval, delivery, import, review and pairing separately, keeps provider actions attached to their owned job, and distinguishes pairing from normal Bridge processing. Manual BookOrbit release picking requires positive handback evidence; unknown automation remains pending. Both Classic and New Search surfaces clear and open the saved job after a saved response, preserve the form when no job was saved, and offer existing matching jobs. Confirmed arrivals refresh the affected search results. The Phase D migration and an application restart are required.
 

@@ -104,6 +104,9 @@ def test_ebook_update_sends_koreader_xpointer_through_to_bookorbit():
         client = BookOrbitClient()
     client._reading_progress_api = False
     client.get_book_by_id = MagicMock(return_value={"id": 7, "ebookFileId": 12, "title": "X"})
+    client.get_book_detail = MagicMock(return_value={"files": [
+        {"id": 12, "filename": "X.epub", "format": "epub", "role": "primary"},
+    ]})
 
     sc = BookOrbitSyncClient(client, ebook_parser=None)
     book = _book(ebook_source="BookOrbit", ebook_source_id="7", abs_id="abs1",

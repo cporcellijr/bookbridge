@@ -28,14 +28,28 @@ def find_ebook_file(filename):
 
 
 def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=None,
-                            bookorbit_id=None, kavita_id=None, source_path=None):
+                            bookorbit_id=None, kavita_id=None, source_path=None, ebook_source_file_id=None):
     """Get KOSync document ID for an ebook.
-    Tries Grimmory API first (if configured and booklore_id provided),
-    falls back to filesystem, then BookOrbit / ABS / CWA on-demand downloads.
+    Explicit Grimmory/BookOrbit selections are resolved exactly and fail closed.
+    Legacy selections use filesystem, then provider on-demand downloads.
     """
     web = _web_server()
     # Try Grimmory API first
     clients = web.uc()
+
+    # An explicit provider selection is authoritative, including its filename.
+    # Do not hash a local namesake or a different library's primary publication.
+    if ebook_source_file_id and (bookorbit_id or booklore_id):
+        client = clients.bookorbit_client if bookorbit_id else clients.booklore_client
+        source_id = bookorbit_id or booklore_id
+        if not client or not client.is_configured():
+            return None
+        try:
+            from src.utils.provider_ebook_files import hash_selected_ebook
+            return hash_selected_ebook(client, web.container.ebook_parser(), source_id, ebook_filename, ebook_source_file_id)
+        except Exception:
+            web.logger.warning("Could not hash selected provider ebook", exc_info=True)
+            return None
 
     if kavita_id and clients.kavita_client.is_configured():
         try:
