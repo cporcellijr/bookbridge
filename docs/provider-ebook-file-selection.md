@@ -18,6 +18,11 @@ Both Classic and New UI use the same accessible dialog, with theme-aware styling
 Filenames, available file sizes and the provider's primary-file marker distinguish editions.
 An explicit media-overlay badge is based on provider metadata, not a filename
 guess; Grimmory may not expose that metadata.
+BookOrbit's catalog retains every supported ebook filename for local-choice
+deduplication, including non-primary editions. These files stay under the
+provider card instead of reappearing as local choices. This uses the existing
+catalog response, without a detail request per book; unreported local filenames
+remain available.
 
 Keep the matching text/audio/read-along in one BookOrbit entry if using its native
 read-aloud synchronization. Do not also create a competing BookOrbit-audio mapping

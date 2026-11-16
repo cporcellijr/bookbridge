@@ -156,6 +156,7 @@ def get_searchable_ebooks(
     results = []
     found_filenames = set()
     found_stems = set()  # To dedupe by title stem
+    bookorbit_filenames = set()
     try:
         clients = web._scan_user_clients()
     except Exception as exc:
@@ -320,6 +321,13 @@ def get_searchable_ebooks(
                             ebook_file_id=book.get("ebookFileId"),
                         ))
             for b in bo_books or []:
+                # The list response already contains all file names. Keep its
+                # non-primary editions behind the provider card, not as local
+                # fallback choices. Do not suppress other editions by title/stem.
+                bookorbit_filenames.update(
+                    name.lower() for name in (b.get('ebookFilenames') or [])
+                    if isinstance(name, str) and web.is_linkable_ebook_filename(name)
+                )
                 fname = b.get('fileName') or ''
                 if not fname and local_index is not None:
                     fname = local_index.get(_ebook_title_key(b.get('title'))) or ''
@@ -694,6 +702,8 @@ def get_searchable_ebooks(
                     continue
                 fname_lower = eb.name.lower()
                 stem_lower = eb.stem.lower()
+                if fname_lower in bookorbit_filenames:
+                    continue
                 metadata = details.get("metadata")
                 series = details.get("series")
                 if discovery:

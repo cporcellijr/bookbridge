@@ -395,6 +395,8 @@ class BookOrbitClient:
             kinds.append("audiobook")
         primary = ebook_file if ebook_file is not None else audio_file
         primary_format = (primary or {}).get("format")
+        from src.utils.provider_ebook_files import ebook_files
+
         return {
             "id": book_id,
             "title": (book.get("title") or "").strip(),
@@ -406,6 +408,7 @@ class BookOrbitClient:
             "seriesMemberships": book.get("seriesMemberships"),
             "ebookFileId": (ebook_file or {}).get("id"),
             "ebookFormat": ((ebook_file or {}).get("format") or "").lower(),
+            "ebookFilenames": [file["filename"] for file in ebook_files(book, "BookOrbit")],
             "audioFileId": (audio_file or {}).get("id"),
             "audioFormat": ((audio_file or {}).get("format") or "").lower(),
             "kinds": kinds,
@@ -564,6 +567,8 @@ class BookOrbitClient:
         subtitle = (detail.get("subtitle") or "").strip()
         series_name = ((light or {}).get("seriesName") or detail.get("seriesName") or "").strip()
         series_index = detail.get("seriesIndex")
+        from src.utils.provider_ebook_files import ebook_files
+
         return {
             "id": book_id,
             "title": (light or {}).get("title") or detail.get("title") or "",
@@ -572,6 +577,7 @@ class BookOrbitClient:
                 detail.get("language") or (light or {}).get("language") or ""
             ).strip(),
             "fileName": filename,
+            "ebookFilenames": [file["filename"] for file in ebook_files(detail, "BookOrbit")],
             "subtitle": subtitle,
             "seriesName": series_name,
             "seriesIndex": series_index,
@@ -733,6 +739,7 @@ class BookOrbitClient:
                 "ebookFormat": info.get("ebookFormat"),
                 "sourceFileId": info.get("ebookFileId"),
                 "fileName": None,
+                "ebookFilenames": info.get("ebookFilenames") or [],
             })
         return out
 
