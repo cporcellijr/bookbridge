@@ -1086,6 +1086,35 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertAlmostEqual(data["percentage"], 0.60, places=4)
         self.assertEqual(data["progress"], "/body/device-ahead.0")
 
+    def test_put_on_another_copy_marks_the_books_own_hash_as_a_device_put(self):
+        """A device reading another copy of the book PUTs that copy's hash. Its position
+        lands in the book's KoSync State, which the cycle reads with a GET on the book's
+        kosync_doc_id: that GET must still carry the recent-external-PUT marker."""
+        from src import web_server
+        from src.api import kosync_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        book_hash, copy_hash = "6" * 32, "7" * 32
+        svc.save_book(Book(
+            abs_id="copy-marker", abs_title="Copy Marker", ebook_filename="copy-marker.epub",
+            kosync_doc_id=book_hash, status="active", user_id=admin_id,
+        ))
+        svc.save_kosync_document(KosyncDocument(
+            document_hash=copy_hash, linked_abs_id="copy-marker", user_id=admin_id,
+        ))
+        kosync_server._kosync_recent_external_puts.clear()
+
+        put = self.client.put("/syncs/progress", headers=self.auth_headers, json={
+            "document": copy_hash, "progress": "/body/DocFragment[9]/body/p[3].0",
+            "percentage": 0.30, "device": "Phone", "device_id": "P1",
+        })
+        self.assertEqual(put.status_code, 200)
+
+        data = self.client.get(f"/syncs/progress/{book_hash}", headers=self.auth_headers).get_json()
+        self.assertAlmostEqual(data["percentage"], 0.30, places=4)
+        self.assertTrue(data.get("_bridge_recent_external_put"))
+
     def test_same_library_same_hash_two_users_keep_separate_progress(self):
         """Two users reading the same EPUB hash should not share progress."""
         from src import web_server

@@ -2398,6 +2398,11 @@ def kosync_put_progress():
         # A match route may have linked this hash itself, skipping _register_hash_for_book.
         _adopt_cwa_identity(doc_hash, linked_book)
         _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
+        if linked_book.kosync_doc_id and linked_book.kosync_doc_id != doc_hash:
+            # The sync cycle reads that State back with a GET on the book's own hash.
+            _record_recent_external_kosync_put(
+                linked_book.kosync_doc_id, device, device_id, percentage, now_ts, request_user_id,
+            )
 
     # AUTO-DISCOVERY
     if not linked_book:
