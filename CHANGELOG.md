@@ -25,6 +25,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Your Audiobookshelf API key no longer shows up in logs.** When Audiobookshelf was
+  unreachable, a failed cover or audio download could write the full request URL, key
+  included, into the log file, the Logs page, Telegram alerts, a job's error text on
+  Processing and diagnostics. Covers now send the key in a header, and any `token=` value
+  in a logged URL is replaced with `[redacted]`.
+
 - **Linking an audiobook to an ebook you had already added no longer breaks the book later.**
   The link saved the ebook-only entry's internal id as the book's Audiobookshelf ebook. That item
   doesn't exist, so the next KOReader progress update marked the book as an error with "library

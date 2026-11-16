@@ -58,7 +58,7 @@ from src.utils.transcription_cancel import (
 )
 from src.utils.transcriber import TranscriptionCancelled
 from src.utils.source_fingerprint import AcquiredPaths, SourceAudioChanged, verify_unchanged
-from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
+from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger, redact_url_secrets
 from src.utils.progress_metadata import state_metadata_kwargs
 from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename, normalize_href
 from src.utils.fixed_page_progress import coerce_page, is_cbz_book, is_cbz_filename
@@ -4067,7 +4067,7 @@ class SyncManager:
                 abs_id=abs_id,
                 last_attempt=time.time(),
                 retry_count=new_retry_count,
-                last_error=str(e),
+                last_error=redact_url_secrets(str(e)),
                 progress=job.progress if job else 0.0,
                 stage=(
                     "ebook_input_recovery_manual" if recovery_manual
