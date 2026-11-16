@@ -558,8 +558,27 @@ local saved_items = nil
 bridge.delete_removed_books = true
 bridge._ensureDirectory = function() return true end
 bridge._getStateScalar = function() return "old-revision" end
+local keep_path = bridge.download_dir .. "/Keep.epub"
+local manifest_extra = {}
+local deleted_paths = {}
+bridge._loadStateItems = function()
+    return {
+        ["kobo-book"] = {
+            local_path = "/mnt/onboard/Koreaderbooks/Title.epub",
+            filename = "Title.epub",
+            content_hash = "hash-1",
+        },
+        ["keep-book"] = { local_path = keep_path, filename = "Keep.epub", content_hash = "hash-keep" },
+    }
+end
+bridge._fileExists = function() return true end
 bridge.api.getManifest = function()
-    return true, { revision = "new-revision", books = {} }
+    local manifest = {
+        revision = "new-revision",
+        books = { { abs_id = "keep-book", filename = "Keep.epub", content_hash = "hash-keep" } },
+    }
+    for key, value in pairs(manifest_extra) do manifest[key] = value end
+    return true, manifest
 end
 bridge._saveState = function(_, items)
     saved_items = items
@@ -567,12 +586,32 @@ bridge._saveState = function(_, items)
 end
 bridge._updateCollections = function() end
 bridge._isCurrentDocument = function() return false end
-bridge._deleteManagedFile = function() return false, "permission denied" end
+bridge._deleteManagedFile = function(_, path)
+    deleted_paths[#deleted_paths + 1] = path
+    return false, "permission denied"
+end
 local delete_result = bridge:_runSync()
 assert(delete_result.deleted == 0 and delete_result.errors == 1,
     "failed managed-file removal must be reported as an error, not a deletion")
 assert(saved_items["kobo-book"] ~= nil,
     "failed managed-file removal must retain state for a later retry")
+
+-- A book the server could not resolve this cycle is not a removal.
+deleted_paths = {}
+manifest_extra = { unavailable_abs_ids = { "kobo-book" } }
+local unavailable_result = bridge:_runSync()
+assert(#deleted_paths == 0 and unavailable_result.errors == 0,
+    "an entry listed in unavailable_abs_ids must never be deleted")
+assert(saved_items["kobo-book"] ~= nil, "an unavailable entry must stay in state")
+
+-- An empty manifest against local managed books is a server outage, not a mass removal.
+deleted_paths = {}
+manifest_extra = { books = {} }
+local empty_result = bridge:_runSync()
+assert(#deleted_paths == 0 and empty_result.deleted == 0 and empty_result.errors == 0,
+    "an empty manifest must skip the delete pass")
+assert(saved_items["kobo-book"] ~= nil and saved_items["keep-book"] ~= nil,
+    "an empty manifest must leave every managed entry in state")
 
 local marked_session_ids = nil
 bridge.pending_sessions = {

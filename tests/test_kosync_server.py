@@ -1716,6 +1716,27 @@ class TestKosyncEndpoints(unittest.TestCase):
         )
         self.assertEqual(scoped_again["books"][0]["shelves"], ["Fantasy"])
 
+    def test_device_sync_manifest_unavailable_ids_are_scoped_to_the_reader(self):
+        from src.api import kosync_server
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        svc.save_book(Book(abs_id="ua-mine", abs_title="Mine", ebook_filename="mine.epub",
+                           status="active", user_id=admin_id))
+        manifest = {
+            "generated_at": 1,
+            "revision": "abc",
+            "delete_mode": "mirror",
+            "books": [],
+            "unavailable_abs_ids": ["ua-mine", "ua-someone-else"],
+        }
+
+        scoped = kosync_server._scope_manifest_to_user(manifest, admin_id)
+
+        self.assertEqual(scoped["unavailable_abs_ids"], ["ua-mine"])
+        self.assertEqual(manifest["unavailable_abs_ids"], ["ua-mine", "ua-someone-else"])
+
     def test_device_sync_manifest_uses_unsorted_for_grimmory_match_outside_selected_shelves(self):
         from src.api import kosync_server
         from src import web_server

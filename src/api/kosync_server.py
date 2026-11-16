@@ -706,10 +706,14 @@ def _scope_manifest_to_user(manifest, user_id):
     books = [dict(item) for item in all_books if str(item.get("abs_id")) in owned_ids]
     credentials = _booklore_credentials_for_manifest(user_id)
     books = _apply_manifest_shelf_filter(books, user_id, credentials, owned_books)
-    if len(books) == len(all_books) and _device_collection_source(credentials) == "off":
+    unavailable = manifest.get("unavailable_abs_ids") or []
+    owned_unavailable = [abs_id for abs_id in unavailable if str(abs_id) in owned_ids]
+    if (len(books) == len(all_books) and len(owned_unavailable) == len(unavailable)
+            and _device_collection_source(credentials) == "off"):
         return manifest
     scoped = dict(manifest)
     scoped["books"] = books
+    scoped["unavailable_abs_ids"] = owned_unavailable
     _apply_user_collection_source(scoped, user_id)
     scoped["revision"] = _compute_manifest_revision(scoped["books"])
     return scoped

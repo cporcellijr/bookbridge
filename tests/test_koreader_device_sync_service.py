@@ -210,6 +210,34 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertIsNone(sizes["abs-a"], "the un-stat-able book reports no size")
         self.assertEqual(sizes["abs-b"], len(b"epub"))
 
+    def test_unresolvable_book_is_reported_unavailable_not_silently_dropped(self):
+        """A book whose file cannot be resolved right now must be flagged so the
+        plugin does not delete the device copy; a deleted book is in neither list."""
+        self._write_book_file("outage_present.epub")
+        for abs_id, filename in (("abs-ok", "outage_present.epub"), ("abs-missing", "outage_absent.epub")):
+            self.db.save_book(
+                Book(
+                    abs_id=abs_id,
+                    abs_title=f"Book {abs_id}",
+                    original_ebook_filename=filename,
+                    kosync_doc_id=f"hash-{abs_id}",
+                    status="active",
+                )
+            )
+        self.db.save_book(
+            Book(abs_id="abs-gone", abs_title="Gone", original_ebook_filename="outage_gone.epub",
+                 kosync_doc_id="hash-gone", status="active")
+        )
+        real_get_book = self.db.get_book
+        with patch.object(
+            self.db, "get_book",
+            side_effect=lambda abs_id, *a, **k: None if abs_id == "abs-gone" else real_get_book(abs_id, *a, **k),
+        ):
+            manifest = self.service.build_manifest()
+
+        self.assertEqual([item["abs_id"] for item in manifest["books"]], ["abs-ok"])
+        self.assertEqual(manifest["unavailable_abs_ids"], ["abs-missing"])
+
     def test_resolve_download_uses_local_original_file(self):
         source_path = self.books_dir / "kavita_187.epub"
         source_path.write_bytes(b"epub")
