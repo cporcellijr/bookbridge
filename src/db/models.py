@@ -863,6 +863,20 @@ class BookOrbitSessionEvent(Base):
     created_at = Column(Float, nullable=False)
 
 
+class BookOrbitPageStatExport(Base):
+    """Durable raw-event delivery receipts; independent of progress and local sessions."""
+    __tablename__ = 'bookorbit_page_stat_exports'
+
+    event_id = Column(String(64), primary_key=True)
+    account_scope = Column(String(64), nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    page_stat_id = Column(Integer, nullable=False, index=True)
+    last_attempt_at = Column(Float, nullable=False, default=0)
+    status = Column(String(20), nullable=False)
+    payload_json = Column(Text, nullable=False)
+    created_at = Column(Float, nullable=False)
+
+
 class ReadingSession(Base):
     """
     Local reading session tracking for dashboard stats.

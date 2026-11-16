@@ -1,82 +1,60 @@
-# BookOrbit session replication: current work-in-progress
+# BookOrbit statistics: native KOReader page relay
 
-> **Not a complete mixed-route deduplication fix.** The account-wide ownership
-> workaround below was rejected and is being replaced. Its Settings and reader
-> preference controls have been removed. The internal setting remains temporarily
-> for compatibility with the already deployed hotfix; this change does not disable
-> that installation's existing preference or migrate its history.
+BridgeSync's raw statistics upload is forwarded through BookOrbit's native
+`/api/v1/koreader/plugin/page-stats` endpoint. The original KOReader `device_id`,
+book MD5, page, start time, duration and total page count are retained. BookOrbit
+derives the session and sets `source=koreader`; BookBridge does not pretend that
+the activity came from the hub or from the web reader.
 
-The BookOrbit server change prepared separately only suppresses exact copies of
-raw page events submitted under different device IDs. It does not correlate a
-generic `source=web` session exported by BookBridge with a native KOReader session.
-The replacement BookBridge transport must use the same raw events instead of
-exporting an additional aggregate session. No plugin update is included yet.
+Direct BookOrbit plugin uploads and BridgeSync uploads from the same device use
+the same native event identity. Retries or different delivery order do not create
+another measured event. Books are resolved by BookOrbit's hash links, not by title
+or by guessing a different primary file. Unmatched hashes remain pending.
 
-Position synchronization and reading statistics are separate operations. A copied
-position must not be treated as another measurement of time spent reading.
+## Settings and credentials
 
-## When KOReader already uploads sessions to BookOrbit
+There is no statistics-source owner selector. The earlier
+`BOOKORBIT_NATIVE_READING_SESSIONS` workaround and native-session importer have
+been removed. Existing imported history is preserved but not refreshed or deleted.
 
-The earlier hotfix used an internal setting named
-`BOOKORBIT_NATIVE_READING_SESSIONS`; it defaults to false for compatibility.
-Enable it only for readers whose BookOrbit integration really uploads sessions.
-This is an account-wide ownership choice: all KOReader devices that should
-contribute measured time must send it through BookOrbit. A BridgeSync-only
-device's telemetry will be retained but not counted as a second authoritative
-channel. Readers such as Readest that send only a bookmark will still synchronize
-position; accurate time statistics need a session-upload integration as well.
+`BOOKORBIT_READING_SESSIONS` remains the existing outbound-statistics enable flag.
+The native relay uses `BOOKORBIT_KOSYNC_USER` and `BOOKORBIT_KOSYNC_KEY` (not JWT).
+Its KOReader username must match the configured BookOrbit username, or
+`BOOKORBIT_KOSYNC_OWNER` must explicitly identify that same BookOrbit account.
+Missing credentials leave the delivery pending; no generic web-session fallback
+is attempted.
 
-With this preference enabled:
+## Delivery and compatibility
 
-* BookOrbit owns native KOReader and BookOrbit reading/listening measurements.
-* BookBridge retains incoming BridgeSync session telemetry as durable receipts,
-  but does not count or export that second channel again.
-* BookBridge imports BookOrbit sessions into its own statistics, keyed by the
-  authenticated reader/account, provider book and remote session ID. Checkpoint
-  extensions update the same imported local row.
-* Changes in BookOrbit progress do not also create poll-derived estimates.
-* ABS movements still create local listening history and are exported using a
-  durable outbox, a stable session ID and a frozen destination file. Their exact
-  exported copies are excluded from the native import.
-* Import and outbox delivery run in a reader-scoped background worker. Native
-  statistics requests do not hold the progress-sync thread or a DB transaction.
+* Raw events are queued durably when a statistics upload is acknowledged.
+* Only stored canonical rows are queued, not incoming cross-device echoes rejected
+  by the statistics repository.
+* Each queue entry is scoped to the bridge user and BookOrbit account/server.
+* Requests stay within 500 events and 50 books and retain the source UUID.
+* Acknowledged native duplicates count as delivered. Failures, unmatched hashes
+  and incomplete acknowledgements retain pending work.
+* No historical raw-event backfill is performed automatically.
+* Non-KOReader aggregate export, including ABS, retains replay-safe IDs, active
+  duration and frozen destination files.
+* Position synchronization, alignment maps, downloads and read-along policy are
+  independent of the statistics worker.
 
-This is **explicit source ownership**, not a claim that independently generated
-session IDs can be correlated perfectly. Overlapping time or equal percentages
-alone cannot distinguish a duplicate from a reread or a second device.
+No plugin update is included. Existing BridgeSync versions already upload raw
+statistics with the shared KOReader UUID. They must have automatic statistics
+upload enabled. Old clients without raw statistics or a real UUID keep local
+coarse-session telemetry, but it is no longer exported as a duplicate web session.
+Missing or nonintegral raw fields are not invented or rounded into another event.
 
-## Replay safety
+## Known limitation: copied statistics
 
-Device session receipts, their local measurement (when BookBridge owns that
-channel), and their export are committed together. A lost HTTP acknowledgement
-or restart reuses the receipt. Every retry sends the same BookOrbit `sessionId`,
-active duration and destination file; it cannot silently follow a new primary.
-Intervals are normalized to the BookOrbit API's millisecond precision, so its
-returned copy cannot become a different event just because Python kept microseconds.
-An unavailable duplicate check defers legacy estimated delivery rather than
-blindly posting another session. User or provider credential changes cannot
-replay another account's pending outbox.
+Disable **Combine device reading stats** (`KOREADER_COMBINE_DEVICE_STATS`) for the
+temporary no-sharing setup. **Share recently-read books / History** is a different
+setting and does not stop page-stat copying.
 
-`durationSeconds` is active time, not necessarily `endedAt - startedAt`. Keep both;
-do not turn idle time between observations into additional reading time. The
-existing four-hour export safety cap remains; native measured imports retain
-the source duration, bounded by the session's wall-clock span.
-
-## History and limitations
-
-Native imports begin with sessions starting after that book's first native-mode
-poll. Existing history is neither cleaned up nor backfilled automatically.
-Delayed/offline sessions starting before that boundary are not backfilled.
-The original telemetry remains available in the receipt table.
-
-The current BookOrbit session-list API does not expose the client `sessionId` or
-an update/deletion feed. Own export echoes are recognized by the exact persisted
-file/time/duration payload and provider-rounded progress, not fuzzy overlaps.
-Native deletions are not propagated automatically, and old duplicate records
-require a separate reviewed repair. A complete paginated import is bounded to
-10,000 sessions per book; an incomplete/unavailable response is not treated as an
-empty history. The import currently rechecks the post-activation window (with a
-60-second per-book throttle) to observe checkpoint updates.
-
-Position sync, existing alignment maps, selected publication identity and the
-BookOrbit read-along ownership policy are not changed by session replication.
+Rows already copied into another device's KOReader database have no reliable
+origin marker. The unmodified BookOrbit plugin may upload them under that other
+device's UUID. This relay does not solve that historical provenance problem or
+remove existing duplicates. The separately proposed BookOrbit cross-device echo
+filter addresses exact copied raw events; it is not required for same-device
+dual-route deduplication. Do not claim complete multi-device protection until the
+copying/provenance case has also been addressed.

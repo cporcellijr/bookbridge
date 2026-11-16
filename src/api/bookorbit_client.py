@@ -1954,6 +1954,16 @@ class BookOrbitClient:
             return None
         return self._parse_json(resp) or {}
 
+    def koreader_upload_page_stats(self, kosync_user: str, kosync_key: str, device_id: str,
+                                   device_model: str, books: list) -> Optional[dict]:
+        """Preserve the source KOReader UUID. This is not the bridge's own activity."""
+        if not device_id or len(device_id) > 100:
+            return None
+        return self._koreader_plugin_request(kosync_user, kosync_key, '/api/v1/koreader/plugin/page-stats', {
+            'deviceId': device_id, 'deviceModel': device_model[:100],
+            'pluginVersion': 'bridge-page-relay-1', 'books': books,
+        })
+
     def _koreader_device_fields(self) -> dict:
         from src.utils.time_utils import utcnow
         return {
@@ -2164,30 +2174,6 @@ class BookOrbitClient:
         status = resp.status_code if resp else "no response"
         logger.debug("BookOrbit: failed to record session for book %s: %s", book_id, status)
         return False
-
-    def list_reading_sessions(self, book_id, since):
-        """Complete, bounded session window; None means unavailable, not empty."""
-        from datetime import datetime, timezone
-
-        date_from = quote(datetime.fromtimestamp(since, timezone.utc).isoformat(), safe='')
-        items = []
-        for page in range(1, 101):
-            response = self._make_request('GET', f'/api/v1/books/{book_id}/sessions?'
-                                          f'page={page}&pageSize=100&sortBy=startedAt&sortDir=desc&dateFrom={date_from}')
-            if response is None or response.status_code != 200:
-                return None
-            data = self._parse_json(response)
-            if not isinstance(data, dict) or not isinstance(data.get('items'), list):
-                return None
-            total = data.get('total')
-            if isinstance(total, bool) or not isinstance(total, int) or total < 0:
-                return None
-            items.extend(data['items'])
-            if len(items) >= total:
-                return items
-            if not data['items']:
-                return None
-        return None
 
     # ------------------------------------------------------------------
     # Collections (writable manual shelves — used for "Up Next"/Kobo)

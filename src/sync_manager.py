@@ -6401,10 +6401,9 @@ class SyncManager:
         """Accumulate one progress observation for local history and Grimmory."""
         if leader.lower() == "kosync":
             return
-        from src.services.bookorbit_session_service import native_sessions_enabled
-        if leader.lower() in {'bookorbit', 'bookorbitaudio'} and native_sessions_enabled(self.database_service):
-            # Real sessions are imported independently. A mirrored progress
-            # observation is not another reading/listening measurement.
+        if leader.lower() == 'bookorbit':
+            # BookOrbit records its own activity. Mirrored progress is not a new
+            # measurement, and native session import is intentionally disabled.
             return
         current = leader_state.current
         previous_pct = leader_state.previous_pct or 0.0
@@ -6566,20 +6565,19 @@ class SyncManager:
         """Post one buffered session to one destination. False means retry later."""
         client = self._reading_session_client(destination)
         if destination == "bookorbit":
-            from src.services.bookorbit_session_service import BookOrbitSessionService, native_sessions_enabled
-            native_owned = native_sessions_enabled(self.database_service)
+            from src.services.bookorbit_session_service import BookOrbitSessionService
             leader = row.leader_client.lower()
-            if native_owned and (leader in {'bookorbit', 'bookorbitaudio', 'kosync', 'bridgesync_plugin'}
-                                 or leader.startswith('kosync:')):
+            if (leader in {'bookorbit', 'kosync', 'bridgesync_plugin'}
+                    or leader.startswith('kosync:')):
                 self.database_service.mark_reading_session_delivered(row.id, destination, 'disabled')
                 return True
             service = BookOrbitSessionService(self.database_service, client)
             identity = ['buffer', row.abs_id, row.id, row.last_event_at, row.start_progress, row.end_progress]
             event_id = service._key('export', row.bookorbit_book_id, identity)
             if service.exists(event_id):
-                return True if native_owned else service.deliver(event_id)
+                return service.deliver(event_id)
             try:
-                scale = 1.0 if native_owned else self._bookorbit_session_scale(row, duration)
+                scale = self._bookorbit_session_scale(row, duration)
             except Exception:
                 return False  # Keep delivery pending; absence was not established.
             if scale <= 0:
@@ -6590,9 +6588,7 @@ class SyncManager:
                                       row.start_progress, row.end_progress, row.session_type)
             book = self.database_service.get_book(row.abs_id) or row
             service.enqueue(book, row.bookorbit_book_id, payload, identity=identity)
-            # In native-owner mode hand off to the durable background outbox;
-            # no statistics HTTP is allowed to hold up position synchronization.
-            return True if native_owned else service.deliver(event_id)
+            return service.deliver(event_id)
         # At-least-once delivery: a lost POST response may cause a duplicate.
         # Retain the row on any failure; local history was committed at close.
         return bool(client.create_reading_session(
@@ -6656,15 +6652,9 @@ class SyncManager:
             )
 
     def _flush_bookorbit_sessions(self):
-        """Schedule native statistics separately so their network cannot delay position sync."""
-        from src.services.bookorbit_session_service import BookOrbitSessionService, native_sessions_enabled
-
+        """Schedule outbound statistics without importing BookOrbit sessions."""
         client = self.active_bookorbit_client
-        if not client or not client.is_configured():
-            return
-        if not native_sessions_enabled(self.database_service):
-            if env_truthy('BOOKORBIT_READING_SESSIONS', 'true'):
-                BookOrbitSessionService(self.database_service, client).flush()
+        if not env_truthy('BOOKORBIT_READING_SESSIONS', 'true') or not client or not client.is_configured():
             return
         uid = get_current_user_id()
         with self._bookorbit_stats_lock:
@@ -6688,31 +6678,10 @@ class SyncManager:
     def _replicate_bookorbit_sessions(self, client):
         """Stats-only worker; isolated user context, no progress writers."""
         from src.services.bookorbit_session_service import BookOrbitSessionService
-
-        service = BookOrbitSessionService(self.database_service, client)
+        from src.services.bookorbit_page_stat_service import BookOrbitPageStatService
         if env_truthy('BOOKORBIT_READING_SESSIONS', 'true'):
-            service.flush()
-        uid = get_current_user_id()
-        linked = self.database_service.get_linked_abs_ids(uid) if uid is not None else None
-        for book in self.database_service.get_all_books():
-            if linked is not None and book.abs_id not in linked:
-                continue
-            targets = set()
-            if getattr(book, 'ebook_source', None) == 'BookOrbit':
-                book_id = (self.database_service.resolve_bookorbit_ebook_id(uid, book)
-                           if uid is not None else getattr(book, 'ebook_source_id', None))
-                if book_id is not None:
-                    targets.add(int(book_id))
-            if getattr(book, 'audio_source', None) == 'BookOrbit':
-                audio_id = (getattr(book, 'audio_provider_book_id', None)
-                            or getattr(book, 'audio_source_id', None))
-                if audio_id is not None:
-                    targets.add(int(audio_id))
-            for book_id in targets:
-                try:
-                    service.import_book(book, book_id)
-                except Exception:
-                    logger.warning('Native BookOrbit sessions unavailable for %s; will retry', book.abs_id, exc_info=True)
+            BookOrbitSessionService(self.database_service, client).flush()
+            BookOrbitPageStatService(self.database_service, client).flush()
 
     def _resolve_grimmory_ebook_id(self, book):
         """Resolve the Grimmory book ID for a book's ebook. Returns int or None."""

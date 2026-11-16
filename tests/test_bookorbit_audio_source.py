@@ -587,10 +587,9 @@ def test_bookorbit_session_logs_audio_leader_against_audio_book_id(tmp_path):
     book_id, candidates = sm._resolve_bookorbit_session_ids(book, audio=True)
     assert book_id == 4345
     try:
-        with patch.dict('os.environ', {'BOOKORBIT_NATIVE_READING_SESSIONS': 'false'}):
-            assert sm._deliver_reading_session(
-                _buffer_row(book_id, candidates, session_type="AUDIOBOOK"), "bookorbit", 120,
-            )
+        assert sm._deliver_reading_session(
+            _buffer_row(book_id, candidates, session_type="AUDIOBOOK"), "bookorbit", 120,
+        )
     finally:
         sm.database_service.db_manager.close()
     _, kwargs = bo.create_reading_session.call_args

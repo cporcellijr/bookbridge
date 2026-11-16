@@ -504,7 +504,7 @@ class TestSyncCycleUserScoping(unittest.TestCase):
             last_event_at=1000, start_progress=0.5, end_progress=0.6,
             grimmory_book_id=None, grimmory_status="disabled",
             bookorbit_book_id=42, bookorbit_status="pending",
-            bookorbit_candidate_ids=json.dumps([42]), leader_client="BookOrbit",
+            bookorbit_candidate_ids=json.dumps([42]), leader_client="ABS",
             session_type="EPUB", end_location="epubcfi(/6/2)",
         )
         from src.db.database_service import DatabaseService
@@ -513,12 +513,13 @@ class TestSyncCycleUserScoping(unittest.TestCase):
         mgr.database_service = DatabaseService(str(Path(directory.name) / 'scoped-outbox.db'))
         self.addCleanup(mgr.database_service.db_manager.close)
         from unittest.mock import patch
-        with patch.object(mgr.database_service, 'get_user', return_value=SimpleNamespace(id=6, active=1)), \
+        with patch.object(mgr, '_flush_bookorbit_sessions'), \
+             patch.object(mgr.database_service, 'get_user', return_value=SimpleNamespace(id=6, active=1)), \
              patch.object(mgr.database_service, 'close_reading_sessions'), \
              patch.object(mgr.database_service, 'get_pending_reading_sessions', return_value=[pending]), \
              patch.object(mgr.database_service, 'get_book', return_value=book), \
              patch.object(mgr.database_service, 'mark_reading_session_delivered'), \
-             patch.dict("os.environ", {"BOOKORBIT_READING_SESSIONS": "true", "BOOKORBIT_NATIVE_READING_SESSIONS": "false"}):
+             patch.dict("os.environ", {"BOOKORBIT_READING_SESSIONS": "true"}):
             mgr.sync_cycle(user_id=6, sessions_only=True)
 
         self.assertEqual(len(user_bo.session_calls), 1)

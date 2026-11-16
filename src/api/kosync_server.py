@@ -969,62 +969,8 @@ def _get_kosync_session_type(book) -> str:
     return "EBOOK"
 
 
-def _bookorbit_session_service(book):
-    if not book or getattr(book, 'ebook_source', None) != 'BookOrbit':
-        return None
-    if get_current_user_id() is not None:
-        client = _discovery_client('bookorbit_client')
-    else:
-        client = getattr(_manager, 'bookorbit_client', None) if _manager else None
-    if not client or not client.is_configured():
-        return None
-    from src.services.bookorbit_session_service import BookOrbitSessionService
-    return BookOrbitSessionService(_database_service, client)
-
-
 def _record_device_reading_session(book, **values):
-    from src.services.bookorbit_session_service import native_sessions_enabled
-    native_owned = native_sessions_enabled(_database_service)
-    export_enabled = os.environ.get('BOOKORBIT_READING_SESSIONS', 'true').lower() in {'true', '1', 'yes', 'on'}
-    if book and getattr(book, 'ebook_source', None) == 'BookOrbit' and (native_owned or export_enabled):
-        service = _bookorbit_session_service(book)
-        if service is None:
-            raise RuntimeError('Native BookOrbit session telemetry cannot be retained without its reader client')
-        payload = service.payload(values['start_time'], values['end_time'], values['duration_seconds'],
-                                  values.get('start_progress'), values.get('end_progress'), values['session_type'])
-        uid = get_current_user_id()
-        source_id = (_database_service.resolve_bookorbit_ebook_id(uid, book)
-                     if uid is not None else book.ebook_source_id)
-        if source_id is None:
-            raise PermissionError('No BookOrbit mapping for this reader')
-        service.record_device(book, source_id, payload, values.get('leader_client'), native_owned)
-    else:
-        _database_service.record_reading_session(**values)
-
-
-def _forward_reading_session_to_bookorbit(
-    book, start_time, end_time, start_progress, end_progress, book_type=None, duration_seconds=None,
-) -> None:
-    """Persist delivery before acknowledging device telemetry; native sessions never echo."""
-    if os.environ.get("BOOKORBIT_READING_SESSIONS", "true").strip().lower() not in ("true", "1", "yes", "on"):
-        return
-    if not book or getattr(book, "ebook_source", None) != "BookOrbit":
-        return
-    from src.services.bookorbit_session_service import native_sessions_enabled
-    if native_sessions_enabled(_database_service):
-        return
-    uid = get_current_user_id()
-    source_id = (_database_service.resolve_bookorbit_ebook_id(uid, book) if uid is not None
-                 else getattr(book, "ebook_source_id", None))
-    if not source_id:
-        return
-    service = _bookorbit_session_service(book)
-    if service is None:
-        raise RuntimeError('BookOrbit session client unavailable; retry device upload')
-    payload = service.payload(start_time, end_time,
-                              duration_seconds if duration_seconds is not None else end_time - start_time,
-                              start_progress, end_progress, book_type)
-    service.enqueue(book, source_id, payload, origin='koreader')
+    _database_service.record_reading_session(**values)
 
 
 def _persist_grouped_kosync_session(session_data: dict) -> None:
@@ -1081,21 +1027,6 @@ def _persist_grouped_kosync_session(session_data: dict) -> None:
                 )
         except Exception as e:
             logger.warning("KOSync session forwarding failed for '%s': %s", session_data["abs_id"], e, exc_info=True)
-
-    try:
-        bo_book = _database_service.get_book(session_data["abs_id"])
-        _forward_reading_session_to_bookorbit(
-            bo_book,
-            session_data["start_time"],
-            session_data["last_time"],
-            session_data["start_progress"],
-            session_data["last_progress"],
-            book_type=session_data["session_type"],
-            duration_seconds=duration_seconds,
-        )
-    except Exception as e:
-        logger.warning("KOSync BookOrbit session forwarding failed for '%s': %s", session_data["abs_id"], e, exc_info=True)
-
 
 def _discard_open_kosync_session(document_hash: str | None, device: str | None, device_id: str | None) -> bool:
     if not document_hash:
@@ -2823,6 +2754,12 @@ def koreader_upload_statistics():
             page_stats=page_stats,
             user_id=user_id,
         )
+        if env_truthy('BOOKORBIT_READING_SESSIONS', 'true'):
+            client = (_discovery_client('bookorbit_client') if get_current_user_id() is not None
+                      else getattr(_manager, 'bookorbit_client', None) if _manager else None)
+            if client and client.is_configured():
+                from src.services.bookorbit_page_stat_service import BookOrbitPageStatService
+                BookOrbitPageStatService(_database_service, client).enqueue_upload(device_id, page_stats)
         return accepted, result
 
     # A long sync cycle can hold the SQLite writer past the busy timeout, so a
@@ -3289,10 +3226,6 @@ def kosync_upload_sessions():
                     exc_info=True,
                 )
         if already_recorded:
-            _forward_reading_session_to_bookorbit(
-                book, start_time, end_time, start_progress, end_progress,
-                book_type=session_type, duration_seconds=duration_seconds,
-            )
             logger.info("Session upload: accepted duplicate retry for '%s'", abs_id)
             accepted += 1
             record_result(index, session, True)
@@ -3318,10 +3251,7 @@ def kosync_upload_sessions():
 
         record_result(index, session, True)
 
-        from src.services.bookorbit_session_service import native_sessions_enabled
-        native_owned = (book and getattr(book, 'ebook_source', None) == 'BookOrbit'
-                        and native_sessions_enabled(_database_service))
-        if _database_service and not native_owned:
+        if _database_service:
             try:
                 deleted = _database_service.delete_recent_estimated_kosync_session(
                     abs_id=abs_id,
@@ -3432,12 +3362,6 @@ def kosync_upload_sessions():
                     logger.debug(f"Forwarded session to Grimmory for '{book.abs_title}' (id={grimmory_id})")
             except Exception as e:
                 logger.warning(f"Session upload: Grimmory forwarding failed for '{abs_id}': {e}", exc_info=True)
-
-        # Forward to BookOrbit if the ebook is hosted there
-        _forward_reading_session_to_bookorbit(
-            book, start_time, end_time, start_progress, end_progress,
-            book_type=session_type, duration_seconds=duration_seconds,
-        )
 
     logger.info(f"Session upload: accepted={accepted}, rejected={rejected}")
     return jsonify({"accepted": accepted, "rejected": rejected, "results": results}), 200
