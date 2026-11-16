@@ -25,6 +25,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **The KoSync server rejects reading positions it can't use.** A reader app that sent a
+  percentage outside 0–1 (for example `45` instead of `0.45`) had it saved as your position,
+  and every later real position then looked like a jump backwards. A text percentage or a
+  malformed request caused a server error. These requests now get a clear "invalid" reply
+  and nothing is saved.
+
 - **Your Audiobookshelf API key no longer shows up in logs.** When Audiobookshelf was
   unreachable, a failed cover or audio download could write the full request URL, key
   included, into the log file, the Logs page, Telegram alerts, a job's error text on

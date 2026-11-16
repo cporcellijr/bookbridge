@@ -368,6 +368,40 @@ class TestKosyncEndpoints(unittest.TestCase):
             _hashlib.sha256(response.data).hexdigest(),
         )
 
+    def _put_raw(self, body):
+        return self.client.put('/syncs/progress', headers=self.auth_headers, json=body)
+
+    def test_put_rejects_non_object_body(self):
+        """A JSON list body is a 400, not a 500."""
+        self.assertEqual(self._put_raw([{'document': 'p' * 32}]).status_code, 400)
+
+    def test_put_rejects_invalid_percentage_and_stores_nothing(self):
+        """Non-numeric, out-of-range, bool and NaN percentages are 400 with no state written."""
+        from src import web_server
+        doc = 'p' * 32
+        for bad in ('abc', '0.5', 45, 1.01, -0.1, True, float('nan'), float('inf')):
+            with self.subTest(percentage=bad):
+                response = self._put_raw({
+                    'document': doc, 'progress': '/body/x', 'percentage': bad,
+                    'device': 'TestKobo', 'device_id': 'KOBO123',
+                })
+                self.assertEqual(response.status_code, 400)
+                self.assertIsNone(web_server.database_service.get_kosync_document(doc))
+                with web_server.database_service.get_session() as session:
+                    self.assertEqual(session.query(KosyncUserProgress).count(), 0)
+
+    def test_put_valid_percentage_still_succeeds(self):
+        """Boundary and missing percentages stay accepted."""
+        from src import web_server
+        for index, pct in enumerate((0.5, 0, 1, None)):
+            with self.subTest(percentage=pct):
+                body = {'document': f'{index}' * 32, 'progress': '/body/x',
+                        'device': 'TestKobo', 'device_id': 'KOBO123'}
+                if pct is not None:
+                    body['percentage'] = pct
+                self.assertEqual(self._put_raw(body).status_code, 200)
+        self.assertIsNotNone(web_server.database_service.get_kosync_document('0' * 32))
+
     def test_put_progress_creates_document(self):
         """Test that PUT creates a new document."""
         # Case 1: Standard device (should return String timestamp)

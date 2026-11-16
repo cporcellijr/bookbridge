@@ -6,6 +6,7 @@ import io
 import ipaddress
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -2118,7 +2119,7 @@ def kosync_put_progress():
     from src.db.models import KosyncDocument, Book
 
     data = request.json
-    if not data:
+    if not data or not isinstance(data, dict):
         logger.warning(f"KOSync: PUT progress with no JSON data from {request.remote_addr}")
         return jsonify({"error": "No data"}), 400
 
@@ -2126,6 +2127,12 @@ def kosync_put_progress():
     if not doc_hash:
         logger.warning(f"KOSync: PUT progress with no document ID from {request.remote_addr}")
         return jsonify({"error": "Missing document ID"}), 400
+
+    raw_percentage = data.get('percentage', 0)
+    if (isinstance(raw_percentage, bool) or not isinstance(raw_percentage, (int, float))
+            or not math.isfinite(raw_percentage) or not 0 <= raw_percentage <= 1):
+        logger.warning(f"KOSync: PUT progress with invalid percentage for doc {doc_hash} from {request.remote_addr}")
+        return jsonify({"error": "Invalid percentage"}), 400
 
     logger.info(f"KOSync: PUT progress request for doc {doc_hash} from {request.remote_addr} (device: {data.get('device', 'unknown')})")
 
