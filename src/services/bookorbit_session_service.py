@@ -275,7 +275,7 @@ class BookOrbitSessionService:
             values = dict(abs_id=book.abs_id, session_type=payload['book_type'],
                           start_time=start, end_time=end, duration_seconds=payload['duration_seconds'],
                           start_progress=payload['start_progress'], end_progress=payload['end_progress'],
-                          leader_client=('KoSync:BookOrbit' if remote.get('source') == 'koreader' else
+                           leader_client=('KoSync:KOReader' if remote.get('source') == 'koreader' else
                                          'BookOrbitAudio' if payload['book_type'] == 'AUDIOBOOK' else 'BookOrbit'),
                           user_id=self.user_id or None,
                           book_title=getattr(book, 'abs_title', None) or getattr(book, 'audio_title', None))

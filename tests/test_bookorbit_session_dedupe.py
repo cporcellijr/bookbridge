@@ -69,8 +69,36 @@ def test_import_is_idempotent_and_preserves_active_seconds(setup):
         with patch('src.services.bookorbit_session_service.time.time', return_value=now):
             service.import_book(book, 7)
     assert len(sessions(db)) == 1
-    assert sessions(db)[0][1:] == (697, 2000, 3223, 'KoSync:BookOrbit')
+    assert sessions(db)[0][1:] == (697, 2000, 3223, 'KoSync:KOReader')
     client._make_request.assert_not_called()
+
+
+@pytest.mark.parametrize(('source', 'session_type', 'leader'), [
+    ('koreader', 'read', 'KoSync:KOReader'),
+    ('koreader', 'listen', 'KoSync:KOReader'),
+    ('web', 'read', 'BookOrbit'),
+    ('web', 'listen', 'BookOrbitAudio'),
+])
+def test_import_preserves_source_separately_from_transport(setup, source, session_type, leader):
+    db, book, client, service = setup
+    activate(service, book, client)
+    client.list_reading_sessions.return_value = [remote(source=source, sessionType=session_type)]
+    service.import_book(book, 7)
+    assert sessions(db)[0][4] == leader
+    with db.get_session() as session:
+        receipt = session.query(BookOrbitSessionEvent).filter_by(direction='import').one()
+        assert receipt.origin == 'bookorbit'  # Transport, not the activity's source.
+        assert json.loads(receipt.payload_json)['source'] == source
+
+
+def test_native_owner_choice_is_not_exposed_in_settings():
+    from pathlib import Path
+    from src.utils.user_config import PER_USER_FIELD_GROUPS
+
+    assert all(key != 'BOOKORBIT_NATIVE_READING_SESSIONS'
+               for _, fields in PER_USER_FIELD_GROUPS for key, *_ in fields)
+    root = Path(__file__).resolve().parents[1]
+    assert 'BOOKORBIT_NATIVE_READING_SESSIONS' not in (root / 'templates/next/_settings_form.html').read_text()
 
 
 def test_checkpoint_update_updates_the_same_local_copy(setup):

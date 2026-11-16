@@ -1,12 +1,23 @@
-# BookOrbit session ownership and replay safety
+# BookOrbit session replication: current work-in-progress
+
+> **Not a complete mixed-route deduplication fix.** The account-wide ownership
+> workaround below was rejected and is being replaced. Its Settings and reader
+> preference controls have been removed. The internal setting remains temporarily
+> for compatibility with the already deployed hotfix; this change does not disable
+> that installation's existing preference or migrate its history.
+
+The BookOrbit server change prepared separately only suppresses exact copies of
+raw page events submitted under different device IDs. It does not correlate a
+generic `source=web` session exported by BookBridge with a native KOReader session.
+The replacement BookBridge transport must use the same raw events instead of
+exporting an additional aggregate session. No plugin update is included yet.
 
 Position synchronization and reading statistics are separate operations. A copied
 position must not be treated as another measurement of time spent reading.
 
 ## When KOReader already uploads sessions to BookOrbit
 
-Enable **BookOrbit already receives my KOReader sessions directly** in Settings,
-or the corresponding reader preference in My Integrations. The setting key is
+The earlier hotfix used an internal setting named
 `BOOKORBIT_NATIVE_READING_SESSIONS`; it defaults to false for compatibility.
 Enable it only for readers whose BookOrbit integration really uploads sessions.
 This is an account-wide ownership choice: all KOReader devices that should
