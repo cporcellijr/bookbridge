@@ -25,6 +25,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Changing a password now signs out that account everywhere else.** Before, a browser that
+  was already signed in stayed signed in for up to a month after you (or an admin) changed the
+  password. Now only the browser where you made the change stays signed in. Everyone signs in
+  once after updating.
+
 - **The KoSync server rejects reading positions it can't use.** A reader app that sent a
   percentage outside 0–1 (for example `45` instead of `0.45`) had it saved as your position,
   and every later real position then looked like a jump backwards. A text percentage or a

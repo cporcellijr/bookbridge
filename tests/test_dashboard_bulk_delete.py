@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from src.db.database_service import DatabaseService
 from src.db.models import Book
+from src.web.session_auth import session_marker
 from tests.test_webserver import MockContainer
 
 
@@ -43,6 +44,8 @@ class TestDashboardBulkDelete(unittest.TestCase):
         self.client = self.app.test_client()
         with self.client.session_transaction() as session:
             session['user_id'] = self.user.id
+            with self.app.app_context():
+                session['session_marker'] = session_marker(self.user)
         cleanup = patch('src.web_server.cleanup_mapping_resources')
         self.cleanup = cleanup.start()
         self.addCleanup(cleanup.stop)

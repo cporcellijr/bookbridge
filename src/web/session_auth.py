@@ -1,5 +1,7 @@
 """C02 helpers extracted from web_server with no behavior change."""
 
+import hashlib
+import hmac
 from importlib import import_module
 
 _WEB_MODULE = None
@@ -8,6 +10,17 @@ def _web_server():
     if _WEB_MODULE is not None:
         return _WEB_MODULE
     return import_module("src.web_server")
+
+
+def session_marker(user) -> str:
+    """Short HMAC of the user's password hash, keyed with the app secret.
+
+    Stored in the session at login; a password change alters it, so every
+    older session for that user stops matching in `current_user`.
+    """
+    key = _web_server().current_app.secret_key
+    key = key.encode() if isinstance(key, str) else key
+    return hmac.new(key, (user.password_hash or '').encode(), hashlib.sha256).hexdigest()[:16]
 
 
 def current_user():
@@ -20,7 +33,13 @@ def current_user():
     if uid and web.database_service is not None:
         try:
             candidate = web.database_service.get_user(uid)
-            if candidate and candidate.active:
+            if (
+                candidate
+                and candidate.active
+                and hmac.compare_digest(
+                    str(web.session.get('session_marker') or ''), session_marker(candidate)
+                )
+            ):
                 user = candidate
         except Exception:
             user = None
@@ -152,6 +171,7 @@ def _establish_session_and_redirect(user):
     web.session['user_id'] = user.id
     web.session['username'] = user.username
     web.session['role'] = user.role
+    web.session['session_marker'] = session_marker(user)
     web.session.permanent = True
     try:
         web.database_service.touch_user_login(user.id)

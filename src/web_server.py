@@ -587,6 +587,7 @@ from src.web.session_auth import (
     _remote_auth_peer_trusted,
     _remote_auth_user,
     _establish_session_and_redirect,
+    session_marker,
 )
 
 
@@ -774,6 +775,7 @@ def require_login_guard():
             session['user_id'] = remote_user.id
             session['username'] = remote_user.username
             session['role'] = remote_user.role
+            session['session_marker'] = session_marker(remote_user)
             session.permanent = True
             g.current_user = remote_user
             user = remote_user
