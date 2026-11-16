@@ -134,6 +134,35 @@ def _remote_auth_peer_trusted() -> bool:
     return any(address in network for network in _trusted_proxy_networks())
 
 
+def _client_address() -> str:
+    """The dashboard client's address for login rate limiting.
+
+    The TCP peer, unless the peer is a trusted proxy: then the right-most
+    X-Forwarded-For hop that is not itself a trusted proxy. Otherwise every client
+    behind a proxy shares one address and five bad passwords lock everyone out.
+    """
+    web = _web_server()
+    import ipaddress
+
+    networks = _trusted_proxy_networks()
+
+    def trusted(address: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        return any(ip in network for network in networks)
+
+    peer = (web.request.remote_addr or '').strip()
+    if not trusted(peer):
+        return peer
+    hops = [hop.strip() for hop in web.request.headers.get('X-Forwarded-For', '').split(',') if hop.strip()]
+    for hop in reversed(hops):
+        if not trusted(hop):
+            return hop
+    return peer
+
+
 def _remote_auth_user():
     """Return the User named by the configured reverse-proxy header, or None."""
     web = _web_server()

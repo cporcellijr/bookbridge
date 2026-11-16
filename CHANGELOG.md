@@ -25,6 +25,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Wrong passwords from one person no longer lock everyone else out of the dashboard
+  sign-in.** Behind a reverse proxy, every visitor looked like the proxy, so five bad guesses
+  for a username blocked that username for everyone. If your proxy's address is listed under
+  Remote auth's trusted proxies, each visitor is now counted separately. The failed-login
+  record also stays a fixed size instead of growing with every new username tried.
+
 - **Changing a password now signs out that account everywhere else.** Before, a browser that
   was already signed in stayed signed in for up to a month after you (or an admin) changed the
   password. Now only the browser where you made the change stays signed in. Everyone signs in

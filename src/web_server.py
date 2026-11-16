@@ -554,6 +554,8 @@ _LOGIN_FAILURES: dict[tuple[str, str], list[float]] = {}
 _LOGIN_FAILURES_LOCK = threading.Lock()
 _LOGIN_FAILURE_LIMIT = 5
 _LOGIN_FAILURE_WINDOW = 60
+_LOGIN_FAILURE_MAX_KEYS = 10_000
+_LOGIN_USERNAME_KEY_CHARS = 256
 
 # Global engine configuration, library-wide maintenance and logs are admin-only.
 # Reader pages, including Stats, resolve the acting user's data and credentials.
@@ -585,6 +587,7 @@ from src.web.session_auth import (
     _safe_next_url,
     _trusted_proxy_networks,
     _remote_auth_peer_trusted,
+    _client_address,
     _remote_auth_user,
     _establish_session_and_redirect,
     session_marker,
