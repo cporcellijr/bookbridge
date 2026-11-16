@@ -25,6 +25,24 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **"Clear stale suggestions" no longer erases your "Never suggest" list.** It now removes
+  only pending suggestions for books that aren't in your library. Books you marked "Never" and
+  BookOrbit reviews you dismissed stay as they were.
+
+- **BridgeSync no longer deletes books from your e-reader when the server briefly can't find
+  them.** If the library folder or BookOrbit was unavailable while the device list was being
+  built, those books were left off it, and devices with "delete removed books" on deleted them
+  along with their reading position and highlights. The server now marks those books as
+  temporarily unavailable, and the plugin keeps them. The plugin also skips deleting anything
+  when the server sends an empty list. Update the BridgeSync plugin to 0.9.11 to get this.
+
+- **A failed update to one app is retried instead of left behind.** If writing your position
+  to an app failed (for example a brief Audiobookshelf outage), later syncs waited for you to
+  read again, leaving that app at the old spot. BookBridge now retries up to five times, and
+  only while the app that had your latest position would still lead. Separately, one app
+  returning a broken reply when positions are read at the start of a sync no longer stops
+  every other book from syncing.
+
 - **Wrong passwords from one person no longer lock everyone else out of the dashboard
   sign-in.** Behind a reverse proxy, every visitor looked like the proxy, so five bad guesses
   for a username blocked that username for everyone. If your proxy's address is listed under
