@@ -19,6 +19,7 @@ API quirks (verified against a live instance, see the `bookorbit-api` memo):
 """
 
 import os
+import json
 import re
 import time
 import logging
@@ -2104,12 +2105,18 @@ class BookOrbitClient:
         book_type: Optional[str] = None,
         start_location: Optional[str] = None,
         end_location: Optional[str] = None,
+        *, duration_seconds: Optional[int] = None, session_id: Optional[str] = None,
+        book_file_id: Optional[int] = None,
     ) -> bool:
         """Record a reading session on the book's primary file.
 
         Progress args are 0-1 fractions; BookOrbit's session fields are 0-100.
         """
-        duration_seconds = int(end_time - start_time)
+        start_time = round(float(start_time) * 1000) / 1000
+        end_time = round(float(end_time) * 1000) / 1000
+        elapsed = (round(end_time * 1000) - round(start_time * 1000)) // 1000
+        duration_seconds = int(min(elapsed, duration_seconds)
+                               if duration_seconds is not None else elapsed)
         if duration_seconds <= 0:
             return False
         max_duration = 14400  # cap at 4h, mirroring the Grimmory client
@@ -2117,7 +2124,13 @@ class BookOrbitClient:
             duration_seconds = max_duration
 
         kind = "audiobook" if (book_type or "").lower() in ("audiobook", "audio") else "ebook"
-        file_id = self._resolve_primary_file_id(book_id, kind)
+        file_id = book_file_id
+        if file_id is not None:
+            detail = self.get_book_detail(book_id, force=True, fresh_only=True)
+            if not any(str(file.get('id')) == str(file_id) for file in (detail or {}).get('files', [])):
+                return False
+        else:
+            file_id = self._resolve_primary_file_id(book_id, kind)
         if file_id is None:
             file_id = self._resolve_primary_file_id(book_id, "ebook")
         if file_id is None:
@@ -2127,26 +2140,54 @@ class BookOrbitClient:
         import uuid
         from datetime import datetime, timezone
 
-        start_pct = round(float(start_progress) * 100, 2)
-        end_pct = round(float(end_progress) * 100, 2)
+        start_pct = round(float(start_progress) * 100, 2) if start_progress is not None else None
+        end_pct = round(float(end_progress) * 100, 2) if end_progress is not None else None
         payload = {
-            "sessionId": str(uuid.uuid4()),
-            "startedAt": datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat(),
-            "endedAt": datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat(),
+            "sessionId": session_id or str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(
+                [self._get_base_url(), book_id, file_id, start_time, end_time,
+                 duration_seconds, start_progress, end_progress, kind], separators=(',', ':')
+            ))),
+            "startedAt": datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat(timespec='milliseconds'),
+            "endedAt": datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat(timespec='milliseconds'),
             "durationSeconds": duration_seconds,
-            "progressDelta": round(end_pct - start_pct, 2),
+            "progressDelta": round(end_pct - start_pct, 2) if start_pct is not None and end_pct is not None else None,
             "endProgress": end_pct,
+            "sessionType": "listen" if kind == "audiobook" else "read",
         }
         resp = self._make_request("POST", f"/api/v1/books/files/{file_id}/sessions", payload)
         if resp and resp.status_code in (200, 201, 202, 204):
             logger.debug(
-                "BookOrbit: recorded reading session for book %s file %s (%ds, %.1f%%->%.1f%%)",
+                "BookOrbit: recorded reading session for book %s file %s (%ds, %s%%->%s%%)",
                 book_id, file_id, duration_seconds, start_pct, end_pct,
             )
             return True
         status = resp.status_code if resp else "no response"
         logger.debug("BookOrbit: failed to record session for book %s: %s", book_id, status)
         return False
+
+    def list_reading_sessions(self, book_id, since):
+        """Complete, bounded session window; None means unavailable, not empty."""
+        from datetime import datetime, timezone
+
+        date_from = quote(datetime.fromtimestamp(since, timezone.utc).isoformat(), safe='')
+        items = []
+        for page in range(1, 101):
+            response = self._make_request('GET', f'/api/v1/books/{book_id}/sessions?'
+                                          f'page={page}&pageSize=100&sortBy=startedAt&sortDir=desc&dateFrom={date_from}')
+            if response is None or response.status_code != 200:
+                return None
+            data = self._parse_json(response)
+            if not isinstance(data, dict) or not isinstance(data.get('items'), list):
+                return None
+            total = data.get('total')
+            if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+                return None
+            items.extend(data['items'])
+            if len(items) >= total:
+                return items
+            if not data['items']:
+                return None
+        return None
 
     # ------------------------------------------------------------------
     # Collections (writable manual shelves — used for "Up Next"/Kobo)

@@ -27,11 +27,34 @@ import os
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.api.bookorbit_client import BookOrbitClient
 from src.sync_manager import SyncManager
+
+
+@pytest.fixture(autouse=True)
+def outbox_database(tmp_path, monkeypatch):
+    """Exercise the real durable outbox even when the old tests mock manager DB."""
+    from src.db.database_service import DatabaseService
+    import src.services.bookorbit_session_service as sessions
+
+    database = DatabaseService(str(tmp_path / 'outbox.db'))
+    original = sessions.BookOrbitSessionService
+
+    def factory(_database, client):
+        _database.get_book.return_value = None
+        for method, value in [('_get_base_url', 'https://bookorbit.test'), ('_get_username', 'reader'),
+                              ('_get_api_key', ''), ('_get_password', 'private'),
+                              ('_resolve_primary_file_id', 10)]:
+            getattr(client, method).return_value = value
+        return original(database, client)
+
+    monkeypatch.setattr(sessions, 'BookOrbitSessionService', factory)
+    yield
+    database.db_manager.close()
 
 
 def _sync_manager(**kw):
@@ -135,16 +158,16 @@ def test_dedupe_is_asked_about_the_span_we_are_about_to_write():
     assert kwargs["end_time"] == 1_000_000.0
 
 
-def test_dedupe_failure_does_not_block_recording():
-    """A failed lookup must not cost the user the session."""
+def test_dedupe_failure_keeps_delivery_pending_instead_of_posting_blindly():
+    """A failed lookup is not proof that no native session exists."""
     bo = MagicMock()
     bo.is_configured.return_value = True
     bo.find_covering_sessions.side_effect = RuntimeError("BookOrbit unreachable")
     bo.create_reading_session.return_value = True
     sm = _sync_manager(bookorbit_client=bo)
     sm.database_service = MagicMock()
-    assert sm._deliver_reading_session(_delivery_row(sm), "bookorbit", 737)
-    bo.create_reading_session.assert_called_once()
+    assert not sm._deliver_reading_session(_delivery_row(sm), "bookorbit", 737)
+    bo.create_reading_session.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

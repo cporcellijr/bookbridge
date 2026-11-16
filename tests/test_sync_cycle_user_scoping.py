@@ -473,6 +473,18 @@ class TestSyncCycleUserScoping(unittest.TestCase):
             def is_configured(self):
                 return True
 
+            def _get_base_url(self):
+                return 'https://bookorbit.test'
+
+            def _get_username(self):
+                return 'reader'
+
+            def _get_api_key(self):
+                return ''
+
+            def _resolve_primary_file_id(self, *args):
+                return 10
+
         user_bo = _BookOrbitSessionClient()
         global_bo = _BookOrbitSessionClient()
         registry = _FakeRegistry({
@@ -495,20 +507,24 @@ class TestSyncCycleUserScoping(unittest.TestCase):
             bookorbit_candidate_ids=json.dumps([42]), leader_client="BookOrbit",
             session_type="EPUB", end_location="epubcfi(/6/2)",
         )
-        mgr.database_service = SimpleNamespace(
-            close_reading_sessions=lambda *args: None,
-            get_pending_reading_sessions=lambda: [pending],
-            get_book=lambda abs_id: book,
-            mark_reading_session_delivered=lambda *args: None,
-            record_reading_session_delivery_failure=lambda *args: False,
-        )
+        from src.db.database_service import DatabaseService
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        mgr.database_service = DatabaseService(str(Path(directory.name) / 'scoped-outbox.db'))
+        self.addCleanup(mgr.database_service.db_manager.close)
         from unittest.mock import patch
-        with patch.dict("os.environ", {"BOOKORBIT_READING_SESSIONS": "true"}):
+        with patch.object(mgr.database_service, 'get_user', return_value=SimpleNamespace(id=6, active=1)), \
+             patch.object(mgr.database_service, 'close_reading_sessions'), \
+             patch.object(mgr.database_service, 'get_pending_reading_sessions', return_value=[pending]), \
+             patch.object(mgr.database_service, 'get_book', return_value=book), \
+             patch.object(mgr.database_service, 'mark_reading_session_delivered'), \
+             patch.dict("os.environ", {"BOOKORBIT_READING_SESSIONS": "true", "BOOKORBIT_NATIVE_READING_SESSIONS": "false"}):
             mgr.sync_cycle(user_id=6, sessions_only=True)
 
         self.assertEqual(len(user_bo.session_calls), 1)
         self.assertEqual(user_bo.session_calls[0]["book_id"], 42)
-        self.assertEqual(user_bo.session_calls[0]["end_location"], "epubcfi(/6/2)")
+        self.assertEqual(user_bo.session_calls[0]["duration_seconds"], 90)
+        self.assertTrue(user_bo.session_calls[0]["session_id"])
         self.assertEqual(global_bo.session_calls, [])
 
     def test_user_scoped_suggestion_uses_user_provider_clients(self):

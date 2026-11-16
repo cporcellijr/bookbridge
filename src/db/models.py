@@ -846,6 +846,23 @@ class ReadingSessionBuffer(Base):
     )
 
 
+class BookOrbitSessionEvent(Base):
+    """User-scoped session receipts and a durable outbox, independent of progress."""
+    __tablename__ = 'bookorbit_session_events'
+
+    event_id = Column(String(64), primary_key=True)
+    account_scope = Column(String(64), nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    abs_id = Column(String(255), nullable=False)
+    bookorbit_book_id = Column(Integer, nullable=False)
+    direction = Column(String(20), nullable=False)
+    origin = Column(String(32), nullable=False, default='bridge')
+    status = Column(String(20), nullable=False)
+    payload_json = Column(Text, nullable=False)
+    local_session_id = Column(Integer, nullable=True)
+    created_at = Column(Float, nullable=False)
+
+
 class ReadingSession(Base):
     """
     Local reading session tracking for dashboard stats.

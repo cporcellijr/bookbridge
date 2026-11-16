@@ -1203,6 +1203,12 @@
                         <div class="help-text">{{ _('Send reading sessions to BookOrbit so its reading stats include them.') }}</div>
                     </div>
                     <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="bookorbit_native_sessions" name="BOOKORBIT_NATIVE_READING_SESSIONS"
+                            {% if get_bool('BOOKORBIT_NATIVE_READING_SESSIONS') %}checked{% endif %}>
+                        <label for="bookorbit_native_sessions">{{ _('BookOrbit already receives my KOReader sessions directly') }}</label>
+                        <div class="help-text">{{ _('Import measured BookOrbit sessions instead of counting BridgeSync telemetry or BookOrbit progress estimates again. ABS session export and position sync stay enabled. Applies to new activity only.') }}</div>
+                    </div>
+                    <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="koreader_sync_read_history" name="KOREADER_SYNC_READ_HISTORY" {% if
                             get_bool('KOREADER_SYNC_READ_HISTORY') %}checked{% endif %}>
                         <label for="koreader_sync_read_history">{{ _('KOReader: share recently-read books between devices') }}</label>
