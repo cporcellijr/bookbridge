@@ -18,7 +18,7 @@ from src.db.models import AcquisitionJob, AcquisitionRequest
 
 pytestmark = pytest.mark.real_database_migrations
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "d7e4a9b2c681"
+HEAD = "e597a1c3b2d4"
 PREVIOUS = "e3b7c1a9d2f4"
 
 

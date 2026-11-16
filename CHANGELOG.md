@@ -25,6 +25,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Linking an audiobook to an ebook you had already added no longer breaks the book later.**
+  The link saved the ebook-only entry's internal id as the book's Audiobookshelf ebook. That item
+  doesn't exist, so the next KOReader progress update marked the book as an error with "library
+  item no longer exists", and re-matching didn't help. Affected books are repaired on upgrade,
+  with nothing to re-match. (#597)
+
 - **CWA sync no longer re-downloads every book on every poll.** With more than eight books linked
   to Calibre-Web-Automated, each sync pass fetched every book's full Kobo file again, which could
   freeze CWA while it repacked them and pause CWA progress sync. Unchanged bookmarks now reuse the

@@ -29,14 +29,14 @@ class TestABSEbookSyncClient(unittest.TestCase):
 
     def test_target_prefers_abs_ebook_item_id(self):
         book = Book(abs_id="audio-1", ebook_filename="test.epub",
-                    abs_ebook_item_id="ebook-42")
+                    abs_ebook_item_id="li_ebook_42")
         self.mock_abs_client.get_progress_with_status.return_value = (
             {"ebookProgress": 0.3, "ebookLocation": "cfi1"}, 200,
         )
         state = self.client.get_service_state(book, None)
         self.assertIsNotNone(state)
         self.assertEqual(state.current['pct'], 0.3)
-        self.mock_abs_client.get_progress_with_status.assert_called_once_with("ebook-42")
+        self.mock_abs_client.get_progress_with_status.assert_called_once_with("li_ebook_42")
 
     def test_target_falls_back_to_ebook_source_id_when_abs(self):
         book = Book(abs_id="audio-1", ebook_filename="test.epub",
@@ -62,33 +62,33 @@ class TestABSEbookSyncClient(unittest.TestCase):
 
     def test_update_progress_uses_abs_ebook_item_id_for_nonzero(self):
         book = Book(abs_id="audio-1", ebook_filename="test.epub",
-                    abs_ebook_item_id="ebook-42")
+                    abs_ebook_item_id="li_ebook_42")
         locator = LocatorResult(percentage=0.75, cfi="epubcfi(/6/20!/4:0)")
         request = UpdateProgressRequest(locator_result=locator)
         self.mock_abs_client.update_ebook_progress.return_value = True
         with patch("src.services.write_tracker.record_write"):
             self.client.update_progress(book, request)
         self.mock_abs_client.update_ebook_progress.assert_called_with(
-            "ebook-42", 0.75, "epubcfi(/6/20!/4:0)"
+            "li_ebook_42", 0.75, "epubcfi(/6/20!/4:0)"
         )
 
     def test_update_progress_zero_reset_uses_abs_ebook_item_id(self):
         book = Book(abs_id="audio-1", ebook_filename="test.epub",
-                    abs_ebook_item_id="ebook-42")
+                    abs_ebook_item_id="li_ebook_42")
         locator = LocatorResult(percentage=0.0, cfi="")
         request = UpdateProgressRequest(locator_result=locator)
         self.mock_abs_client.update_ebook_progress.return_value = True
         with patch("src.services.write_tracker.record_write"):
             self.client.update_progress(book, request)
         self.mock_abs_client.update_ebook_progress.assert_called_with(
-            "ebook-42", 0, ""
+            "li_ebook_42", 0, ""
         )
 
     # --- explicit unopened 404 -> 0% state ----------------------------------
 
     def test_explicit_404_returns_zero_state_when_abs_ebook_item_id(self):
         book = Book(abs_id="audio-1", ebook_filename="test.epub",
-                    abs_ebook_item_id="ebook-42")
+                    abs_ebook_item_id="li_ebook_42")
         self.mock_abs_client.get_progress_with_status.return_value = (None, 404)
         state = self.client.get_service_state(book, None)
         self.assertIsNotNone(state)
@@ -108,7 +108,7 @@ class TestABSEbookSyncClient(unittest.TestCase):
     def test_explicit_200_without_ep_returns_zero_state(self):
         """Combined item: audio progress exists but ebook is unopened."""
         book = Book(abs_id="audio-1", ebook_filename="test.epub",
-                    abs_ebook_item_id="ebook-42")
+                    abs_ebook_item_id="li_ebook_42")
         self.mock_abs_client.get_progress_with_status.return_value = (
             {"progress": 0.3}, 200,  # no ebookProgress key
         )
@@ -121,7 +121,7 @@ class TestABSEbookSyncClient(unittest.TestCase):
 
     def test_500_returns_none(self):
         book = Book(abs_id="audio-1", ebook_filename="test.epub",
-                    abs_ebook_item_id="ebook-42")
+                    abs_ebook_item_id="li_ebook_42")
         self.mock_abs_client.get_progress_with_status.return_value = (None, 500)
         state = self.client.get_service_state(book, None)
         self.assertIsNone(state)

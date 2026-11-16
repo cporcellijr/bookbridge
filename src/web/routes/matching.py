@@ -461,6 +461,10 @@ def match():
             abs_ebook_item_id = preserved_abs_ebook_item_id
         if abs_ebook_item_id is None and current_book_entry:
             abs_ebook_item_id = current_book_entry.abs_ebook_item_id
+        # A merged ebook-only row's key (`ebook-<hash>`) is no ABS item (#597).
+        from src.sync_clients.abs_ebook_sync_client import _SYNTHETIC_KEY_PREFIXES
+        if str(abs_ebook_item_id or "").strip().lower().startswith(_SYNTHETIC_KEY_PREFIXES):
+            abs_ebook_item_id = None
 
         # Extract series metadata from ABS item details
         _match_series_name, _match_series_seq = None, None
