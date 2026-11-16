@@ -3,6 +3,10 @@
 import hashlib
 import hmac
 from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.db.models import User
 
 _WEB_MODULE = None
 
@@ -12,7 +16,7 @@ def _web_server():
     return import_module("src.web_server")
 
 
-def session_marker(user) -> str:
+def session_marker(user: "User") -> str:
     """Short HMAC of the user's password hash, keyed with the app secret.
 
     Stored in the session at login; a password change alters it, so every
