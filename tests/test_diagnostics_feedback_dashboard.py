@@ -205,13 +205,16 @@ class TestRoutes(_Base):
         )
 
     def test_non_admin_cannot_send_or_read_instance_reports(self):
-        user = Mock(id=2, active=True, is_admin=False)
+        user = Mock(id=2, active=True, is_admin=False, password_hash='hash')
         self.container.mock_database_service.count_users.return_value = 1
         self.container.mock_database_service.get_user.return_value = user
         self.container.mock_database_service.get_user_credentials.return_value = {}
         self.app.config['LOGIN_DISABLED'] = False
         with self.client.session_transaction() as session:
             session['user_id'] = user.id
+            with self.app.app_context():
+                from src.web.session_auth import session_marker
+                session['session_marker'] = session_marker(user)
 
         history = self.client.get(
             '/api/diagnostics/submissions',

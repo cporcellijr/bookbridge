@@ -73,6 +73,7 @@ def account():
                     changed.append("username")
             if not error and new_password:
                 web.database_service.set_user_password(user.id, new_password)
+                web.session['session_marker'] = web.session_marker(web.database_service.get_user(user.id))
                 changed.append("password")
             if not error:
                 message = "Updated " + " and ".join(changed) + "." if changed else "No changes made."

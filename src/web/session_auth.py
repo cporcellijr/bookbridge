@@ -1,6 +1,12 @@
 """C02 helpers extracted from web_server with no behavior change."""
 
+import hashlib
+import hmac
 from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.db.models import User
 
 _WEB_MODULE = None
 
@@ -8,6 +14,17 @@ def _web_server():
     if _WEB_MODULE is not None:
         return _WEB_MODULE
     return import_module("src.web_server")
+
+
+def session_marker(user: "User") -> str:
+    """Short HMAC of the user's password hash, keyed with the app secret.
+
+    Stored in the session at login; a password change alters it, so every
+    older session for that user stops matching in `current_user`.
+    """
+    key = _web_server().current_app.secret_key
+    key = key.encode() if isinstance(key, str) else key
+    return hmac.new(key, (user.password_hash or '').encode(), hashlib.sha256).hexdigest()[:16]
 
 
 def current_user():
@@ -20,7 +37,13 @@ def current_user():
     if uid and web.database_service is not None:
         try:
             candidate = web.database_service.get_user(uid)
-            if candidate and candidate.active:
+            if (
+                candidate
+                and candidate.active
+                and hmac.compare_digest(
+                    str(web.session.get('session_marker') or ''), session_marker(candidate)
+                )
+            ):
                 user = candidate
         except Exception:
             user = None
@@ -115,6 +138,35 @@ def _remote_auth_peer_trusted() -> bool:
     return any(address in network for network in _trusted_proxy_networks())
 
 
+def _client_address() -> str:
+    """The dashboard client's address for login rate limiting.
+
+    The TCP peer, unless the peer is a trusted proxy: then the right-most
+    X-Forwarded-For hop that is not itself a trusted proxy. Otherwise every client
+    behind a proxy shares one address and five bad passwords lock everyone out.
+    """
+    web = _web_server()
+    import ipaddress
+
+    networks = _trusted_proxy_networks()
+
+    def trusted(address: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        return any(ip in network for network in networks)
+
+    peer = (web.request.remote_addr or '').strip()
+    if not trusted(peer):
+        return peer
+    hops = [hop.strip() for hop in web.request.headers.get('X-Forwarded-For', '').split(',') if hop.strip()]
+    for hop in reversed(hops):
+        if not trusted(hop):
+            return hop
+    return peer
+
+
 def _remote_auth_user():
     """Return the User named by the configured reverse-proxy header, or None."""
     web = _web_server()
@@ -152,6 +204,7 @@ def _establish_session_and_redirect(user):
     web.session['user_id'] = user.id
     web.session['username'] = user.username
     web.session['role'] = user.role
+    web.session['session_marker'] = session_marker(user)
     web.session.permanent = True
     try:
         web.database_service.touch_user_login(user.id)

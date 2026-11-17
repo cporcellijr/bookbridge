@@ -25,6 +25,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import requests
 
 from src.utils.config_loader import env_truthy
+from src.utils.logging_utils import redact_url_secrets
 from src.version import APP_VERSION
 
 logger = logging.getLogger(__name__)
@@ -118,7 +119,7 @@ def scrub_diagnostic_text(text: str) -> str:
     4. Filesystem paths (>= 2 path separators) → ``path:<sha1(full)[:8]><ext>``
     5. Quoted spans >= 12 chars → ``t:<sha1(inner)[:8]>`` (quotes preserved)
     """
-    result = text
+    result = redact_url_secrets(text)
 
     # 1. URLs
     def _replace_url(m: re.Match) -> str:

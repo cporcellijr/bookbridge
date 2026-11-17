@@ -554,6 +554,8 @@ _LOGIN_FAILURES: dict[tuple[str, str], list[float]] = {}
 _LOGIN_FAILURES_LOCK = threading.Lock()
 _LOGIN_FAILURE_LIMIT = 5
 _LOGIN_FAILURE_WINDOW = 60
+_LOGIN_FAILURE_MAX_KEYS = 10_000
+_LOGIN_USERNAME_KEY_CHARS = 256
 
 # Global engine configuration, library-wide maintenance and logs are admin-only.
 # Reader pages, including Stats, resolve the acting user's data and credentials.
@@ -585,8 +587,10 @@ from src.web.session_auth import (
     _safe_next_url,
     _trusted_proxy_networks,
     _remote_auth_peer_trusted,
+    _client_address,
     _remote_auth_user,
     _establish_session_and_redirect,
+    session_marker,
 )
 
 
@@ -774,6 +778,7 @@ def require_login_guard():
             session['user_id'] = remote_user.id
             session['username'] = remote_user.username
             session['role'] = remote_user.role
+            session['session_marker'] = session_marker(remote_user)
             session.permanent = True
             g.current_user = remote_user
             user = remote_user
@@ -2380,6 +2385,7 @@ if __name__ == '__main__':
     # that finalizes the forge does not, so resume it here. The registry lets
     # each book resume on its owner's clients (multi-user), not just the admin's.
     try:
+        container.forge_service().sweep_orphaned_staging()
         container.forge_service().resume_pending_forge_matches(
             user_client_registry=container.user_client_registry()
         )

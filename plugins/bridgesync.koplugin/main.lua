@@ -1820,9 +1820,25 @@ function BridgeSync:_runSync()
         end
     end
 
-    if self.delete_removed_books then
+    local unavailable = {}
+    for _, abs_id in ipairs(manifest.unavailable_abs_ids or {}) do
+        unavailable[abs_id] = true
+    end
+    local delete_pass = self.delete_removed_books
+    if delete_pass and #remote_books == 0 and next(items) ~= nil then
+        -- An older server omits books it cannot resolve; an empty manifest is never a mass removal.
+        self:logWarn("Empty manifest with local managed books; skipping delete pass")
+        delete_pass = false
+    end
+
+    if delete_pass then
         for abs_id, entry in pairs(items) do
-            if not remote_by_abs[abs_id] then
+            if not remote_by_abs[abs_id] and unavailable[abs_id] then
+                -- Server could not resolve the file right now; keep the local copy.
+                if entry.pending_delete then
+                    entry.pending_delete = nil
+                end
+            elseif not remote_by_abs[abs_id] then
                 if remote_paths[self:_normalizeManagedPath(entry.local_path)] then
                     -- A replacement ID can own the same file as a retired match.
                     items[abs_id] = nil

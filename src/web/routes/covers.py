@@ -160,10 +160,10 @@ def proxy_cover(abs_id):
         if not token or not base_url:
             return "ABS not configured", 500
 
-        url = f"{base_url.rstrip('/')}/api/items/{abs_id}/cover?token={token}"
+        url = f"{base_url.rstrip('/')}/api/items/{abs_id}/cover"
 
         # Stream the response to avoid loading large images into memory
-        req = web.requests.get(url, stream=True, timeout=10)
+        req = web.requests.get(url, headers=abs_client.headers, stream=True, timeout=10)
         if req.status_code == 200:
             from flask import Response
             response = Response(

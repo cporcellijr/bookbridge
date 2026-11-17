@@ -205,31 +205,23 @@ class SuggestionsMixin:
 
     def clear_stale_suggestions(self, user_id: Optional[int] = None) -> int:
         """
-        Delete a user's suggestions that are not for active books in our bridge.
+        Delete a user's pending suggestions that are not for books in our bridge.
         A suggestion is 'stale' if its source_id (ABS ID) is not in our books table.
+        Ignored ("Never") and dismissed (reviewed) rows are the user's records and are kept.
         """
         uid = self._resolve_uid(user_id)
         with self.get_session() as session:
-            # Subquery to get all IDs in books table
-            # We preserve ANY suggestion that corresponds to a book we tracking,
-            # regardless of its status. This ensures that if the user matched it
-            # or it's pending transcription, we don't wipe it accidentally.
-            # But junk suggestions for books they haven't touched are wiped.
-            from sqlalchemy import select
-            
-            # Using raw delete with subquery for efficiency
-            # We delete suggestions where source_id is not in the books table
             from sqlalchemy import not_
-            
-            # Find all suggestions not in the books table
+
             stale_query = session.query(PendingSuggestion).filter(
                 self._suggestion_owner_clause(uid),
+                PendingSuggestion.status == 'pending',
                 not_(PendingSuggestion.source_id.in_(
                     session.query(Book.abs_id)
                 ))
             )
-            
+
             count = stale_query.count()
             stale_query.delete(synchronize_session=False)
-            
+
             return count

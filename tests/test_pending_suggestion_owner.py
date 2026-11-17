@@ -73,10 +73,12 @@ class TestOwnerScoping(OwnerDbBase):
         self.assertTrue(self.db.dismiss_suggestion("src-1", user_id=self.alice.id))
         self.assertIsNone(self.db.get_pending_suggestion("src-1", user_id=self.alice.id))
         self.assertIsNotNone(self.db.get_pending_suggestion("src-1", user_id=self.bob.id))
+        self.save(self.alice.id, "src-2")
+        # Only alice's pending row is stale; her dismissed record and bob's row stay.
         self.assertEqual(self.db.clear_stale_suggestions(user_id=self.alice.id), 1)
         self.assertTrue(self.db.suggestion_exists("src-1", user_id=self.bob.id))
-        self.assertFalse(self.db.suggestion_exists("src-1", user_id=self.alice.id))
-        self.assertFalse(self.db.dismiss_suggestion("src-1", user_id=self.alice.id))
+        self.assertTrue(self.db.suggestion_exists("src-1", user_id=self.alice.id))
+        self.assertFalse(self.db.suggestion_exists("src-2", user_id=self.alice.id))
 
     def test_legacy_null_owner_rows_belong_to_the_default_user(self):
         self.db.save_pending_suggestion(_suggestion("legacy"), user_id=self.admin.id)

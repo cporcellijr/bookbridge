@@ -58,7 +58,7 @@ from src.utils.transcription_cancel import (
 )
 from src.utils.transcriber import TranscriptionCancelled
 from src.utils.source_fingerprint import AcquiredPaths, SourceAudioChanged, verify_unchanged
-from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
+from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger, redact_url_secrets
 from src.utils.progress_metadata import state_metadata_kwargs
 from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename, normalize_href
 from src.utils.fixed_page_progress import coerce_page, is_cbz_book, is_cbz_filename
@@ -112,6 +112,8 @@ _STATE_FETCH_SLOW_SECONDS = 15.0
 # the 1% suggestion-eligibility floor the tracker posts already apply, so
 # "opened it for ten seconds" does not become 'reading' on every device.
 _KOREADER_READING_MIN_PCT: float = 0.01
+# Idle cycles that re-push a position after a follower write failed, before giving up.
+_MAX_WRITE_RETRIES: int = 5
 
 _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS: frozenset[str] = frozenset({
     "StoryGraph",
@@ -266,6 +268,9 @@ class SyncManager:
         self._sync_lock = threading.Lock()
         self._bookorbit_stats_lock = threading.Lock()
         self._bookorbit_stats_running = set()
+        # (user_id, abs_id) -> {"spent": forced retries, "leader": client whose write failed to reach a follower}.
+        # Only touched inside the sync cycle, i.e. under _sync_lock.
+        self._write_retries: dict[tuple, dict] = {}
         self._pending_sync_lock = threading.Lock()
         self._pending_sync_books: set[tuple[int | None, str]] = set()
         self._replay_worker_running = False
@@ -300,6 +305,12 @@ class SyncManager:
         self._setup_sync_clients(sync_clients)
         self.startup_checks()
         self.cleanup_stale_jobs()
+
+    def _write_retry_state(self) -> dict:
+        """Pending follower-write retries; tolerant of managers built without __init__."""
+        if not hasattr(self, "_write_retries"):
+            self._write_retries = {}
+        return self._write_retries
 
     def _get_cached_ebook_text(self, ebook_filename: str):
         """Return (full_text, total_len) cached for current sync cycle."""
@@ -4069,7 +4080,7 @@ class SyncManager:
                 abs_id=abs_id,
                 last_attempt=time.time(),
                 retry_count=new_retry_count,
-                last_error=str(e),
+                last_error=redact_url_secrets(str(e)),
                 progress=job.progress if job else 0.0,
                 stage=(
                     "ebook_input_recovery_manual" if recovery_manual
@@ -5615,7 +5626,20 @@ class SyncManager:
 
         if not target_abs_id:
             for client_name, client in self.sync_clients.items():
-                bulk_data = client.fetch_bulk_state()
+                bulk_key = f"bulk-fetch:{get_current_user_id()}:{client_name}"
+                try:
+                    bulk_data = client.fetch_bulk_state()
+                except Exception as exc:
+                    get_persistent_condition_logger().warn(
+                        logger, bulk_key,
+                        "⚠️ Bulk state fetch failed for '%s'; reading its books individually this cycle: %s",
+                        client_name, exc, exc_info=True,
+                    )
+                    bulk_data = None
+                else:
+                    get_persistent_condition_logger().resolve(
+                        logger, bulk_key, "Bulk state fetch for '%s' recovered", client_name,
+                    )
                 # None = the read failed; any dict, even an empty one, is a successful read
                 if bulk_data is not None:
                     bulk_states_per_client[client_name] = bulk_data
@@ -5916,8 +5940,26 @@ class SyncManager:
                     for client_name in decision_config.keys()
                 )
                 is_instant_target = bool(target_abs_id)
+                # A follower write that failed leaves delta 0 everywhere next cycle,
+                # so without this the book would wait for a read that never looks new.
+                retry_key = (get_current_user_id(), abs_id)
+                force_write_retry = False
                 if (significant_diff and not any_significant_delta and not char_delta_triggered and not page_delta_triggered
-                        and not new_client_in_config and not is_instant_target):
+                        and not new_client_in_config and not is_instant_target
+                        and retry_key in self._write_retry_state()):
+                    spent = self._write_retry_state()[retry_key]["spent"]
+                    if spent < _MAX_WRITE_RETRIES:
+                        self._write_retry_state()[retry_key]["spent"] = spent + 1
+                        force_write_retry = True
+                        logger.info(f"🔁 '{abs_id}' '{title_snip}' Retrying after a failed write to a follower (attempt {spent + 1}/{_MAX_WRITE_RETRIES})")
+                    else:
+                        get_persistent_condition_logger().warn(
+                            logger, f"write-retry:{retry_key[0]}:{abs_id}",
+                            "⚠️ '%s' '%s' Follower write still failing after %d retries; waiting for a new read event instead",
+                            abs_id, title_snip, _MAX_WRITE_RETRIES,
+                        )
+                if (significant_diff and not any_significant_delta and not char_delta_triggered and not page_delta_triggered
+                        and not new_client_in_config and not is_instant_target and not force_write_retry):
                     logger.debug(f"'{abs_id}' '{title_snip}' Discrepancy exists ({max_progress*100:.1f}% vs {min_progress*100:.1f}%) but no recent client activity detected. Waiting for a new read event to determine true leader")
                     continue
                 if (is_instant_target and significant_diff and not any_significant_delta
@@ -5972,6 +6014,13 @@ class SyncManager:
                 # Determine leader
                 leader, leader_pct = self._determine_leader(decision_config, book, abs_id, title_snip)
                 if not leader:
+                    continue
+                retry_leader = self._write_retry_state().get(retry_key, {}).get("leader") if force_write_retry else None
+                if retry_leader and leader != retry_leader:
+                    # Idle cycles fall back to furthest-wins; re-pushing from another client
+                    # could undo a deliberate rewind whose propagation failed.
+                    logger.info(f"🔁 '{abs_id}' '{title_snip}' Write retry dropped: '{leader}' would lead now, not '{retry_leader}'")
+                    self._write_retry_state().pop(retry_key, None)
                     continue
 
                 leader_formatter = config[leader].value_formatter
@@ -6287,6 +6336,16 @@ class SyncManager:
                         f"Re-match it in the dashboard to resume syncing"
                     )
                     continue
+
+                # Genuine failures only: a policy no-write is success=True, skipped=True.
+                retry_key = (get_current_user_id(), abs_id)
+                if any(not result.success for result in results.values()):
+                    self._write_retry_state().setdefault(retry_key, {"spent": 0})["leader"] = leader
+                elif results and self._write_retry_state().pop(retry_key, None) is not None:
+                    get_persistent_condition_logger().resolve(
+                        logger, f"write-retry:{retry_key[0]}:{abs_id}",
+                        "'%s' Follower writes succeeded again", abs_id,
+                    )
 
                 threshold = self._completion_threshold()
                 previous_leader_pct = getattr(leader_state, 'previous_pct', None)

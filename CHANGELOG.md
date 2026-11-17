@@ -25,6 +25,47 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **"Clear stale suggestions" no longer erases your "Never suggest" list.** It now removes
+  only pending suggestions for books that aren't in your library. Books you marked "Never" and
+  BookOrbit reviews you dismissed stay as they were.
+
+- **BridgeSync no longer deletes books from your e-reader when the server briefly can't find
+  them.** If the library folder or BookOrbit was unavailable while the device list was being
+  built, those books were left off it, and devices with "delete removed books" on deleted them
+  along with their reading position and highlights. The server now marks those books as
+  temporarily unavailable, and the plugin keeps them. The plugin also skips deleting anything
+  when the server sends an empty list. Update the BridgeSync plugin to 0.9.11 to get this.
+
+- **A failed update to one app is retried instead of left behind.** If writing your position
+  to an app failed (for example a brief Audiobookshelf outage), later syncs waited for you to
+  read again, leaving that app at the old spot. BookBridge now retries up to five times, and
+  only while the app that had your latest position would still lead. Separately, one app
+  returning a broken reply when positions are read at the start of a sync no longer stops
+  every other book from syncing.
+
+- **Wrong passwords from one person no longer lock everyone else out of the dashboard
+  sign-in.** Behind a reverse proxy, every visitor looked like the proxy, so five bad guesses
+  for a username blocked that username for everyone. If your proxy's address is listed under
+  Remote auth's trusted proxies, each visitor is now counted separately. The failed-login
+  record also stays a fixed size instead of growing with every new username tried.
+
+- **Changing a password now signs out that account everywhere else.** Before, a browser that
+  was already signed in stayed signed in for up to a month after you (or an admin) changed the
+  password. Now only the browser where you made the change stays signed in. Everyone signs in
+  once after updating.
+
+- **The KoSync server rejects reading positions it can't use.** A reader app that sent a
+  percentage outside 0–1 (for example `45` instead of `0.45`) had it saved as your position,
+  and every later real position then looked like a jump backwards. A text percentage or a
+  malformed request caused a server error. These requests now get a clear "invalid" reply
+  and nothing is saved.
+
+- **Your Audiobookshelf API key no longer shows up in logs.** When Audiobookshelf was
+  unreachable, a failed cover or audio download could write the full request URL, key
+  included, into the log file, the Logs page, Telegram alerts, a job's error text on
+  Processing and diagnostics. Covers now send the key in a header, and any `token=` value
+  in a logged URL is replaced with `[redacted]`.
+
 - **Linking an audiobook to an ebook you had already added no longer breaks the book later.**
   The link saved the ebook-only entry's internal id as the book's Audiobookshelf ebook. That item
   doesn't exist, so the next KOReader progress update marked the book as an error with "library

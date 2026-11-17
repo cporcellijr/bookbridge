@@ -95,6 +95,7 @@ class KOReaderDeviceSyncService:
         books = self._get_active_books()
         filename_map = self._build_manifest_filename_map(books)
         items = []
+        unavailable_abs_ids = []
 
         for book in books:
             filename = filename_map.get(str(book.abs_id))
@@ -102,6 +103,8 @@ class KOReaderDeviceSyncService:
                 continue
             resolved = self._resolve_download_artifact(book, device_filename=filename)
             if not resolved:
+                if self._still_claimed(book):
+                    unavailable_abs_ids.append(str(book.abs_id))
                 continue
 
             items.append({
@@ -129,7 +132,15 @@ class KOReaderDeviceSyncService:
             "revision": self._compute_revision(items),
             "delete_mode": "mirror",
             "books": items,
+            "unavailable_abs_ids": unavailable_abs_ids,
         }
+
+    def _still_claimed(self, book) -> bool:
+        """True when the book still exists and belongs to this reader, so a failed
+        artifact resolution is a transient outage rather than a removal."""
+        if self.database_service.get_book(book.abs_id) is None:
+            return False
+        return self.user_id is None or self.database_service.is_user_linked(self.user_id, book.abs_id)
 
     def resolve_download(self, abs_id: str) -> Optional[dict]:
         book = self.database_service.get_book(abs_id)

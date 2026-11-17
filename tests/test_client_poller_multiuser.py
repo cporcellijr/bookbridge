@@ -237,3 +237,23 @@ def test_settle_fire_rechecks_global_self_write(monkeypatch):
 
     sm.sync_cycle.assert_not_called()
     assert (1, "Storyteller", "abs-1") not in poller._pending_sync
+
+
+def test_run_shelf_watch_for_user_delegates_user_binding_to_service():
+    watch_svc = MagicMock()
+    poller = ClientPoller(MagicMock(), MagicMock(), {})
+
+    poller._run_shelf_watch_for_user(watch_svc, "BookOrbit", 7)
+
+    watch_svc.process_watch_shelf.assert_called_once_with(user_id=7)
+
+
+def test_run_shelf_watch_for_user_logs_and_swallows_service_error(caplog):
+    watch_svc = MagicMock()
+    watch_svc.process_watch_shelf.side_effect = RuntimeError("boom")
+    poller = ClientPoller(MagicMock(), MagicMock(), {})
+    caplog.set_level(logging.DEBUG, logger="src.services.client_poller")
+
+    poller._run_shelf_watch_for_user(watch_svc, "BookOrbit", 7)
+
+    assert "ClientPoller: shelf-watch run failed for user 7: boom" in caplog.text

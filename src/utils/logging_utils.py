@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
@@ -58,11 +59,23 @@ def repair_mojibake(text):
     return repaired
 
 
+_URL_SECRET_RE = re.compile(
+    r"([?&](?:access_token|api_key|apikey|token)=)[^&\s'\"()<>]*", re.IGNORECASE
+)
+
+
+def redact_url_secrets(text: str) -> str:
+    """Replace query-string secrets (token, access_token, api_key, apikey) with ``[redacted]``."""
+    if not isinstance(text, str) or "=" not in text:
+        return text
+    return _URL_SECRET_RE.sub(r"\1[redacted]", text)
+
+
 class MojibakeSafeFormatter(logging.Formatter):
-    """Formatter that normalizes mojibake before logs are emitted."""
+    """Formatter that normalizes mojibake and redacts URL secrets before logs are emitted."""
 
     def format(self, record):
-        return repair_mojibake(super().format(record))
+        return redact_url_secrets(repair_mojibake(super().format(record)))
 
 
 class ThresholdExceptionFormatter(logging.Formatter):
@@ -136,7 +149,7 @@ class MemoryLogHandler(logging.Handler):
             log_entry = {
                 'timestamp': datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S'),
                 'level': record.levelname,
-                'message': repair_mojibake(record.getMessage()),
+                'message': redact_url_secrets(repair_mojibake(record.getMessage())),
                 'module': record.name
             }
             self.logs.append(log_entry)
