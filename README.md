@@ -4,9 +4,9 @@
 
 # BookBridge
 
-**Switch between your audiobook and your ebook without losing your place.**
+**Read it. Hear it. Never lose your place.**
 
-An open-source, self-hosted alternative to Amazon's Whispersync.
+Switch between your audiobook and your ebook across the apps you already use.<br>An open-source, self-hosted alternative to Amazon's Whispersync.
 
 [![Documentation](https://img.shields.io/badge/docs-live-blue)](https://cporcellijr.github.io/bookbridge/)
 [![License](https://img.shields.io/github/license/cporcellijr/bookbridge)](LICENSE)

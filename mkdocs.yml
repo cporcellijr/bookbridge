@@ -24,33 +24,39 @@ repo_url: https://github.com/cporcellijr/bookbridge
 
 theme:
   name: material
-  logo: assets/icon.png
-  favicon: assets/icon.png
+  custom_dir: overrides
+  logo: assets/icon-192.png
+  favicon: assets/icon-192.png
+  # Fonts are bundled (the app's own Literata, Instrument Sans, IBM Plex Mono); no Google Fonts requests.
+  font: false
   features:
     - navigation.tabs
     - navigation.sections
     - navigation.top
+    - navigation.footer
     - search.suggest
     - search.highlight
     - content.code.copy
+    - content.tabs.link
   palette:
-    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
 
-    # Palette toggle for dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/weather-sunny
-        name: Switch to light mode
+extra_css:
+  - assets/fonts/fonts.css
+  - stylesheets/extra.css
 
 plugins:
   - search
@@ -63,16 +69,21 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.emoji:
-      emoji_index: !!python/name:materialx.emoji.twemoji
-      emoji_generator: !!python/name:materialx.emoji.to_svg
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
   - Home: index.md
-  - Getting Started: getting-started.md
-  - User Guide: user-guide.md
-  - New Interface (Beta): new-interface.md
-  - Configuration: configuration.md
-  - Device API: device-api.md
-  - Backup & Restore: backup-restore.md
+  - Getting Started:
+      - Install and first sync: getting-started.md
+      - How It Works: how-it-works.md
+      - Supported Apps: supported-apps.md
+  - User Guide:
+      - User Guide: user-guide.md
+      - New Interface (Beta): new-interface.md
+  - Reference:
+      - Configuration: configuration.md
+      - Device API: device-api.md
+      - Backup & Restore: backup-restore.md
   - Troubleshooting: troubleshooting.md
   - Changelog: changelog.md

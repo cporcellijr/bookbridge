@@ -1,8 +1,16 @@
+---
+description: "Install BookBridge with Docker Compose, connect your apps and link your first audiobook and ebook in about ten minutes."
+---
+
 # Getting Started
 
-## Goal
+Get your library syncing in about ten minutes: start the container, connect your apps in the web UI, and link your first book.
 
-Get your library syncing in about 10 minutes.
+!!! info "What you will do"
+    1. Gather your Audiobookshelf details (skip for ebook-only)
+    2. Create a folder and a `docker-compose.yml`
+    3. Start BookBridge and create your account
+    4. Connect your apps and link your first book
 
 ---
 
@@ -17,9 +25,9 @@ All you actually need:
 Common starting points:
 
 - **Audiobookshelf + KOReader** — the classic audiobook ↔ ebook pairing
-- **Ebook-only** — KOReader, BookFusion, Grimmory, BookOrbit, or CWA in any combination, with Audiobookshelf switched off
+- **Ebook-only** — KOReader, BookFusion, Grimmory, BookOrbit, Kavita or CWA in any combination, with Audiobookshelf switched off
 
-Everything else — Storyteller, Hardcover, StoryGraph, Readest, Telegram, AI assist — is optional and can be added later from the Settings UI. BookBridge aligns audio and text on its own, using built-in Whisper transcription and the EPUB's own timing data, so an audiobook and an ebook stay in step without any of them.
+Everything else — Storyteller, Hardcover, StoryGraph, Goodreads, Readest, Telegram, AI assist — is optional and can be added later from the Settings UI. BookBridge aligns audio and text on its own: built-in forced alignment runs on the CPU, with Whisper transcription and the EPUB's own timing data as fallbacks, so an audiobook and an ebook stay in step without any of them. See [Supported apps](supported-apps.md) for what each app syncs.
 
 ---
 
@@ -30,7 +38,7 @@ Setting up ebook-only? Skip this step — you will switch Audiobookshelf off lat
 ### Audiobookshelf API token
 
 1. Log into Audiobookshelf.
-2. Go to **Settings -> Users -> Your user**.
+2. Go to **Settings → Users → Your user**.
 3. Click **Generate API Token**.
 4. Copy the token.
 
@@ -49,6 +57,7 @@ If you plan to use them, also keep these handy:
 - KOSync URL, username, and password
 - BookFusion account access, if you want BookFusion progress or highlight sync
 - Grimmory and/or BookOrbit URL, username, and password
+- Kavita URL and auth key (from Kavita's 3rd Party Clients settings)
 - CWA URL, username/password, and Kobo sync token if you use Calibre-Web Automated
 - Storyteller URL, username, and password
 
@@ -140,7 +149,7 @@ same names, in the same order.
 7. If you mounted Storyteller assets, set **Storyteller Assets Path** to `/storyteller` under **Settings → Server**.
 
 !!! tip "Sharing with more than one reader?"
-    Your main account can add other people from **Settings -> Users**. Each reader signs in to their own dashboard, opens **Account -> My Integrations**, enters their own service logins, and only sees the books they are reading - so everyone keeps their own progress, even on the same book. Admins can also fill those integrations for a reader from **Settings -> Users -> Integrations**.
+    Your main account can add other people from **Settings → Users**. Each reader signs in to their own dashboard, opens **Account → My Integrations**, enters their own service logins, and only sees the books they are reading - so everyone keeps their own progress, even on the same book. Admins can also fill those integrations for a reader from **Settings → Users → Integrations**.
 
 ---
 
@@ -148,25 +157,29 @@ same names, in the same order.
 
 You can start in either of these ways:
 
-### Discover: Pairs
+=== "Discover: Pairs"
 
-1. Open **Discover**.
-2. Click **Scan Library**.
-3. Review the likely pairs.
-4. Add the good ones to the queue.
-5. Click **Match All**.
+    Let BookBridge find audiobook and ebook pairs for you.
 
-If your audiobook and ebook services point at the same mounted `/books` tree,
-sibling audio and ebook files in the same title folder appear as high-confidence
-same-folder matches.
+    1. Open **Discover**.
+    2. Click **Scan Library**.
+    3. Review the likely pairs.
+    4. Add the good ones to the queue.
+    5. Click **Match All**.
 
-### Discover: Search
+    If your audiobook and ebook services point at the same mounted `/books` tree,
+    sibling audio and ebook files in the same title folder appear as high-confidence
+    same-folder matches.
 
-1. Open **Discover** and choose the **Search** tab.
-2. Search for the book, then pick an ABS, Grimmory, or BookOrbit audiobook, or leave audio on **None / Skip** for an ebook-only link.
-3. Optionally pick a Storyteller title (skip this unless you use the Storyteller app).
-4. Pick the standard ebook and click **Add to Queue**.
-5. Click **Match All** in the Batch Match Queue.
+=== "Discover: Search"
+
+    Link one book you choose.
+
+    1. Open **Discover** and choose the **Search** tab.
+    2. Search for the book, then pick an ABS, Grimmory, or BookOrbit audiobook, or leave audio on **None / Skip** for an ebook-only link.
+    3. Optionally pick a Storyteller title (skip this unless you use the Storyteller app).
+    4. Pick the standard ebook and click **Add to Queue**.
+    5. Click **Match All** in the Batch Match Queue.
 
 That is enough to get syncing started. The normal background cycle runs every 5 minutes by default, and instant sync can react faster when supported by the source.
 
@@ -190,7 +203,7 @@ Open **My Account → Connect a KOReader device** for a two-step card:
    from a KOReader plugin store such as Storefront). The plugin delivers books
    from the bridge byte-for-byte — so KOReader progress auto-links with no manual matching —
    and adds reading-stats sync plus highlight and note sync. Unzip it into
-   `koreader/plugins/`, restart KOReader, then open **Tools -> Bridge Sync** to set the same
+   `koreader/plugins/`, restart KOReader, then open **Tools → Bridge Sync** to set the same
    server URL and KoSync login.
 
 Plain KOReader/KOSync progress sync works without the plugin; highlights, notes, sweep, and
@@ -203,3 +216,12 @@ This is optional. The bridge works without it.
 If KOReader reports **Unknown server error** when you sign in, the address or the network
 path is wrong rather than the password — see
 [KOReader cannot connect](troubleshooting.md#koreader-cannot-connect-unknown-server-error).
+
+---
+
+## Next steps
+
+- [User Guide](user-guide.md): the dashboard, sync modes, highlights and notes
+- [Supported apps](supported-apps.md): what BookBridge syncs with each app
+- [Configuration](configuration.md): every setting, service by service
+- [Troubleshooting](troubleshooting.md): logs and common fixes
