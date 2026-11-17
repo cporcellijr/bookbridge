@@ -57,6 +57,26 @@ All notable changes to BookBridge will be documented in this file.
   returning a broken reply when positions are read at the start of a sync no longer stops
   every other book from syncing.
 
+- **Telegram alerts with a `<` in them arrive again.** Error alerts were sent as HTML, so a
+  book title, a server reply such as `<Response [500]>`, or a traceback line made Telegram
+  reject the message and the alert was lost. Alerts are now plain text and cut to Telegram's
+  length limit.
+
+- **A re-aligned book uses its new map straight away.** A sync reading the old map at the
+  moment the new one was saved could keep serving the old positions until the next restart.
+
+- **BridgeSync no longer replaces your own KOReader collections.** A server shelf with the
+  same name as a collection you made yourself (for example "Favorites") used to overwrite it;
+  BridgeSync now leaves it alone. Moving a book to a new filename no longer deletes the copy
+  already there if the move fails, and downloads cut off by a power loss are cleaned up.
+  Update the BridgeSync plugin to 0.9.11 to get this.
+
+- **Forge & Match adds the book to the reader's own Audiobookshelf collection name**, not the
+  admin's.
+
+- **Closed the last place in the Classic dashboard where a crafted book id from an external
+  server could run script in your browser.**
+
 - **Wrong passwords from one person no longer lock everyone else out of the dashboard
   sign-in.** Behind a reverse proxy, every visitor looked like the proxy, so five bad guesses
   for a username blocked that username for everyone. If your proxy's address is listed under
