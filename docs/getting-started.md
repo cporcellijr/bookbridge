@@ -103,7 +103,7 @@ What to fill in for your setup:
     | Where | What |
     | :--- | :--- |
     | Settings → Services → **Audiobookshelf** | Server URL |
-    | My Integrations → **Audiobookshelf** | API token: in Audiobookshelf open **Settings → Users →** your user and generate one |
+    | My Integrations → **Audiobookshelf** | API token: in Audiobookshelf open **Settings → Users**, choose your user and copy its API token |
     | My Integrations → **KOReader / KoSync** | A sync username and password of your choice; you enter the same pair on the device in step 6 |
 
 === "BookOrbit or Grimmory"
@@ -123,7 +123,7 @@ What to fill in for your setup:
     | Settings → Services → each reader app | Turn it on and enter its Server URL (KOReader needs none: BookBridge is its sync server) |
     | My Integrations → each reader app | Your login for it, for example a Kavita auth key or a KOReader sync username and password |
 
-Each app's fields are listed in [Configuration](configuration.md), and the [Settings tour](settings-tour.md) shows the rest of Settings.
+Every app has a page with screenshots in [Connecting your apps](apps/index.md), and the [Settings tour](settings-tour.md) shows the rest of Settings.
 
 ## 5. Link your first book
 

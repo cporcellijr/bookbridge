@@ -46,6 +46,10 @@ os.environ.update(
     ABS_ENABLED="true", ABS_SERVER="http://audiobookshelf.local:13378",
     KOSYNC_ENABLED="true", BOOKORBIT_ENABLED="true", BOOKORBIT_SERVER="http://bookorbit.local:3000",
     STORYTELLER_ENABLED="true", STORYTELLER_API_URL="http://storyteller.local:8001",
+    BOOKLORE_ENABLED="true", BOOKLORE_SERVER="http://grimmory.local:6060",
+    KAVITA_ENABLED="true", KAVITA_SERVER="http://kavita.local:5000",
+    CWA_ENABLED="true", CWA_SERVER="http://calibre-web.local:8083",
+    BOOKFUSION_ENABLED="true", HARDCOVER_ENABLED="true", STORYGRAPH_ENABLED="true", GOODREADS_ENABLED="true",
 )
 for key, value in (("ABS_KEY", "demo-abs-api-key"), ("ABS_LIBRARY_ID", "demo-library-id"),
                    ("KOSYNC_USER", "demo"), ("KOSYNC_KEY", "demo-password"),

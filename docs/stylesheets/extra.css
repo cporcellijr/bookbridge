@@ -148,7 +148,7 @@
 
 /* Guide pages: framed screenshots with numbered callouts. */
 .md-typeset img.bb-shot {
-  display: block; width: 100%; height: auto; margin: 1.2em 0 0.4em;
+  display: block; max-width: 100%; height: auto; margin: 1.2em 0 0.4em;
   border: 1px solid var(--bb-line); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
 }
 .md-typeset .bb-callouts ol { list-style: none; counter-reset: bb-co; margin: 0.6em 0 1.6em; padding: 0; }
@@ -166,6 +166,7 @@
 }
 .md-typeset .bb-pick > div > p:first-child { margin-top: 0; font-weight: 600; color: var(--bb-text); }
 .md-typeset .bb-pick > div > p { margin: 0.35em 0 0; color: var(--bb-text-2); font-size: 0.95em; }
+.md-typeset .bb-pick--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media screen and (max-width: 44.9375em) { .md-typeset .bb-pick { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------- Homepage (overrides/home.html) ---------- */

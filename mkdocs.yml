@@ -80,6 +80,25 @@ nav:
       - Settings Tour: settings-tour.md
       - How It Works: how-it-works.md
       - Supported Apps: supported-apps.md
+  - Connect Your Apps:
+      - Overview: apps/index.md
+      - Listen and read:
+          - Audiobookshelf: apps/audiobookshelf.md
+          - BookOrbit: apps/bookorbit.md
+          - Grimmory: apps/grimmory.md
+          - Storyteller: apps/storyteller.md
+      - Readers:
+          - KOReader: apps/koreader.md
+          - Kavita: apps/kavita.md
+          - Calibre-Web Automated: apps/calibre-web-automated.md
+          - BookFusion: apps/bookfusion.md
+          - Readest: apps/readest.md
+      - Trackers:
+          - Hardcover: apps/hardcover.md
+          - StoryGraph: apps/storygraph.md
+          - Goodreads: apps/goodreads.md
+      - Getting books:
+          - Shelfmark: apps/shelfmark.md
   - User Guide:
       - User Guide: user-guide.md
       - New Interface (Beta): new-interface.md

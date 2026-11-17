@@ -15,7 +15,7 @@ A few things work the same on every tab:
 - **RESTART** marks a setting that BookBridge reads at startup. Saving a change to it restarts BookBridge, which takes a few seconds. Everything else applies as soon as you save.
 - **DEFAULT FOR READERS** marks a setting each reader can override for themselves under My Integrations → Reading preferences.
 
-The app connections at the top of the sidebar are covered in [Getting Started](getting-started.md#4-connect-your-apps) and [Configuration](configuration.md). The tabs below them:
+The app connections at the top of the sidebar are covered in [Connecting your apps](apps/index.md). The tabs below them:
 
 ## Reading & Sync
 
