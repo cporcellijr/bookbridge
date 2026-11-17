@@ -12,7 +12,7 @@ from src.db.database_service import DatabaseService
 from src.db.models import Book, State
 from src.services import write_tracker
 from src.sync_clients.kosync_sync_client import KoSyncSyncClient
-from src.utils.progress_metadata import get_kosync_synced_pct, state_metadata_kwargs
+from src.utils.progress_metadata import get_kosync_approved_rewind_at, get_kosync_synced_pct, state_metadata_kwargs
 from src.utils.time_utils import utcnow
 from tests.test_cbz_fixed_page_progress import build_manager, configure_cycle, cycle_client, cycle_state
 
@@ -125,3 +125,15 @@ def test_first_put_without_prior_state_keeps_old_behaviour(env):
     assert saved.locator_json is None
     state, _ = _kosync_state(env, 0.3)
     assert state.delta == 0
+
+
+def test_put_keeps_the_approved_rewind_cutoff(env):
+    # The GET refuses device rows older than this cutoff; a PUT must not drop it.
+    rewind_at = 1_700_000_000.0
+    env.db.save_state(State(abs_id='book-1', client_name='kosync', user_id=env.users[0].id,
+                            percentage=START, xpath='/body/p[1]',
+                            **state_metadata_kwargs({'pct': START, 'xpath': '/body/p[1]',
+                                                     'kosync_approved_rewind_at': rewind_at})))
+    _put(env, START + _chars(500))
+    saved = env.db.get_state('book-1', 'kosync', user_id=env.users[0].id)
+    assert get_kosync_approved_rewind_at(saved) == rewind_at

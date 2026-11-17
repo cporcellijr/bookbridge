@@ -1960,7 +1960,11 @@ def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
         previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
         # Keep the percentage the cycle last saw, across several PUTs, so the cycle
         # measures (and accumulates) movement from it instead of seeing a delta of 0.
-        metadata = state_metadata_kwargs({"synced_pct": get_kosync_synced_pct(previous)})
+        # Keep an approved rewind's cutoff too, as the cycle's own writes do.
+        metadata = state_metadata_kwargs({
+            "synced_pct": get_kosync_synced_pct(previous),
+            "kosync_approved_rewind_at": get_kosync_approved_rewind_at(previous),
+        })
         if is_cbz_book(book):
             # PUT updates the wire position immediately. Retain the last synced
             # page until the cycle consumes it, including across several PUTs,
@@ -2405,6 +2409,11 @@ def kosync_put_progress():
         # A match route may have linked this hash itself, skipping _register_hash_for_book.
         _adopt_cwa_identity(doc_hash, linked_book)
         _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
+        if linked_book.kosync_doc_id and linked_book.kosync_doc_id != doc_hash:
+            # The sync cycle reads that State back with a GET on the book's own hash.
+            _record_recent_external_kosync_put(
+                linked_book.kosync_doc_id, device, device_id, percentage, now_ts, request_user_id,
+            )
 
     # AUTO-DISCOVERY
     if not linked_book:
