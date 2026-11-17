@@ -1,0 +1,153 @@
+[
+ {
+  "name": "library",
+  "path": "/",
+  "width": 1440,
+  "height": 900,
+  "pre": [
+   "fetch('/').then(() => new Promise(r => setTimeout(r, 12000))).then(() => 'warm')",
+   "fetch('/account/interface',{method:'POST',body:new URLSearchParams({ui_mode:'new'})}).then(r=>r.status)",
+   "fetch('/account/display',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({\"UI_THEME\": \"night\", \"UI_LIBRARY_STYLE\": \"cards\", \"UI_SHOW_HERO\": \"true\"})}).then(r=>r.status)"
+  ],
+  "actions": [
+   "(() => { const i = document.querySelector('#library-hero .hero-cover img'); if (!i) return 'none'; const u = (i.dataset.thumbUrl || i.getAttribute('src') || '').split('?')[0].replace('/covers/thumb/', '/covers/'); i.onerror = null; i.loading = 'eager'; i.hidden = false; i.src = u; return u; })()",
+   "(() => { const g = document.querySelector('#series-grouping-toggle'); if (g && g.checked) g.click(); document.documentElement.dataset.input = 'touch'; return 'ok'; })()",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ],
+  "actionWait": 2000
+ },
+ {
+  "name": "hero-card",
+  "path": "/",
+  "width": 1280,
+  "height": 900,
+  "dsf": 2,
+  "clip": "#library-hero",
+  "actions": [
+   "(() => { const i = document.querySelector('#library-hero .hero-cover img'); if (!i) return 'none'; const u = (i.dataset.thumbUrl || i.getAttribute('src') || '').split('?')[0].replace('/covers/thumb/', '/covers/'); i.onerror = null; i.loading = 'eager'; i.hidden = false; i.src = u; return u; })()",
+   "(() => { const g = document.querySelector('#series-grouping-toggle'); if (g && g.checked) g.click(); document.documentElement.dataset.input = 'touch'; return 'ok'; })()",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ],
+  "actionWait": 2000,
+  "pad": 2
+ },
+ {
+  "name": "view-covers",
+  "path": "/",
+  "width": 1440,
+  "height": 900,
+  "pre": [
+   "fetch('/account/display',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({\"UI_SHOW_HERO\": \"false\"})}).then(r=>r.status)"
+  ],
+  "actions": [
+   "(() => { const g = document.querySelector('#series-grouping-toggle'); if (g && g.checked) g.click(); document.documentElement.dataset.input = 'touch'; return 'ok'; })()",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ]
+ },
+ {
+  "name": "view-spines",
+  "path": "/",
+  "width": 1440,
+  "height": 900,
+  "pre": [
+   "fetch('/account/display',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({\"UI_LIBRARY_STYLE\": \"spines\"})}).then(r=>r.status)"
+  ],
+  "actions": [
+   "(() => { const g = document.querySelector('#series-grouping-toggle'); if (g && g.checked) g.click(); document.documentElement.dataset.input = 'touch'; return 'ok'; })()",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ]
+ },
+ {
+  "name": "view-list",
+  "path": "/",
+  "width": 1440,
+  "height": 900,
+  "theme": "light",
+  "pre": [
+   "fetch('/account/display',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({\"UI_LIBRARY_STYLE\": \"list\", \"UI_THEME\": \"day\"})}).then(r=>r.status)"
+  ],
+  "actions": [
+   "(() => { const g = document.querySelector('#series-grouping-toggle'); if (g && g.checked) g.click(); document.documentElement.dataset.input = 'touch'; return 'ok'; })()",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ]
+ },
+ {
+  "name": "view-classic",
+  "path": "/",
+  "width": 1440,
+  "height": 900,
+  "pre": [
+   "fetch('/account/display',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({\"UI_THEME\": \"night\", \"UI_LIBRARY_STYLE\": \"cards\", \"UI_SHOW_HERO\": \"true\"})}).then(r=>r.status)",
+   "fetch('/account/interface',{method:'POST',body:new URLSearchParams({ui_mode:'classic'})}).then(r=>r.status)"
+  ],
+  "wait": 3500,
+  "actions": [
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ]
+ },
+ {
+  "name": "book-drawer",
+  "path": "/",
+  "width": 1440,
+  "height": 900,
+  "pre": [
+   "fetch('/account/interface',{method:'POST',body:new URLSearchParams({ui_mode:'new'})}).then(r=>r.status)"
+  ],
+  "actions": [
+   "document.querySelector('[data-abs-id=\"demo-00\"] .book-open').click(), 'clicked'",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ],
+  "actionWait": 2500
+ },
+ {
+  "name": "discover",
+  "path": "/suggestions",
+  "width": 1440,
+  "height": 900,
+  "wait": 3500,
+  "actions": [
+   "(() => { const g = document.getElementById('groupToggle'); if (g && g.checked) g.click(); return 'ok'; })()",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ]
+ },
+ {
+  "name": "phone-library",
+  "path": "/",
+  "width": 390,
+  "height": 844,
+  "dsf": 2,
+  "mobile": true,
+  "actions": [
+   "(() => { const i = document.querySelector('#library-hero .hero-cover img'); if (!i) return 'none'; const u = (i.dataset.thumbUrl || i.getAttribute('src') || '').split('?')[0].replace('/covers/thumb/', '/covers/'); i.onerror = null; i.loading = 'eager'; i.hidden = false; i.src = u; return u; })()",
+   "(document.documentElement.dataset.input = 'touch', 'ok')",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ],
+  "actionWait": 2000
+ },
+ {
+  "name": "phone-drawer",
+  "path": "/",
+  "width": 390,
+  "height": 844,
+  "dsf": 2,
+  "mobile": true,
+  "actions": [
+   "document.querySelector('[data-abs-id=\"demo-00\"] .book-open').click(), 'clicked'",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ],
+  "actionWait": 2500
+ },
+ {
+  "name": "phone-discover",
+  "path": "/suggestions",
+  "width": 390,
+  "height": 844,
+  "dsf": 2,
+  "mobile": true,
+  "wait": 3500,
+  "actions": [
+   "(() => { const g = document.getElementById('groupToggle'); if (g && g.checked) g.click(); return 'ok'; })()",
+   "([...document.querySelectorAll('body *')].filter(e => e.children.length === 0 && /^Build (dev|v)/.test(e.textContent.trim())).forEach(e => e.style.visibility = 'hidden'), 'hid-build')"
+  ]
+ }
+]

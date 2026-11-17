@@ -2,7 +2,8 @@
 
 <!-- markdownlint-disable MD033 -->
 <div align="center">
-  <p><strong>The ultimate bridge for cross-platform reading and listening synchronization.</strong></p>
+  <p><strong>Switch between your audiobook and your ebook without losing your place.</strong></p>
+  <p>An open-source, self-hosted alternative to Amazon's Whispersync.</p>
   <p>
     <a href="getting-started/" class="md-button md-button--primary">Getting Started</a>
     <a href="https://github.com/cporcellijr/bookbridge" class="md-button">View on GitHub</a>
@@ -14,17 +15,29 @@
 
 ## What is it?
 
-**BookBridge** is a self-hosted sync engine for audiobooks and ebooks. It keeps your reading and listening position aligned across multiple apps, whether the source is Audiobookshelf, KOReader, BookFusion, Grimmory, BookOrbit, Kavita, Calibre-Web Automated, or Storyteller. With the current Bridge Sync KOReader plugin, it can also move highlights and notes between supported readers.
+**BookBridge** keeps your place in sync between the audiobook and the ebook of the same book, across the apps you already use. Listen in Audiobookshelf on the drive home, then open the book in KOReader and it is already where you stopped. Read a few chapters before bed, and the audiobook picks up from there in the morning.
+
+BookBridge lines up the audio with the text itself, so it works with the audiobook and EPUB files you already own. It runs on your own server in Docker: no Amazon account and no cloud service in between. With the current Bridge Sync KOReader plugin, it can also move highlights and notes between supported readers.
 
 ### Screenshots
 
 The New interface, shown with a demo library of public-domain classics.
 
-![Library in the New interface: book covers with your progress and a strip showing where each book is linked](assets/screenshots/library.png)
+=== "Library"
 
-![Book drawer showing the position in each app and recent syncs](assets/screenshots/book-drawer.png)
+    ![Library: the book you are reading now on top, with its progress in each app, above your library](assets/screenshots/library.png)
 
-![Discover listing audiobook and ebook pairs to review](assets/screenshots/discover.png)
+=== "Book drawer"
+
+    ![Book drawer showing the position in each app and recent syncs](assets/screenshots/book-drawer.png)
+
+=== "Discover"
+
+    ![Discover listing audiobook and ebook pairs to review](assets/screenshots/discover.png)
+
+=== "Phone"
+
+    ![The same Library on a phone](assets/screenshots/phone-library.png){ width="360" }
 
 ### What do you actually need?
 
@@ -35,7 +48,7 @@ Just two things:
 
 Every service below is **optional** — switch on only the ones you actually use, and add more later. Ebook-only setups (KOReader plus Grimmory, say) work just as well as an audiobook pairing.
 
-BookBridge does its own audio ↔ text alignment, using built-in Whisper transcription and the EPUB's own timing data where it exists. Nothing else needs to be in place for an audiobook and an ebook to stay in step.
+BookBridge does its own audio ↔ text alignment: built-in forced alignment matches the audiobook against its ebook on the CPU, with Whisper transcription and the EPUB's own timing data as automatic fallbacks. Nothing else needs to be in place for an audiobook and an ebook to stay in step.
 
 ### Supported Services
 
