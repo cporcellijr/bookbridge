@@ -116,29 +116,30 @@ class MarkCompleteHandlerEscapingTests(unittest.TestCase):
 
 
 class OtherInlineHandlersTests(unittest.TestCase):
-    """Free text must never be quoted into an inline handler by hand.
+    """No server value may be hand-quoted into any inline `on…=` handler.
 
-    Scoped to title/author/name-bearing values on purpose. The other inline
-    handlers in this template interpolate identifiers — `abs_id`, a regex-
-    slugified `dom_id`, and a UUID/hash `source_id` — none of which can contain a
-    quote, so they are not part of this bug class and are deliberately left alone.
+    Ids such as `abs_id`, `source_id` and cover URLs come from external services,
+    so a crafted id like `x');alert(1);//` would close the string and run code.
+    Only values the bridge itself builds from a fixed alphabet are allowed.
     """
 
-    _FREE_TEXT = ("title", "author", "name")
+    # A regex-slugified dom_id and fixed settings keys cannot contain a quote.
+    _SAFE_EXPRESSIONS = ("series_strip.dom_id", "group.dom_id", "dom_id", "key",
+                         "'abs' if key == 'ABS_LIBRARY_ID' else 'booklore'")
 
-    def test_no_inline_handler_quotes_free_text_into_a_js_string(self):
-        source = _INDEX.read_text(encoding="utf-8")
-
-        offenders = [
-            match
-            for match in re.findall(r"onclick=\"[^\"]*'\{\{[^}]*\}\}'[^\"]*\"", source)
-            if any(word in match.lower() for word in self._FREE_TEXT)
-        ]
+    def test_no_inline_handler_quotes_a_server_value_into_a_js_string(self):
+        templates = [_INDEX, *sorted((_INDEX.parent / "next").glob("*.html"))]
+        offenders = []
+        for path in templates:
+            source = path.read_text(encoding="utf-8")
+            for handler in re.findall(r"\bon[a-z]+=\"[^\"]*\"", source):
+                for expression in re.findall(r"'\{\{\s*(.*?)\s*\}\}'", handler):
+                    if expression not in self._SAFE_EXPRESSIONS:
+                        offenders.append(f"{path.name}: {expression}")
 
         self.assertEqual(
             [], offenders,
-            "interpolate free text via |tojson instead of quoting it inside JS: "
-            f"{offenders}",
+            "interpolate server values via |tojson|forceescape instead of quoting them inside JS",
         )
 
 

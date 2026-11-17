@@ -41,7 +41,7 @@
             {% if mapping.kosync_doc_id %}
             <img src="/covers/{{ mapping.kosync_doc_id }}.jpg" alt="{{ _('Cover') }}" class="book-cover"
                 loading="lazy" decoding="async"
-                onerror="{% if mapping.cover_url %}this.onerror=null; this.src='{{ mapping.cover_url }}';{% else %}this.style.display='none'; this.nextElementSibling.classList.remove('hidden');{% endif %}">
+                onerror="{% if mapping.cover_url %}this.onerror=null; this.src={{ mapping.cover_url|tojson|forceescape }};{% else %}this.style.display='none'; this.nextElementSibling.classList.remove('hidden');{% endif %}">
             <div class="book-cover-placeholder hidden">📖</div>
             {% elif mapping.cover_url %}
             <img src="{{ mapping.cover_url }}" alt="{{ _('Cover') }}" class="book-cover"
@@ -421,7 +421,7 @@
                     <span class="last-sync-age">{{ _('Synced %(when)s', when=mapping.last_sync) }}</span>
                 </div>
                 <div class="quick-actions">
-                    <button type="button" class="action-btn" onclick="syncNow('{{ mapping.abs_id }}', this)"
+                    <button type="button" class="action-btn" onclick="syncNow({{ mapping.abs_id|tojson|forceescape }}, this)"
                         title="{{ _('Sync Now') }}">⚡</button>
                     <button type="button" class="action-btn"
                         onclick='markComplete({{ mapping.abs_id|tojson }}, {{ mapping.abs_title|tojson }})'
@@ -2372,7 +2372,7 @@
                                     <a href="{{ url_for('suggestions', tab='search', q=suggestion.title, review=suggestion.source_id) if suggestion.origin in ('shelf_watch', 'reading_watch') else url_for('suggestions', tab='search', q=suggestion.title) }}"
                                         class="btn btn-sm btn-primary"
                                         style="padding: 4px 10px; font-size: 0.8rem; text-decoration: none;">{{ _('Review') }}</a>
-                                    <button onclick="dismissSuggestion(event, '{{ suggestion.source_id }}')"
+                                    <button onclick="dismissSuggestion(event, {{ suggestion.source_id|tojson|forceescape }})"
                                         class="btn btn-sm"
                                         style="padding: 4px 10px; font-size: 0.8rem; background: rgba(255,255,255,0.1); border: none; cursor: pointer; color: #fff;">{{ _('Dismiss') }}</button>
                                 </div>

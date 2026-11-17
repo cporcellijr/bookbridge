@@ -105,4 +105,34 @@ assert.equal(countScope.filterCount.textContent, '2 of 2 books', 'active filter 
 countCards[0].classList.contains = name => name === 'hidden';
 countScope.updateFilteredCount();
 assert.equal(countScope.filterCount.textContent, '1 of 2 books', 'filtered count reflects visible cards');
-console.log('global search, warning/processing split, count and popover contracts ok');
+
+// Run the real loader: one failed load must not leave search empty for the rest of the page's life.
+(async () => {
+    const loadStart = globalSearch.indexOf('async function loadSources()');
+    const loadEnd = globalSearch.indexOf('function score(', loadStart);
+    assert.ok(loadStart > 0 && loadEnd > loadStart, 'loadSources must be present');
+    let calls = 0;
+    const loadScope = {
+        message: {textContent: ''},
+        labels: {loading: 'loading', failed: 'failed'},
+        catalog: {maySearchSettings: false},
+        render: () => {},
+        indexSettings: () => [],
+        fetch: () => {
+            calls += 1;
+            return calls === 1
+                ? Promise.resolve({ok: false})
+                : Promise.resolve({ok: true, json: () => ({books: [{abs_id: 'a', title: 'T'}]})});
+        },
+    };
+    vm.runInNewContext('let loading = false, loaded = false, books = [], settings = [];'
+        + globalSearch.slice(loadStart, loadEnd) + ';this.load = loadSources; this.getBooks = () => books;', loadScope);
+    await loadScope.load();
+    assert.equal(loadScope.message.textContent, 'failed');
+    await loadScope.load();
+    assert.equal(calls, 2, 'a failed load is retried on the next open');
+    assert.equal(loadScope.getBooks().length, 1);
+    await loadScope.load();
+    assert.equal(calls, 2, 'a successful load is not repeated');
+    console.log('global search, warning/processing split, count and popover contracts ok');
+})().catch(error => { console.error(error); process.exit(1); });
