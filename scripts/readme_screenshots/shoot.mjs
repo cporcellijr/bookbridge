@@ -44,7 +44,27 @@ for (const s of shots) {
   for (const js of s.pre || []) console.log(s.name, 'pre ->', await evaluate(js));
   await send('Page.navigate', { url: BASE + s.path }); await sleep(s.wait || 2500);
   for (const js of s.actions || []) { console.log(s.name, 'action ->', await evaluate(js)); await sleep(s.actionWait || 1500); }
-  let clip;
+  // marks: [{sel, n}] draws an amber outline and a numbered badge on each element, for the docs' callouts.
+  if (s.marks) console.log(s.name, 'marks ->', await evaluate(`(() => {
+    const missing = [];
+    ${JSON.stringify(s.marks)}.forEach(({ sel, n }) => {
+      const e = document.querySelector(sel); if (!e) { missing.push(sel); return; }
+      const b = e.getBoundingClientRect(), x = b.left + scrollX, y = b.top + scrollY;
+      const box = document.createElement('div');
+      box.style.cssText = 'position:absolute;z-index:99999;pointer-events:none;border:3px solid #F2B544;border-radius:10px;box-shadow:0 0 0 5px rgba(242,181,68,.2);'
+        + 'left:' + (x - 7) + 'px;top:' + (y - 7) + 'px;width:' + (b.width + 14) + 'px;height:' + (b.height + 14) + 'px';
+      const dot = document.createElement('div');
+      dot.textContent = n;
+      dot.style.cssText = 'position:absolute;z-index:100000;pointer-events:none;width:34px;height:34px;border-radius:50%;background:#F2B544;color:#1A1204;'
+        + 'font:700 19px/34px "Instrument Sans",system-ui,sans-serif;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.5);'
+        + 'left:' + (x - 24) + 'px;top:' + (y - 24) + 'px';
+      document.body.append(box, dot);
+    });
+    return missing.length ? 'MISSING ' + missing.join(' | ') : 'ok';
+  })()`));
+  if (s.probeOnly) continue;
+  // region is in viewport coordinates, so it follows any scrolling the actions did.
+  let clip = s.region && { ...s.region, y: s.region.y + await evaluate('scrollY'), scale: 1 };
   if (s.clip) {
     const r = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(s.clip)}); e.scrollIntoView({block: 'center'}); const b = e.getBoundingClientRect(); return {x: b.x + scrollX, y: b.y + scrollY, width: b.width, height: b.height}; })()`);
     await sleep(800);

@@ -34,7 +34,7 @@ Every app is optional. Turn on the ones you use in **Settings**, and add more la
 ## Things worth knowing
 
 !!! note "Highlights need the Bridge Sync plugin"
-    Plain KOReader and KOSync clients sync your position only. Highlights, notes, reading status and History come with the [Bridge Sync plugin](getting-started.md#optional-connect-a-koreader-device), installed from the dashboard or the [Releases](https://github.com/cporcellijr/bookbridge/releases) page.
+    Plain KOReader and KOSync clients sync your position only. Highlights, notes, reading status and History come with the [Bridge Sync plugin](getting-started.md#6-connect-a-koreader-device-optional), installed from the dashboard or the [Releases](https://github.com/cporcellijr/bookbridge/releases) page.
 
 - **BookOrbit highlights** use BookOrbit's own KOReader sync login, so set those credentials in Settings as well.
 - **Calibre-Web Automated** progress works through CWA's Kobo sync: BookBridge reads and writes the bookmark CWA keeps for your Kobo. It is off until you turn it on.

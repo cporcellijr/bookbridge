@@ -41,6 +41,17 @@ service = DatabaseService(str(tmp / "demo.db"))
 user = service.create_user("demo", "demo", role="admin")
 service.set_user_credential(user.id, "UI_MODE", "new")
 
+# Settings and My Integrations shots: placeholder hosts and logins, never real ones.
+os.environ.update(
+    ABS_ENABLED="true", ABS_SERVER="http://audiobookshelf.local:13378",
+    KOSYNC_ENABLED="true", BOOKORBIT_ENABLED="true", BOOKORBIT_SERVER="http://bookorbit.local:3000",
+    STORYTELLER_ENABLED="true", STORYTELLER_API_URL="http://storyteller.local:8001",
+)
+for key, value in (("ABS_KEY", "demo-abs-api-key"), ("ABS_LIBRARY_ID", "demo-library-id"),
+                   ("KOSYNC_USER", "demo"), ("KOSYNC_KEY", "demo-password"),
+                   ("BOOKORBIT_USER", "demo"), ("BOOKORBIT_PASSWORD", "demo-password")):
+    service.set_user_credential(user.id, key, value)
+
 now = time.time()
 H = 3600
 # (slug, title, author, series, seq, mode, audio_source, states {client: pct}, leader, hours_ago, storyteller)

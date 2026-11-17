@@ -64,6 +64,7 @@ plugins:
 markdown_extensions:
   - admonition
   - attr_list
+  - md_in_html
   - pymdownx.details
   - pymdownx.superfences
   - pymdownx.tabbed:
@@ -76,6 +77,7 @@ nav:
   - Home: index.md
   - Getting Started:
       - Install and first sync: getting-started.md
+      - Settings Tour: settings-tour.md
       - How It Works: how-it-works.md
       - Supported Apps: supported-apps.md
   - User Guide:

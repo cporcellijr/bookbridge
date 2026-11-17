@@ -146,6 +146,28 @@
 .md-typeset table:not([class]) th { background-color: var(--bb-surface-2); color: var(--bb-text); }
 .md-typeset img { border-radius: 8px; }
 
+/* Guide pages: framed screenshots with numbered callouts. */
+.md-typeset img.bb-shot {
+  display: block; width: 100%; height: auto; margin: 1.2em 0 0.4em;
+  border: 1px solid var(--bb-line); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+.md-typeset .bb-callouts ol { list-style: none; counter-reset: bb-co; margin: 0.6em 0 1.6em; padding: 0; }
+.md-typeset .bb-callouts ol li {
+  counter-increment: bb-co; position: relative; margin: 0 0 0.55em; padding-left: 2.1em;
+}
+.md-typeset .bb-callouts ol li::before {
+  content: counter(bb-co); position: absolute; left: 0; top: 0.05em;
+  width: 1.45em; height: 1.45em; border-radius: 50%; display: grid; place-items: center;
+  background: #F2B544; color: #1A1204; font-weight: 700; font-size: 0.8em;
+}
+.md-typeset .bb-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.8rem; margin: 1em 0 1.4em; }
+.md-typeset .bb-pick > div {
+  background: var(--bb-surface); border: 1px solid var(--bb-line); border-radius: 12px; padding: 0.9rem 1rem;
+}
+.md-typeset .bb-pick > div > p:first-child { margin-top: 0; font-weight: 600; color: var(--bb-text); }
+.md-typeset .bb-pick > div > p { margin: 0.35em 0 0; color: var(--bb-text-2); font-size: 0.95em; }
+@media screen and (max-width: 44.9375em) { .md-typeset .bb-pick { grid-template-columns: minmax(0, 1fr); } }
+
 /* ---------- Homepage (overrides/home.html) ---------- */
 
 .bb-home ~ .md-main { display: none; }
