@@ -513,7 +513,7 @@ StoryGraph is a popular alternative to Goodreads that focuses on reading data an
 
 StoryGraph notes:
 
-- Requires browser cookies for authentication. See the [User Guide](user-guide.md#storygraph-authentication) for instructions on how to retrieve these.
+- Requires browser cookies for authentication. See [StoryGraph authentication](user-guide.md#storygraph-authentication) for instructions on how to retrieve these.
 - Supports **Edition Picking**: Select specific editions (Paperback, Kindle, etc.) to ensure accurate page counts.
 - **Switch Editions**: The bridge can automatically "switch" your tracked edition on StoryGraph to match your selection.
 - When the selected edition has a page count, BookBridge reports estimated page
@@ -583,7 +583,7 @@ Found under **Settings -> Server**.
 Found under **Settings -> Library & Matching -> Getting books**. When a Discover search finds
 only the audiobook or only the ebook, readers can request the missing half from BookOrbit or
 Shelfmark, and BookBridge pairs it when it arrives. See
-[Getting missing books](user-guide.md#getting-missing-books).
+[Getting missing books](using/get-books.md).
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |

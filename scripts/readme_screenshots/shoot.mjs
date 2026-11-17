@@ -45,11 +45,14 @@ for (const s of shots) {
   await send('Page.navigate', { url: BASE + s.path }); await sleep(s.wait || 2500);
   for (const js of s.actions || []) { console.log(s.name, 'action ->', await evaluate(js)); await sleep(s.actionWait || 1500); }
   // marks: [{sel, n}] draws an amber outline and a numbered badge on each element, for the docs' callouts.
+  // `sel` marks the first visible match. A mark can give `text` instead: the first button, link, heading or label whose text is exactly that.
   // badge: 'left' (per shot or per mark) puts the badge beside the element instead of on its top-left corner.
   if (s.marks) console.log(s.name, 'marks ->', await evaluate(`(() => {
     const missing = [];
-    ${JSON.stringify(s.marks)}.forEach(({ sel, n, badge = ${JSON.stringify(s.badge || 'corner')} }) => {
-      const e = document.querySelector(sel); if (!e) { missing.push(sel); return; }
+    ${JSON.stringify(s.marks)}.forEach(({ sel, text, n, badge = ${JSON.stringify(s.badge || 'corner')} }) => {
+      const e = sel ? [...document.querySelectorAll(sel)].find(x => x.getBoundingClientRect().width > 0)
+        : [...document.querySelectorAll('button, a, h1, h2, h3, h4, label, summary, strong, small')].find(x => x.textContent.trim() === text);
+      if (!e) { missing.push(sel || text); return; }
       const b = e.getBoundingClientRect(), x = b.left + scrollX, y = b.top + scrollY;
       const box = document.createElement('div');
       box.style.cssText = 'position:absolute;z-index:99999;pointer-events:none;border:3px solid #F2B544;border-radius:10px;box-shadow:0 0 0 5px rgba(242,181,68,.2);'

@@ -38,7 +38,7 @@ Finding, matching and showing the books in your library.
 - **Suggestions:** turns on Discover's Pairs and Ebook Only scans, with optional scheduled scans.
 - **Matching books you read:** link a book you open on a reader automatically, and keep links working after a library app rewrites the file.
 - **"Up Next" shelf, Shared Library, Series Display:** a watched shelf that links whatever you put on it; showing every matched book to every reader (each keeps their own progress); and how series show in the Library.
-- **Getting books, Shelfmark:** requesting a missing audiobook or ebook; see [Getting missing books](user-guide.md#getting-missing-books).
+- **Getting books, Shelfmark:** requesting a missing audiobook or ebook; see [Getting missing books](using/get-books.md).
 
 ## Alignment
 

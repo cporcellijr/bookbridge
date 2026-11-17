@@ -99,9 +99,16 @@ nav:
           - Goodreads: apps/goodreads.md
       - Getting books:
           - Shelfmark: apps/shelfmark.md
-  - User Guide:
-      - User Guide: user-guide.md
-      - New Interface (Beta): new-interface.md
+  - Using BookBridge:
+      - Library: using/library.md
+      - Discover: using/discover.md
+      - Get a Missing Book: using/get-books.md
+      - Processing: using/processing.md
+      - Stats: using/stats.md
+      - Display: using/display.md
+      - KOReader Devices: using/koreader-devices.md
+      - Classic and New: new-interface.md
+      - More Features: user-guide.md
   - Reference:
       - Configuration: configuration.md
       - Device API: device-api.md

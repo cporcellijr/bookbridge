@@ -158,6 +158,6 @@ If KOReader reports **Unknown server error** when you sign in, the address or ne
 ## Next steps
 
 - [Settings tour](settings-tour.md): what each Settings tab is for
-- [User Guide](user-guide.md): the Library, Discover, highlights and notes
+- [Library](using/library.md) and [Discover](using/discover.md): your books, and linking new ones
 - [Supported apps](supported-apps.md): what BookBridge syncs with each app
 - [Troubleshooting](troubleshooting.md): logs and common fixes

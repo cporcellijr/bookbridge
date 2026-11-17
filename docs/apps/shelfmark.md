@@ -6,7 +6,7 @@ description: "Connect Shelfmark to BookBridge so readers can request a missing a
 
 # Shelfmark
 
-When a Discover search finds only the audiobook or only the ebook, readers can ask Shelfmark for the missing half, and BookBridge pairs it when it arrives. See [Getting missing books](../user-guide.md#getting-missing-books).
+When a Discover search finds only the audiobook or only the ebook, readers can ask Shelfmark for the missing half, and BookBridge pairs it when it arrives. See [Getting missing books](../using/get-books.md).
 
 ## 1. Turn it on (admin)
 

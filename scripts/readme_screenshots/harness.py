@@ -165,10 +165,85 @@ for j, (slug, title, author, key, score, reason, series, seq) in enumerate(PAIRS
             "author_agrees": True, "title_key": title.lower(),
         }],
     }
+# Discover's Ebook Only tab: ebooks the last scan found no audiobook for (an empty audio pool).
+from src.services.ebook_discovery import build_discovery_snapshot, build_ebook_inventory  # noqa: E402
+from src.services.suggestions_service import SuggestionsService  # noqa: E402
+
+no_audio = build_discovery_snapshot(
+    SuggestionsService(database_service=Mock(), container=Mock(), manager=Mock(),
+                       get_audiobooks_conditionally=list, get_searchable_ebooks=lambda _q: [],
+                       audiobook_matches_search=lambda _a, _q: False, get_abs_author=lambda _a: "", logger=Mock()),
+    build_ebook_inventory([
+        {"source": "BookOrbit", "source_id": f"eo-{k}", "title": title, "author": author,
+         "series_name": series, "series_sequence": seq}
+        for k, (title, author, series, seq) in enumerate([
+            ("The Moonstone", "Wilkie Collins", None, None),
+            ("Middlemarch", "George Eliot", None, None),
+            ("The Valley of Fear", "Arthur Conan Doyle", "Sherlock Holmes", 4),
+            ("Northanger Abbey", "Jane Austen", None, None),
+            ("The Island of Doctor Moreau", "H. G. Wells", None, None),
+        ])
+    ]), [], now=now - 2 * H)
 (tmp / f"suggestions_scan_cache_user_{user.id}.json").write_text(json.dumps({
     "scan_cache_by_abs": cache, "scan_cache_no_match_abs_ids": [], "scan_last_stats": {},
     "scan_generation": "demo-1", "scanned_at": now - 2 * H, "updated_at": now - 2 * H,
+    "ebook_discovery": no_audio,
 }), encoding="utf-8")
+
+# Processing: one book aligning, two waiting their turn, one finished today.
+from src.db.models import Job  # noqa: E402
+
+for k, (title, author, status, progress) in enumerate([
+    ("Little Women", "Louisa May Alcott", "processing", .46),
+    ("The Call of the Wild", "Jack London", "pending", None),
+    ("Around the World in Eighty Days", "Jules Verne", "pending", None),
+    ("The Secret Garden", "Frances Hodgson Burnett", "active", 1.0),
+]):
+    abs_id = f"demo-job-{k}"
+    service.save_book(Book(abs_id=abs_id, abs_title=title, status=status, sync_mode="audiobook",
+                           ebook_filename=f"{title} - {author}.epub", duration=9 * H, user_id=user.id))
+    service.link_user_book(user.id, abs_id)
+    if progress is not None:
+        service.save_job(Job(abs_id=abs_id, kind="alignment", progress=progress, last_attempt=now - (k + 1) * 600))
+
+# Discover's Search tab: a small fixed catalogue instead of live providers. "persuasion" finds both
+# halves; "northanger" finds only the ebook, so the page offers to get the audiobook.
+from types import SimpleNamespace  # noqa: E402
+
+import src.api.acquisition_routes  # noqa: E402
+import src.web_server  # noqa: E402
+
+
+def _demo_audio(title, author, source, sid, cover_slug):
+    return SimpleNamespace(source=source, source_id=sid, title=title, subtitle="", series_label="", series_name=None,
+                           series_sequence=None, authors=author, language="en", cover_url=f"/covers/{cover_slug}.jpg",
+                           duration=8 * H, provider_book_id=sid, provider_file_id="")
+
+
+def _demo_ebook(title, author, source, sid):
+    return SimpleNamespace(name=f"{title} - {author}.epub", display_name=title, source_file_id=None, title=title,
+                           subtitle="", authors=author, series_name=None, series_sequence=None, source=source,
+                           source_id=sid, path=None, abs_identifier=None, language="en")
+
+
+DEMO_SEARCH = {
+    "persuasion": ([_demo_audio("Persuasion", "Jane Austen", "BookOrbit", "bookorbit:persuasion", "91" + "e" * 30)],
+                   [_demo_ebook("Persuasion", "Jane Austen", "BookOrbit", "bo-persuasion"),
+                    _demo_ebook("Persuasion", "Jane Austen", "Calibre-Web", "cw-persuasion")]),
+    "northanger": ([], [_demo_ebook("Northanger Abbey", "Jane Austen", "BookOrbit", "eo-3")]),
+}
+
+
+def _demo_search_results(search, review, ebook_key, generation):
+    term = (search or "").strip().lower()
+    audio, ebooks = next((hit for key, hit in DEMO_SEARCH.items() if key in term), ([], []))
+    return audio, ebooks, [], False, term, "search"
+
+
+src.web_server._suggestions_search_results = _demo_search_results
+src.api.acquisition_routes._bookorbit_client = lambda _web: SimpleNamespace(
+    request_sources=lambda: {"enabled": 1}, can_pick_releases=lambda: False)
+src.api.acquisition_routes._shelfmark_client = lambda _web: None
 
 container = MockContainer()
 container.mock_database_service = service
