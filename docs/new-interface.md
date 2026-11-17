@@ -19,7 +19,7 @@ These docs show the New interface. Where Classic uses a different name:
 
 ## Getting around in New
 
-- The sidebar holds **Library**, **Discover** and **Stats**, plus **Processing**, **Logs** and **Settings** for admins. Your account, integrations and Display are in the menu under your name.
+- The sidebar holds **Library**, **Discover**, **Stats** and **Processing**, plus **Logs** and **Settings** for admins and **My apps** (your integrations) for everyone else. **Account** and **Display** are in the menu under your name.
 - On a phone, the main sections sit in a bottom tab bar.
 - **Search** at the top finds books, pages and settings. Press **Ctrl K** (Windows/Linux), **⌘K** (Mac) or **/** outside a text field to open it; arrow keys choose, Enter opens and Escape closes. It only offers what your account can use.
 - The book drawer and search work with the keyboard, and tap targets are sized for touch.

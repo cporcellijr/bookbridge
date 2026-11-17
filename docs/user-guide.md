@@ -244,7 +244,7 @@ Books matched automatically can get one too: turn on **Also generate a read-alon
 for auto-matched books** for BookOrbit's watched collection (BookOrbit card in
 **Settings -> Services**) or **Also generate a read-along EPUB for books
 auto-matched to a BookOrbit audiobook** for Suggestions auto-match (**Settings ->
-Features**). Both are off by default.
+Library & Matching**). Both are off by default.
 
 Generation preserves the book's original chapter markup and non-breaking whitespace, keeps
 each audio clip within its narrated segment, and refuses to publish an incomplete export
@@ -343,7 +343,7 @@ that stays in the collection is not reworked on every poll. Turn this on per ser
 ### Books you start reading in BookOrbit
 
 With **Auto-match books you start reading in BookOrbit** on (BookOrbit card, **Settings
--> Integrations**), you don't need to drop a book into a collection first. Once you are
+-> Services**), you don't need to drop a book into a collection first. Once you are
 past 1% of a BookOrbit ebook that BookBridge hasn't matched, it looks for the
 audiobook:
 

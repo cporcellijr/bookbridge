@@ -1,28 +1,33 @@
-# Configuration
+---
+description: "Every BookBridge environment variable: what only the environment can set, and every setting with its default, for Docker Compose installs."
+---
 
-> [!NOTE]
-> All configuration is managed through the **Web UI** at `/settings`.
-> Environment variables only seed the settings database. On first boot BookBridge saves every setting there, from its environment variable or its default, even if you never open Settings. From then on the saved value wins, so changing an environment variable later does nothing; change the setting in the UI instead. (A setting added by a later update takes its first value from the environment in the same way.)
-> `DATA_DIR` is the exception: it is read only from the environment, because it says where the database is.
+# Configuration reference
 
-## Web UI Settings
+This page is for setting BookBridge up with environment variables in Docker Compose. Most people never need it: everything except the first section is also in the web UI, under **Settings** for the admin and **My Integrations** for each reader. See the [Settings tour](settings-tour.md) and [Connect your apps](apps/index.md).
 
-The **Settings** page is the easiest way to manage the bridge. Most changes take effect as soon as you save. A setting marked **restart** is read once at startup, so saving a change to it restarts the app and brings you back to the dashboard when it is ready. **Different from defaults** in the sidebar lists every setting that differs from its default, each with a **reset** link.
+!!! warning "Environment variables only seed the first boot"
+    On first boot BookBridge saves every setting in its database, taken from its environment variable or its default.
+    From then on the saved value wins, so changing the variable in your compose file later does nothing. Change the
+    setting in the web UI instead. A setting added by a later update takes its first value from the environment the same way.
 
-The Settings sidebar is organized into these tabs (the New interface groups them under
-**Connections**, **Sync & library** and **Server**; Classic shows the same tabs in one row):
+    - **Per-reader settings** (marked *each reader* in [Every setting](#every-setting)) belong to each reader, under
+      **My Integrations**. The environment value only becomes the server-wide default; the first admin's empty fields
+      are filled from it once, and no other reader ever uses it.
+    - The variables in the next section are read only from the environment, on every start.
 
-- **Services** — one card per app, in the same order and with the same names as each reader's **My Integrations** page
-- **Reading & Sync** — sync behavior, instant sync, polling, reading sessions and posting to trackers
-- **Library & Matching** — Discover suggestions, watched shelves, series display and getting missing books (BookOrbit and Shelfmark)
-- **Alignment** — transcription, forced alignment and Alignment Health
-- **AI** — the optional LLM assist provider and its feature toggles
-- **Server** — timezone and logging, Telegram notifications, paths and advanced toggles
-- **Maintenance** — backfills, cache review and other one-off tools
-- **Users** — reader accounts and their per-reader integrations
-- **Logs** — the embedded live log viewer
+## Set only in the environment
 
-Everything in **Settings** is **server-wide**: connections and engine behavior shared by all readers. Reader-specific accounts, tokens, API keys, and sync toggles live under **Account -> My Integrations** for the signed-in reader — the same service cards, same order — with **Test** buttons to check each login. Admins can manage those same per-reader fields from **Settings -> Users -> Integrations** when they are helping another reader.
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DATA_DIR` | `/data` | Where the database, caches and working files live. Settings shows it read-only. Changing it does not move existing data. |
+| `KOSYNC_PORT` | empty | Also serve the KOReader sync API alone on this port. See [Split-port security](#split-port-security-optional). |
+| `BOOKBRIDGE_SECRET_KEY` | empty | Encrypt stored credentials with this key instead of `DATA_DIR/secret.key`. `BOOKBRIDGE_SECRET_KEY_FILE` names a file holding it instead. See [Credential encryption](#credential-encryption). |
+| `ADMIN_API_TOKEN` | empty | Turns on the [admin API](#admin-api-optional). At least 32 characters. |
+| `WEB_SECRET_KEY` | empty | Signs sign-in sessions. Empty generates a random key once and keeps it in the database. |
+| `SESSION_COOKIE_SECURE` | `false` | `true` sends the sign-in cookie over HTTPS only. Set it when every visit goes through HTTPS. |
+| `DB_JOURNAL_MODE` | empty | Forces the SQLite journal mode. Empty uses WAL, or DELETE on network and Docker Desktop mounts where WAL loses writes; leave it empty. |
+| `ALIGN_THREADS` | empty | CPU threads for forced alignment. Empty uses the CPUs the container can use, at most 8. |
 
 ### Credential Encryption
 
@@ -125,7 +130,7 @@ books when Shared Library is enabled. Integration PATCH requests save all submit
 fields together; changing a Readest email or password discards its previous session
 so the next sync authenticates with the updated credentials.
 
-### Integrations
+## Settings by app
 
 Every integration card has an **Enable** switch, and that switch is server-wide: a
 service switched off in Settings is off for everyone on the install. Readers still
@@ -138,7 +143,7 @@ service back on restores everyone's settings exactly as they were. A script usin
 KOReader device that keeps syncing to BookBridge while KoSync is off is noted once per
 reader in the log, since the device itself cannot tell that its progress stops there.
 
-#### Audiobookshelf
+### Audiobookshelf
 
 Audiobookshelf remains the default audiobook source when a mapping is not explicitly using Grimmory or BookOrbit audio.
 
@@ -156,20 +161,20 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 | Enable ABS Ebook Sync | `SYNC_ABS_EBOOK` | `false` | Turns on bidirectional reading-progress sync with the ebook file attached to an Audiobookshelf item. |
 | ABS Ebook Position Format | `ABS_EBOOK_LOCATOR_FORMAT` | `cfi` | `cfi`, `readium`, or `auto`. See the note below. |
 
-Audiobookshelf notes:
+??? note "More about Audiobookshelf"
 
-- Use **Find IDs** next to **Library ID** in Settings to load your available ABS libraries and fill the field from a dropdown.
-- To run without Audiobookshelf, switch **Enable** off on the Audiobookshelf card. A reader who wants to opt out on their own account can switch it off under **Account -> My Integrations** instead, without affecting anyone else. The older workaround of entering `disabled` in the ABS URL or token field still works and is still honoured, but the switch is the supported way now.
-- **ABS ebook sync** (`SYNC_ABS_EBOOK`) treats the ebook attached to an Audiobookshelf item as a full sync
-  client in its own right, reading and writing its position like any other ebook source. Both of these settings
-  live in the Settings UI under **Sync Behavior**, not under Advanced.
-- **Position format.** Audiobookshelf stores one position field that every reader shares, but readers disagree
-  on how to write it. **CFI** is the safe default, and is what the official Audiobookshelf apps and the web
-  reader read and write. **Readium locator** is for readers that speak Readium JSON. **Auto** mirrors whichever
-  format your reader last wrote. If a mixed set of readers is opening books at the wrong place, or at the very
-  start, this setting is the first thing to check.
+    - Use **Find IDs** next to **Library ID** in Settings to load your available ABS libraries and fill the field from a dropdown.
+    - To run without Audiobookshelf, switch **Enable** off on the Audiobookshelf card. A reader who wants to opt out on their own account can switch it off under **Account -> My Integrations** instead, without affecting anyone else. The older workaround of entering `disabled` in the ABS URL or token field still works and is still honoured, but the switch is the supported way now.
+    - **ABS ebook sync** (`SYNC_ABS_EBOOK`) treats the ebook attached to an Audiobookshelf item as a full sync
+      client in its own right, reading and writing its position like any other ebook source. Both of these settings
+      are on the Audiobookshelf card in **Settings → Services**.
+    - **Position format.** Audiobookshelf stores one position field that every reader shares, but readers disagree
+      on how to write it. **CFI** is the safe default, and is what the official Audiobookshelf apps and the web
+      reader read and write. **Readium locator** is for readers that speak Readium JSON. **Auto** mirrors whichever
+      format your reader last wrote. If a mixed set of readers is opening books at the wrong place, or at the very
+      start, this setting is the first thing to check.
 
-#### KOReader / KoSync
+### KOReader / KoSync
 
 The bridge **is** a KoSync server — KOReader devices sync directly with it. Device onboarding
 (the sync-server address to enter in KOReader, plus the Bridge Sync plugin download) lives on
@@ -190,22 +195,22 @@ The bridge **is** a KoSync server — KOReader devices sync directly with it. De
 | Trusted Proxy Addresses | `KOSYNC_TRUSTED_PROXIES` | empty | Under **Advanced — behind a reverse proxy**. Comma-separated IPs or CIDR ranges of the proxy or tunnel in front of the KoSync port. Requests from them are rate-limited under the client address in `X-Forwarded-For`. Empty trusts only localhost. List only your proxy: any address covered here can claim to be any client. |
 | When Two KOReader Devices Disagree | `KOSYNC_ACTIVE_DEVICE_WINS` | `shadow` | Under **Advanced — cross-device progress**. `shadow` (**Watch and log only**) records the choice the arbiter would make without changing anything readers receive; `on` (**Let the device you are reading on win**) lets the device you are actively reading — proven by several forward page turns in a row — outrank a stale device sitting at the furthest position; `off` (**Always use the furthest position**) keeps the original behavior. |
 
-KOSync notes:
+??? note "More about KOSync"
 
-- Each reader's KoSync **username and password** are per-reader — set them under **Account -> My Integrations -> KOReader / KoSync** (with a **Test** button), or as an admin under **Settings -> Users -> Integrations**.
-- Plain KOReader/KOSync progress sync does not need the Bridge Sync plugin. Highlight and note sync, status sync, and History sharing all do.
-- Tapping **Register** against the bridge's KoSync server only succeeds for an account that
-  already exists in **My Account -> My Integrations**; it does not create one. Use **Login**
-  once the username and password are saved there.
-- **Sync Reading Status** and **Share Recently-Read Books** never touch your reading
-  *position* — only KOReader's own status field and History list. When two devices disagree
-  on status, the one whose status changed most recently wins, and "finished" breaks a
-  same-day tie so simply reopening a finished book cannot quietly un-finish it.
-- **When Two KOReader Devices Disagree** only matters once a book is linked to more than one
-  reader file. It ships on `shadow` deliberately, so you can check its logged decisions
-  against your own devices before switching it to `on`.
+    - Each reader's KoSync **username and password** are per-reader — set them under **Account -> My Integrations -> KOReader / KoSync** (with a **Test** button), or as an admin under **Settings -> Users -> Integrations**.
+    - Plain KOReader/KOSync progress sync does not need the Bridge Sync plugin. Highlight and note sync, status sync, and History sharing all do.
+    - Tapping **Register** against the bridge's KoSync server only succeeds for an account that
+      already exists in **My Account -> My Integrations**; it does not create one. Use **Login**
+      once the username and password are saved there.
+    - **Sync Reading Status** and **Share Recently-Read Books** never touch your reading
+      *position* — only KOReader's own status field and History list. When two devices disagree
+      on status, the one whose status changed most recently wins, and "finished" breaks a
+      same-day tie so simply reopening a finished book cannot quietly un-finish it.
+    - **When Two KOReader Devices Disagree** only matters once a book is linked to more than one
+      reader file. It ships on `shadow` deliberately, so you can check its logged decisions
+      against your own devices before switching it to `on`.
 
-#### BookFusion
+### BookFusion
 
 BookFusion is a supported ebook progress and highlight source. BookBridge can also upload a book's local EPUB into your BookFusion bookshelf when a link search finds no match.
 
@@ -219,14 +224,14 @@ BookFusion is a supported ebook progress and highlight source. BookBridge can al
 | Poll Mode | `BOOKFUSION_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls BookFusion separately. |
 | Poll Interval | `BOOKFUSION_POLL_SECONDS` | `300` | Used when Poll Mode is `custom`. |
 
-BookFusion notes:
+??? note "More about BookFusion"
 
-- Link BookFusion from **Account -> My Integrations**. Admins can also enter a reader's token under **Settings -> Users -> Integrations**.
-- The access token (progress and highlights) and the Calibre API key (uploads) are **two separate credentials**.
-- BookFusion reports percentages as 0-100; BookBridge handles the conversion internally.
-- BookFusion matching uses linked BookFusion IDs. When a book is not linked, the dashboard link flow offers **Upload to BookFusion** if the book has a local EPUB and the reader has a Calibre API key configured.
+    - Link BookFusion from **Account -> My Integrations**. Admins can also enter a reader's token under **Settings -> Users -> Integrations**.
+    - The access token (progress and highlights) and the Calibre API key (uploads) are **two separate credentials**.
+    - BookFusion reports percentages as 0-100; BookBridge handles the conversion internally.
+    - BookFusion matching uses linked BookFusion IDs. When a book is not linked, the dashboard link flow offers **Upload to BookFusion** if the book has a local EPUB and the reader has a Calibre API key configured.
 
-#### Readest
+### Readest
 
 Readest can participate in highlight and note relay through Readest cloud sync, and can
 receive copies of your books. It is not a progress sync source.
@@ -246,22 +251,22 @@ receive copies of your books. It is not a progress sync source.
 | Upload Max Per Run | `READEST_UPLOAD_MAX_PER_RUN` | `5` | Global. Caps uploads per sweep so a first run cannot flood an account. `0` pauses uploading. |
 | Upload Sweep Interval | `READEST_UPLOAD_SWEEP_MINUTES` | `60` | Global. How often to look for newly started books. Shares a daemon with the annotation syncs, so the fastest of those intervals wins. `0` removes it from that schedule. |
 
-Readest notes:
+??? note "More about Readest"
 
-- Enter the Readest email and password under **Account -> My Integrations** for each reader that wants Readest highlights.
-- Tokens are cached and refreshed by the bridge after login.
-- Readest sync depends on the same book identity being available to Readest and the bridge.
-- Uploads are off by default and set per reader. The two upload switches are independent:
-  you can upload on match, on the currently-reading sweep, or both.
-- The sweep only considers books with a reading position above 0% and below
-  `SYNC_COMPLETION_THRESHOLD`, and skips any book already present in that Readest account.
-  This matters because Readest's free plan includes 500 MB, which a full library will not fit.
-- Uploading never overwrites your Readest reading position, reading status, or cover.
-  If you move an uploaded book into a different group inside Readest, the bridge leaves it there.
-- Only EPUB files are uploaded. If the account runs out of storage, the bridge logs the
-  quota and stops uploading rather than failing quietly.
+    - Enter the Readest email and password under **Account -> My Integrations** for each reader that wants Readest highlights.
+    - Tokens are cached and refreshed by the bridge after login.
+    - Readest sync depends on the same book identity being available to Readest and the bridge.
+    - Uploads are off by default and set per reader. The two upload switches are independent:
+      you can upload on match, on the currently-reading sweep, or both.
+    - The sweep only considers books with a reading position above 0% and below
+      `SYNC_COMPLETION_THRESHOLD`, and skips any book already present in that Readest account.
+      This matters because Readest's free plan includes 500 MB, which a full library will not fit.
+    - Uploading never overwrites your Readest reading position, reading status, or cover.
+      If you move an uploaded book into a different group inside Readest, the bridge leaves it there.
+    - Only EPUB files are uploaded. If the account runs out of storage, the bridge logs the
+      quota and stops uploading rather than failing quietly.
 
-#### Storyteller
+### Storyteller
 
 Storyteller is **optional** — the bridge does its own audio ↔ text alignment with built-in
 Whisper transcription and EPUB SMIL data. Add this integration only if you use the
@@ -283,14 +288,14 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 | Poll Mode | `STORYTELLER_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls Storyteller separately. |
 | Poll Interval | `STORYTELLER_POLL_SECONDS` | `45` | Used when Poll Mode is `custom`. |
 
-Storyteller notes:
+??? note "More about Storyteller"
 
-- Storyteller edition uploads use the Storyteller REST/TUS API directly. A Storyteller library mount is optional unless you want local fallback access to generated artifacts.
-- If you mount `/path/to/storyteller/assets:/storyteller/assets`, set **Storyteller Assets Path** to `/storyteller`.
-- Storyteller timing data stays the preferred alignment source whenever valid transcript assets are available.
-- **Settings -> Maintenance -> Storyteller Backfill** rechecks existing Storyteller-linked books and rebuilds their alignment data without rerunning Whisper.
+    - Storyteller edition uploads use the Storyteller REST/TUS API directly. A Storyteller library mount is optional unless you want local fallback access to generated artifacts.
+    - If you mount `/path/to/storyteller/assets:/storyteller/assets`, set **Storyteller Assets Path** to `/storyteller`.
+    - Storyteller timing data stays the preferred alignment source whenever valid transcript assets are available.
+    - **Settings -> Maintenance -> Storyteller Backfill** rechecks existing Storyteller-linked books and rebuilds their alignment data without rerunning Whisper.
 
-#### Grimmory
+### Grimmory
 
 Grimmory is a supported ebook and audiobook source. You can use it for ebook sync, audiobook-backed mappings, web-reader annotation relay, and Bridge Sync collection shaping.
 
@@ -314,21 +319,21 @@ Grimmory is a supported ebook and audiobook source. You can use it for ebook syn
 | Grimmory Audiobook Poll Interval (seconds) | `BOOKLORE_AUDIO_POLL_SECONDS` | `300` | Used when the audiobook poll mode is `custom`. |
 | Wait for Position to Settle (audiobooks) | `BOOKLORE_AUDIO_POLL_WAIT_FOR_SETTLE` | `false` | Recommended while listening: holds the sync until playback pauses or stops, instead of writing on every poll. |
 
-Grimmory notes:
+??? note "More about Grimmory"
 
-- Discover (Pairs and Search) and the match queue can use **Grimmory audiobooks** as the audio source.
-- The dashboard shows **BL Audio** progress when a mapping is driven by Grimmory audio.
-- When **Record Reading Sessions** is enabled, Grimmory gets session updates as you make progress.
-- Enable **Highlight Sync** in each reader's Grimmory integration if you want Grimmory web-reader highlights and notes to round-trip through the bridge.
-- **Settings -> Maintenance -> Refresh Grimmory Cache** forces a fresh cache rebuild after imports, removals, or large metadata changes.
-- Use **Find IDs** next to **Library ID** in Settings to load your available Grimmory libraries and fill the field from a dropdown.
-- The **KOReader Collections** settings only matter if you use the optional **Bridge Sync** KOReader plugin.
-- KOReader collections are configured per reader under **Account -> My Integrations -> KOReader Collections**.
-- **Collection Source** chooses whether Bridge Sync should use Grimmory shelves or Hardcover lists.
-- When the source is Grimmory, **Collection Syncing** controls which Grimmory shelves become KOReader collections. **Magic Shelves Only** means Bridge Sync uses shelves in Grimmory that fill themselves based on rules.
-- **Excluded Shelves** lets you list Grimmory shelf names you do not want turned into KOReader collections.
-- **Find Shelves** helps you pick shelf names from Grimmory instead of typing them by hand.
-- **Only download books on these Grimmory shelves** (under **KOReader / KoSync**) limits what Bridge Sync puts on the device, independently of collections. It can name your sync shelf (for example `Kobo`), which collections always skip. Books whose ebook doesn't come from Grimmory are left out while a filter is set, and shelf changes reach the device within a couple of minutes. If none of the named shelves exist, or a shelf can't be read and BookBridge has no earlier answer to reuse, the manifest request fails instead of returning an empty list, so the device never deletes its books because of a typo or an outage.
+    - Discover (Pairs and Search) and the match queue can use **Grimmory audiobooks** as the audio source.
+    - The dashboard shows **BL Audio** progress when a mapping is driven by Grimmory audio.
+    - When **Record Reading Sessions** is enabled, Grimmory gets session updates as you make progress.
+    - Enable **Highlight Sync** in each reader's Grimmory integration if you want Grimmory web-reader highlights and notes to round-trip through the bridge.
+    - **Settings -> Maintenance -> Refresh Grimmory Cache** forces a fresh cache rebuild after imports, removals, or large metadata changes.
+    - Use **Find IDs** next to **Library ID** in Settings to load your available Grimmory libraries and fill the field from a dropdown.
+    - The **KOReader Collections** settings only matter if you use the optional **Bridge Sync** KOReader plugin.
+    - KOReader collections are configured per reader under **Account -> My Integrations -> KOReader Collections**.
+    - **Collection Source** chooses whether Bridge Sync should use Grimmory shelves or Hardcover lists.
+    - When the source is Grimmory, **Collection Syncing** controls which Grimmory shelves become KOReader collections. **Magic Shelves Only** means Bridge Sync uses shelves in Grimmory that fill themselves based on rules.
+    - **Excluded Shelves** lets you list Grimmory shelf names you do not want turned into KOReader collections.
+    - **Find Shelves** helps you pick shelf names from Grimmory instead of typing them by hand.
+    - **Only download books on these Grimmory shelves** (under **KOReader / KoSync**) limits what Bridge Sync puts on the device, independently of collections. It can name your sync shelf (for example `Kobo`), which collections always skip. Books whose ebook doesn't come from Grimmory are left out while a filter is set, and shelf changes reach the device within a couple of minutes. If none of the named shelves exist, or a shelf can't be read and BookBridge has no earlier answer to reuse, the manifest request fails instead of returning an empty list, so the device never deletes its books because of a typo or an outage.
 
 KOReader Collections per-reader settings:
 
@@ -351,7 +356,7 @@ Advanced Grimmory cache tuning:
 | Login Retry Delay | `BOOKLORE_LOGIN_RETRY_DELAY_SECONDS` | `1.1` | Delay before retrying duplicate refresh-token login conflicts. |
 | Login Max Attempts | `BOOKLORE_LOGIN_MAX_ATTEMPTS` | `2` | Maximum login attempts before failing. |
 
-#### BookOrbit
+### BookOrbit
 
 BookOrbit is a supported ebook and audiobook source. You can use it for ebook sync, audiobook-backed mappings, BookOrbit reading sessions, web-reader highlight relay, and watched-collection auto-matching.
 
@@ -393,23 +398,23 @@ Optional matching of books you start reading — under **Books You Start Reading
 | --- | --- | --- | --- |
 | Auto-match books you start reading in BookOrbit | `BOOKORBIT_READING_WATCH_ENABLED` | `false` | Once you are past 1% of a BookOrbit ebook that BookBridge has not matched, it looks for the audiobook. A match is added to **Suggestions** for you to confirm; a book with no audiobook becomes an ebook-only mapping so its progress syncs. A suggestion you dismiss is not offered again. |
 
-BookOrbit notes:
+??? note "More about BookOrbit"
 
-- BookOrbit is available across Discover, the match queue, and the dashboard. Pick it as the ebook source, the audio source, or both when you create a mapping.
-- Use the **Test** button in Settings to check the connection before saving.
-- To sync BookOrbit web-reader highlights through the bridge, fill in the BookOrbit KOReader sync username/password in each reader's Integrations. BookBridge only relays annotations when ownership is clear.
-- **Moving from Grimmory to BookOrbit?** You do not need to rematch. A helper script, `scripts/migrate_grimmory_to_bookorbit.py`, re-points your existing Grimmory ebook links at BookOrbit by filename, leaving the audio link and reading progress untouched. Enable and scan BookOrbit first, then run it from inside the container (it is a dry run by default; add `--apply` to commit):
+    - BookOrbit is available across Discover, the match queue, and the dashboard. Pick it as the ebook source, the audio source, or both when you create a mapping.
+    - Use the **Test** button in Settings to check the connection before saving.
+    - To sync BookOrbit web-reader highlights through the bridge, fill in the BookOrbit KOReader sync username/password in each reader's Integrations. BookBridge only relays annotations when ownership is clear.
+    - **Moving from Grimmory to BookOrbit?** You do not need to rematch. A helper script, `scripts/migrate_grimmory_to_bookorbit.py`, re-points your existing Grimmory ebook links at BookOrbit by filename, leaving the audio link and reading progress untouched. Enable and scan BookOrbit first, then run it from inside the container (it is a dry run by default; add `--apply` to commit):
 
-    ```bash
-    docker exec abs_kosync python -m scripts.migrate_grimmory_to_bookorbit --apply
-    ```
+        ```bash
+        docker exec abs_kosync python -m scripts.migrate_grimmory_to_bookorbit --apply
+        ```
 
-- **Generating a read-along EPUB** for BookOrbit needs a mapping whose audio source is
-  BookOrbit and that already has an alignment map (forced alignment or the standard Whisper/lexical one).
-  See [Read-Along EPUBs for BookOrbit](user-guide.md#read-along-epubs-for-bookorbit) in the
-  User Guide.
+    - **Generating a read-along EPUB** for BookOrbit needs a mapping whose audio source is
+      BookOrbit and that already has an alignment map (forced alignment or the standard Whisper/lexical one).
+      See [Read-Along EPUBs for BookOrbit](user-guide.md#read-along-epubs-for-bookorbit) in the
+      User Guide.
 
-#### Kavita
+### Kavita
 
 Kavita is a supported EPUB source and bidirectional reading-progress client. It can
 provide books to Discover, the match queue, managed KOReader devices,
@@ -439,18 +444,18 @@ bridge auto-matches it on the next poll:
 | Match Threshold | `KAVITA_SHELF_WATCH_THRESHOLD` | `95` | Minimum match confidence (60–100) before a book is auto-linked. |
 | Rescan Interval (Hours) | `KAVITA_SHELF_WATCH_RESCAN_HOURS` | `24` | How often a still-unmatched book is retried. |
 
-Kavita notes:
+??? note "More about Kavita"
 
-- Create a non-expiring auth key for each reader in Kavita under **User Settings ->
-  3rd Party Clients**, then save it under **Account -> My Integrations -> Kavita**.
-- The Kavita user behind the key must be able to read/download the selected library
-  and manage collections if collection workflows are enabled.
-- Kavita support is ebook-only. Grimmory and BookOrbit remain the library-server
-  choices when the audio side of a mapping also comes from that service.
-- Only EPUB chapters participate; comic/archive and PDF progress models are outside
-  this integration.
+    - Create a non-expiring auth key for each reader in Kavita under **User Settings ->
+      3rd Party Clients**, then save it under **Account -> My Integrations -> Kavita**.
+    - The Kavita user behind the key must be able to read/download the selected library
+      and manage collections if collection workflows are enabled.
+    - Kavita support is ebook-only. Grimmory and BookOrbit remain the library-server
+      choices when the audio side of a mapping also comes from that service.
+    - Only EPUB chapters participate; comic/archive and PDF progress models are outside
+      this integration.
 
-#### Calibre-Web Automated (CWA)
+### Calibre-Web Automated (CWA)
 
 CWA is a supported ebook source and optional Kobo-sync progress source. Use it to search/download ebooks from Calibre-Web Automated, and enable Kobo sync when you want stock Kobo readers or KOReader-via-CWA to participate in progress sync.
 
@@ -469,15 +474,15 @@ CWA is a supported ebook source and optional Kobo-sync progress source. Use it t
 | Use Calibre ABS Identifier | `CALIBRE_USE_ABS_IDENTIFIER` | `false` | Uses Calibre's `audiobookshelf_id` identifier to make suggestion matching authoritative when available. |
 | Calibre Library Path | `CALIBRE_LIBRARY_PATH` | empty | Optional path to the Calibre library containing `metadata.db`, mounted read-only. Used for identifier lookup, and to recognise KOReader copies downloaded from CWA (see below). |
 
-CWA notes:
+??? note "More about CWA"
 
-- CWA appears as a standard ebook source in Discover and the match queue.
-- Kobo sync lets CWA-sourced ebook progress participate alongside KOReader, Grimmory, BookOrbit, Storyteller, and ABS ebook progress.
-- The CWA username/password and Kobo sync token are per-reader integration credentials.
-- With **Embed Metadata** on, CWA rewrites an EPUB's metadata on every download, so a copy a reader downloads from CWA does not hash the same as the file BookBridge matched. When `CALIBRE_LIBRARY_PATH` points at the library, BookBridge looks an unknown KOReader hash up in CWA's checksum history (`book_format_checksums`, which CWA creates and writes only while its KOReader sync is enabled) and links it to the matching book on the reader's first sync. If BookBridge has no mapping for that book yet, the hash leads to the book's EPUB in the Calibre library, and auto-discovery maps it on the reader's first forward sync, with CWA as the ebook source when no other library hosts the file. A match you accept from a suggestion gets the CWA source on the reader's next sync, provided the mapping uses that same library file. The EPUB must also be under `BOOKS_DIR` or `EXTRA_EBOOK_DIRS`, and `AUTO_CREATE_EBOOK_MAPPING` must be on.
-- If you use the Audiobookshelf Calibre plugin, the bridge can read the `audiobookshelf_id` identifier from Calibre metadata or CWA as a fallback to avoid fuzzy matching already-linked books.
+    - CWA appears as a standard ebook source in Discover and the match queue.
+    - Kobo sync lets CWA-sourced ebook progress participate alongside KOReader, Grimmory, BookOrbit, Storyteller, and ABS ebook progress.
+    - The CWA username/password and Kobo sync token are per-reader integration credentials.
+    - With **Embed Metadata** on, CWA rewrites an EPUB's metadata on every download, so a copy a reader downloads from CWA does not hash the same as the file BookBridge matched. When `CALIBRE_LIBRARY_PATH` points at the library, BookBridge looks an unknown KOReader hash up in CWA's checksum history (`book_format_checksums`, which CWA creates and writes only while its KOReader sync is enabled) and links it to the matching book on the reader's first sync. If BookBridge has no mapping for that book yet, the hash leads to the book's EPUB in the Calibre library, and auto-discovery maps it on the reader's first forward sync, with CWA as the ebook source when no other library hosts the file. A match you accept from a suggestion gets the CWA source on the reader's next sync, provided the mapping uses that same library file. The EPUB must also be under `BOOKS_DIR` or `EXTRA_EBOOK_DIRS`, and `AUTO_CREATE_EBOOK_MAPPING` must be on.
+    - If you use the Audiobookshelf Calibre plugin, the bridge can read the `audiobookshelf_id` identifier from Calibre metadata or CWA as a fallback to avoid fuzzy matching already-linked books.
 
-#### Hardcover
+### Hardcover
 
 Hardcover provides modern reading tracking with a beautiful UI. BookBridge can post reading progress to Hardcover, push selected highlights, and optionally project Grimmory shelves into Hardcover lists. It is a **write-only tracker**: it receives progress but never leads a sync.
 
@@ -492,15 +497,15 @@ Hardcover provides modern reading tracking with a beautiful UI. BookBridge can p
 | Hardcover List Name Prefix | `HARDCOVER_GRIMMORY_LIST_PREFIX` | `Grimmory: ` | Prefix for lists created from Grimmory shelves. |
 | Excluded Grimmory Shelves | `HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES` | empty | Comma-separated shelf names to skip during list projection. |
 
-Hardcover notes:
+??? note "More about Hardcover"
 
-- When enabled, progress is synced from KOReader/Audiobookshelf and other bridge leaders to Hardcover.
-- Use the **Edition Picker** on the dashboard to select which specific edition to track.
-- Each reader supplies their own Hardcover token under **Account -> My Integrations**.
-- Hardcover lists can also be used as KOReader collections when **KOReader Collections -> Collection Source** is set to **Hardcover Lists**.
-- Grimmory shelf projection creates or updates Hardcover lists for books already matched to Hardcover. It is per-reader, so one reader's shelves are not projected into another reader's account.
+    - When enabled, progress is synced from KOReader/Audiobookshelf and other bridge leaders to Hardcover.
+    - Use the **Edition Picker** on the dashboard to select which specific edition to track.
+    - Each reader supplies their own Hardcover token under **Account -> My Integrations**.
+    - Hardcover lists can also be used as KOReader collections when **KOReader Collections -> Collection Source** is set to **Hardcover Lists**.
+    - Grimmory shelf projection creates or updates Hardcover lists for books already matched to Hardcover. It is per-reader, so one reader's shelves are not projected into another reader's account.
 
-#### StoryGraph
+### StoryGraph
 
 StoryGraph is a popular alternative to Goodreads that focuses on reading data and moods. Like Hardcover, it is a **write-only tracker**: it receives progress but never leads a sync.
 
@@ -511,18 +516,18 @@ StoryGraph is a popular alternative to Goodreads that focuses on reading data an
 | Remember User Token | `STORYGRAPH_REMEMBER_USER_TOKEN` | empty | `remember_user_token` cookie value. |
 | Update Cooldown (minutes) | `STORYGRAPH_UPDATE_COOLDOWN_MINS` | `60` | Global. Minutes of no new progress before a book's position is posted; new progress restarts the wait. Finishing a book posts at once. `0` posts on every sync cycle. |
 
-StoryGraph notes:
+??? note "More about StoryGraph"
 
-- Requires browser cookies for authentication. See [StoryGraph authentication](user-guide.md#storygraph-authentication) for instructions on how to retrieve these.
-- Supports **Edition Picking**: Select specific editions (Paperback, Kindle, etc.) to ensure accurate page counts.
-- **Switch Editions**: The bridge can automatically "switch" your tracked edition on StoryGraph to match your selection.
-- When the selected edition has a page count, BookBridge reports estimated page
-  progress and selects **Pages** on the next progress update, even if the book
-  previously used Percentage. This cannot guarantee the exact print page for a
-  reflowable ebook or audiobook. Books without a page count continue using
-  percent.
+    - Requires browser cookies for authentication. See [StoryGraph authentication](user-guide.md#storygraph-authentication) for instructions on how to retrieve these.
+    - Supports **Edition Picking**: Select specific editions (Paperback, Kindle, etc.) to ensure accurate page counts.
+    - **Switch Editions**: The bridge can automatically "switch" your tracked edition on StoryGraph to match your selection.
+    - When the selected edition has a page count, BookBridge reports estimated page
+      progress and selects **Pages** on the next progress update, even if the book
+      previously used Percentage. This cannot guarantee the exact print page for a
+      reflowable ebook or audiobook. Books without a page count continue using
+      percent.
 
-#### Goodreads
+### Goodreads
 
 Goodreads is a **write-only tracker**, like Hardcover and StoryGraph: it receives your
 progress, page count and finished books, and never leads a sync. It is **off by default**.
@@ -541,20 +546,20 @@ stop working until BookBridge is updated.
 | Cookie Refresher Token | `GOODREADS_COOKIE_REFRESH_TOKEN` | empty | That service's `AUTH_TOKEN`, if set. |
 | Update Cooldown (minutes) | `GOODREADS_UPDATE_COOLDOWN_MINS` | `60` | Global. Same meaning as StoryGraph's cooldown. |
 
-Goodreads notes:
+??? note "More about Goodreads"
 
-- **Recommended: a signed-in browser.** Goodreads often blocks plain HTTP requests as a bot.
-  Run a `selenium/standalone-chrome` container on the same Docker network as BookBridge
-  (give it `shm_size: 2gb`), open its noVNC view (port 7900) once, sign in to Goodreads,
-  and leave that tab open. Set **Browser URL** to its internal address, for example
-  `http://selenium:4444`. Keep port 4444 off your host ports: that browser is signed in as you.
-  Each Goodreads account needs its own browser.
-- **Without a browser**, paste your Goodreads `Cookie` header as **Session Cookie**. This needs no
-  extra container but is the least reliable option.
-- Books are matched by ISBN, ASIN or title and author, and you can pick the edition from the
-  book's page.
+    - **Recommended: a signed-in browser.** Goodreads often blocks plain HTTP requests as a bot.
+      Run a `selenium/standalone-chrome` container on the same Docker network as BookBridge
+      (give it `shm_size: 2gb`), open its noVNC view (port 7900) once, sign in to Goodreads,
+      and leave that tab open. Set **Browser URL** to its internal address, for example
+      `http://selenium:4444`. Keep port 4444 off your host ports: that browser is signed in as you.
+      Each Goodreads account needs its own browser.
+    - **Without a browser**, paste your Goodreads `Cookie` header as **Session Cookie**. This needs no
+      extra container but is the least reliable option.
+    - Books are matched by ISBN, ASIN or title and author, and you can pick the edition from the
+      book's page.
 
-#### Progress Trackers
+### Progress Trackers
 
 Hardcover, StoryGraph and Goodreads are independent - enable any of them on their cards in
 **Settings -> Services**. Each reader then picks which they use, and supplies their own
@@ -567,7 +572,7 @@ the service is down — BookBridge retries after 15 minutes, then waits twice as
 time, up to every 6 hours. New reading progress gets a fresh attempt once its cooldown has
 passed. See [troubleshooting](troubleshooting.md#hardcover-or-storygraph-gets-many-requests-or-a-book-never-updates-there).
 
-#### Telegram Notifications
+### Telegram Notifications
 
 Found under **Settings -> Server**.
 
@@ -578,7 +583,7 @@ Found under **Settings -> Server**.
 | Chat ID | `TELEGRAM_CHAT_ID` | empty | Target user or group ID. |
 | Min Log Level | `TELEGRAM_LOG_LEVEL` | `ERROR` | Lowest log severity that gets forwarded. |
 
-#### Getting missing books
+### Getting missing books
 
 Found under **Settings -> Library & Matching -> Getting books**. When a Discover search finds
 only the audiobook or only the ebook, readers can request the missing half from BookOrbit or
@@ -589,7 +594,7 @@ Shelfmark, and BookBridge pairs it when it arrives. See
 | --- | --- | --- | --- |
 | Let readers get missing books | `ACQUISITION_ALLOW_READERS` | `false` | Admins can always request; turn this on to let other readers do it too. |
 
-#### Shelfmark
+### Shelfmark
 
 Found under **Settings -> Library & Matching**.
 
@@ -604,7 +609,7 @@ BookOrbit readers can also turn on **Follow audiobook requests I make in BookOrb
 them with my ebook** (`BOOKORBIT_ADOPT_REQUESTS`, per reader, off by default) in their BookOrbit
 integration.
 
-#### Series Display
+### Series Display
 
 Found under **Settings -> Library & Matching**.
 
@@ -612,7 +617,7 @@ Found under **Settings -> Library & Matching**.
 | --- | --- | --- | --- |
 | Show each series as the book you're reading | `SERIES_SHOW_CURRENT_BOOK_DETAIL` | `false` | Each series on the Library becomes the full card of the book you are on (in progress, or the next unread one), with the series name, how many are finished and the other books listed along its bottom. Click that strip to open the rest of the series. Finished series keep their usual card. When off, a closed series shows each book as a compact row. |
 
-#### AI / LLM Providers (Optional)
+### AI / LLM Providers (Optional)
 
 Found under **Settings -> AI**. The bridge can use Ollama, OpenAI, or an OpenAI-compatible local endpoint such as llama-server or llama-swap. The local OpenAI-compatible option expects standard `/v1/models`, `/v1/embeddings`, and `/v1/chat/completions` endpoints.
 
@@ -648,13 +653,15 @@ What it can do — each is a separate toggle, and the defaults below only take e
 | Tracker match verify | `OLLAMA_TRACKER_MATCH` | `true` | Double-checks Hardcover/StoryGraph matches before writing. |
 | Library match rescue | `OLLAMA_LIBRARY_MATCH` | `true` | When a Grimmory/BookOrbit ebook won't match by name, shortlists the library and lets the model pick the right book. |
 
-Ollama notes:
+??? note "More about Ollama"
 
-- The model never runs on hot sync paths — only on linking, suggestion scans, and alignment work — so day-to-day syncing stays fast.
-- Use the **Test** button to confirm the server is reachable. It reports each model's context length and capabilities, and warns if your embedding model can't actually embed.
-- OpenAI-compatible providers are tested with `/v1/models`; embeddings and chat calls are still lazy so local servers can load models on first real use.
-- Existing `OLLAMA_*` feature toggles remain supported. Generic `LLM_*` connection/model settings take precedence when present.
-- Finer tuning knobs (score bands, judge margins, similarity thresholds) are available in the Settings UI if you want them, but the defaults are a sensible starting point.
+    - The model never runs on hot sync paths — only on linking, suggestion scans, and alignment work — so day-to-day syncing stays fast.
+    - Use the **Test** button to confirm the server is reachable. It reports each model's context length and capabilities, and warns if your embedding model can't actually embed.
+    - OpenAI-compatible providers are tested with `/v1/models`; embeddings and chat calls are still lazy so local servers can load models on first real use.
+    - Existing `OLLAMA_*` feature toggles remain supported. Generic `LLM_*` connection/model settings take precedence when present.
+    - Finer tuning knobs (score bands, judge margins, similarity thresholds) are available in the Settings UI if you want them, but the defaults are a sensible starting point.
+
+## Engine settings
 
 ### Suggestions
 
@@ -670,18 +677,18 @@ Enabled under **Settings -> Library & Matching**. The Discover page (Pairs and E
 | Ignore local files in Suggestions | `SUGGESTIONS_EXCLUDE_LOCAL_FILES` | `false` | Leaves locally scanned files (`BOOKS_DIR`, `EXTRA_EBOOK_DIRS`) out of Pairs and Ebook Only on the next scan; ebooks from your connected library services stay included. |
 | Scheduled Full Refresh | `SUGGESTIONS_FULL_REFRESH_ENABLED` | `false` | Turns the scheduled full refresh on; the schedule field appears once it is ticked. |
 | Full Refresh Schedule | `SUGGESTIONS_FULL_REFRESH_CRON` | _(empty)_ | Five-field cron expression (minute hour day-of-month month day-of-week, in the `TZ` timezone; `*`, ranges, steps, lists and `jan`/`sun`-style names). Each time it fires the scan cache is cleared and the whole unmatched library is rescanned. A fire missed while BookBridge was down runs when it comes back, up to a day late. Used only while the full refresh is enabled; empty = off; an invalid expression turns it off and logs a warning. |
-| Weekly Full Refresh Day / Time | `SUGGESTIONS_FULL_REFRESH_DAY` / `SUGGESTIONS_FULL_REFRESH_TIME` | `off` / `04:00` | Legacy weekly schedule, used only while `SUGGESTIONS_FULL_REFRESH_ENABLED` is off (`sunday` + `04:20` behaves like `20 4 * * sun`). Saving the Features page converts it to the cron setting. |
+| Weekly Full Refresh Day / Time | `SUGGESTIONS_FULL_REFRESH_DAY` / `SUGGESTIONS_FULL_REFRESH_TIME` | `off` / `04:00` | Legacy weekly schedule, used only while `SUGGESTIONS_FULL_REFRESH_ENABLED` is off (`sunday` + `04:20` behaves like `20 4 * * sun`). Saving **Settings → Library & Matching** converts it to the cron setting. |
 
-Suggestions notes:
+??? note "More about Suggestions"
 
-- A normal scan reuses cached results so repeat scans are faster.
-- **Full Refresh** rescans the whole unmatched library from scratch.
-- Scheduled scans never overlap a running scan, and a slow scan pushes the next one back instead of queueing it. The time of the last scheduled scan and the day of the last weekly refresh are stored, so a restart neither scans straight away nor repeats a refresh already done that day.
-- A scheduled scan uses the primary admin's own credentials, the same as that account pressing the buttons on Discover. An open Discover page shows the scheduled results the next time it loads.
-- Discover can queue audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit, and can use CWA as the ebook side for audiobook-backed, ebook-only, and Storyteller-assisted links.
-- If your audio and ebook providers expose the same mounted `/books` tree,
-  sibling files in the same title folder are treated as same-folder matches
-  before fuzzy or Ollama scoring.
+    - A normal scan reuses cached results so repeat scans are faster.
+    - **Full Refresh** rescans the whole unmatched library from scratch.
+    - Scheduled scans never overlap a running scan, and a slow scan pushes the next one back instead of queueing it. The time of the last scheduled scan and the day of the last weekly refresh are stored, so a restart neither scans straight away nor repeats a refresh already done that day.
+    - A scheduled scan uses the primary admin's own credentials, the same as that account pressing the buttons on Discover. An open Discover page shows the scheduled results the next time it loads.
+    - Discover can queue audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit, and can use CWA as the ebook side for audiobook-backed, ebook-only, and Storyteller-assisted links.
+    - If your audio and ebook providers expose the same mounted `/books` tree,
+      sibling files in the same title folder are treated as same-folder matches
+      before fuzzy or Ollama scoring.
 
 ### Transcription Settings
 
@@ -713,20 +720,20 @@ audio ↔ text alignment; it runs locally by default and needs no external servi
 | Use Forced Alignment | `CTC_ENABLED` | `true` | Recommended. Aligns each audiobook directly against its ebook's text, word by word, instead of transcribing it first; also locates each chapter directly in the audio, so long books skip Whisper entirely. Runs on the CPU in every image via the default QuartzNet model. Off always uses transcription (Whisper/lexical). New installs default on; existing installs keep whatever they had. |
 | Alignment model | `CTC_MODEL` | `quartznet` | `quartznet` (NVIDIA QuartzNet15x5, English only) runs on the CPU in every image. `mms_fa` (Meta MMS, ~1000 languages) needs a self-built image with `INSTALL_CTC=true` and effectively an NVIDIA GPU. Visible under Advanced once forced alignment is on. |
 | QuartzNet Model File | `CTC_QUARTZNET_MODEL_PATH` | empty | Optional path to a local `model.onnx` (or the folder holding it). Empty downloads it once (77 MB) from Storyteller's package registry into `/data/models/quartznet15x5-en/`; set this if that download fails. |
-| — (environment only) | `ALIGN_THREADS` | empty | CPU threads QuartzNet alignment uses. Empty uses the CPUs the container can actually use (its `cpus:` limit, then its CPU affinity), at most 8; the choice is logged when the model loads. Set it to use more than 8, or fewer to leave CPUs for other work. Read when the model first loads, so a change needs a restart. |
+| — (environment only, see [above](#set-only-in-the-environment)) | `ALIGN_THREADS` | empty | CPU threads QuartzNet alignment uses. Empty uses the CPUs the container can actually use (its `cpus:` limit, then its CPU affinity), at most 8; the choice is logged when the model loads. Set it to use more than 8, or fewer to leave CPUs for other work. Read when the model first loads, so a change needs a restart. |
 | Run the MMS model on | `CTC_DEVICE` | `auto` | MMS only — QuartzNet always runs on the CPU. Uses an NVIDIA GPU when available; CPU is practical only for short books with MMS. |
 | Use a read-along's own timings when they check out | `SMIL_SKIP_CTC` | `false` | Applies while forced alignment is on. When the ebook is a read-along (a Storyteller or StoryAlign EPUB with media overlays), checks its timings for places where they lose sync with the audio; timings that pass become the book's map without running forced alignment. Off: forced alignment runs first, and the read-along's timings are used only if it fails. |
 
-Transcription notes:
+??? note "More about Transcription"
 
-- The **Whisper Model** field in Settings is a text box with common suggestions. You can use a normal preset like `tiny` or enter a custom model name directly.
-- The `whispercpp` provider works with any OpenAI-compatible transcription endpoint — whisper.cpp server, speaches, parakeet, or a proxy such as llama-swap — not just whisper.cpp itself. Use the 🔗 **Test** button next to the URL to check the endpoint before saving. Inside Docker, do not use `localhost`; use the host's LAN IP or the whisper container's service name.
-- **Split Uploads** exists for servers that return one merged segment per request (parakeet does this). Alignment can only be as precise as the segments it gets back, so on those servers set it low — 2 or 3 minutes — and leave it at `0` for servers that already return fine-grained segments.
-- **Send Original Audio** skips local ffmpeg normalization and splitting, which saves minutes per book, but only works on servers that decode arbitrary formats *and* chunk long audio themselves (e.g. parakeet with `-long-audio`). Leave it off for whisper.cpp, which requires 16kHz WAV input. When it is on, **Audio Split Length** no longer applies — the server controls chunking.
-- **Refuse alignments that look like a different book** is the safe default. It prevents a wrong, abridged, or otherwise incompatible ebook/audio pairing from replacing a usable map when semantic matching is unavailable. Check the selected editions before lowering its threshold.
-- **Handle chapters read aloud out of order** is an opt-in fix for an unusual edition where the EPUB's chapter order does not match narration order. It does nothing for normally ordered books. Enable it, then use **Remap alignment** for the affected book.
-- **Forced alignment** is the recommended, default-on method: it runs on the CPU in every published image (standard and `-cuda`) using QuartzNet, and it finds each chapter directly in the audio, so long books skip the Whisper transcript entirely — a 22-hour audiobook takes about 7.5 minutes on a modern 8-thread CPU, a 39-hour one about 15. It falls back to transcription automatically, with no user action needed, for a book that is not in English, whose audio does not follow the text closely enough, whose chapters are narrated out of order, or that appears to be a different book — that fallback is expected, not an error. New installs default it on; existing installs keep whatever they had.
-- For a non-English book, switch **Alignment model** to `mms_fa` under **Advanced — forced alignment model**. MMS needs a self-built image (`INSTALL_CTC=true`) and effectively an NVIDIA GPU — see [Forced alignment for non-English books (MMS)](#forced-alignment-for-non-english-books-mms) below.
+    - The **Whisper Model** field in Settings is a text box with common suggestions. You can use a normal preset like `tiny` or enter a custom model name directly.
+    - The `whispercpp` provider works with any OpenAI-compatible transcription endpoint — whisper.cpp server, speaches, parakeet, or a proxy such as llama-swap — not just whisper.cpp itself. Use the 🔗 **Test** button next to the URL to check the endpoint before saving. Inside Docker, do not use `localhost`; use the host's LAN IP or the whisper container's service name.
+    - **Split Uploads** exists for servers that return one merged segment per request (parakeet does this). Alignment can only be as precise as the segments it gets back, so on those servers set it low — 2 or 3 minutes — and leave it at `0` for servers that already return fine-grained segments.
+    - **Send Original Audio** skips local ffmpeg normalization and splitting, which saves minutes per book, but only works on servers that decode arbitrary formats *and* chunk long audio themselves (e.g. parakeet with `-long-audio`). Leave it off for whisper.cpp, which requires 16kHz WAV input. When it is on, **Audio Split Length** no longer applies — the server controls chunking.
+    - **Refuse alignments that look like a different book** is the safe default. It prevents a wrong, abridged, or otherwise incompatible ebook/audio pairing from replacing a usable map when semantic matching is unavailable. Check the selected editions before lowering its threshold.
+    - **Handle chapters read aloud out of order** is an opt-in fix for an unusual edition where the EPUB's chapter order does not match narration order. It does nothing for normally ordered books. Enable it, then use **Remap alignment** for the affected book.
+    - **Forced alignment** is the recommended, default-on method: it runs on the CPU in every published image (standard and `-cuda`) using QuartzNet, and it finds each chapter directly in the audio, so long books skip the Whisper transcript entirely — a 22-hour audiobook takes about 7.5 minutes on a modern 8-thread CPU, a 39-hour one about 15. It falls back to transcription automatically, with no user action needed, for a book that is not in English, whose audio does not follow the text closely enough, whose chapters are narrated out of order, or that appears to be a different book — that fallback is expected, not an error. New installs default it on; existing installs keep whatever they had.
+    - For a non-English book, switch **Alignment model** to `mms_fa` under **Advanced — forced alignment model**. MMS needs a self-built image (`INSTALL_CTC=true`) and effectively an NVIDIA GPU — see [Forced alignment for non-English books (MMS)](#forced-alignment-for-non-english-books-mms) below.
 
 ### Shared choices
 
@@ -814,7 +821,419 @@ The practical consequence: **if some of your ebooks live outside `BOOKS_DIR`, ad
 those folders to `EXTRA_EBOOK_DIRS`.** Mount them read-only where you can — a
 library BookBridge only reads from does not need write access.
 
----
+## Every setting
+
+Generated from BookBridge's settings registry, so it lists every setting, including ones with no
+section above. A linked name has its description earlier on this page. **Applies to** says whether
+the value is server-wide or each reader's own; *server and each reader* is a service switch, which
+each reader turns on for themselves and the admin can turn off for everyone. **Restart** marks
+settings read only at startup, which restart the app when saved in Settings.
+
+<!-- settings-index:start -->
+
+### Audiobookshelf { #every-setting-audiobookshelf }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`ABS_ENABLED`](#audiobookshelf) | `true` | server and each reader | yes |
+| [`ABS_SERVER`](#audiobookshelf) | empty | server | yes |
+| `ABS_WEB_URL` | empty | server |  |
+| [`ABS_KEY`](#audiobookshelf) | empty | each reader | yes |
+| [`ABS_LIBRARY_ID`](#audiobookshelf) | empty | each reader | yes |
+| [`ABS_COLLECTION_NAME`](#audiobookshelf) | `Synced with KOReader` | each reader | yes |
+| [`ABS_COLLECTION_RECONCILE`](#audiobookshelf) | `false` | server |  |
+| [`ABS_PROGRESS_OFFSET_SECONDS`](#audiobookshelf) | `0` | server | yes |
+| [`ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID`](#audiobookshelf) | `false` | server |  |
+| [`ABS_SOCKET_ENABLED`](#advanced-toggles) | `true` | server | yes |
+| [`ABS_SOCKET_DEBOUNCE_SECONDS`](#advanced-toggles) | `30` | server |  |
+| [`ABS_READING_CHECKPOINTS`](#audiobookshelf) | `false` | server |  |
+
+### Sign-in { #every-setting-sign-in }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| `REMOTE_AUTH_ENABLED` | `false` | server |  |
+| `REMOTE_AUTH_HEADER` | `Remote-User` | server |  |
+| `REMOTE_AUTH_TRUSTED_PROXIES` | empty | server |  |
+
+### KOReader / KoSync { #every-setting-koreader-kosync }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`KOSYNC_ENABLED`](#koreader-kosync) | `false` | server and each reader |  |
+| [`KOSYNC_SERVER`](#koreader-kosync) | empty | server |  |
+| `KOSYNC_USER` | empty | each reader |  |
+| `KOSYNC_KEY` | empty | each reader |  |
+| `KOSYNC_AUTH_METHOD` | `kosync` | each reader |  |
+| [`KOSYNC_CREDENTIALS_FROM_GRIMMORY`](#koreader-kosync) | `false` | server |  |
+| [`KOSYNC_HASH_METHOD`](#koreader-kosync) | `content` | server | yes |
+| [`KOSYNC_USE_PERCENTAGE_FROM_SERVER`](#koreader-kosync) | `false` | server |  |
+| `KOSYNC_RECENT_EXTERNAL_PUT_SECONDS` | `600` | server |  |
+| `KOSYNC_AUTO_MAP_ON_AGREEMENT` | `true` | server |  |
+| `SYNC_OBSERVATION_TRAIL_SECONDS` | `600` | server |  |
+| `SYNC_REWIND_CORROBORATION_COUNT` | `2` | server |  |
+| [`SYNC_TRUST_CORROBORATED_REWIND`](#sync-tuning) | `true` | server |  |
+| `SYNC_REWIND_HOLD_SECONDS` | `300` | server |  |
+| `KOSYNC_HASH_RECONCILE_ENABLED` | `true` | server |  |
+| `KOSYNC_HASH_RECONCILE_MINUTES` | `360` | server |  |
+| `KOSYNC_XPATH_ORDER_ENABLED` | `false` | server |  |
+| `KOSYNC_FURTHEST_WINS` | `true` | server |  |
+| [`KOSYNC_ACTIVE_DEVICE_WINS`](#koreader-kosync) | `shadow` | server |  |
+| [`KOSYNC_TRUSTED_PROXIES`](#koreader-kosync) | empty | server |  |
+| [`KOSYNC_PUT_DEBOUNCE_SECONDS`](#koreader-kosync) | `300` | server |  |
+| `KOSYNC_BOOKORBIT_DISCOVERY_LIMIT` | `40` | server |  |
+| `AUTO_CREATE_EBOOK_MAPPING` | `true` | server |  |
+| `KOREADER_COMBINE_DEVICE_STATS` | `true` | server |  |
+| [`KOREADER_ANNOTATION_SYNC`](#koreader-kosync) | `true` | server |  |
+| [`KOREADER_STATUS_SYNC_ENABLED`](#koreader-kosync) | `true` | server |  |
+| [`KOREADER_SYNC_READ_HISTORY`](#koreader-kosync) | `false` | server |  |
+
+### Storyteller { #every-setting-storyteller }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`STORYTELLER_ENABLED`](#storyteller) | `false` | server and each reader |  |
+| [`STORYTELLER_API_URL`](#storyteller) | empty | server | yes |
+| [`STORYTELLER_USER`](#storyteller) | empty | each reader | yes |
+| [`STORYTELLER_PASSWORD`](#storyteller) | empty | each reader | yes |
+| [`STORYTELLER_AUTO_LINK`](#storyteller) | `false` | each reader |  |
+| [`STORYTELLER_COLLECTION_NAME`](#storyteller) | `Synced with KOReader` | server |  |
+
+### Grimmory { #every-setting-grimmory }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`BOOKLORE_ENABLED`](#grimmory) | `false` | server and each reader |  |
+| [`BOOKLORE_SERVER`](#grimmory) | empty | server | yes |
+| `BOOKLORE_WEB_URL` | empty | server |  |
+| [`BOOKLORE_USER`](#grimmory) | empty | each reader | yes |
+| [`BOOKLORE_PASSWORD`](#grimmory) | empty | each reader | yes |
+| [`BOOKLORE_SHELF_NAME`](#grimmory) | `Kobo` | each reader | yes |
+| [`BOOKLORE_LIBRARY_ID`](#grimmory) | empty | each reader |  |
+| [`GRIMMORY_READING_SESSIONS`](#grimmory) | `true` | server |  |
+| [`BOOKLORE_ANNOTATION_SYNC`](#grimmory) | `false` | each reader |  |
+| [`BOOKLORE_ANNOTATION_SYNC_MINUTES`](#grimmory) | `15` | server |  |
+| [`DEVICE_SYNC_COLLECTION_SOURCE`](#grimmory) | `grimmory` | each reader |  |
+| [`DEVICE_SYNC_COLLECTIONS`](#grimmory) | `off` | each reader |  |
+| [`DEVICE_SYNC_EXCLUDED_SHELVES`](#grimmory) | empty | each reader |  |
+| [`DEVICE_SYNC_SHELF_FILTER`](#grimmory) | empty | each reader |  |
+| [`DEVICE_SYNC_HARDCOVER_LISTS`](#grimmory) | `all` | each reader |  |
+| [`DEVICE_SYNC_HARDCOVER_LIST_NAMES`](#grimmory) | empty | each reader |  |
+| `DEVICE_SYNC_EBOOK_CACHE_TTL_MINUTES` | `360` | server |  |
+| [`BOOKLORE_SHELF_REQUIRE_ALIGNMENT`](#grimmory) | `false` | server |  |
+| [`BOOKLORE_SHELF_OWNER`](#grimmory) | empty | server |  |
+| `BOOKLORE_SHELF_WATCH_ENABLED` | `false` | server |  |
+| `BOOKLORE_SHELF_WATCH_NAME` | `Up Next` | server |  |
+| `BOOKLORE_SHELF_WATCH_THRESHOLD` | `95` | server |  |
+| `BOOKLORE_SHELF_WATCH_RESCAN_HOURS` | `24` | server |  |
+
+### BookOrbit { #every-setting-bookorbit }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`BOOKORBIT_ENABLED`](#bookorbit) | `false` | server and each reader |  |
+| [`BOOKORBIT_SERVER`](#bookorbit) | empty | server |  |
+| `BOOKORBIT_WEB_URL` | empty | server |  |
+| [`BOOKORBIT_USER`](#bookorbit) | empty | each reader |  |
+| [`BOOKORBIT_PASSWORD`](#bookorbit) | empty | each reader |  |
+| [`BOOKORBIT_API_KEY`](#bookorbit) | empty | each reader |  |
+| [`BOOKORBIT_SHELF_NAME`](#bookorbit) | `Kobo` | each reader |  |
+| `BOOKORBIT_ADOPT_REQUESTS` | `false` | each reader |  |
+| [`BOOKORBIT_POLL_MODE`](#bookorbit) | `global` | server |  |
+| [`BOOKORBIT_POLL_SECONDS`](#bookorbit) | `300` | server |  |
+| [`BOOKORBIT_POLL_WAIT_FOR_SETTLE`](#bookorbit) | `false` | server |  |
+| [`BOOKORBIT_AUDIO_POLL_MODE`](#bookorbit) | `global` | server |  |
+| [`BOOKORBIT_AUDIO_POLL_SECONDS`](#bookorbit) | `300` | server |  |
+| [`BOOKORBIT_AUDIO_POLL_WAIT_FOR_SETTLE`](#bookorbit) | `false` | server |  |
+| [`BOOKORBIT_READING_SESSIONS`](#bookorbit) | `true` | server |  |
+| [`BOOKORBIT_SHELF_WATCH_ENABLED`](#bookorbit) | `false` | server |  |
+| [`BOOKORBIT_SHELF_WATCH_NAME`](#bookorbit) | `Up Next` | server |  |
+| [`BOOKORBIT_SHELF_WATCH_THRESHOLD`](#bookorbit) | `95` | server |  |
+| [`BOOKORBIT_SHELF_WATCH_RESCAN_HOURS`](#bookorbit) | `24` | server |  |
+| [`BOOKORBIT_SHELF_WATCH_READALONG`](#bookorbit) | `false` | server |  |
+| [`BOOKORBIT_READING_WATCH_ENABLED`](#bookorbit) | `false` | server |  |
+| [`BOOKORBIT_ANNOTATION_SYNC_MINUTES`](#bookorbit) | `15` | server |  |
+| [`BOOKORBIT_KOSYNC_OWNER`](#bookorbit) | empty | each reader |  |
+| [`BOOKORBIT_READALONG_POLICY`](#bookorbit) | `defer` | server |  |
+| [`READALONG_AUDIO_BITRATE`](#bookorbit) | `32k` | server |  |
+
+### Kavita { #every-setting-kavita }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`KAVITA_ENABLED`](#kavita) | `false` | server and each reader |  |
+| [`KAVITA_SERVER`](#kavita) | empty | server |  |
+| [`KAVITA_WEB_URL`](#kavita) | empty | server |  |
+| [`KAVITA_API_KEY`](#kavita) | empty | each reader |  |
+| [`KAVITA_LIBRARY_ID`](#kavita) | empty | each reader |  |
+| [`KAVITA_COLLECTION_NAME`](#kavita) | `BookBridge` | each reader |  |
+| [`KAVITA_POLL_MODE`](#kavita) | `global` | server |  |
+| [`KAVITA_POLL_SECONDS`](#kavita) | `300` | server |  |
+| [`KAVITA_POLL_WAIT_FOR_SETTLE`](#kavita) | `false` | server |  |
+| [`KAVITA_SHELF_WATCH_ENABLED`](#kavita) | `false` | server |  |
+| [`KAVITA_SHELF_WATCH_NAME`](#kavita) | `Up Next` | server |  |
+| [`KAVITA_SHELF_WATCH_THRESHOLD`](#kavita) | `95` | server |  |
+| [`KAVITA_SHELF_WATCH_RESCAN_HOURS`](#kavita) | `24` | server |  |
+
+### BookFusion { #every-setting-bookfusion }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`BOOKFUSION_ENABLED`](#bookfusion) | `false` | server and each reader |  |
+| [`BOOKFUSION_API_URL`](#bookfusion) | `https://www.bookfusion.com` | server |  |
+| [`BOOKFUSION_ACCESS_TOKEN`](#bookfusion) | empty | each reader |  |
+| [`BOOKFUSION_API_KEY`](#bookfusion) | empty | each reader |  |
+| [`BOOKFUSION_ANNOTATION_SYNC`](#bookfusion) | `false` | each reader |  |
+| [`BOOKFUSION_POLL_MODE`](#bookfusion) | `global` | server |  |
+| [`BOOKFUSION_POLL_SECONDS`](#bookfusion) | `300` | server |  |
+| `BOOKFUSION_POLL_WAIT_FOR_SETTLE` | `false` | server |  |
+
+### Calibre-Web Automated { #every-setting-calibre-web-automated }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`CWA_ENABLED`](#calibre-web-automated-cwa) | `false` | server and each reader |  |
+| [`CWA_SERVER`](#calibre-web-automated-cwa) | empty | server | yes |
+| `CWA_WEB_URL` | empty | server |  |
+| [`CWA_USERNAME`](#calibre-web-automated-cwa) | empty | each reader | yes |
+| [`CWA_PASSWORD`](#calibre-web-automated-cwa) | empty | each reader | yes |
+| [`CWA_SYNC_ENABLED`](#calibre-web-automated-cwa) | `false` | server and each reader |  |
+| [`CWA_SYNC_TOKEN`](#calibre-web-automated-cwa) | empty | each reader | yes |
+| [`CWA_KOBO_SPAN_SYNC`](#calibre-web-automated-cwa) | `true` | server |  |
+| [`CWA_SYNC_POLL_MODE`](#calibre-web-automated-cwa) | `global` | server |  |
+| [`CWA_SYNC_POLL_SECONDS`](#calibre-web-automated-cwa) | `300` | server |  |
+| [`CWA_SYNC_POLL_WAIT_FOR_SETTLE`](#calibre-web-automated-cwa) | `false` | server |  |
+| [`CALIBRE_USE_ABS_IDENTIFIER`](#calibre-web-automated-cwa) | `false` | server |  |
+| [`CALIBRE_LIBRARY_PATH`](#calibre-web-automated-cwa) | empty | server |  |
+
+### Readest { #every-setting-readest }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`READEST_ENABLED`](#readest) | `true` | server and each reader |  |
+| [`READEST_ANNOTATION_SYNC`](#readest) | `false` | each reader |  |
+| [`READEST_ANNOTATION_SYNC_MINUTES`](#readest) | `15` | server |  |
+| [`READEST_EMAIL`](#readest) | empty | each reader |  |
+| [`READEST_PASSWORD`](#readest) | empty | each reader |  |
+| [`READEST_SUPABASE_URL`](#readest) | `https://readest.supabase.co` | server |  |
+| [`READEST_SUPABASE_ANON_KEY`](#readest) | empty | server |  |
+| [`READEST_UPLOAD_ON_MATCH`](#readest) | `false` | each reader |  |
+| [`READEST_GROUP_NAME`](#readest) | `BookBridge` | each reader |  |
+| [`READEST_UPLOAD_READING`](#readest) | `false` | each reader |  |
+| [`READEST_UPLOAD_MAX_PER_RUN`](#readest) | `5` | server |  |
+| [`READEST_UPLOAD_SWEEP_MINUTES`](#readest) | `60` | server |  |
+
+### Hardcover { #every-setting-hardcover }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`HARDCOVER_ENABLED`](#hardcover) | `false` | server and each reader |  |
+| [`HARDCOVER_TOKEN`](#hardcover) | empty | each reader | yes |
+| [`HARDCOVER_UPDATE_COOLDOWN_MINS`](#hardcover) | `60` | server |  |
+| [`HARDCOVER_ANNOTATION_SYNC`](#hardcover) | `false` | server |  |
+| [`HARDCOVER_ANNOTATION_SYNC_MINUTES`](#hardcover) | `30` | server |  |
+| [`HARDCOVER_GRIMMORY_LIST_SYNC`](#hardcover) | `off` | each reader |  |
+| [`HARDCOVER_GRIMMORY_LIST_PREFIX`](#hardcover) | `Grimmory: ` | each reader |  |
+| [`HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES`](#hardcover) | empty | each reader |  |
+
+### StoryGraph { #every-setting-storygraph }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`STORYGRAPH_ENABLED`](#storygraph) | `false` | server and each reader |  |
+| [`STORYGRAPH_SESSION_COOKIE`](#storygraph) | empty | each reader |  |
+| [`STORYGRAPH_REMEMBER_USER_TOKEN`](#storygraph) | empty | each reader |  |
+| [`STORYGRAPH_UPDATE_COOLDOWN_MINS`](#storygraph) | `60` | server |  |
+
+### Goodreads { #every-setting-goodreads }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`GOODREADS_ENABLED`](#goodreads) | `false` | server and each reader |  |
+| [`GOODREADS_SESSION_COOKIE`](#goodreads) | empty | each reader |  |
+| [`GOODREADS_COOKIE_REFRESH_URL`](#goodreads) | empty | each reader |  |
+| [`GOODREADS_COOKIE_REFRESH_TOKEN`](#goodreads) | empty | each reader |  |
+| [`GOODREADS_BROWSER_URL`](#goodreads) | empty | each reader |  |
+| [`GOODREADS_UPDATE_COOLDOWN_MINS`](#goodreads) | `60` | server |  |
+
+### AI { #every-setting-ai }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`LLM_PROVIDER`](#ai-llm-providers-optional) | `ollama` | server | yes |
+| [`LLM_BASE_URL`](#ai-llm-providers-optional) | `http://localhost:8080/v1` | server |  |
+| [`LLM_API_KEY`](#ai-llm-providers-optional) | empty | server |  |
+| [`LLM_EMBED_MODEL`](#ai-llm-providers-optional) | empty | server |  |
+| [`LLM_CHAT_MODEL`](#ai-llm-providers-optional) | empty | server |  |
+| `LLM_NUM_CTX` | empty | server |  |
+| [`OLLAMA_ENABLED`](#ai-llm-providers-optional) | `false` | server |  |
+| [`OLLAMA_URL`](#ai-llm-providers-optional) | `http://ollama:11434` | server |  |
+| [`OLLAMA_EMBED_MODEL`](#ai-llm-providers-optional) | `nomic-embed-text` | server |  |
+| [`OLLAMA_CHAT_MODEL`](#ai-llm-providers-optional) | `qwen2.5:14b` | server |  |
+| [`OLLAMA_KEEP_ALIVE`](#ai-llm-providers-optional) | `5m` | server |  |
+| [`OLLAMA_NUM_CTX`](#ai-llm-providers-optional) | empty | server |  |
+| [`OLLAMA_RERANK_SUGGESTIONS`](#ai-llm-providers-optional) | `true` | server |  |
+| `OLLAMA_RERANK_BAND_MIN` | `60` | server |  |
+| `OLLAMA_RERANK_BAND_MAX` | `95` | server |  |
+| [`OLLAMA_JUDGE_SUGGESTIONS`](#ai-llm-providers-optional) | `true` | server |  |
+| `OLLAMA_JUDGE_MARGIN` | `5` | server |  |
+| `OLLAMA_JUDGE_CONFIDENCE_MIN` | `85` | server |  |
+| [`OLLAMA_ALIGN_FALLBACK`](#ai-llm-providers-optional) | `true` | server |  |
+| `OLLAMA_ALIGN_SIM_THRESHOLD` | `0.72` | server |  |
+| [`OLLAMA_EBOOK_TEXT_FALLBACK`](#ai-llm-providers-optional) | `true` | server |  |
+| [`OLLAMA_ALIGN_ANCHOR_RESCUE`](#ai-llm-providers-optional) | `true` | server |  |
+| `OLLAMA_ALIGN_MAX_WINDOWS` | `80` | server |  |
+| [`OLLAMA_ALIGN_CONTENT_GUARD`](#ai-llm-providers-optional) | `true` | server |  |
+| `OLLAMA_ALIGN_CONTENT_MIN_SIM` | `0.45` | server |  |
+| [`OLLAMA_SUGGEST_JUDGE_GATE`](#ai-llm-providers-optional) | `true` | server |  |
+| `OLLAMA_SUGGEST_AUTOKEEP_SCORE` | `90` | server |  |
+| [`OLLAMA_TRACKER_MATCH`](#ai-llm-providers-optional) | `true` | server |  |
+| [`OLLAMA_LIBRARY_MATCH`](#ai-llm-providers-optional) | `true` | server |  |
+
+### Diagnostics { #every-setting-diagnostics }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| `DIAGNOSTICS_OPT_IN` | `false` | server |  |
+| `DIAGNOSTICS_ENDPOINT_URL` | `https://bookbridge-diagnostics.duckdns.org/api/v1/diagnostics` | server |  |
+
+### Telegram { #every-setting-telegram }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`TELEGRAM_ENABLED`](#telegram-notifications) | `false` | server | yes |
+| [`TELEGRAM_BOT_TOKEN`](#telegram-notifications) | empty | server | yes |
+| [`TELEGRAM_CHAT_ID`](#telegram-notifications) | empty | server | yes |
+| [`TELEGRAM_LOG_LEVEL`](#telegram-notifications) | `ERROR` | server | yes |
+
+### Getting missing books { #every-setting-getting-missing-books }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`SHELFMARK_URL`](#shelfmark) | empty | server |  |
+| [`SHELFMARK_ENABLED`](#shelfmark) | `false` | server |  |
+| `SHELFMARK_USER` | empty | each reader |  |
+| `SHELFMARK_PASSWORD` | empty | each reader |  |
+| [`SHELFMARK_AUDIOBOOK_LIBRARY_ID`](#shelfmark) | empty | each reader |  |
+| [`ACQUISITION_ALLOW_READERS`](#getting-missing-books) | `false` | server |  |
+
+### Sync, matching and alignment { #every-setting-sync-matching-and-alignment }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`SYNC_PERIOD_MINS`](#sync-tuning) | `5` | server | yes |
+| [`SYNC_DELTA_ABS_SECONDS`](#sync-tuning) | `60` | server | yes |
+| [`SYNC_DELTA_KOSYNC_PERCENT`](#sync-tuning) | `0.5` | server | yes |
+| [`SYNC_DELTA_BETWEEN_CLIENTS_PERCENT`](#sync-tuning) | `0.5` | server | yes |
+| [`SYNC_DELTA_KOSYNC_WORDS`](#sync-tuning) | `400` | server |  |
+| `SYNC_FRESHNESS_GUARDS` | `true` | server |  |
+| `SYNC_COMPLETION_PROPAGATION` | `false` | server |  |
+| `SYNC_COMPLETION_THRESHOLD` | `99` | server |  |
+| `SYNC_ROLLBACK_VETO_SECONDS` | `600` | server |  |
+| [`LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS`](#sync-tuning) | `30` | server |  |
+| [`XPATH_FALLBACK_TO_PREVIOUS_SEGMENT`](#advanced-toggles) | `false` | server | yes |
+| [`SYNC_ABS_EBOOK`](#audiobookshelf) | `false` | server |  |
+| [`ABS_EBOOK_LOCATOR_FORMAT`](#audiobookshelf) | `cfi` | server |  |
+| [`REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT`](#advanced-toggles) | `true` | server |  |
+| [`FUZZY_MATCH_THRESHOLD`](#sync-tuning) | `80` | server | yes |
+| [`SUGGESTIONS_ENABLED`](#suggestions) | `false` | server |  |
+| [`SUGGESTIONS_AUTO_MATCH_ENABLED`](#suggestions) | `false` | server |  |
+| [`SUGGESTIONS_AUTO_MATCH_THRESHOLD`](#suggestions) | `100` | server |  |
+| [`SUGGESTIONS_AUTO_MATCH_READALONG`](#suggestions) | `false` | server |  |
+| [`SUGGESTIONS_EXCLUDE_LOCAL_FILES`](#suggestions) | `false` | server |  |
+| [`SUGGESTIONS_AUTO_SCAN_MINUTES`](#suggestions) | `0` | server |  |
+| [`SUGGESTIONS_FULL_REFRESH_ENABLED`](#suggestions) | `false` | server |  |
+| [`SUGGESTIONS_FULL_REFRESH_CRON`](#suggestions) | empty | server |  |
+| `SUGGESTIONS_FULL_REFRESH_DAY` | `off` | server |  |
+| `SUGGESTIONS_FULL_REFRESH_TIME` | `04:00` | server |  |
+| [`INSTANT_SYNC_ENABLED`](#advanced-toggles) | `true` | server | yes |
+| `KOREADER_SESSION_GAP_MINUTES` | `30` | server |  |
+| [`READING_SESSION_MERGE_MINUTES`](#sync-tuning) | `5` | server |  |
+| [`STORYTELLER_POLL_MODE`](#storyteller) | `global` | server |  |
+| [`STORYTELLER_POLL_SECONDS`](#storyteller) | `45` | server |  |
+| `STORYTELLER_POLL_WAIT_FOR_SETTLE` | `false` | server |  |
+| `STORYTELLER_LISTENING_SESSIONS` | `true` | server |  |
+| [`BOOKLORE_POLL_MODE`](#grimmory) | `global` | server |  |
+| [`BOOKLORE_POLL_SECONDS`](#grimmory) | `300` | server |  |
+| [`BOOKLORE_POLL_WAIT_FOR_SETTLE`](#grimmory) | `false` | server |  |
+| [`BOOKLORE_AUDIO_POLL_MODE`](#grimmory) | `global` | server |  |
+| [`BOOKLORE_AUDIO_POLL_SECONDS`](#grimmory) | `300` | server |  |
+| [`BOOKLORE_AUDIO_POLL_WAIT_FOR_SETTLE`](#grimmory) | `false` | server |  |
+
+### Server, paths and interface { #every-setting-server-paths-and-interface }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| `UI_MODE` | `classic` | each reader |  |
+| `UI_THEME` | `auto` | server |  |
+| `UI_LIBRARY_STYLE` | `cards` | server |  |
+| `UI_SHELF_FINISH` | `theme` | server |  |
+| `UI_COVER_SIZE` | `2` | server |  |
+| `UI_SHOW_PROGRESS` | `true` | server |  |
+| `UI_SHOW_FINISHED` | `true` | server |  |
+| `UI_SHOW_FORMAT_STRIP` | `true` | server |  |
+| `UI_SHOW_RATINGS` | `true` | server |  |
+| `UI_SHOW_TITLES` | `true` | server |  |
+| `UI_SHOW_HERO` | `true` | server |  |
+| `UI_HERO_CONTENT` | `stats` | server |  |
+| [`TZ`](#paths-and-system) | `America/New_York` | server | yes |
+| [`LOG_LEVEL`](#paths-and-system) | `INFO` | server | yes |
+| [`DATA_DIR`](#paths-and-system) | `/data` | server | yes |
+| [`BOOKS_DIR`](#paths-and-system) | `/books` | server | yes |
+| [`EXTRA_EBOOK_DIRS`](#paths-and-system) | empty | server | yes |
+| [`AUDIOBOOKS_DIR`](#paths-and-system) | `/audiobooks` | server | yes |
+| [`STORYTELLER_LIBRARY_DIR`](#storyteller) | `/storyteller_library` | server | yes |
+| [`STORYTELLER_ASSETS_DIR`](#storyteller) | empty | server |  |
+| [`STORYTELLER_UPLOAD_CHUNK_SIZE`](#storyteller) | `5242880` | server |  |
+| `STORYTELLER_NO_EPUB_CACHE` | `false` | server |  |
+| [`STORYTELLER_LIBRARY_TIMEOUT`](#storyteller) | `10` | server |  |
+| `STORYTELLER_RECOVERY_MAX_WAIT_MINUTES` | `360` | server | yes |
+| `STORYTELLER_RECOVERY_POLL_INTERVAL_MINUTES` | `2` | server | yes |
+| [`EBOOK_CACHE_SIZE`](#paths-and-system) | `3` | server | yes |
+| `ALIGNMENT_CACHE_SIZE` | `3` | server | yes |
+| [`JOB_MAX_RETRIES`](#sync-tuning) | `5` | server |  |
+| [`JOB_RETRY_DELAY_MINS`](#sync-tuning) | `15` | server |  |
+| [`WHISPER_MODEL`](#transcription-settings) | `tiny` | server |  |
+| [`WHISPER_DEVICE`](#transcription-settings) | `auto` | server |  |
+| [`WHISPER_COMPUTE_TYPE`](#transcription-settings) | `auto` | server |  |
+| [`WHISPER_VAD_FILTER`](#transcription-settings) | `false` | server |  |
+| [`WHISPER_LANGUAGE`](#transcription-settings) | empty | server |  |
+| [`TRANSCRIPTION_PROVIDER`](#transcription-settings) | `local` | server |  |
+| [`DEEPGRAM_API_KEY`](#transcription-settings) | empty | server |  |
+| [`DEEPGRAM_MODEL`](#transcription-settings) | `nova-2` | server |  |
+| [`WHISPER_CPP_URL`](#transcription-settings) | empty | server |  |
+| [`WHISPER_CPP_TIMEOUT`](#transcription-settings) | `600` | server |  |
+| [`WHISPER_CPP_SEND_ORIGINAL`](#transcription-settings) | `false` | server |  |
+| [`WHISPER_CPP_CHUNK_MINUTES`](#transcription-settings) | `0` | server |  |
+| [`CTC_ENABLED`](#transcription-settings) | `true` | server |  |
+| [`CTC_MODEL`](#transcription-settings) | `quartznet` | server |  |
+| [`CTC_QUARTZNET_MODEL_PATH`](#transcription-settings) | empty | server | yes |
+| [`CTC_DEVICE`](#transcription-settings) | `auto` | server | yes |
+| [`SMIL_SKIP_CTC`](#transcription-settings) | `false` | server |  |
+| [`ALIGNMENT_SEGMENTED_MAPS`](#transcription-settings) | `false` | server |  |
+| [`CONTENT_MATCH_GUARD`](#transcription-settings) | `true` | server |  |
+| [`CONTENT_MATCH_MIN_OVERLAP`](#transcription-settings) | `0.15` | server |  |
+| [`AUDIO_SPLIT_DURATION_MINUTES`](#transcription-settings) | `45` | server |  |
+| [`SMIL_VALIDATION_THRESHOLD`](#transcription-settings) | `60` | server |  |
+| `TRANSCRIPT_MIN_COVERAGE` | `0.85` | server |  |
+| `DIAGNOSTICS_MAX_PAYLOAD_BYTES` | `800000` | server |  |
+| `SHARE_ALL_BOOKS_WITH_ALL_USERS` | `false` | server |  |
+| [`SERIES_SHOW_CURRENT_BOOK_DETAIL`](#series-display) | `false` | server |  |
+
+### Set by BookBridge { #every-setting-set-by-bookbridge }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| `READEST_ACCESS_TOKEN` | empty | each reader |  |
+| `READEST_REFRESH_TOKEN` | empty | each reader |  |
+| `READEST_TOKEN_EXPIRES_AT` | empty | each reader |  |
+| `SERVICE_GATE_RECONCILED` | empty | server |  |
+| `DIAGNOSTICS_PROMPTED` | empty | server |  |
+| `DIAGNOSTICS_INSTANCE_ID` | empty | server |  |
+| `DIAGNOSTICS_LAST_SENT` | empty | server |  |
+| `DIAGNOSTICS_INGEST_TOKEN` | empty | server |  |
+
+<!-- settings-index:end -->
 
 ## GPU Support (Optional)
 

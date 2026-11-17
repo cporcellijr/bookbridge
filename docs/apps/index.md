@@ -17,7 +17,7 @@ Settings → Services
 <div markdown>
 Account → My Integrations
 
-**Each reader.** Your own login for the app, so everyone keeps their own progress. An admin can fill this in for a reader under **Settings → Users → Integrations**.
+**Each reader.** Your own login for the app, so everyone keeps their own progress. Click your name, choose **Account**, then **Open integrations** (readers who are not admins also have **My apps** in the sidebar). An admin can fill this in for a reader under **Settings → Users → Integrations**.
 </div>
 </div>
 
