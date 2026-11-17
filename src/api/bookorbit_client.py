@@ -2125,10 +2125,18 @@ class BookOrbitClient:
         for book_id in wanted:
             resp = self._make_request("GET", f"/api/v1/books/{book_id}/sessions")
             if not resp or resp.status_code != 200:
-                continue
+                raise RuntimeError(
+                    f"BookOrbit session lookup for book {book_id} failed "
+                    f"(status={getattr(resp, 'status_code', None)})"
+                )
             data = self._parse_json(resp)
-            items = data.get("items") if isinstance(data, dict) else None
-            for session in items or ():
+            if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+                raise RuntimeError(
+                    f"BookOrbit session lookup for book {book_id} returned "
+                    "a malformed response"
+                )
+            items = data["items"]
+            for session in items:
                 if not isinstance(session, dict):
                     continue
                 ended = self._parse_session_timestamp(session.get("endedAt"))

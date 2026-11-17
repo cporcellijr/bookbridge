@@ -1,5 +1,6 @@
 """Native page relay and aggregate export use real SQLite, without progress writes."""
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -12,6 +13,7 @@ from src.db.models import Book, BookOrbitPageStatExport, BookOrbitSessionEvent, 
 from src.services.bookorbit_page_stat_service import BookOrbitPageStatService
 from src.services.bookorbit_session_service import BookOrbitSessionService
 from src.sync_manager import SyncManager
+from src.utils.logging_utils import PersistentConditionLogger
 from src.utils.user_context import set_current_user_id, reset_current_user_id
 
 HASH = 'a' * 32
@@ -71,7 +73,7 @@ def test_native_owner_setting_and_import_are_removed():
     template = ('templates/next/_settings_form.html' if (root / 'templates/next/_settings_form.html').exists()
                 else 'templates/next/settings.html')
     for name in ('src/utils/config_loader.py', 'src/utils/user_config.py', 'src/sync_manager.py', template):
-        assert 'BOOKORBIT_NATIVE_READING_SESSIONS' not in (root / name).read_text()
+        assert 'BOOKORBIT_NATIVE_READING_SESSIONS' not in (root / name).read_text(encoding='utf-8')
     assert not hasattr(BookOrbitSessionService, 'import_book')
 
 
@@ -256,6 +258,91 @@ def test_user_scoping_does_not_reuse_another_users_outbox(setup):
     client._koreader_plugin_request.assert_not_called()
 
 
+@pytest.mark.parametrize(('method', 'value'), [
+    ('_get_base_url', 'https://other-books.example'),
+    ('_get_username', 'another-reader'),
+    ('_get_api_key', 'another-key'),
+])
+def test_existing_page_relay_keeps_old_account_work_pending_after_account_change(setup, monkeypatch, method, value):
+    db, _, client, _ = setup
+    service = enqueue(db, client)
+    monkeypatch.setattr(client, method, lambda: value)
+    if method == '_get_username':
+        client._creds['BOOKORBIT_KOSYNC_USER'] = value
+    service.flush()
+    client._koreader_plugin_request.assert_not_called()
+    assert statuses(db) == ['pending']
+
+
+@pytest.mark.parametrize(('method', 'value'), [
+    ('_get_base_url', 'https://other-books.example'),
+    ('_get_username', 'another-reader'),
+    ('_get_api_key', 'another-key'),
+])
+def test_existing_aggregate_relay_keeps_old_account_work_pending_after_account_change(setup, monkeypatch, method, value):
+    db, book, client, service = setup
+    event_id = service.enqueue(book, 7, payload(service))
+    monkeypatch.setattr(client, method, lambda: value)
+    if method == '_get_username':
+        client._creds['BOOKORBIT_KOSYNC_USER'] = value
+    assert service.deliver(event_id) is False
+    client._make_request.assert_not_called()
+    with db.get_session() as session:
+        assert session.get(BookOrbitSessionEvent, event_id).status == 'pending'
+
+
+def test_aggregate_delivery_keeps_first_file_pin_when_lookup_races(setup, monkeypatch):
+    db, book, client, service = setup
+    event_id = service.enqueue(book, 7, payload(service))
+
+    def pin_another_file(_book_id, _kind):
+        db.update_bookorbit_session_event_payload(event_id, service.scope, service.user_id, 99)
+        return 10
+
+    monkeypatch.setattr(client, '_resolve_primary_file_id', pin_another_file)
+    client.create_reading_session = Mock(return_value=True)
+    assert service.deliver(event_id)
+    client.create_reading_session.assert_called_once()
+    assert client.create_reading_session.call_args.kwargs['book_file_id'] == 99
+    with db.get_session() as session:
+        stored = json.loads(session.get(BookOrbitSessionEvent, event_id).payload_json)
+    assert stored['book_file_id'] == 99
+
+
+def test_aggregate_delivery_rechecks_destination_after_file_lookup(setup, monkeypatch):
+    db, book, client, service = setup
+    event_id = service.enqueue(book, 7, payload(service))
+
+    def change_account(_book_id, _kind):
+        monkeypatch.setattr(client, '_get_api_key', lambda: 'changed-key')
+        return 10
+
+    monkeypatch.setattr(client, '_resolve_primary_file_id', change_account)
+    assert service.deliver(event_id) is False
+    client._make_request.assert_not_called()
+    with db.get_session() as session:
+        assert session.get(BookOrbitSessionEvent, event_id).status == 'pending'
+
+
+def test_page_relay_credential_warning_is_suppressed_and_resolved(setup, monkeypatch, caplog):
+    import src.services.bookorbit_page_stat_service as page_stat_module
+
+    db, _, client, _ = setup
+    service = enqueue(db, client)
+    conditions = PersistentConditionLogger()
+    monkeypatch.setattr(page_stat_module, 'get_persistent_condition_logger', lambda: conditions)
+    client._creds['BOOKORBIT_KOSYNC_KEY'] = ''
+    with caplog.at_level(logging.INFO, logger=page_stat_module.logger.name):
+        service.flush()
+        service.flush()
+        assert sum('BookOrbit page relay pending: KOReader credentials' in record.message
+                   for record in caplog.records) == 1
+        client._creds['BOOKORBIT_KOSYNC_KEY'] = 'private'
+        service.flush()
+    assert any('BookOrbit page relay credentials recovered' in record.message for record in caplog.records)
+    client._koreader_plugin_request.assert_called_once()
+
+
 def test_statistics_network_does_not_block_position_thread(setup, monkeypatch):
     import threading
     db, _, client, _ = setup
@@ -343,3 +430,102 @@ def test_native_request_book_limit_is_preserved(setup):
     assert len(client._koreader_plugin_request.call_args.args[3]['books']) == 50
     service.flush()
     assert statuses(db).count('delivered') == 51
+
+
+# ---------------------------------------------------------------------------
+# find_covering_sessions transport / response failures must not silently
+# return [] so that _deliver_reading_session posts blindly. A failed GET is
+# not proof that no native session exists, so the delivery must stay pending.
+# ---------------------------------------------------------------------------
+
+def _bookorbit_pending_row(db, book, book_id=7, candidate_ids=None):
+    """A closed buffer row with bookorbit_status='pending' as the flush pass sees it."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        id=1, abs_id=book.abs_id, accumulated_seconds=90, started_at=910,
+        last_event_at=1000, start_progress=0.5, end_progress=0.6,
+        grimmory_book_id=None, grimmory_status="disabled",
+        bookorbit_book_id=book_id, bookorbit_status="pending",
+        bookorbit_candidate_ids=json.dumps(candidate_ids or [book_id]),
+        leader_client="ABS", session_type="EPUB", end_location=None,
+    )
+
+
+def _run_bookorbit_delivery(setup, client, pending_row, destination="bookorbit"):
+    """Drive the real manager._deliver_reading_session path with a pending row."""
+    db, book, _, _ = setup
+    from src.services.bookorbit_session_service import BookOrbitSessionService
+    service = BookOrbitSessionService(db, client)
+    # The outbox must be empty so the only delivery attempt is the POST below.
+    assert not service.exists(service._key('export', pending_row.bookorbit_book_id,
+                                            ['buffer', pending_row.abs_id, pending_row.id,
+                                             pending_row.last_event_at, pending_row.start_progress,
+                                             pending_row.end_progress]))
+    # create_reading_session is the real method on BookOrbitClient; mock it so the
+    # test can assert whether the POST was attempted at all.
+    client.create_reading_session = Mock(return_value=True)
+    from src.sync_manager import SyncManager
+    manager = SyncManager(database_service=db, bookorbit_client=client, sync_clients={})
+    delivered = manager._deliver_reading_session(pending_row, destination, 90)
+    return delivered, manager, service
+
+
+def test_bookorbit_session_dedupe_transport_failure_keeps_delivery_pending(setup):
+    """A transport failure (None response) is not an empty result."""
+    db, book, client, _ = setup
+    pending = _bookorbit_pending_row(db, book)
+    client._make_request.return_value = None  # network failure / no token
+    delivered, manager, service = _run_bookorbit_delivery(setup, client, pending)
+    assert delivered is False
+    client.create_reading_session.assert_not_called()
+    # The outbox must not have been seeded, so a retry can still fire.
+    assert not service.exists(service._key('export', pending.bookorbit_book_id,
+                                           ['buffer', pending.abs_id, pending.id,
+                                            pending.last_event_at, pending.start_progress,
+                                            pending.end_progress]))
+
+
+def test_bookorbit_session_dedupe_http_error_keeps_delivery_pending(setup):
+    """A non-200 status is a failure, not a valid empty response."""
+    db, book, client, _ = setup
+    pending = _bookorbit_pending_row(db, book)
+    client._make_request.return_value = SimpleNamespace(status_code=503)
+    delivered, manager, service = _run_bookorbit_delivery(setup, client, pending)
+    assert delivered is False
+    client.create_reading_session.assert_not_called()
+    assert not service.exists(service._key('export', pending.bookorbit_book_id,
+                                           ['buffer', pending.abs_id, pending.id,
+                                            pending.last_event_at, pending.start_progress,
+                                            pending.end_progress]))
+
+
+@pytest.mark.parametrize('data', [None, [], {}, {'unexpected': []},
+                                 {'items': None}, {'items': {}}, {'items': 'bad'}])
+def test_bookorbit_session_dedupe_malformed_top_level_response_keeps_delivery_pending(setup, data):
+    """A 200 whose top-level shape is wrong is not a valid empty items list."""
+    db, book, client, _ = setup
+    pending = _bookorbit_pending_row(db, book)
+    client._make_request.return_value = SimpleNamespace(
+        status_code=200, json=Mock(return_value=data))
+    delivered, manager, service = _run_bookorbit_delivery(setup, client, pending)
+    assert delivered is False
+    client.create_reading_session.assert_not_called()
+    assert not service.exists(service._key('export', pending.bookorbit_book_id,
+                                           ['buffer', pending.abs_id, pending.id,
+                                            pending.last_event_at, pending.start_progress,
+                                            pending.end_progress]))
+
+
+def test_bookorbit_session_dedupe_valid_empty_result_posts_normally(setup):
+    """A 200 with an empty items list is a valid empty result, so the session posts."""
+    db, book, client, _ = setup
+    pending = _bookorbit_pending_row(db, book)
+    client._make_request.return_value = SimpleNamespace(
+        status_code=200, json=Mock(return_value={"items": []}))
+    delivered, manager, service = _run_bookorbit_delivery(setup, client, pending)
+    assert delivered is True
+    client.create_reading_session.assert_called_once()
+    assert service.exists(service._key('export', pending.bookorbit_book_id,
+                                       ['buffer', pending.abs_id, pending.id,
+                                        pending.last_event_at, pending.start_progress,
+                                        pending.end_progress]))

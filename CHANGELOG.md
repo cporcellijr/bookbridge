@@ -25,6 +25,15 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **KOReader statistics reach BookOrbit with their original device identity.** Raw page
+  events use BookOrbit's native endpoint, so direct plugin uploads and BridgeSync uploads
+  can share the same event identity. Retries reuse durable receipts; account changes hold
+  older pending work. Other apps' session exports keep stable IDs and their chosen file.
+  Failed duplicate checks leave delivery pending. Native delivery requires matching BookOrbit KOReader credentials;
+  coarse-only sessions stay local, and existing duplicates are retained. BookOrbit ebook
+  movement no longer generates estimated local sessions; native sessions are not imported.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #598.
+
 - **KoSync keeps an approved rewind when you continue reading, including on another copy
   of the book.** Device updates preserve the rewind cutoff, and updates from another
   copy retain their device-origin marker when the sync cycle reads the book's main hash.

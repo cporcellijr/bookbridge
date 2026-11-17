@@ -48,6 +48,7 @@ from .repositories.advanced_queries import AdvancedQueriesMixin
 from .repositories.acquisition import AcquisitionMixin
 from .repositories.state import StateMixin
 from .repositories.books import BooksMixin
+from .repositories.bookorbit_stats import BookOrbitStatsMixin
 
 class DatabaseService(
     TrackerDetailsMixin,
@@ -70,6 +71,7 @@ class DatabaseService(
     AcquisitionMixin,
     StateMixin,
     BooksMixin,
+    BookOrbitStatsMixin,
 ):
     """
     Unified SQLAlchemy-based database service providing direct model operations.

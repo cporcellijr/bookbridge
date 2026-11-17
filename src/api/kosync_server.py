@@ -976,10 +976,6 @@ def _get_kosync_session_type(book) -> str:
     return "EBOOK"
 
 
-def _record_device_reading_session(book, **values):
-    _database_service.record_reading_session(**values)
-
-
 def _persist_grouped_kosync_session(session_data: dict) -> None:
     if not _supports_estimated_kosync_sessions(session_data["device"], session_data["device_id"]):
         logger.debug(
@@ -993,7 +989,7 @@ def _persist_grouped_kosync_session(session_data: dict) -> None:
     if duration_seconds < _KOSYNC_SESSION_MIN_SECONDS or duration_seconds > _KOSYNC_SESSION_MAX_SECONDS:
         return
 
-    _record_device_reading_session(_database_service.get_book(session_data['abs_id']),
+    _database_service.record_reading_session(
         abs_id=session_data["abs_id"],
         session_type=session_data["session_type"],
         start_time=session_data["start_time"],
@@ -3255,7 +3251,7 @@ def kosync_upload_sessions():
             continue
 
         try:
-            _record_device_reading_session(book,
+            _database_service.record_reading_session(
                 abs_id=abs_id,
                 session_type=session_type,
                 start_time=float(start_time),

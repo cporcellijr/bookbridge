@@ -30,6 +30,8 @@ is attempted.
 * Only stored canonical rows are queued, not incoming cross-device echoes rejected
   by the statistics repository.
 * Each queue entry is scoped to the bridge user and BookOrbit account/server.
+  An in-flight relay stops if its server URL, username or API key changes; pending
+  receipts remain assigned to the previous destination identity.
 * Requests stay within 500 events and 50 books and retain the source UUID.
 * Acknowledged native duplicates count as delivered. Failures, unmatched hashes
   and incomplete acknowledgements retain pending work.
