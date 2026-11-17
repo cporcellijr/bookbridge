@@ -1940,6 +1940,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             ws.EbookResult(
                 name="The Reader's Copy.epub",
                 title="The Reader's Copy",
+    def test_reader_documents_list_loads_only_when_opened(self):
+        # Measured live: the closed panel fetched 3,657 documents (1.3 MB) on every Discover visit.
+        reader_docs_html = self._read_template_source('_reader_documents.html')
+        init = reader_docs_html[reader_docs_html.index("document.addEventListener('DOMContentLoaded'"):]
+        self.assertIn("fetchKosyncJson('/api/me/kosync-documents?summary=1')", init)
+        self.assertNotIn('loadKosyncDocuments(false)\n            .then(openKosyncSectionFromHash)', init)
+        self.assertIn("if (section.open) {\n                    loadKosyncDocuments(false)", init)
+
                 authors="A. Author",
                 source="BookOrbit",
                 source_id="bo-1",

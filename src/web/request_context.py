@@ -87,16 +87,19 @@ def inject_csrf_script(response):
 
 
 def gzip_html_response(response):
-    """after_request hook: compress HTML pages for browsers that accept gzip.
+    """after_request hook: compress HTML pages and signed-in JSON for browsers that accept gzip.
 
     The Library page is about 500 KB of markup and compresses to a tenth of that in a
-    few milliseconds, which matters on a phone.
+    few milliseconds, which matters on a phone. Discover's JSON (1.3 MB of reader
+    documents) shrinks the same way. JSON is compressed only for a browser session:
+    KoSync devices reach the same app without one and keep plain responses.
     """
     web = _web_server()
     try:
         if (
             response.status_code != 200
-            or response.mimetype != 'text/html'
+            or response.mimetype not in ('text/html', 'application/json')
+            or (response.mimetype == 'application/json' and not web.session.get('user_id'))
             or response.direct_passthrough
             or response.is_streamed
             or 'Content-Encoding' in response.headers

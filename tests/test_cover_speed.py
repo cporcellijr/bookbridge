@@ -7,6 +7,7 @@ keep their direct URLs across restarts, and HTML pages are gzipped.
 """
 
 import gzip
+import json
 import os
 import shutil
 import tempfile
@@ -267,6 +268,20 @@ class TestHtmlIsGzipped(unittest.TestCase):
         for url in ("/tiny", "/data"):
             response = self.client.get(url, headers={"Accept-Encoding": "gzip"})
             self.assertNotIn("Content-Encoding", response.headers, url)
+
+    def test_json_is_compressed_only_for_a_signed_in_browser(self):
+        # Measured live: Discover read 1.3 MB of reader-document JSON uncompressed (179 KB gzipped).
+        # A KoSync device has no web session, so its JSON stays plain.
+        self.app.secret_key = "test"
+        device = self.client.get("/data", headers={"Accept-Encoding": "gzip"})
+        self.assertNotIn("Content-Encoding", device.headers)
+        with self.client.session_transaction() as session:
+            session["user_id"] = 1
+        browser = self.client.get("/data", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(browser.headers["Content-Encoding"], "gzip")
+        self.assertEqual(json.loads(gzip.decompress(browser.data)), {"cards": ["x" * 4000]})
+        refused = self.client.get("/data", headers={"Accept-Encoding": "gzip;q=0"})
+        self.assertNotIn("Content-Encoding", refused.headers)
 
     def test_compression_runs_after_the_csrf_script_is_added(self):
         from tests.test_webserver import MockContainer

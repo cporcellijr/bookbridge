@@ -1202,6 +1202,9 @@ class TestMultiUserAuth(unittest.TestCase):
         hashes = {doc["document_hash"] for doc in resp.get_json()["documents"]}
         self.assertEqual(hashes, {"b" * 32, "c" * 32})
 
+        summary = self.client.get('/api/me/kosync-documents?summary=1').get_json()
+        self.assertEqual(summary, {"total": 2, "linked": 1, "unlinked": 1})
+
         books_resp = self.client.get('/api/me/books')
         self.assertEqual(books_resp.status_code, 200)
         self.assertEqual(

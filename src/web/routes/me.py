@@ -39,6 +39,14 @@ def api_me_kosync_documents():
     web = _web_server()
     user = web.current_user()
     claimed_abs_ids = web._current_user_claimed_abs_ids(user)
+    if web.request.args.get("summary") == "1":
+        # The collapsed panel shows only counts; the full list loads when it opens.
+        visible = [
+            doc for doc in web.database_service.get_all_kosync_documents()
+            if web._kosync_document_visible_to_user(doc, user, claimed_abs_ids)
+        ]
+        linked = sum(1 for doc in visible if doc.linked_abs_id)
+        return web.jsonify({"total": len(visible), "linked": linked, "unlinked": len(visible) - linked})
     visible_docs = []
     for doc in web.database_service.get_all_kosync_documents():
         if not web._kosync_document_visible_to_user(doc, user, claimed_abs_ids):

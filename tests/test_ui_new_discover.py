@@ -219,6 +219,16 @@ class TestDiscoverPhoneFilters(unittest.TestCase):
         self.assertIn('.discover-page #filterBar:not(.open) > .filter-field:not(.grow)', css)
         self.assertIn('.discover-page .discover-filters-toggle { display: none; }', css)
 
+    def test_series_filter_width_does_not_follow_its_options(self):
+        # Measured live: the select grew 140 -> 281px when 199 series arrived, wrapping
+        # the filter row and shifting the results down 40px (CLS 0.28-0.60 on desktop).
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/next/suggestions.html').read_text(encoding='utf-8')
+        css = (root / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        field = template[:template.index('id="seriesFilter"')].rsplit('<div class="', 1)[1]
+        self.assertTrue(field.startswith('filter-field series-field"'), field)
+        self.assertIn('@media (min-width: 921px) { .discover-page .filter-field.series-field { flex: 0 0 240px; } }', css)
+
 
 class TestDiscoverPhoneQueueBar(unittest.TestCase):
     """Phone Discover can reach the selected book and queued items without a long scroll."""

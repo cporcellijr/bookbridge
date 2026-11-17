@@ -125,6 +125,23 @@ class TestBookPage(unittest.TestCase):
         assert 'Not reported' not in text
         assert 'Last:' not in text  # no app is known to have moved the place last
 
+    def test_book_window_cover_uses_the_thumbnail_not_the_original(self):
+        # Measured live: the original cover was 3000x4794 (1.98 MB) for a 150x220 slot.
+        self.service.save_book(Book(abs_id='book-1', abs_title='A Reader’s Book',
+                                    ebook_filename='reader.epub', status='active',
+                                    duration=3600, kosync_doc_id='abc123'))
+        self._login('ui-reader')
+        globals_ = self.app.jinja_env.globals
+        with patch.dict(globals_, {'thumb_cover_src': lambda doc: '/covers/thumb/abc123.jpg?v=1-2'}):
+            text = self.client.get('/book/book-1?fragment=1').get_data(as_text=True)
+        cover = re.search(r'<img class="book-cover"[^>]*>', text).group(0)
+        assert 'src="/covers/thumb/abc123.jpg?v=1-2"' in cover
+        assert 'data-cover-original="/covers/abc123.jpg"' in cover  # an evicted thumbnail still has the original
+        with patch.dict(globals_, {'thumb_cover_src': lambda doc: None}):
+            text = self.client.get('/book/book-1?fragment=1').get_data(as_text=True)
+        cover = re.search(r'<img class="book-cover"[^>]*>', text).group(0)
+        assert 'src="/covers/abc123.jpg"' in cover and 'data-cover-original' not in cover
+
     def test_goodreads_row_links_and_changes_the_link(self):
         from src.db.models import GoodreadsDetails
         self._login('ui-reader')
