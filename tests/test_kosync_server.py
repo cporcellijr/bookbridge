@@ -1137,7 +1137,9 @@ class TestKosyncEndpoints(unittest.TestCase):
         svc.save_kosync_document(KosyncDocument(
             document_hash=copy_hash, linked_abs_id="copy-marker", user_id=admin_id,
         ))
-        kosync_server._kosync_recent_external_puts.clear()
+        patcher = patch.object(kosync_server, '_kosync_recent_external_puts', {})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         put = self.client.put("/syncs/progress", headers=self.auth_headers, json={
             "document": copy_hash, "progress": "/body/DocFragment[9]/body/p[3].0",

@@ -25,6 +25,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **KoSync keeps an approved rewind when you continue reading, including on another copy
+  of the book.** Device updates preserve the rewind cutoff, and updates from another
+  copy retain their device-origin marker when the sync cycle reads the book's main hash.
+  Contributed by [@jucor](https://github.com/jucor) in #600.
+
 - **"Clear stale suggestions" no longer erases your "Never suggest" list.** It now removes
   only pending suggestions for books that aren't in your library. Books you marked "Never" and
   BookOrbit reviews you dismissed stay as they were.
