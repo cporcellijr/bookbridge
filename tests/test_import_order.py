@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _run(code):
-    return subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
 
 
 @pytest.mark.parametrize("module", [
