@@ -6,7 +6,25 @@ description: "Display: choose Classic or New, the theme, the library style and w
 
 # Display
 
-**Account → Display** holds every look-and-feel choice for your account. Changes save as you make them and follow you to every device you sign in on.
+Display holds every look-and-feel choice for your account, including switching between Classic and New. Changes save as you make them and follow you to every device you sign in on.
+
+## 1. Open Display
+
+=== "New"
+
+    ![The account menu in the New interface](../assets/guide/use-display-menu.webp){ .bb-shot loading=lazy }
+
+    1. Click your name at the bottom of the sidebar.
+    2. Choose **Display**.
+
+=== "Classic"
+
+    ![The account menu in the Classic interface](../assets/guide/use-display-menu-classic.webp){ .bb-shot loading=lazy }
+
+    1. Click your name at the top right.
+    2. Choose **Display**.
+
+## 2. Choose how it looks
 
 ![Account, Display](../assets/guide/use-display.webp){ .bb-shot loading=lazy }
 
@@ -26,4 +44,4 @@ Further down:
 | **Layout** | What the reading-now card on the Library shows on wider screens: synopsis, book stats and reading streak. Phones keep the simple card, and anything without data is left out. |
 | **Behaviour** | Whether the reading-now card appears at all. |
 
-Classic readers open the same page from the user menu. The library style, cover and card choices shape the New interface's Library.
+The library style, cover and card choices shape the New interface's Library.

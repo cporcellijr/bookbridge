@@ -46,7 +46,7 @@ for (const s of shots) {
   for (const js of s.actions || []) { console.log(s.name, 'action ->', await evaluate(js)); await sleep(s.actionWait || 1500); }
   // marks: [{sel, n}] draws an amber outline and a numbered badge on each element, for the docs' callouts.
   // `sel` marks the first visible match. A mark can give `text` instead: the first button, link, heading or label whose text is exactly that.
-  // badge: 'left' (per shot or per mark) puts the badge beside the element instead of on its top-left corner.
+  // badge: 'left' or 'right' (per shot or per mark) puts the badge beside the element instead of on its top-left corner.
   if (s.marks) console.log(s.name, 'marks ->', await evaluate(`(() => {
     const missing = [];
     ${JSON.stringify(s.marks)}.forEach(({ sel, text, n, badge = ${JSON.stringify(s.badge || 'corner')} }) => {
@@ -61,7 +61,9 @@ for (const s of shots) {
       dot.textContent = n;
       dot.style.cssText = 'position:absolute;z-index:100000;pointer-events:none;width:34px;height:34px;border-radius:50%;background:#F2B544;color:#1A1204;'
         + 'font:700 19px/34px "Instrument Sans",system-ui,sans-serif;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.5);'
-        + (badge === 'left' ? 'left:' + (x - 50) + 'px;top:' + (y + b.height / 2 - 17) + 'px' : 'left:' + (x - 24) + 'px;top:' + (y - 24) + 'px');
+        + (badge === 'left' ? 'left:' + (x - 50) + 'px;top:' + (y + b.height / 2 - 17) + 'px'
+          : badge === 'right' ? 'left:' + (x + b.width + 16) + 'px;top:' + (y + b.height / 2 - 17) + 'px'
+          : 'left:' + (x - 24) + 'px;top:' + (y - 24) + 'px');
       document.body.append(box, dot);
     });
     return missing.length ? 'MISSING ' + missing.join(' | ') : 'ok';
