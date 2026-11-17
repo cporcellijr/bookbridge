@@ -5,7 +5,8 @@
 ### Do I need Storyteller?
 
 No. Storyteller is an optional integration. The bridge does audio ↔ ebook alignment itself
-using built-in Whisper transcription (or the EPUB's SMIL data), so cross-format sync works
+with built-in forced alignment (falling back to Whisper transcription or the EPUB's SMIL data),
+so cross-format sync works
 with just an audio source and an ebook client. Add Storyteller only if you actually use the
 Storyteller read-along app — the bridge will then sync its position and use its transcripts
 as a bonus alignment source.
@@ -49,7 +50,7 @@ the corrected alignment accounts for timestamp gaps between audio chapters.
 
 ### KOReader sends progress under the wrong book
 
-Install **BridgeSync 0.9.10** on each device. Close affected managed books, then run
+Install **BridgeSync 0.9.11** (the current release) on each device. Close affected managed books, then run
 **Bridge Sync → Sync Reading Stats** to repair their saved book identities.
 Positions and highlights are retained; do not delete the books' metadata to repair
 the checksum. The plugin also uses KOReader's metadata handling when managed books

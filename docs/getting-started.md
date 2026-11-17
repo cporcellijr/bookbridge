@@ -4,7 +4,7 @@ description: "Install BookBridge with Docker Compose, connect your apps and link
 
 # Getting Started
 
-Get your library syncing in about ten minutes: start the container, connect your apps in the web UI, and link your first book.
+Setup takes about ten minutes: start the container, connect your apps in the web UI, and link your first book.
 
 !!! info "What you will do"
     1. Gather your Audiobookshelf details (skip for ebook-only)
@@ -182,6 +182,12 @@ You can start in either of these ways:
     5. Click **Match All** in the Batch Match Queue.
 
 That is enough to get syncing started. The normal background cycle runs every 5 minutes by default, and instant sync can react faster when supported by the source.
+
+!!! note "The first alignment takes a while"
+    An ebook-only link syncs straight away. An audiobook paired with an ebook first needs its
+    alignment map, built in the background, which can take a while for a long book depending on
+    your hardware. Follow it on the **Job Queue** (**Processing** in the New interface); the book
+    syncs across formats once its map is ready.
 
 ---
 

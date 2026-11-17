@@ -2,6 +2,11 @@
 
 This guide covers the main workflows in the BookBridge web UI.
 
+!!! tip "Classic and New interface names"
+    This guide uses the Classic interface's names. In the [New interface](new-interface.md) the
+    **Dashboard** is called **Library** and the **Job Queue** is called **Processing**; the
+    workflows are the same.
+
 ## Dashboard
 
 The **Dashboard** is the main status view for your library.
@@ -144,7 +149,7 @@ This is the normal mode when a mapping has an audiobook source.
 
 - The audio source can be **Audiobookshelf**, **Grimmory**, or **BookOrbit**.
 - The text side can include a standard ebook, a Storyteller artifact, or both.
-- The bridge prefers Storyteller transcript timing when available, then falls back to SMIL, then Whisper.
+- The bridge builds its own alignment map with forced alignment on the CPU. Storyteller transcripts, the EPUB's SMIL timing and Whisper transcription are used when a book needs them (another language, out-of-order narration, a different edition).
 
 Use this when you want listening and reading progress to stay aligned.
 
@@ -250,7 +255,7 @@ Plain KOReader/KOSync clients and older Bridge Sync versions continue syncing re
 
 ## Keeping Multiple KOReader Devices in Step
 
-Use **BridgeSync 0.9.10** on every device. When upgrading from an older plugin,
+Use **BridgeSync 0.9.11** (the current release) on every device. When upgrading from an older plugin,
 close affected managed books and run **Bridge Sync → Sync Reading Stats** to repair
 their saved book identities. Positions and highlights are retained. This also
 updates reading status when there are no local status changes to upload.
@@ -385,6 +390,13 @@ When a provider's ebook is safely available in a configured mounted library,
 BookBridge uses that copy instead of downloading another. Missing or unreadable
 mounted files fall back to the cache or provider.
 
+When a BookOrbit or Grimmory book holds more than one ebook file, picking it opens an edition
+chooser with filenames, sizes, the primary-file marker and read-along labels. BookBridge
+remembers the file you chose for matching, downloads, KOReader delivery and progress. If that
+file is later removed or replaced, the book stops syncing its ebook instead of switching to
+another file. Grimmory keeps one progress value per book, so its own progress is skipped for an
+alternate edition while Audiobookshelf and KOReader keep syncing.
+
 ### Final actions
 
 **Add to Queue** puts your pick in the **Batch Match Queue**. From the queue:
@@ -415,6 +427,37 @@ process it.
 (Before 7.5.0 the queue lived on a separate **Batch Match** page.)
 
 ---
+
+## Getting missing books
+
+When a search on Discover's **Search** tab finds only the audiobook or only the ebook of a book
+(or neither), **Get it** requests the missing half from BookOrbit or finds a release in
+Shelfmark, using your own login on each service. BookBridge remembers exactly which book you
+asked for and pairs the new file with it when it arrives. An arrival it cannot identify with
+certainty goes to Discover's review instead of being guessed.
+
+- **My requests** follows each request until it arrives and is paired, declined or cancelled.
+  **Processing** (the Job Queue) shows each stage separately: release or approval, delivery,
+  import into the library, review and pairing.
+- Admins can always use it. Other readers need **Let readers get missing books** turned on in
+  **Settings → Library & Matching** (off by default), and add their own Shelfmark login under
+  **Account → My Integrations**.
+- When BookOrbit is set not to grab releases automatically, you can pick the release in
+  BookBridge. That needs the BookOrbit permission "Download books directly"
+  (`book_request_self_fulfill`) on the login or API key BookBridge uses.
+- Shelfmark results only list releases in the format you asked for and name their source. A
+  Shelfmark audiobook waits as "Downloaded, waiting for the library" until BookOrbit has scanned
+  it in; set **Audiobook destination library** in your integrations to have BookBridge ask for
+  that scan.
+- A download with no progress for 30 minutes says so and suggests checking your download client
+  or indexer sign-in. Nothing is cancelled automatically.
+- Optional: **Follow audiobook requests I make in BookOrbit** also picks up audiobooks you
+  requested inside BookOrbit in the last 30 days and pairs them with your ebook when the title,
+  authors and series match.
+
+Known limits: arrivals are found in your BookOrbit library only, and the **Get it** dialog is
+only in the New interface. See
+[Configuration → Getting missing books](configuration.md#getting-missing-books).
 
 ## Job Queue
 
@@ -780,7 +823,8 @@ and ebook pairings for review. See [Discover](#discover-pairs-and-ebook-only) ab
 
 ### Delete mapping
 
-Stops syncing that book. It does not delete your original media files.
+Stops syncing that book. It does not delete your original media files. In the Classic
+library you can select several books and remove them together.
 
 ### Reset progress
 

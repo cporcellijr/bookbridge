@@ -9,13 +9,16 @@
 
 The **Settings** page is the easiest way to manage the bridge. Most changes take effect as soon as you save. A setting marked **restart** is read once at startup, so saving a change to it restarts the app and brings you back to the dashboard when it is ready. **Different from defaults** in the sidebar lists every setting that differs from its default, each with a **reset** link.
 
-The Settings sidebar is organized into:
+The Settings sidebar is organized into these tabs (the New interface groups them under
+**Connections**, **Sync & library** and **Server**; Classic shows the same tabs in one row):
 
-- **Integrations** — one card per service, in the same order and with the same names as each reader's **My Integrations** page
-- **Sync** — sync behavior, instant sync, and alignment health
-- **Features** — Telegram notifications, Shelfmark, and Suggestions (the Discover page)
+- **Services** — one card per app, in the same order and with the same names as each reader's **My Integrations** page
+- **Reading & Sync** — sync behavior, instant sync, polling, reading sessions and posting to trackers
+- **Library & Matching** — Discover suggestions, watched shelves, series display and getting missing books (BookOrbit and Shelfmark)
+- **Alignment** — transcription, forced alignment and Alignment Health
 - **AI** — the optional LLM assist provider and its feature toggles
-- **System** — timezone and logging, paths, and advanced maintenance tools (transcription, cache cleanup, backfills)
+- **Server** — timezone and logging, Telegram notifications, paths and advanced toggles
+- **Maintenance** — backfills, cache review and other one-off tools
 - **Users** — reader accounts and their per-reader integrations
 - **Logs** — the embedded live log viewer
 
@@ -575,13 +578,31 @@ Found under **Settings -> Server**.
 | Chat ID | `TELEGRAM_CHAT_ID` | empty | Target user or group ID. |
 | Min Log Level | `TELEGRAM_LOG_LEVEL` | `ERROR` | Lowest log severity that gets forwarded. |
 
+#### Getting missing books
+
+Found under **Settings -> Library & Matching -> Getting books**. When a Discover search finds
+only the audiobook or only the ebook, readers can request the missing half from BookOrbit or
+Shelfmark, and BookBridge pairs it when it arrives. See
+[Getting missing books](user-guide.md#getting-missing-books).
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Let readers get missing books | `ACQUISITION_ALLOW_READERS` | `false` | Admins can always request; turn this on to let other readers do it too. |
+
 #### Shelfmark
 
 Found under **Settings -> Library & Matching**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
-| Shelfmark URL | `SHELFMARK_URL` | empty | Adds the Shelfmark shortcut when configured. |
+| Enable Shelfmark | `SHELFMARK_ENABLED` | `false` | Turns on Shelfmark as a source for missing-book requests. An install that already had a Shelfmark URL counts as enabled. |
+| Shelfmark URL | `SHELFMARK_URL` | empty | Your Shelfmark server. Settings also shows an **Open Shelfmark** link, and `/shelfmark` opens it. |
+| Shelfmark username / password | `SHELFMARK_USER`, `SHELFMARK_PASSWORD` | empty | Per reader, under **Account -> My Integrations**. |
+| Audiobook destination library | `SHELFMARK_AUDIOBOOK_LIBRARY_ID` | empty | Per reader. The BookOrbit library to scan when a Shelfmark audiobook download finishes; blank leaves it to BookOrbit's normal scans. |
+
+BookOrbit readers can also turn on **Follow audiobook requests I make in BookOrbit and pair
+them with my ebook** (`BOOKORBIT_ADOPT_REQUESTS`, per reader, off by default) in their BookOrbit
+integration.
 
 #### Series Display
 
