@@ -121,22 +121,7 @@ def max_gap_fraction(alignment_map: Optional[List[Dict]],
         return 1.0
     chars = sorted(int(point.get("char", point.get("global_char", 0)))
                    for point in alignment_map)
-    # Collapse the union of exclusions into a narrated-only coordinate space.
-    # A single sweep avoids multiplying dense per-word anchors by span count.
-    spans = sorted((lo, hi) for lo, hi in (exclude_spans or []) if lo < hi)
-    if spans:
-        adjusted = []
-        removed, cursor, span_idx = 0, chars[0], 0
-        for char in chars:
-            while span_idx < len(spans) and spans[span_idx][0] < char:
-                lo, hi = spans[span_idx]
-                removed += max(0, min(char, hi) - max(cursor, lo))
-                cursor = max(cursor, min(char, hi))
-                if hi > char:
-                    break
-                span_idx += 1
-            adjusted.append(char - removed)
-        chars = adjusted
+    chars = _collapse_excluded(chars, exclude_spans)
     span = chars[-1] - chars[0]
     if span <= 0:
         return 1.0
@@ -145,10 +130,8 @@ def max_gap_fraction(alignment_map: Optional[List[Dict]],
 
 
 def _collapse_excluded(chars: List[int], exclude_spans: Optional[List[Tuple[int, int]]]) -> List[int]:
-    """Collapse the union of exclusions out of an already char-sorted list, in the
-    same single left-to-right sweep `max_gap_fraction` uses. Used by the metrics
-    below (which resolve points via `point_char`, unlike `max_gap_fraction`'s own
-    inline resolution)."""
+    """Collapse the union of exclusions out of an already char-sorted list, in one
+    left-to-right sweep, so dense per-word anchors are not multiplied by span count."""
     spans = sorted((lo, hi) for lo, hi in (exclude_spans or []) if lo < hi)
     if not spans or not chars:
         return list(chars)

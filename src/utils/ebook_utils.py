@@ -1908,7 +1908,6 @@ class EbookParser:
             # Find the exact text element matching the character count
             current_char_count = 0
             target_string = None
-            target_offset = 0
             first_non_empty_string = None
             last_non_empty_string = None
 
@@ -1930,17 +1929,6 @@ class EbookParser:
                 
                 if current_char_count + text_len > local_pos:
                     target_string = string
-                    # Calculate offset within the CLEAN string
-                    clean_offset = local_pos - current_char_count
-                    
-                    # KOReader needs the offset within the RAW string (including leading whitespace etc)
-                    # Find where the clean text starts inside the raw string to determine true offset
-                    raw_text = str(string)
-                    raw_start = raw_text.find(clean_text)
-                    if raw_start == -1:
-                        raw_start = 0
-                    
-                    target_offset = raw_start + clean_offset
                     break
                 
                 current_char_count += text_len
@@ -1950,7 +1938,6 @@ class EbookParser:
 
             if target_string is None:
                 target_string = last_non_empty_string or first_non_empty_string
-                target_offset = 0
 
             if not target_string:
                 logger.warning(f"⚠️ No matching text element found in spine {target_item['spine_index']}")
