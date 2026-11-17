@@ -28,7 +28,7 @@ BookBridge reads and writes your listening position in Audiobookshelf, and hears
 
 <div class="bb-callouts" markdown>
 1. **Enable** it for your account.
-2. **API token:** in Audiobookshelf, open **Settings → Users**, choose your user and copy its API token.
+2. **API token:** in Audiobookshelf, open **Settings → API Keys** and create one.
 3. **Library ID** (optional) keeps your matches to one Audiobookshelf library. **Find IDs** lists them.
 </div>
 

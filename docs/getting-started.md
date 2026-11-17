@@ -103,7 +103,7 @@ What to fill in for your setup:
     | Where | What |
     | :--- | :--- |
     | Settings → Services → **Audiobookshelf** | Server URL |
-    | My Integrations → **Audiobookshelf** | API token: in Audiobookshelf open **Settings → Users**, choose your user and copy its API token |
+    | My Integrations → **Audiobookshelf** | API token: in Audiobookshelf open **Settings → API Keys** and create one |
     | My Integrations → **KOReader / KoSync** | A sync username and password of your choice; you enter the same pair on the device in step 6 |
 
 === "BookOrbit or Grimmory"
