@@ -45,8 +45,8 @@ def api_status():
     all_storygraph = web.database_service.get_all_storygraph_details()
     all_goodreads = web.database_service.get_all_goodreads_details()
     all_reading_stats = web.database_service.get_all_reading_stats(user_id=user_id)
-    cached_booklore_by_filename = web._index_cached_booklore_books(web.database_service.get_all_booklore_books())
     integrations = web._build_dashboard_integrations()
+    cached_booklore_by_filename = web._viewer_booklore_index(integrations)
     mappings, _ = web._build_dashboard_mappings(
         books,
         all_states,

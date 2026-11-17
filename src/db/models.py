@@ -991,6 +991,8 @@ class KOReaderPageStat(Base):
 
     __table_args__ = (
         UniqueConstraint('md5', 'user_id', 'device_key', 'page', 'start_time', name='uq_koreader_page_stats_user_replay'),
+        Index('ix_koreader_page_stats_user_md5_start_time', 'user_id', 'md5', 'start_time'),
+        Index('ix_koreader_page_stats_user_start_time', 'user_id', 'start_time'),
     )
 
     def __init__(

@@ -244,6 +244,18 @@ def _index_cached_booklore_books(all_booklore_books):
     return indexed
 
 
+def _viewer_booklore_index(integrations: dict) -> dict:
+    """Grimmory cache rows by filename key, or none when Grimmory is off for this user.
+
+    The cache stops refreshing when Grimmory is turned off, so its titles, ratings and
+    ids would be stale; an empty dict (not None) also skips the per-book table lookup.
+    """
+    web = _web_server()
+    if not (integrations or {}).get("booklore"):
+        return {}
+    return _index_cached_booklore_books(web.database_service.get_all_booklore_books())
+
+
 def _get_cached_booklore_book(book, cached_booklore_by_filename=None):
     web = _web_server()
     candidates = []

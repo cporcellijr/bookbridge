@@ -1201,6 +1201,7 @@ from src.web.dashboard_metadata import (
     _group_dashboard_mappings_by_series,
     _dashboard_filename_key,
     _index_cached_booklore_books,
+    _viewer_booklore_index,
     _get_cached_booklore_book,
     _get_cached_ebook_display_metadata,
     _coerce_dashboard_rating,

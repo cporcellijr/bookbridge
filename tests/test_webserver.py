@@ -450,7 +450,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             self.mock_database_service.get_all_states.assert_called_once()
             self.mock_database_service.get_all_hardcover_details.assert_called_once()
             self.mock_database_service.get_all_storygraph_details.assert_called_once()
-            self.mock_database_service.get_all_booklore_books.assert_called_once()
+            self.mock_database_service.get_all_booklore_books.assert_not_called()  # Grimmory is not configured
             self.mock_abs_client.get_all_audiobooks.assert_not_called()
             self.mock_abs_client.get_all_progress_raw.assert_not_called()
             self.mock_storyteller_client.get_book_details.assert_not_called()
@@ -1172,7 +1172,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
 
-        self._set_dashboard_integrations(storyteller=False)
+        self._set_dashboard_integrations(storyteller=False, booklore=True)
 
         mapping = self._capture_index_mapping()
         self.assertEqual(mapping['abs_title'], 'Displayed Title')
@@ -1182,6 +1182,35 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(mapping['display_subtitle'], 'Displayed Subtitle')
         self.assertEqual(mapping['display_author'], 'Displayed Author')
         self.assertEqual(mapping['display_filename'], 'book-file.epub')
+
+    def test_index_endpoint_ignores_the_grimmory_cache_when_grimmory_is_off(self):
+        """A disabled Grimmory leaves a cache nothing refreshes: never read it or show it."""
+        from src.db.models import Book, BookloreBook
+
+        test_book = Book(
+            abs_id='ebook-only-1',
+            abs_title='book-file',
+            ebook_filename='book-file.epub',
+            sync_mode='ebook_only',
+            status='active'
+        )
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = [BookloreBook(
+            filename='book-file.epub', title='Stale Title', authors='Stale Author',
+            raw_metadata=json.dumps({'id': 42, 'title': 'Stale Title', 'authors': 'Stale Author'}),
+        )]
+
+        self._set_dashboard_integrations(storyteller=False, booklore=False)
+
+        mapping = self._capture_index_mapping()
+        self.mock_database_service.get_all_booklore_books.assert_not_called()
+        self.mock_database_service.get_booklore_book.assert_not_called()
+        self.assertNotEqual(mapping['display_title'], 'Stale Title')
+        self.assertNotEqual(mapping['display_author'], 'Stale Author')
+        self.assertIsNone(mapping['booklore_id'])
 
     def test_index_endpoint_storyteller_uses_cached_audio_title_for_display(self):
         from src.db.models import Book
@@ -1314,7 +1343,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
-        self._set_dashboard_integrations(storyteller=False)
+        self._set_dashboard_integrations(storyteller=False, booklore=True)
 
         mapping = self._capture_index_mapping()
         self.assertEqual(mapping['display_title'], 'ABS Clean Title')
@@ -1536,7 +1565,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
-        self._set_dashboard_integrations(storyteller=False)
+        self._set_dashboard_integrations(storyteller=False, booklore=True)
 
         html = self._render_index_template_source()
         self.assertIn('data-filename="book-file.epub"', html)
@@ -1603,7 +1632,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
-        self._set_dashboard_integrations(storygraph=True)
+        self._set_dashboard_integrations(storygraph=True, booklore=True)
 
         mapping = self._capture_index_mapping()
 
@@ -1633,7 +1662,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             )
         ]
         self.mock_booklore_client.is_configured.return_value = False
-        self._set_dashboard_integrations(storygraph=False)
+        self._set_dashboard_integrations(storygraph=False, booklore=True)
 
         mapping = self._capture_index_mapping()
 
@@ -1663,7 +1692,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         ]
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_booklore_client.is_configured.return_value = False
-        self._set_dashboard_integrations(storygraph=True)
+        self._set_dashboard_integrations(storygraph=True, booklore=True)
 
         html = self._render_index_template_source()
 
@@ -1911,6 +1940,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('Reader Documents', reader_docs_html)
         self.assertIn('/api/me/kosync-documents', reader_docs_html)
 
+    def test_reader_documents_list_loads_only_when_opened(self):
+        # Measured live: the closed panel fetched 3,657 documents (1.3 MB) on every Discover visit.
+        reader_docs_html = self._read_template_source('_reader_documents.html')
+        init = reader_docs_html[reader_docs_html.index("document.addEventListener('DOMContentLoaded'"):]
+        self.assertIn("fetchKosyncJson('/api/me/kosync-documents?summary=1')", init)
+        self.assertNotIn('loadKosyncDocuments(false)\n            .then(openKosyncSectionFromHash)', init)
+        self.assertIn("if (section.open) {\n                    loadKosyncDocuments(false)", init)
+
     def test_kosync_link_panel_suggests_filename_matches(self):
         reader_docs_html = self._read_template_source('_reader_documents.html')
 
@@ -1940,14 +1977,6 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             ws.EbookResult(
                 name="The Reader's Copy.epub",
                 title="The Reader's Copy",
-    def test_reader_documents_list_loads_only_when_opened(self):
-        # Measured live: the closed panel fetched 3,657 documents (1.3 MB) on every Discover visit.
-        reader_docs_html = self._read_template_source('_reader_documents.html')
-        init = reader_docs_html[reader_docs_html.index("document.addEventListener('DOMContentLoaded'"):]
-        self.assertIn("fetchKosyncJson('/api/me/kosync-documents?summary=1')", init)
-        self.assertNotIn('loadKosyncDocuments(false)\n            .then(openKosyncSectionFromHash)', init)
-        self.assertIn("if (section.open) {\n                    loadKosyncDocuments(false)", init)
-
                 authors="A. Author",
                 source="BookOrbit",
                 source_id="bo-1",

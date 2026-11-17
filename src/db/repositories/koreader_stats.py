@@ -465,17 +465,16 @@ class KOReaderStatsMixin:
             for day in self._date_range(start_date, end_date)
         ]
 
-    def _get_koreader_activity_dates(self, session, md5s: set[str], tz_name: str) -> set:
-        if not md5s:
-            return set()
+    def _get_koreader_activity_dates(self, session, tz_name: str) -> set:
+        # Every UTC offset is a whole number of quarter hours, so a 15-minute bucket never
+        # straddles local midnight. Measured live: 92k page turns took ~300 ms converted one
+        # by one; ~3k distinct buckets take ~10 ms.
+        from sqlalchemy import Integer, cast
 
-        uid = self._resolve_uid(None)
-        query = session.query(KOReaderPageStat.start_time).filter(KOReaderPageStat.md5.in_(md5s))
-        rows = self._scope_koreader_user(query, KOReaderPageStat, uid).all()
-        return {
-            datetime.fromisoformat(self._local_date_from_epoch(row.start_time, tz_name)).date()
-            for row in rows
-        }
+        bucket = cast(KOReaderPageStat.start_time / 900, Integer)
+        query = self._scope_koreader_user(session.query(bucket), KOReaderPageStat, self._resolve_uid(None))
+        tz = ZoneInfo(tz_name)
+        return {datetime.fromtimestamp(row[0] * 900, tz).date() for row in query.distinct().all()}
 
     def get_koreader_dashboard_summary(self, tz_name: str) -> Optional[dict]:
         """Get high-level KOReader reading stats for the dashboard."""
@@ -516,7 +515,7 @@ class KOReaderStatsMixin:
                 start_date=week_start,
                 end_date=now_local,
             )
-            activity_dates = self._get_koreader_activity_dates(session, md5s, tz_name)
+            activity_dates = self._get_koreader_activity_dates(session, tz_name)
             if not activity_dates:
                 return None
 
@@ -572,11 +571,7 @@ class KOReaderStatsMixin:
     def get_koreader_activity_dates(self, tz_name: str) -> list[str]:
         """Get all KOReader activity dates in the configured timezone."""
         with self.get_session() as session:
-            md5s = self._get_all_koreader_active_md5s(session)
-            if not md5s:
-                return []
-
-            dates = self._get_koreader_activity_dates(session, md5s, tz_name)
+            dates = self._get_koreader_activity_dates(session, tz_name)
             return [day.isoformat() for day in sorted(dates)]
 
     def get_koreader_heatmap(self, start_date: date, end_date: date, tz_name: str) -> list[dict]:

@@ -24,9 +24,9 @@ def _dashboard_mappings_for_user(user) -> tuple[list, float, dict]:
     all_storygraph = web.database_service.get_all_storygraph_details()
     all_goodreads = web.database_service.get_all_goodreads_details()
     all_reading_stats = web.database_service.get_all_reading_stats(user_id=user_id)
-    cached_booklore_by_filename = web._index_cached_booklore_books(web.database_service.get_all_booklore_books())
-    claim_times_by_book = web.database_service.get_book_claim_times(user_id=user_id)
     integrations = web._build_dashboard_integrations()
+    cached_booklore_by_filename = web._viewer_booklore_index(integrations)
+    claim_times_by_book = web.database_service.get_book_claim_times(user_id=user_id)
     mappings, overall_progress = web._build_dashboard_mappings(
         books,
         all_states,

@@ -202,7 +202,7 @@ def account_display_page():
             all_storygraph=web.database_service.get_all_storygraph_details(),
             all_goodreads=web.database_service.get_all_goodreads_details(),
             reading_stats_by_book=web.database_service.get_all_reading_stats(user_id=user.id),
-            cached_booklore_by_filename=web._index_cached_booklore_books(web.database_service.get_all_booklore_books()),
+            cached_booklore_by_filename=web._viewer_booklore_index(integrations),
             claim_times_by_book=web.database_service.get_book_claim_times(user_id=user.id),
         )
     return web.render_template(
