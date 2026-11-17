@@ -355,15 +355,6 @@ function BridgeSync:_getSyncFingerprint(service, sync_type, abs_id)
     end
 end
 
--- True when the current fingerprint differs from the stored one
--- (or nothing has ever been stored).  Callers skip the sync when
--- this returns false.
--- @return boolean  true = data changed, sync needed
-function BridgeSync:_fingerprintChanged(service, sync_type, abs_id, current_fingerprint)
-    local stored = self:_getSyncFingerprint(service, sync_type, abs_id)
-    return stored == nil or stored ~= current_fingerprint
-end
-
 -- Persist the pending-session list. In SQLite mode rows are written
 -- individually as sessions are created/merged/uploaded, so this is a no-op
 -- there; the LuaSettings backend stores the whole list in one key.
@@ -1532,8 +1523,16 @@ function BridgeSync:_buildHashIndex()
     local hash_cache = self:_getStateScalarJSON("hash_cache", {})
     local new_cache = {}
 
+    local stale_before = os.time() - 3600
     for entry in lfs.dir(self.download_dir) do
-        if entry ~= "." and entry ~= ".." and not entry:match("%.part$") then
+        if entry:match("%.part$") then
+            -- A download cut off by power loss is never resumed; an hour-old one is a leftover.
+            local part_path = self.download_dir .. "/" .. entry
+            local modified = lfs.attributes(part_path, "modification")
+            if modified and modified < stale_before then
+                self:_safeRemove(part_path)
+            end
+        elseif entry ~= "." and entry ~= ".." then
             local path = self.download_dir .. "/" .. entry
             local attrs = lfs.attributes(path)
             if attrs and attrs.mode == "file" then
@@ -1634,8 +1633,21 @@ function BridgeSync:_moveFile(source_path, target_path)
 
     -- Resolve hash-based metadata while the source bytes still exist.
     DocSettings:open(source_path)
-    self:_safeRemove(target_path)
     local ok, err = os.rename(source_path, target_path)
+    if not ok and self:_fileExists(target_path) then
+        -- Windows rename refuses an existing target. Move it aside instead of
+        -- deleting it first, so a failed rename never leaves no book at all.
+        local backup_path = target_path .. ".bak"
+        self:_safeRemove(backup_path)
+        if os.rename(target_path, backup_path) then
+            ok, err = os.rename(source_path, target_path)
+            if ok then
+                self:_safeRemove(backup_path)
+            else
+                os.rename(backup_path, target_path)
+            end
+        end
+    end
     if not ok then
         return false, err or "rename failed"
     end
@@ -1922,6 +1934,10 @@ function BridgeSync:_updateCollections(items)
 
     local prev_managed = self.settings:readSetting("managed_collections") or {}
     local new_managed = {}
+    local prev_set = {}
+    for _, name in ipairs(prev_managed) do
+        prev_set[name] = true
+    end
     local ok_update, update_err = pcall(function()
         for _, name in ipairs(prev_managed) do
             if ReadCollection.removeCollection then
@@ -1930,17 +1946,22 @@ function BridgeSync:_updateCollections(items)
         end
 
         for shelf_name, shelf_data in pairs(shelf_books) do
-            if ReadCollection.removeCollection then
-                ReadCollection:removeCollection(shelf_name)
+            if not prev_set[shelf_name] and ReadCollection.coll and ReadCollection.coll[shelf_name] then
+                -- The reader made this collection themselves; never replace it.
+                self:logInfo("Skipping shelf", shelf_name, "- a collection with that name already exists on this device")
+            else
+                if ReadCollection.removeCollection then
+                    ReadCollection:removeCollection(shelf_name)
+                end
+                ReadCollection:addCollection(shelf_name)
+                if ReadCollection.coll_settings and ReadCollection.coll_settings[shelf_name] then
+                    ReadCollection.coll_settings[shelf_name].order = 1
+                end
+                for _, file_path in ipairs(shelf_data.files) do
+                    ReadCollection:addItem(file_path, shelf_name)
+                end
+                table.insert(new_managed, shelf_name)
             end
-            ReadCollection:addCollection(shelf_name)
-            if ReadCollection.coll_settings and ReadCollection.coll_settings[shelf_name] then
-                ReadCollection.coll_settings[shelf_name].order = 1
-            end
-            for _, file_path in ipairs(shelf_data.files) do
-                ReadCollection:addItem(file_path, shelf_name)
-            end
-            table.insert(new_managed, shelf_name)
         end
 
         ReadCollection:write()

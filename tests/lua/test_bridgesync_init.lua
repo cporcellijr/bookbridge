@@ -934,6 +934,98 @@ do
     assert(not ok and #metadata_events == 1, "failed deletion must retain metadata")
 end
 
+-- A failed move must never cost the book already at the destination.
+do
+    metadata_events = {}
+    local source = settings_dir .. "/move-source.epub"
+    local target = settings_dir .. "/move-target.epub"
+    local real_rename = os.rename
+    for _, mode in ipairs({ "always_fails", "eexist_then_ok" }) do
+        write_bytes(source, "new")
+        write_bytes(target, "old")
+        local sync = BridgeSync:new{
+            _fileExists = function(_, path) return file_bytes(path) ~= nil end,
+            _safeRemove = function(_, path) os.remove(path); return true end,
+        }
+        os.rename = function(src, dst)
+            if src == source and (mode == "always_fails" or file_bytes(dst) ~= nil) then
+                return nil, "EEXIST: file already exists"
+            end
+            return real_rename(src, dst)
+        end
+        local ok_call, moved = pcall(function() return sync:_moveFile(source, target) end)
+        os.rename = real_rename
+        assert(ok_call, moved)
+        if mode == "always_fails" then
+            assert(not moved and file_bytes(target) == "old", "a failed move deleted the existing book")
+        else
+            assert(moved and file_bytes(target) == "new", "the move-aside retry must publish the new file")
+        end
+        assert(file_bytes(target .. ".bak") == nil, "backup file leaked")
+        os.remove(source)
+        os.remove(target)
+    end
+end
+
+-- Server shelves must never replace a collection the reader made themselves,
+-- while collections BridgeSync made earlier are still rebuilt.
+do
+    local calls = {}
+    local saved_managed
+    package.loaded["readcollection"] = {
+        coll = { Favorites = { mine = true }, Kobo = { old = true } },
+        removeCollection = function(_, name) calls[#calls + 1] = "remove:" .. name end,
+        addCollection = function(_, name) calls[#calls + 1] = "add:" .. name end,
+        addItem = function(_, _, name) calls[#calls + 1] = "item:" .. name end,
+        write = function() end,
+    }
+    local sync = BridgeSync:new{
+        settings = {
+            readSetting = function(_, key) if key == "managed_collections" then return { "Kobo" } end end,
+            saveSetting = function(_, key, value) if key == "managed_collections" then saved_managed = value end end,
+            flush = function() end,
+        },
+        _fileExists = function() return true end,
+        _refreshCollectionsUI = function() end,
+        logInfo = function() end,
+        logWarn = function() end,
+    }
+    sync:_updateCollections({ a = { local_path = "/books/a.epub", shelves = { "Favorites", "Kobo" } } })
+    package.loaded["readcollection"] = nil
+    local joined = table.concat(calls, ",")
+    assert(not joined:find("Favorites", 1, true), "a reader's own collection was touched: " .. joined)
+    assert(joined:find("add:Kobo", 1, true) and joined:find("item:Kobo", 1, true), "a managed shelf must be rebuilt")
+    assert(#saved_managed == 1 and saved_managed[1] == "Kobo", "only BridgeSync's own collections are recorded")
+end
+
+-- A download cut off by power loss leaves a .part file; an old one is removed, a fresh one is not.
+do
+    local lfs = package.loaded["libs/libkoreader-lfs"]
+    local real_attributes, real_dir = lfs.attributes, lfs.dir
+    local times = { ["old.part"] = os.time() - 7200, ["fresh.part"] = os.time() }
+    local removed = {}
+    lfs.dir = function()
+        local names, i = { ".", "..", "old.part", "fresh.part" }, 0
+        return function() i = i + 1; return names[i] end
+    end
+    lfs.attributes = function(path, attribute)
+        if path == "/dl" and attribute == "mode" then return "directory" end
+        local name = path:match("[^/]+$")
+        if attribute == "modification" then return times[name] end
+        return nil
+    end
+    local sync = BridgeSync:new{
+        download_dir = "/dl",
+        _getStateScalarJSON = function() return {} end,
+        _saveStateScalarJSON = function() end,
+        _safeRemove = function(_, path) removed[#removed + 1] = path; return true end,
+    }
+    local ok_call, err = pcall(function() return sync:_buildHashIndex() end)
+    lfs.attributes, lfs.dir = real_attributes, real_dir
+    assert(ok_call, err)
+    assert(#removed == 1 and removed[1] == "/dl/old.part", "only a stale .part is removed: " .. table.concat(removed, ","))
+end
+
 -- The Kindle downloaded Household Inheritance then deleted it through its old
 -- ebook ID. Run the actual forked book-sync entry point and repeat the sync to
 -- prove both file retention and SQLite revision persistence.
