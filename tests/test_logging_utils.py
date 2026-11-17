@@ -1,6 +1,6 @@
 import logging
 
-from src.utils.logging_utils import MojibakeSafeFormatter, repair_mojibake
+from src.utils.logging_utils import MojibakeSafeFormatter, repair_mojibake, setup_telegram_logging
 
 
 def _mojibake(text, rounds=1):
@@ -46,3 +46,28 @@ def test_mojibake_safe_formatter_repairs_formatted_log_output():
     )
 
     assert formatter.format(record) == "INFO - \U0001F504 Hardcover: Setting finished_at to '2026-03-28'"
+
+
+def test_telegram_alert_with_angle_brackets_is_sent_as_plain_text(monkeypatch):
+    """'<Response [500]>' or a traceback's '<lambda>' made Telegram reject HTML mode, losing the alert."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    monkeypatch.delenv("TELEGRAM_ENABLED", raising=False)
+    post = MagicMock()
+    monkeypatch.setattr("src.utils.logging_utils.requests.post", post)
+    handler = setup_telegram_logging()
+    try:
+        record = logging.LogRecord(
+            name="test.logger", level=logging.ERROR, pathname=__file__, lineno=1,
+            msg="ABS push failed: <Response [500]> " + "x" * 5000, args=(), exc_info=None,
+        )
+        handler.emit(record)
+    finally:
+        logging.getLogger().removeHandler(handler)
+
+    payload = post.call_args.kwargs["data"]
+    assert "parse_mode" not in payload
+    assert "<Response [500]>" in payload["text"]
+    assert len(payload["text"]) <= 4096

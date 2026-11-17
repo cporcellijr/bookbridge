@@ -121,6 +121,35 @@ def test_save_alignment_invalidates_cache(service, mock_db):
     assert service._get_alignment("test_id") == fresh_map
 
 
+def test_read_racing_a_save_does_not_recache_the_old_map(service, mock_db):
+    stale_map = [{'char': 0, 'ts': 0.0}]
+    fresh_map = [{'char': 0, 'ts': 0.0}, {'char': 50, 'ts': 5.0}]
+    session = _stub_alignment_row(mock_db, stale_map)
+    stale_entry = session.query.return_value.filter_by.return_value.first.return_value
+    stale_entry.segments_json = None
+
+    def read_old_row_while_a_save_lands():
+        service._invalidate_map_caches("test_id")
+        return stale_entry
+
+    session.query.return_value.filter_by.return_value.first.side_effect = read_old_row_while_a_save_lands
+    mock_db.get_alignment_total_chars.side_effect = lambda _abs_id: (
+        service._invalidate_map_caches("test_id") or 111
+    )
+    assert service._get_alignment("test_id") == stale_map
+    assert service._get_segments("test_id") is None
+    assert service._get_alignment_total_chars("test_id") == 111
+
+    session.query.return_value.filter_by.return_value.first.side_effect = None
+    fresh_session = _stub_alignment_row(mock_db, fresh_map)
+    fresh_session.query.return_value.filter_by.return_value.first.return_value.segments_json = '[{"char_start": 0}]'
+    mock_db.get_alignment_total_chars.side_effect = None
+    mock_db.get_alignment_total_chars.return_value = 222
+    assert service._get_alignment("test_id") == fresh_map
+    assert service._get_segments("test_id") == [{"char_start": 0}]
+    assert service._get_alignment_total_chars("test_id") == 222
+
+
 def test_get_alignment_missing_row_is_not_cached(service, mock_db):
     _stub_alignment_row(mock_db, None)
     assert service._get_alignment("test_id") is None

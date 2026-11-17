@@ -2054,8 +2054,16 @@ class ForgeService:
 
             # --- ADD TO COLLECTIONS/SHELVES ---
             try:
-                from src.utils.user_config import user_setting
-                abs_collection_name = user_setting("ABS_COLLECTION_NAME", "Synced with KOReader")
+                from src.utils.user_config import resolve_setting, user_setting
+                # This runs on a plain thread with no ambient user, so read the owner's choice directly.
+                owner_id = getattr(book, "user_id", None) if book else None
+                if owner_id is not None:
+                    abs_collection_name = resolve_setting(
+                        self.database_service.get_user_credentials(owner_id),
+                        "ABS_COLLECTION_NAME", "Synced with KOReader",
+                    )
+                else:
+                    abs_collection_name = user_setting("ABS_COLLECTION_NAME", "Synced with KOReader")
                 if not str(abs_id).startswith('booklore:'):
                     self.abs_client.add_to_collection(abs_id, abs_collection_name)
 

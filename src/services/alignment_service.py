@@ -184,6 +184,9 @@ class AlignmentService:
         # missing DB row is deliberately never cached, here a dict is required
         # to tell "not yet loaded" apart from "loaded, and there are none".
         self._segments_cache: Dict[str, Optional[List[Dict]]] = {}
+        # Bumped on every invalidation; a reader that started before a save
+        # must not put the old map back into a cache the save just cleared.
+        self._cache_generation = 0
         # Lazily-built CTC forced aligner (holds a heavy cached model). Only ever
         # instantiated on the -ctc image when CTC alignment is requested.
         self._forced_aligner = None
@@ -327,9 +330,7 @@ class AlignmentService:
                 quality_detail=map_quality.quality_detail_json(quality),
             )
             if published:
-                self._alignment_cache.delete(abs_id)
-                self._total_chars_cache.pop(abs_id, None)
-                self._segments_cache.pop(abs_id, None)
+                self._invalidate_map_caches(abs_id)
                 return True
             raise TranscriptionCancelled(abs_id)
         published = self._publish_map(
@@ -1453,7 +1454,15 @@ class AlignmentService:
         if self.segmented_maps_enabled() and spine_chapters:
             boundaries = [(c['start'], c['end']) for c in spine_chapters if c['end'] > c['start']]
             if boundaries:
-                placements = fit_segments(anchors, boundaries, total_chars=len(full_text))
+                try:
+                    placements = fit_segments(anchors, boundaries, total_chars=len(full_text))
+                except AssertionError:
+                    logger.warning(
+                        "🧩 Alignment: segmented placement for %s produced overlapping "
+                        "segments; keeping the global LIS",
+                        abs_id or "unknown", exc_info=True,
+                    )
+                    placements = []
                 if placements:
                     # fit_segments already returns its result sorted by ts_start;
                     # compare that order against the same segments sorted by
@@ -1993,6 +2002,11 @@ class AlignmentService:
 
             # Context manager handles commit
             logger.info(f"   💾 Saved alignment for {abs_id} to DB.")
+        self._invalidate_map_caches(abs_id)
+
+    def _invalidate_map_caches(self, abs_id: str) -> None:
+        """Drop a book's cached map, length and segments after its row changed."""
+        self._cache_generation += 1
         self._alignment_cache.delete(abs_id)
         self._total_chars_cache.pop(abs_id, None)
         self._segments_cache.pop(abs_id, None)
@@ -2050,9 +2064,7 @@ class AlignmentService:
                     total_chars=backup.total_chars,
                     segments_json=backup.segments_json,
                 ))
-        self._alignment_cache.delete(abs_id)
-        self._total_chars_cache.pop(abs_id, None)
-        self._segments_cache.pop(abs_id, None)
+        self._invalidate_map_caches(abs_id)
         logger.info(
             "↩️ Restored previous alignment for %s (method '%s')", abs_id, method or "unknown",
         )
@@ -2066,11 +2078,13 @@ class AlignmentService:
         """
         if abs_id in self._total_chars_cache:
             return self._total_chars_cache[abs_id]
+        generation = self._cache_generation
         try:
             total_chars = int(self.database_service.get_alignment_total_chars(abs_id))
         except (AttributeError, TypeError, ValueError):
             total_chars = None
-        self._total_chars_cache[abs_id] = total_chars
+        if generation == self._cache_generation:
+            self._total_chars_cache[abs_id] = total_chars
         return total_chars
 
     def get_map_terminal_char(self, abs_id: str) -> Optional[int]:
@@ -2155,11 +2169,13 @@ class AlignmentService:
         cached = self._alignment_cache.get(abs_id)
         if cached is not None:
             return cached
+        generation = self._cache_generation
         with self.database_service.get_session() as session:
             entry = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
             if entry:
                 alignment = json.loads(entry.alignment_map_json)
-                self._alignment_cache.put(abs_id, alignment)
+                if generation == self._cache_generation:
+                    self._alignment_cache.put(abs_id, alignment)
                 return alignment
             return None
 
@@ -2188,13 +2204,15 @@ class AlignmentService:
         """
         if abs_id in self._segments_cache:
             return self._segments_cache[abs_id]
+        generation = self._cache_generation
         with self.database_service.get_session() as session:
             entry = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
             if entry is None:
                 return None
             raw = entry.segments_json
             segments = json.loads(raw) if isinstance(raw, str) and raw else None
-            self._segments_cache[abs_id] = segments
+            if generation == self._cache_generation:
+                self._segments_cache[abs_id] = segments
             return segments
 
     def get_book_duration(self, abs_id: str) -> Optional[float]:

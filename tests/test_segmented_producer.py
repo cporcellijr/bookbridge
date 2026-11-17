@@ -280,6 +280,25 @@ class TestFlagOnWithoutUsableBoundaries:
         assert method == "lexical"
         assert len(alignment_map) > 0
 
+    def test_overlap_assertion_in_fitting_falls_back_to_lis(self, service, monkeypatch, caplog):
+        """A rare overlap the fix-up misses trips fit_segments' assert; the
+        alignment must still produce the plain LIS map instead of failing."""
+        os.environ["ALIGNMENT_SEGMENTED_MAPS"] = "true"
+        book = FourBlockBook(narration_order=OUT_OF_ORDER_NARRATION)
+
+        def _overlapping(*_args, **_kwargs):
+            raise AssertionError("segments overlap")
+
+        monkeypatch.setattr("src.services.alignment_service.fit_segments", _overlapping)
+        with caplog.at_level("WARNING", logger="src.services.alignment_service"):
+            alignment_map, method, map_segments = service._generate_alignment_map_with_method(
+                book.segments, book.full_text, spine_chapters=book.spine_chapters)
+
+        assert map_segments is None
+        assert method == "lexical"
+        assert len(alignment_map) > 0
+        assert "produced overlapping segments" in caplog.text
+
 
 # --------------------------------------------------------------------------- #
 # 5. Setting registration + the recurring "on"-checkbox bug

@@ -605,6 +605,7 @@ class TestForgeService(unittest.TestCase):
         audio_source_id: str = None,
         staged_audio: bool = True,
         patch_ingest: bool = True,
+        owner_user_id=None,
     ):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -671,6 +672,7 @@ class TestForgeService(unittest.TestCase):
             self.mock_storyteller.download_book.side_effect = _download_storyteller_book
 
             db_book = MagicMock()
+            db_book.user_id = owner_user_id
             self.mock_db.get_book.return_value = db_book
             self.mock_db.save_book.return_value = db_book
 
@@ -757,6 +759,20 @@ class TestForgeService(unittest.TestCase):
 
         self.mock_storyteller.add_to_collection_by_uuid.assert_called_once()
         self.mock_storyteller.add_to_collection.assert_not_called()
+
+    def test_auto_forge_uses_the_owners_collection_name_not_the_admins(self):
+        """The forge thread has no ambient user, so the owner's own name must be read directly."""
+        self.mock_db.get_user_credentials.return_value = {"ABS_COLLECTION_NAME": "Reader Shelf"}
+
+        self._run_auto_forge_pipeline(
+            text_item={"source": "Local File"},
+            ingest_manifest=None,
+            storyteller_alignment_ok=False,
+            owner_user_id=2,
+        )
+
+        self.mock_db.get_user_credentials.assert_called_with(2)
+        self.mock_abs.add_to_collection.assert_called_once_with("abs-1", "Reader Shelf")
 
     def test_auto_forge_uses_storyteller_alignment_before_smil(self):
         """Storyteller transcript alignment should run first; SMIL is fallback only."""

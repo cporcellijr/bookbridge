@@ -238,11 +238,12 @@ class TelegramHandler(logging.Handler):
             return
 
         try:
-            message = self.format(record)
+            # Plain text: '<lambda>' or '<Response [500]>' in a message would make Telegram
+            # reject HTML. Telegram also rejects texts over 4096 UTF-16 units; emoji count twice.
+            message = self.format(record)[:4000]
             payload = {
                 'chat_id': self.chat_id,
                 'text': message,
-                'parse_mode': 'HTML',
                 'disable_notification': False
             }
             response = requests.post(self.api_url, data=payload, timeout=5)
@@ -269,7 +270,7 @@ def setup_telegram_logging():
     logger.info("Setting up telegram logger")
     handler = TelegramHandler(bot_token, chat_id, min_level=log_level)
     handler.setFormatter(MojibakeSafeFormatter(
-        '<b>[%(asctime)s]</b> <code>%(levelname)s</code> - <b>%(name)s</b>: %(message)s',
+        '[%(asctime)s] %(levelname)s - %(name)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'))
     root_logger = logging.getLogger()
     root_logger.addHandler(handler)
