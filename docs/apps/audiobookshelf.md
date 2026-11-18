@@ -17,7 +17,7 @@ BookBridge reads and writes your listening position in Audiobookshelf, and hears
 <div class="bb-callouts" markdown>
 1. **Enable.** Switching it off turns Audiobookshelf off for everyone on the server.
 2. **Server URL:** the address the BookBridge server reaches Audiobookshelf at.
-3. **Test** checks the connection, then **Save Settings**.
+3. **Save Settings**, then add and save your login in step 2. **Test** checks the connection once that login is saved.
 </div>
 
 ## 2. Add your login (each reader)

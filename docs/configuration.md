@@ -4,16 +4,17 @@ description: "Every BookBridge environment variable: what only the environment c
 
 # Configuration reference
 
-This page is for setting BookBridge up with environment variables in Docker Compose. Most people never need it: everything except the first section is also in the web UI, under **Settings** for the admin and **My Integrations** for each reader. See the [Settings tour](settings-tour.md) and [Connect your apps](apps/index.md).
+This page is for setting BookBridge up with environment variables in Docker Compose. Most people never need it. Most saved settings can be changed in **Settings** or **My Integrations**. Environment-only controls are listed separately; BookBridge also maintains some internal values automatically. See the [Settings tour](settings-tour.md) and [Connect your apps](apps/index.md).
 
 !!! warning "Environment variables only seed the first boot"
     On first boot BookBridge saves every setting in its database, taken from its environment variable or its default.
     From then on the saved value wins, so changing the variable in your compose file later does nothing. Change the
     setting in the web UI instead. A setting added by a later update takes its first value from the environment the same way.
 
-    - **Per-reader settings** (marked *each reader* in [Every setting](#every-setting)) belong to each reader, under
-      **My Integrations**. The environment value only becomes the server-wide default; the first admin's empty fields
-      are filled from it once, and no other reader ever uses it.
+    - Account credentials (marked *each reader* in [Every setting](#every-setting)) belong to each reader; only the
+      primary admin's empty credentials are seeded from the environment.
+    - Reading and display preferences (marked *server default; each reader can override*) follow the server default
+      until a reader overrides them in **My Integrations** or **Display**.
     - The variables in the next section are read only from the environment, on every start.
 
 ## Set only in the environment
@@ -28,6 +29,8 @@ This page is for setting BookBridge up with environment variables in Docker Comp
 | `SESSION_COOKIE_SECURE` | `false` | `true` sends the sign-in cookie over HTTPS only. Set it when every visit goes through HTTPS. |
 | `DB_JOURNAL_MODE` | empty | Forces the SQLite journal mode. Empty uses WAL, or DELETE on network and Docker Desktop mounts where WAL loses writes; leave it empty. |
 | `ALIGN_THREADS` | empty | CPU threads for forced alignment. Empty uses the CPUs the container can use, at most 8. |
+| `CROSSFORMAT_DEADBAND_SECONDS` | `2.0` | Prevents tiny cross-format gaps from causing leader flips while avoiding backward writes to newer high-confidence ebook locators. |
+| `CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS` | `2` | Locator roundtrip tolerance used when stabilizing cross-format locators. |
 
 ### Credential Encryption
 
@@ -112,7 +115,7 @@ only, never on the split-port sync server, so keep it on your LAN.
 | `GET /api/v1/admin/users` | | List users (id, username, role, active) |
 | `GET /api/v1/admin/users/<username>` | | One user, plus `off_server_wide`: the services this reader has switched on under **My Integrations** that are switched off in **Settings**, so are not running for them (an empty list when none) |
 | `PUT /api/v1/admin/users/<username>` | `{"password", "role", "active"}`, all optional except `password` when creating | Create the reader if missing, otherwise update it. Safe to repeat, including concurrent calls. A new reader gets the shared library when Shared Library is on. `active` is set, not toggled. `role` may only be `"user"` |
-| `PATCH /api/v1/admin/users/<username>/integrations` | `{"KOSYNC_ENABLED": true, "KOSYNC_USER": "...", ...}` | Set only the given per-user fields from **Account -> My Integrations**. Each value must match its field: booleans must be JSON `true`/`false`, text and secrets must be strings (an empty string clears a field), and select fields must be one of their declared options. Anything else is rejected with 400 naming the field. Secret values are never returned. The response lists the keys saved (`updated`) and, in `off_server_wide`, any service switched on in this call that is switched off in **Settings**: the value is saved, but the service will not run for this reader until it is switched back on server-wide |
+| `PATCH /api/v1/admin/users/<username>/integrations` | `{"KOSYNC_ENABLED": true, "KOSYNC_USER": "...", ...}` | Set only the given per-user fields from **Account → My Integrations**. Each value must match its field: booleans must be JSON `true`/`false`, text and secrets must be strings (an empty string clears a field), and select fields must be one of their declared options. Anything else is rejected with 400 naming the field. Secret values are never returned. The response lists the keys saved (`updated`) and, in `off_server_wide`, any service switched on in this call that is switched off in **Settings**: the value is saved, but the service will not run for this reader until it is switched back on server-wide |
 
 The token manages **readers only**. It can create `user` accounts and change existing
 `user` accounts, but any attempt to create or promote an admin, or to change an
@@ -134,7 +137,7 @@ so the next sync authenticates with the updated credentials.
 
 Every integration card has an **Enable** switch, and that switch is server-wide: a
 service switched off in Settings is off for everyone on the install. Readers still
-have their own switch for the services they hold a login for, under **Account -> My
+have their own switch for the services they hold a login for, under **Account → My
 Integrations**, but it applies only while the service is switched on server-wide. When
 it is off, their switch is shown greyed out with the reason instead of letting them
 turn on something that will not work. Nobody's personal choice is lost — switching the
@@ -149,9 +152,9 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
-| Enable | `ABS_ENABLED` | `true` | Turns Audiobookshelf on or off. Server-wide, with a per-reader switch in **Account -> My Integrations**. |
+| Enable | `ABS_ENABLED` | `true` | Turns Audiobookshelf on or off. Server-wide, with a per-reader switch in **Account → My Integrations**. |
 | Server URL | `ABS_SERVER` | empty | Required unless Audiobookshelf is switched off. Server-wide. |
-| API Token | `ABS_KEY` | empty | Per-user (set in **Account -> My Integrations**). The admin's token also powers global library scans. |
+| API Token | `ABS_KEY` | empty | Per-user (set in **Account → My Integrations**). The admin's token also powers global library scans. |
 | Library ID | `ABS_LIBRARY_ID` | empty | Per-user (set in user Integrations). Used by the matcher and search scoping. |
 | Auto-add Collection | `ABS_COLLECTION_NAME` | `Synced with KOReader` | Per-user (set in user Integrations). Collection matched audiobooks are added to. The value here is the global default; the admin's value seeds from it on first startup. |
 | Keep every match in its auto-add collection | `ABS_COLLECTION_RECONCILE` | `false` | Global. Every sync cycle, each matched Audiobookshelf audiobook missing from its owner's auto-add collection is added again, so an add that failed at match time is not permanent. An Audiobookshelf collection only holds books from one library, so with several audiobook libraries a collection of that name is kept in each. Add-only: while on, a book removed from the collection by hand is added back. |
@@ -163,8 +166,8 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 
 ??? note "More about Audiobookshelf"
 
-    - Use **Find IDs** next to **Library ID** in Settings to load your available ABS libraries and fill the field from a dropdown.
-    - To run without Audiobookshelf, switch **Enable** off on the Audiobookshelf card. A reader who wants to opt out on their own account can switch it off under **Account -> My Integrations** instead, without affecting anyone else. The older workaround of entering `disabled` in the ABS URL or token field still works and is still honoured, but the switch is the supported way now.
+    - Use **Find IDs** next to **Library ID** under **Account → My Integrations → Audiobookshelf** to load your available ABS libraries and fill the field from a dropdown.
+    - To run without Audiobookshelf, switch **Enable** off on the Audiobookshelf card. A reader who wants to opt out on their own account can switch it off under **Account → My Integrations** instead, without affecting anyone else. The older workaround of entering `disabled` in the ABS URL or token field still works and is still honoured, but the switch is the supported way now.
     - **ABS ebook sync** (`SYNC_ABS_EBOOK`) treats the ebook attached to an Audiobookshelf item as a full sync
       client in its own right, reading and writing its position like any other ebook source. Both of these settings
       are on the Audiobookshelf card in **Settings → Services**.
@@ -178,7 +181,7 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 
 The bridge **is** a KoSync server — KOReader devices sync directly with it. Device onboarding
 (the sync-server address to enter in KOReader, plus the Bridge Sync plugin download) lives on
-**My Account -> Connect a KOReader device**.
+**My Account → Connect a KOReader device**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -197,10 +200,10 @@ The bridge **is** a KoSync server — KOReader devices sync directly with it. De
 
 ??? note "More about KOSync"
 
-    - Each reader's KoSync **username and password** are per-reader — set them under **Account -> My Integrations -> KOReader / KoSync** (with a **Test** button), or as an admin under **Settings -> Users -> Integrations**.
+    - Each reader's KoSync **username and password** are per-reader — set them under **Account → My Integrations → KOReader / KoSync** (with a **Test** button), or as an admin under **Settings → Users → Integrations**.
     - Plain KOReader/KOSync progress sync does not need the Bridge Sync plugin. Highlight and note sync, status sync, and History sharing all do.
     - Tapping **Register** against the bridge's KoSync server only succeeds for an account that
-      already exists in **My Account -> My Integrations**; it does not create one. Use **Login**
+      already exists in **My Account → My Integrations**; it does not create one. Use **Login**
       once the username and password are saved there.
     - **Sync Reading Status** and **Share Recently-Read Books** never touch your reading
       *position* — only KOReader's own status field and History list. When two devices disagree
@@ -216,9 +219,9 @@ BookFusion is a supported ebook progress and highlight source. BookBridge can al
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
-| Enable | `BOOKFUSION_ENABLED` | `false` | Per-reader. Turns on BookFusion progress sync for that reader. |
+| Enable | `BOOKFUSION_ENABLED` | `false` | Server and each reader. The admin turns BookFusion on for the server; each reader turns on progress sync for themselves. |
 | API URL | `BOOKFUSION_API_URL` | `https://www.bookfusion.com` | Usually leave this at the default. |
-| Access Token | `BOOKFUSION_ACCESS_TOKEN` | empty | Per-reader. Device linking from **Account -> My Integrations** is preferred (Link BookFusion button). |
+| Access Token | `BOOKFUSION_ACCESS_TOKEN` | empty | Per-reader. Device linking from **Account → My Integrations** is preferred (Link BookFusion button). |
 | Calibre API Key | `BOOKFUSION_API_KEY` | empty | Per-reader. Only needed to **upload** books to BookFusion; get it from the [BookFusion Calibre integration page](https://www.bookfusion.com/integrations/calibre). |
 | Highlight Sync | `BOOKFUSION_ANNOTATION_SYNC` | `false` | Per-reader. Enables BookFusion highlight relay for linked books. |
 | Poll Mode | `BOOKFUSION_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls BookFusion separately. |
@@ -226,7 +229,7 @@ BookFusion is a supported ebook progress and highlight source. BookBridge can al
 
 ??? note "More about BookFusion"
 
-    - Link BookFusion from **Account -> My Integrations**. Admins can also enter a reader's token under **Settings -> Users -> Integrations**.
+    - Link BookFusion from **Account → My Integrations**. Admins can also enter a reader's token under **Settings → Users → Integrations**.
     - The access token (progress and highlights) and the Calibre API key (uploads) are **two separate credentials**.
     - BookFusion reports percentages as 0-100; BookBridge handles the conversion internally.
     - BookFusion matching uses linked BookFusion IDs. When a book is not linked, the dashboard link flow offers **Upload to BookFusion** if the book has a local EPUB and the reader has a Calibre API key configured.
@@ -253,7 +256,7 @@ receive copies of your books. It is not a progress sync source.
 
 ??? note "More about Readest"
 
-    - Enter the Readest email and password under **Account -> My Integrations** for each reader that wants Readest highlights.
+    - Enter the Readest email and password under **Account → My Integrations** for each reader that wants Readest highlights.
     - Tokens are cached and refreshed by the bridge after login.
     - Readest sync depends on the same book identity being available to Readest and the bridge.
     - Uploads are off by default and set per reader. The two upload switches are independent:
@@ -284,7 +287,7 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 | Assets Path | `STORYTELLER_ASSETS_DIR` | empty | Root path that contains `/assets/{title}/transcriptions`. |
 | Library Timeout | `STORYTELLER_LIBRARY_TIMEOUT` | `10` | Seconds to wait for a whole-library response (5–300). Increase for large libraries or slow servers; connection timeout stays 10 seconds. Failed searches report the error instead of appearing empty. |
 | Upload Chunk Size | `STORYTELLER_UPLOAD_CHUNK_SIZE` | `5242880` | TUS PATCH chunk size in bytes for direct Storyteller uploads. |
-| Automatically link aligned Storyteller books | `STORYTELLER_AUTO_LINK` | `false` | Per-user (set in **Account -> My Integrations**). Once an hour, links Storyteller books that finished aligning to the reader's matching BookBridge books, skipping ambiguous matches. A declined book is retried after a week or after it is re-aligned. Each pass stops starting new books after ten minutes. |
+| Automatically link aligned Storyteller books | `STORYTELLER_AUTO_LINK` | `false` | Per-user (set in **Account → My Integrations**). Once an hour, links Storyteller books that finished aligning to the reader's matching BookBridge books, skipping ambiguous matches. A declined book is retried after a week or after it is re-aligned. Each pass stops starting new books after ten minutes. |
 | Poll Mode | `STORYTELLER_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls Storyteller separately. |
 | Poll Interval | `STORYTELLER_POLL_SECONDS` | `45` | Used when Poll Mode is `custom`. |
 
@@ -293,7 +296,7 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
     - Storyteller edition uploads use the Storyteller REST/TUS API directly. A Storyteller library mount is optional unless you want local fallback access to generated artifacts.
     - If you mount `/path/to/storyteller/assets:/storyteller/assets`, set **Storyteller Assets Path** to `/storyteller`.
     - Storyteller timing data stays the preferred alignment source whenever valid transcript assets are available.
-    - **Settings -> Maintenance -> Storyteller Backfill** rechecks existing Storyteller-linked books and rebuilds their alignment data without rerunning Whisper.
+    - **Settings → Maintenance → Storyteller Backfill** rechecks existing Storyteller-linked books and rebuilds their alignment data without rerunning Whisper.
 
 ### Grimmory
 
@@ -325,13 +328,13 @@ Grimmory is a supported ebook and audiobook source. You can use it for ebook syn
     - The dashboard shows **BL Audio** progress when a mapping is driven by Grimmory audio.
     - When **Record Reading Sessions** is enabled, Grimmory gets session updates as you make progress.
     - Enable **Highlight Sync** in each reader's Grimmory integration if you want Grimmory web-reader highlights and notes to round-trip through the bridge.
-    - **Settings -> Maintenance -> Refresh Grimmory Cache** forces a fresh cache rebuild after imports, removals, or large metadata changes.
-    - Use **Find IDs** next to **Library ID** in Settings to load your available Grimmory libraries and fill the field from a dropdown.
+    - **Settings → Maintenance → Refresh Grimmory Cache** forces a fresh cache rebuild after imports, removals, or large metadata changes.
+    - Use **Find IDs** next to **Library ID** under **Account → My Integrations → Grimmory** to load your available Grimmory libraries and fill the field from a dropdown.
     - The **KOReader Collections** settings only matter if you use the optional **Bridge Sync** KOReader plugin.
-    - KOReader collections are configured per reader under **Account -> My Integrations -> KOReader Collections**.
+    - KOReader collections are configured per reader under **Account → My Integrations → KOReader Collections**.
     - **Collection Source** chooses whether Bridge Sync should use Grimmory shelves or Hardcover lists.
-    - When the source is Grimmory, **Collection Syncing** controls which Grimmory shelves become KOReader collections. **Magic Shelves Only** means Bridge Sync uses shelves in Grimmory that fill themselves based on rules.
-    - **Excluded Shelves** lets you list Grimmory shelf names you do not want turned into KOReader collections.
+    - When the source is Grimmory, **Grimmory shelf mode** controls which Grimmory shelves become KOReader collections. **Magic Shelves Only** means Bridge Sync uses shelves in Grimmory that fill themselves based on rules.
+    - **Grimmory shelves to exclude** lets you list Grimmory shelf names you do not want turned into KOReader collections.
     - **Find Shelves** helps you pick shelf names from Grimmory instead of typing them by hand.
     - **Only download books on these Grimmory shelves** (under **KOReader / KoSync**) limits what Bridge Sync puts on the device, independently of collections. It can name your sync shelf (for example `Kobo`), which collections always skip. Books whose ebook doesn't come from Grimmory are left out while a filter is set, and shelf changes reach the device within a couple of minutes. If none of the named shelves exist, or a shelf can't be read and BookBridge has no earlier answer to reuse, the manifest request fails instead of returning an empty list, so the device never deletes its books because of a typo or an outage.
 
@@ -366,12 +369,12 @@ BookOrbit is a supported ebook and audiobook source. You can use it for ebook sy
 | Server URL | `BOOKORBIT_SERVER` | empty | BookOrbit base URL. |
 | Username | `BOOKORBIT_USER` | empty | BookOrbit username. |
 | Password | `BOOKORBIT_PASSWORD` | empty | BookOrbit password. |
-| API Key | `BOOKORBIT_API_KEY` | empty | BookOrbit 3.8+ API key (per user). When set, BookBridge uses it instead of logging in, so it works with OIDC-only BookOrbit (`DISABLE_LOCAL_AUTH=true`). Create it in BookOrbit under Settings → API keys with **Write** access and the permissions Download, Upload, Delete books and Manage libraries. Keep the username filled in if you use highlight sync. |
+| API Key | `BOOKORBIT_API_KEY` | empty | BookOrbit 3.8+ API key (per user). When set, BookBridge uses it instead of logging in, so it works with OIDC-only BookOrbit (`DISABLE_LOCAL_AUTH=true`). Create it in BookOrbit under **Settings → You → API keys** with **Read and write** access and the permissions Download, Upload, Delete books and Manage libraries; your BookOrbit account needs the **Create API keys** permission. Keep the username filled in if you use highlight sync or KOReader reading statistics. |
 | Collection Name | `BOOKORBIT_SHELF_NAME` | `Kobo` | Collection that auto-matched books are moved to on success. |
 | Record Reading Sessions | `BOOKORBIT_READING_SESSIONS` | `true` | Sends reading or listening session updates back to BookOrbit. |
-| KOReader Sync Username | `BOOKORBIT_KOSYNC_USER` | empty | BookOrbit KOReader-sync username used for web-reader highlight relay. |
-| KOReader Sync Password | `BOOKORBIT_KOSYNC_KEY` | empty | BookOrbit KOReader-sync password used for web-reader highlight relay. |
-| KOReader Sync Owner | `BOOKORBIT_KOSYNC_OWNER` | empty | Optional owner assertion; when set, it must match the BookOrbit username. |
+| KOReader Sync Username | `BOOKORBIT_KOSYNC_USER` | empty | BookOrbit KOReader-sync username used for web-reader highlights and KOReader reading statistics. |
+| KOReader Sync Password | `BOOKORBIT_KOSYNC_KEY` | empty | BookOrbit KOReader-sync password used for web-reader highlights and KOReader reading statistics. |
+| KOReader Sync Owner | `BOOKORBIT_KOSYNC_OWNER` | empty | Optional owner assertion; it (or the sync username when blank) must match the BookOrbit username, or statistics stay pending. |
 | Highlight Sync Interval | `BOOKORBIT_ANNOTATION_SYNC_MINUTES` | `15` | Minutes between background BookOrbit annotation relay cycles. |
 | Poll Mode | `BOOKORBIT_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls BookOrbit separately. |
 | Poll Interval | `BOOKORBIT_POLL_SECONDS` | `300` | Used when Poll Mode is `custom`. |
@@ -401,7 +404,7 @@ Optional matching of books you start reading — under **Books You Start Reading
 ??? note "More about BookOrbit"
 
     - BookOrbit is available across Discover, the match queue, and the dashboard. Pick it as the ebook source, the audio source, or both when you create a mapping.
-    - Use the **Test** button in Settings to check the connection before saving.
+    - After saving the server URL and your BookOrbit login, use the **Test** button in Settings to check the connection.
     - To sync BookOrbit web-reader highlights through the bridge, fill in the BookOrbit KOReader sync username/password in each reader's Integrations. BookBridge only relays annotations when ownership is clear.
     - **Moving from Grimmory to BookOrbit?** You do not need to rematch. A helper script, `scripts/migrate_grimmory_to_bookorbit.py`, re-points your existing Grimmory ebook links at BookOrbit by filename, leaving the audio link and reading progress untouched. Enable and scan BookOrbit first, then run it from inside the container (it is a dry run by default; add `--apply` to commit):
 
@@ -427,7 +430,7 @@ clients.
 | Enable | `KAVITA_ENABLED` | `false` | Turns on Kavita catalog and progress support. |
 | Server URL | `KAVITA_SERVER` | empty | Internal/reachable Kavita base URL used by BookBridge. |
 | Browser URL | `KAVITA_WEB_URL` | empty | Optional public URL used for dashboard links; falls back to Server URL. |
-| Auth Key | `KAVITA_API_KEY` | empty | Per-reader Kavita auth key from **User Settings -> 3rd Party Clients**. Treat it like a password. |
+| Auth Key | `KAVITA_API_KEY` | empty | Per-reader Kavita auth key from **User Settings → 3rd Party Clients**. Treat it like a password. |
 | Library ID | `KAVITA_LIBRARY_ID` | empty | Per-reader optional numeric library ID; blank searches all EPUB libraries visible to that key. |
 | Collection Name | `KAVITA_COLLECTION_NAME` | `BookBridge` | Per-reader collection that successfully matched books are moved to. |
 | Poll Mode | `KAVITA_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls Kavita separately. |
@@ -447,7 +450,7 @@ bridge auto-matches it on the next poll:
 ??? note "More about Kavita"
 
     - Create a non-expiring auth key for each reader in Kavita under **User Settings ->
-      3rd Party Clients**, then save it under **Account -> My Integrations -> Kavita**.
+      3rd Party Clients**, then save it under **Account → My Integrations → Kavita**.
     - The Kavita user behind the key must be able to read/download the selected library
       and manage collections if collection workflows are enabled.
     - Kavita support is ebook-only. Grimmory and BookOrbit remain the library-server
@@ -463,7 +466,7 @@ CWA is a supported ebook source and optional Kobo-sync progress source. Use it t
 | --- | --- | --- | --- |
 | Enable | `CWA_ENABLED` | `false` | Turns on OPDS / CWA ebook search and download. |
 | Server URL | `CWA_SERVER` | empty | CWA base URL. |
-| Username | `CWA_USERNAME` | empty | Per-reader (set in **Account -> My Integrations**). |
+| Username | `CWA_USERNAME` | empty | Per-reader (set in **Account → My Integrations**). |
 | Password | `CWA_PASSWORD` | empty | Per-reader. |
 | Kobo Sync Enabled | `CWA_SYNC_ENABLED` | `false` | Turns on reading-progress sync through CWA's Kobo sync protocol. |
 | Kobo Sync Token | `CWA_SYNC_TOKEN` | empty | Per-reader token used for CWA Kobo sync requests. |
@@ -491,7 +494,7 @@ Hardcover provides modern reading tracking with a beautiful UI. BookBridge can p
 | Enable | `HARDCOVER_ENABLED` | `false` | Turns on Hardcover updates. |
 | API Token | `HARDCOVER_TOKEN` | empty | Per-reader personal API token from Hardcover. |
 | Update Cooldown (minutes) | `HARDCOVER_UPDATE_COOLDOWN_MINS` | `60` | Global. Minutes of no new progress before a book's position is posted; new progress restarts the wait. Finishing a book posts at once. `0` posts on every sync cycle. |
-| Highlight Sync | `HARDCOVER_ANNOTATION_SYNC` | `false` | Per-reader. Pushes supported KOReader highlights to Hardcover. |
+| Highlight Sync | `HARDCOVER_ANNOTATION_SYNC` | `false` | Global. Pushes supported KOReader highlights to Hardcover. |
 | Highlight Sync Interval | `HARDCOVER_ANNOTATION_SYNC_MINUTES` | `30` | Minutes between background Hardcover annotation relay cycles. |
 | Grimmory Shelves to Hardcover Lists | `HARDCOVER_GRIMMORY_LIST_SYNC` | `off` | Per-reader. `off`, `all`, `magic`, or `shelf`. |
 | Hardcover List Name Prefix | `HARDCOVER_GRIMMORY_LIST_PREFIX` | `Grimmory: ` | Prefix for lists created from Grimmory shelves. |
@@ -501,8 +504,8 @@ Hardcover provides modern reading tracking with a beautiful UI. BookBridge can p
 
     - When enabled, progress is synced from KOReader/Audiobookshelf and other bridge leaders to Hardcover.
     - Use the **Edition Picker** on the dashboard to select which specific edition to track.
-    - Each reader supplies their own Hardcover token under **Account -> My Integrations**.
-    - Hardcover lists can also be used as KOReader collections when **KOReader Collections -> Collection Source** is set to **Hardcover Lists**.
+    - Each reader supplies their own Hardcover token under **Account → My Integrations**.
+    - Hardcover lists can also be used as KOReader collections when **KOReader Collections → Collection Source** is set to **Hardcover Lists**.
     - Grimmory shelf projection creates or updates Hardcover lists for books already matched to Hardcover. It is per-reader, so one reader's shelves are not projected into another reader's account.
 
 ### StoryGraph
@@ -549,10 +552,11 @@ stop working until BookBridge is updated.
 ??? note "More about Goodreads"
 
     - **Recommended: a signed-in browser.** Goodreads often blocks plain HTTP requests as a bot.
-      Run a `selenium/standalone-chrome` container on the same Docker network as BookBridge
-      (give it `shm_size: 2gb`), open its noVNC view (port 7900) once, sign in to Goodreads,
-      and leave that tab open. Set **Browser URL** to its internal address, for example
-      `http://selenium:4444`. Keep port 4444 off your host ports: that browser is signed in as you.
+      BookBridge uses the one Chrome session already open on goodreads.com; it does not open one.
+      Run `selenium/standalone-chrome` with a [goodreads-cookie-refresher](https://github.com/Lyfts/goodreads-cookie-refresher),
+      which opens that session and keeps it alive, then sign in once through noVNC. The
+      [Goodreads guide](apps/goodreads.md) has the full compose recipe. Set **Browser URL** to the internal address,
+      for example `http://selenium:4444`. Keep port 4444 off your host ports: that browser is signed in as you.
       Each Goodreads account needs its own browser.
     - **Without a browser**, paste your Goodreads `Cookie` header as **Session Cookie**. This needs no
       extra container but is the least reliable option.
@@ -562,9 +566,9 @@ stop working until BookBridge is updated.
 ### Progress Trackers
 
 Hardcover, StoryGraph and Goodreads are independent - enable any of them on their cards in
-**Settings -> Services**. Each reader then picks which they use, and supplies their own
-token/cookies, under **Account -> My Integrations**. Admins can also manage those values under
-**Settings -> Users -> Integrations**.
+**Settings → Services**. Each reader then picks which they use, and supplies their own
+token/cookies, under **Account → My Integrations**. Admins can also manage those values under
+**Settings → Users → Integrations**.
 
 When a tracker cannot take a book's update — most often because the book has no match
 there, but also when the edition has no page count, the book is missing from the account, or
@@ -574,7 +578,7 @@ passed. See [troubleshooting](troubleshooting.md#hardcover-or-storygraph-gets-ma
 
 ### Telegram Notifications
 
-Found under **Settings -> Server**.
+Found under **Settings → Server**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -585,7 +589,7 @@ Found under **Settings -> Server**.
 
 ### Getting missing books
 
-Found under **Settings -> Library & Matching -> Getting books**. When a Discover search finds
+Found under **Settings → Library & Matching → Getting books**. When a Discover search finds
 only the audiobook or only the ebook, readers can request the missing half from BookOrbit or
 Shelfmark, and BookBridge pairs it when it arrives. See
 [Getting missing books](using/get-books.md).
@@ -596,13 +600,13 @@ Shelfmark, and BookBridge pairs it when it arrives. See
 
 ### Shelfmark
 
-Found under **Settings -> Library & Matching**.
+Found under **Settings → Library & Matching**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Enable Shelfmark | `SHELFMARK_ENABLED` | `false` | Turns on Shelfmark as a source for missing-book requests. An install that already had a Shelfmark URL counts as enabled. |
 | Shelfmark URL | `SHELFMARK_URL` | empty | Your Shelfmark server. Settings also shows an **Open Shelfmark** link, and `/shelfmark` opens it. |
-| Shelfmark username / password | `SHELFMARK_USER`, `SHELFMARK_PASSWORD` | empty | Per reader, under **Account -> My Integrations**. |
+| Shelfmark username / password | `SHELFMARK_USER`, `SHELFMARK_PASSWORD` | empty | Per reader, under **Account → My Integrations**. |
 | Audiobook destination library | `SHELFMARK_AUDIOBOOK_LIBRARY_ID` | empty | Per reader. The BookOrbit library to scan when a Shelfmark audiobook download finishes; blank leaves it to BookOrbit's normal scans. |
 
 BookOrbit readers can also turn on **Follow audiobook requests I make in BookOrbit and pair
@@ -611,7 +615,7 @@ integration.
 
 ### Series Display
 
-Found under **Settings -> Library & Matching**.
+Found under **Settings → Library & Matching**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -619,7 +623,7 @@ Found under **Settings -> Library & Matching**.
 
 ### AI / LLM Providers (Optional)
 
-Found under **Settings -> AI**. The bridge can use Ollama, OpenAI, or an OpenAI-compatible local endpoint such as llama-server or llama-swap. The local OpenAI-compatible option expects standard `/v1/models`, `/v1/embeddings`, and `/v1/chat/completions` endpoints.
+Found under **Settings → AI**. The bridge can use Ollama, OpenAI, or an OpenAI-compatible local endpoint such as llama-server or llama-swap. The local OpenAI-compatible option expects standard `/v1/models`, `/v1/embeddings`, and `/v1/chat/completions` endpoints.
 
 This is an advanced, opt-in feature. If you run a local [Ollama](https://ollama.com) server, the bridge can use it to make smarter book-match suggestions and to rescue audio↔text alignments that plain text matching misses. Everything here is **off until you enable it**, and every feature falls back to the normal behavior if Ollama is unreachable — so it never blocks a sync.
 
@@ -665,7 +669,7 @@ What it can do — each is a separate toggle, and the defaults below only take e
 
 ### Suggestions
 
-Enabled under **Settings -> Library & Matching**. The Discover page (Pairs and Ebook Only) is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.
+Enabled under **Settings → Library & Matching**. The Discover page (Pairs and Ebook Only) is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -692,7 +696,7 @@ Enabled under **Settings -> Library & Matching**. The Discover page (Pairs and E
 
 ### Transcription Settings
 
-Found under **Settings -> Alignment**. Transcription powers the bridge's own
+Found under **Settings → Alignment**. Transcription powers the bridge's own
 audio ↔ text alignment; it runs locally by default and needs no external services.
 
 > [!TIP]
@@ -756,7 +760,7 @@ cooldown.
 
 ### Sync Tuning
 
-Found under **Settings -> Reading & Sync**. Each app that cannot notify BookBridge has one row in **How often each app is checked**; Alignment Health is under **Settings -> Alignment**.
+Found under **Settings → Reading & Sync**. Each app that cannot notify BookBridge has one row in **How often each app is checked**; Alignment Health is under **Settings → Alignment**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -769,8 +773,6 @@ Found under **Settings -> Reading & Sync**. Each app that cannot notify BookBrid
 | Retry a failed job up to (times) | `JOB_MAX_RETRIES` | `5` | Retry count for failed background jobs. |
 | Job Retry Delay (Minutes) | `JOB_RETRY_DELAY_MINS` | `15` | Delay before retrying failed jobs. |
 | Reading Session Merge Gap (Minutes) | `READING_SESSION_MERGE_MINUTES` | `5` | Groups non-KOReader progress into one session. The effective idle gap is at least twice the sync period and at most 30 minutes. |
-| Cross-Format Deadband (Seconds) | `CROSSFORMAT_DEADBAND_SECONDS` | `2.0` | Prevents tiny cross-format gaps from causing leader flips while avoiding backward writes to newer high-confidence ebook locators. |
-| Cross-Format Roundtrip Tolerance | `CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS` | `2` | Locator roundtrip tolerance used when stabilizing cross-format locators. |
 | Honor a Deliberate Rewind | `SYNC_TRUST_CORROBORATED_REWIND` | `true` | Lets a rewind lead after the same app reports you continuing from the new position; an isolated stale backward report is held briefly. |
 | Position double-check tolerance (seconds) | `LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS` | `30` | Rejects an otherwise character-close rebuilt locator when it lands far away on the audio timeline, which protects segmented maps at a section seam. |
 
@@ -786,7 +788,7 @@ Found under **Settings -> Reading & Sync**. Each app that cannot notify BookBrid
 
 ### Paths and System
 
-Found under **Settings -> Server**.
+Found under **Settings → Server**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -825,7 +827,8 @@ library BookBridge only reads from does not need write access.
 
 Generated from BookBridge's settings registry, so it lists every setting, including ones with no
 section above. A linked name has its description earlier on this page. **Applies to** says whether
-the value is server-wide or each reader's own; *server and each reader* is a service switch, which
+the value is server-wide or each reader's own; *server default; each reader can override* is a reading or display
+preference with a server default; *server and each reader* is a service switch, which
 each reader turns on for themselves and the admin can turn off for everyone. **Restart** marks
 settings read only at startup, which restart the app when saved in Settings.
 
@@ -846,7 +849,7 @@ settings read only at startup, which restart the app when saved in Settings.
 | [`ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID`](#audiobookshelf) | `false` | server |  |
 | [`ABS_SOCKET_ENABLED`](#advanced-toggles) | `true` | server | yes |
 | [`ABS_SOCKET_DEBOUNCE_SECONDS`](#advanced-toggles) | `30` | server |  |
-| [`ABS_READING_CHECKPOINTS`](#audiobookshelf) | `false` | server |  |
+| [`ABS_READING_CHECKPOINTS`](#audiobookshelf) | `false` | server default; each reader can override |  |
 
 ### Sign-in { #every-setting-sign-in }
 
@@ -877,16 +880,16 @@ settings read only at startup, which restart the app when saved in Settings.
 | `KOSYNC_HASH_RECONCILE_ENABLED` | `true` | server |  |
 | `KOSYNC_HASH_RECONCILE_MINUTES` | `360` | server |  |
 | `KOSYNC_XPATH_ORDER_ENABLED` | `false` | server |  |
-| `KOSYNC_FURTHEST_WINS` | `true` | server |  |
+| `KOSYNC_FURTHEST_WINS` | `true` | server default; each reader can override |  |
 | [`KOSYNC_ACTIVE_DEVICE_WINS`](#koreader-kosync) | `shadow` | server |  |
 | [`KOSYNC_TRUSTED_PROXIES`](#koreader-kosync) | empty | server |  |
 | [`KOSYNC_PUT_DEBOUNCE_SECONDS`](#koreader-kosync) | `300` | server |  |
 | `KOSYNC_BOOKORBIT_DISCOVERY_LIMIT` | `40` | server |  |
 | `AUTO_CREATE_EBOOK_MAPPING` | `true` | server |  |
 | `KOREADER_COMBINE_DEVICE_STATS` | `true` | server |  |
-| [`KOREADER_ANNOTATION_SYNC`](#koreader-kosync) | `true` | server |  |
-| [`KOREADER_STATUS_SYNC_ENABLED`](#koreader-kosync) | `true` | server |  |
-| [`KOREADER_SYNC_READ_HISTORY`](#koreader-kosync) | `false` | server |  |
+| [`KOREADER_ANNOTATION_SYNC`](#koreader-kosync) | `true` | server default; each reader can override |  |
+| [`KOREADER_STATUS_SYNC_ENABLED`](#koreader-kosync) | `true` | server default; each reader can override |  |
+| [`KOREADER_SYNC_READ_HISTORY`](#koreader-kosync) | `false` | server default; each reader can override |  |
 
 ### Storyteller { #every-setting-storyteller }
 
@@ -1127,7 +1130,7 @@ settings read only at startup, which restart the app when saved in Settings.
 | [`SYNC_DELTA_BETWEEN_CLIENTS_PERCENT`](#sync-tuning) | `0.5` | server | yes |
 | [`SYNC_DELTA_KOSYNC_WORDS`](#sync-tuning) | `400` | server |  |
 | `SYNC_FRESHNESS_GUARDS` | `true` | server |  |
-| `SYNC_COMPLETION_PROPAGATION` | `false` | server |  |
+| `SYNC_COMPLETION_PROPAGATION` | `false` | server default; each reader can override |  |
 | `SYNC_COMPLETION_THRESHOLD` | `99` | server |  |
 | `SYNC_ROLLBACK_VETO_SECONDS` | `600` | server |  |
 | [`LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS`](#sync-tuning) | `30` | server |  |
@@ -1152,7 +1155,7 @@ settings read only at startup, which restart the app when saved in Settings.
 | [`STORYTELLER_POLL_MODE`](#storyteller) | `global` | server |  |
 | [`STORYTELLER_POLL_SECONDS`](#storyteller) | `45` | server |  |
 | `STORYTELLER_POLL_WAIT_FOR_SETTLE` | `false` | server |  |
-| `STORYTELLER_LISTENING_SESSIONS` | `true` | server |  |
+| `STORYTELLER_LISTENING_SESSIONS` | `true` | server default; each reader can override |  |
 | [`BOOKLORE_POLL_MODE`](#grimmory) | `global` | server |  |
 | [`BOOKLORE_POLL_SECONDS`](#grimmory) | `300` | server |  |
 | [`BOOKLORE_POLL_WAIT_FOR_SETTLE`](#grimmory) | `false` | server |  |
@@ -1165,17 +1168,17 @@ settings read only at startup, which restart the app when saved in Settings.
 | Variable | Default | Applies to | Restart |
 | --- | --- | --- | --- |
 | `UI_MODE` | `classic` | each reader |  |
-| `UI_THEME` | `auto` | server |  |
-| `UI_LIBRARY_STYLE` | `cards` | server |  |
-| `UI_SHELF_FINISH` | `theme` | server |  |
-| `UI_COVER_SIZE` | `2` | server |  |
-| `UI_SHOW_PROGRESS` | `true` | server |  |
-| `UI_SHOW_FINISHED` | `true` | server |  |
-| `UI_SHOW_FORMAT_STRIP` | `true` | server |  |
-| `UI_SHOW_RATINGS` | `true` | server |  |
-| `UI_SHOW_TITLES` | `true` | server |  |
-| `UI_SHOW_HERO` | `true` | server |  |
-| `UI_HERO_CONTENT` | `stats` | server |  |
+| `UI_THEME` | `auto` | server default; each reader can override |  |
+| `UI_LIBRARY_STYLE` | `cards` | server default; each reader can override |  |
+| `UI_SHELF_FINISH` | `theme` | server default; each reader can override |  |
+| `UI_COVER_SIZE` | `2` | server default; each reader can override |  |
+| `UI_SHOW_PROGRESS` | `true` | server default; each reader can override |  |
+| `UI_SHOW_FINISHED` | `true` | server default; each reader can override |  |
+| `UI_SHOW_FORMAT_STRIP` | `true` | server default; each reader can override |  |
+| `UI_SHOW_RATINGS` | `true` | server default; each reader can override |  |
+| `UI_SHOW_TITLES` | `true` | server default; each reader can override |  |
+| `UI_SHOW_HERO` | `true` | server default; each reader can override |  |
+| `UI_HERO_CONTENT` | `stats` | server default; each reader can override |  |
 | [`TZ`](#paths-and-system) | `America/New_York` | server | yes |
 | [`LOG_LEVEL`](#paths-and-system) | `INFO` | server | yes |
 | [`DATA_DIR`](#paths-and-system) | `/data` | server | yes |
@@ -1218,7 +1221,7 @@ settings read only at startup, which restart the app when saved in Settings.
 | `TRANSCRIPT_MIN_COVERAGE` | `0.85` | server |  |
 | `DIAGNOSTICS_MAX_PAYLOAD_BYTES` | `800000` | server |  |
 | `SHARE_ALL_BOOKS_WITH_ALL_USERS` | `false` | server |  |
-| [`SERIES_SHOW_CURRENT_BOOK_DETAIL`](#series-display) | `false` | server |  |
+| [`SERIES_SHOW_CURRENT_BOOK_DETAIL`](#series-display) | `false` | server default; each reader can override |  |
 
 ### Set by BookBridge { #every-setting-set-by-bookbridge }
 

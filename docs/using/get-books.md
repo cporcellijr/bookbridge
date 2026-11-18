@@ -32,7 +32,7 @@ Search for it on Discover's **Search** tab. When only one half is in your librar
 
 ## 3. Follow it
 
-Your requests show as **My requests** on Discover and under **Book requests** in [Processing](processing.md), from request to download, import and pairing. A request ends as **Paired**, **Declined**, **Cancelled** or **Failed**. If BookBridge cannot be sure the new file is the book you asked for, it marks it **Needs a look** and sends it to Discover for you to check instead of guessing.
+Your requests show as **My requests** on Discover and under **Book requests** in [Processing](processing.md), from request to download, import and pairing. **My requests** shows the provider's status, including **Arrived**, and a request ends as **Paired**, **Declined**, **Cancelled** or **Failed**. Processing separately follows download, library import, edition review and pairing. An arrived download is not necessarily paired or ready to sync. If BookBridge cannot be sure the new file is the book you asked for, it marks it **Needs a look** and sends it to Discover for you to check instead of guessing.
 
 A download with no progress for 30 minutes says so. Nothing is cancelled for you.
 

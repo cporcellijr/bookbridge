@@ -12,7 +12,7 @@ Every app connects the same way, in two places.
 <div markdown>
 Settings → Services
 
-**Admin, once per server.** Turn the app on, enter its address and **Test** it. A service switched off here is off for everyone.
+**Admin, once per server.** Turn the app on, enter its address and **Save Settings**. **Test** checks the connection once your login below is saved. A service switched off here is off for everyone.
 </div>
 <div markdown>
 Account → My Integrations

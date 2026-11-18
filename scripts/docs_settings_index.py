@@ -1,7 +1,8 @@
 """Write the "Every setting" index in docs/configuration.md from the settings registry.
 
 The index lists every key in ALL_SETTINGS, grouped as the registry groups them, with
-its default from DEFAULT_CONFIG, whether each reader has their own value, whether
+its default from DEFAULT_CONFIG, whether each reader has their own value or can override
+the server default, whether
 changing it restarts the app, and a link to the section of the page that describes it.
 
 Usage (from the repo root, with the project venv):
@@ -17,7 +18,10 @@ from markdown.extensions.toc import slugify
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from src.utils import config_loader as cl  # noqa: E402
-from src.utils.user_config import PER_USER_CREDENTIAL_KEYS, SERVICE_ENABLE_KEYS  # noqa: E402
+from src.utils.display_settings import DISPLAY_SETTINGS  # noqa: E402
+from src.utils.user_config import (  # noqa: E402
+    PER_USER_CREDENTIAL_KEYS, PER_USER_PREFERENCE_KEYS, SERVICE_ENABLE_KEYS,
+)
 
 DOC = ROOT / "docs" / "configuration.md"
 START, END = "<!-- settings-index:start -->", "<!-- settings-index:end -->"
@@ -110,8 +114,12 @@ def render(doc: str) -> str:
             name = f"[`{key}`](#{anchors[key]})" if key in anchors else f"`{key}`"
             if key in SERVICE_ENABLE_KEYS:
                 who = "server and each reader"
+            elif key in PER_USER_CREDENTIAL_KEYS:
+                who = "each reader"
+            elif key in PER_USER_PREFERENCE_KEYS or key in DISPLAY_SETTINGS:
+                who = "server default; each reader can override"
             else:
-                who = "each reader" if key in PER_USER_CREDENTIAL_KEYS else "server"
+                who = "server"
             restart = "yes" if key in cl.RESTART_REQUIRED_SETTINGS else ""
             out.append(f"| {name} | {default} | {who} | {restart} |")
         out.append("")

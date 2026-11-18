@@ -9,18 +9,18 @@ The pages under **Using BookBridge** walk through the screens you use every day:
 
 The **Account** page is where you manage your own login and reader-specific setup.
 
-- **My Integrations** lets you save your own service usernames, passwords, tokens, API keys, and per-user sync toggles. The cards here use the same names and order as **Settings -> Services**, so it is always clear which side holds what: Settings has the server connection, your Account has your login.
+- **My Integrations** lets you save your own service usernames, passwords, tokens, API keys, and per-user sync toggles. The cards here use the same names and order as **Settings → Services**, so it is always clear which side holds what: Settings has the server connection, your Account has your login.
 - **Display** holds your interface, theme and library look. See [Display](using/display.md).
 - **Reading preferences**, at the top of My Integrations, are how you want your own books handled. Each starts at **Server default**, which follows Settings; choose On or Off to decide for yourself. See [KOReader devices](using/koreader-devices.md#choose-what-your-devices-share).
 - **Connect a KOReader device** gives the address to enter in KOReader and the Bridge Sync plugin download. See [KOReader devices](using/koreader-devices.md#connect-a-device).
 - Your own switch for a service applies only while that service is switched on in **Settings**. If it is switched off there, your switch is greyed out with the reason — and your saved settings come back untouched if it is switched on again.
-- Admins can still manage the same fields for any reader from **Settings -> Users -> (user) -> Integrations**.
+- Admins can still manage the same fields for any reader from **Settings → Users → (user) → Integrations**.
 - Shared engine settings, such as service URLs, poll intervals, and daemon behavior, still live in **Settings**.
 - BookFusion can be linked from **My Integrations** with the device-link button; a separate Calibre API key enables uploading local EPUBs to BookFusion.
 
 Readers do not inherit anyone else's account credentials when their own fields are blank. This keeps one reader's BookFusion, Grimmory, BookOrbit, tracker, or KOSync account from being used for another reader by accident. Only the **primary admin** — the first admin account, whose logins the engine's shared settings are copied from — falls back to the server-wide values; a second admin account needs its own logins like anyone else.
 
-Admins can change an existing account between **user** and **admin** from **Settings -> Users** with the *Make admin* / *Make user* button. Promoting someone does not hand over your service logins, and it leaves their books, progress and saved credentials untouched. The primary admin and the last remaining active admin cannot be demoted.
+Admins can change an existing account between **user** and **admin** from **Settings → Users** with the *Make admin* / *Make user* button. Promoting someone does not hand over your service logins, and it leaves their books, progress and saved credentials untouched. The primary admin and the last remaining active admin cannot be demoted.
 
 Scripts can create readers and save their integrations through the optional
 [admin API](configuration.md#admin-api-optional). It is off until its environment
@@ -95,7 +95,7 @@ This is useful when you often read directly in Storyteller, Grimmory, BookOrbit,
 
 The **Settings** page is where you connect your services and adjust how the bridge behaves. The sidebar groups it by what each setting is for: **Services** (one card per service), **Reading & Sync**, **Library & Matching**, **Alignment**, **AI**, **Server**, **Maintenance** (one-off actions) and **Users**. The search box looks across every tab at once.
 
-- Everything in Settings is server-wide; your own logins live in **Account -> My Integrations**, on cards with the same names in the same order.
+- Everything in Settings is server-wide; your own logins live in **Account → My Integrations**, on cards with the same names in the same order.
 - **My Integrations** cards have **Test** buttons so you can check a login before saving; Audiobookshelf and Grimmory library ID fields include **Find IDs** helpers so you can pick from a dropdown instead of pasting blindly.
 - Every integration card has an **Enable** switch, Audiobookshelf included, so an ebook-only or maintenance-focused setup is a matter of switching off what you are not using. Switching a service off here switches it off for everyone on the install.
 - **Save Settings** applies your changes straight away. Only a setting marked **restart** (server addresses, folders, the sync period and a few others read at startup) restarts the app; the Save bar tells you before you press it, and you are sent back to the dashboard when the restart finishes.
@@ -123,7 +123,7 @@ books: a manual removal is undone on the next cycle while the option is on.
 
 BookBridge can copy your books into your own [Readest](https://readest.com) cloud library,
 so they are ready to open in Readest's apps and filed into a group of their own. It is off
-by default and configured per reader under **Account -> My Integrations**.
+by default and configured per reader under **Account → My Integrations**.
 
 There are two independent switches — use either or both:
 
@@ -199,7 +199,7 @@ When Storyteller transcript assets are available, the bridge can use them direct
 
 ### Storyteller Backfill
 
-Use **Settings -> Maintenance -> Storyteller Backfill** to:
+Use **Settings → Maintenance → Storyteller Backfill** to:
 
 - Re-scan all Storyteller-linked books
 - Ingest any newly available transcript assets
@@ -242,7 +242,7 @@ Two ways to start a generation job:
 
 Books matched automatically can get one too: turn on **Also generate a read-along EPUB
 for auto-matched books** for BookOrbit's watched collection (BookOrbit card in
-**Settings -> Services**) or **Also generate a read-along EPUB for books
+**Settings → Services**) or **Also generate a read-along EPUB for books
 auto-matched to a BookOrbit audiobook** for Suggestions auto-match (**Settings ->
 Library & Matching**). Both are off by default.
 
@@ -314,7 +314,7 @@ completed continuous sessions rather than one entry for every progress update. T
 sessions; progress itself continues to sync immediately.
 
 If Grimmory imports change and results look stale, run
-**Settings -> Maintenance -> Refresh Grimmory Cache**. If BookOrbit, Kavita, or
+**Settings → Maintenance → Refresh Grimmory Cache**. If BookOrbit, Kavita, or
 CWA results look stale, confirm the service is enabled and reachable, then run the
 normal sync or matching flow again.
 
@@ -338,7 +338,7 @@ your audiobook sources for a partner, and takes one of three actions:
 
 Each book is only reconsidered once per rescan window (24 hours by default), so a book
 that stays in the collection is not reworked on every poll. Turn this on per service in
-**Settings -> Services**.
+**Settings → Services**.
 
 ### Books you start reading in BookOrbit
 
@@ -356,7 +356,7 @@ A suggestion you dismiss is not offered again. Nothing is moved between collecti
 ### Aligned Storyteller books
 
 With **Automatically link aligned Storyteller books** on (your Storyteller integration
-in **Account -> My Integrations**, off by default), an hourly check links Storyteller
+in **Account → My Integrations**, off by default), an hourly check links Storyteller
 books that have finished aligning to your matching BookBridge books. Ambiguous
 matches are skipped, and a declined book is tried again after a week or once it is
 re-aligned.
@@ -423,7 +423,7 @@ If **Rebuild missing sync data when you reset a book** is enabled, the bridge ca
 
 ### Library maintenance
 
-**Settings -> Maintenance** holds a few whole-library actions. All of them
+**Settings → Maintenance** holds a few whole-library actions. All of them
 are safe to run again, and each one reports what it changed when it finishes.
 
 - **Backfill Series Metadata** looks up every book with no series recorded and groups it
@@ -453,13 +453,13 @@ StoryGraph does not have an official public API for third-party apps, so the bri
 ### How to get your cookies:
 
 1. Log in to [The StoryGraph](https://app.thestorygraph.com) in your browser.
-2. Open **Developer Tools** (usually `F12` or `Right Click -> Inspect`).
+2. Open **Developer Tools** (usually `F12` or `Right Click → Inspect`).
 3. Go to the **Application** tab (Chrome/Edge) or **Storage** tab (Firefox).
 4. Expand **Cookies** and select `https://app.thestorygraph.com`.
 5. Find and copy the values for:
    - `_storygraph_session`
    - `remember_user_token`
-6. Paste these into the **StoryGraph** section in **Settings**.
+6. Paste these into **Account → My Integrations → StoryGraph**, then **Save integrations**.
 
 > [!WARNING]
 > If you log out of StoryGraph in your browser, your session cookie might expire. If the bridge fails to sync to StoryGraph, you may need to refresh these cookies.

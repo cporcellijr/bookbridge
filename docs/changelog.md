@@ -6,12 +6,12 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ## [7.13.0]
 
-BookBridge has a New interface (beta), Suggestions grows into Discover for every reader,
+BookBridge has a New interface, Suggestions grows into Discover for every reader,
 and reader apps get a Device API for word-level read-along.
 
 ### What's New
 
-- **New interface (beta)**, opt-in per reader with **Classic | New**; Classic stays the
+- **New interface**, opt-in per reader with **Classic | New**; Classic stays the
   default. Redesigned Library, a format strip on each cover, progress on the cover, a book
   drawer with your current audiobook chapter (#428), Ctrl K / ⌘K search and phone navigation.
 - **Discover replaces Suggestions and Add Book**, with **Pairs**, **Ebook Only** and

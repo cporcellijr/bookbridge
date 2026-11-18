@@ -63,6 +63,6 @@ New links then show in [Processing](processing.md) while BookBridge lines up the
       background, and **Scheduled Full Refresh** runs a full rescan on a schedule.
     - **Ignore local files in Suggestions** (admin) leaves files from your local folders out of Pairs and Ebook Only.
     - A book with more than one ebook file in BookOrbit or Grimmory asks which edition you mean, and BookBridge
-      keeps using that file.
+      keeps using that file. See [Choosing an ebook edition](../provider-ebook-file-selection.md).
     - CBZ comics can be linked as ebook-only.
     - Books can also be added without Discover. See [Automatic ways books get added](../user-guide.md#automatic-ways-books-get-added).

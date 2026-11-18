@@ -75,12 +75,12 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Getting Started:
+  - Getting started:
       - Install and first sync: getting-started.md
-      - Settings Tour: settings-tour.md
-      - How It Works: how-it-works.md
-      - Supported Apps: supported-apps.md
-  - Connect Your Apps:
+      - Settings tour: settings-tour.md
+      - How it works: how-it-works.md
+      - Supported apps: supported-apps.md
+  - Connect your apps:
       - Overview: apps/index.md
       - Listen and read:
           - Audiobookshelf: apps/audiobookshelf.md
@@ -102,16 +102,20 @@ nav:
   - Using BookBridge:
       - Library: using/library.md
       - Discover: using/discover.md
-      - Get a Missing Book: using/get-books.md
+      - Get a missing book: using/get-books.md
       - Processing: using/processing.md
       - Stats: using/stats.md
       - Display: using/display.md
-      - KOReader Devices: using/koreader-devices.md
+      - KOReader devices: using/koreader-devices.md
       - Classic and New: new-interface.md
-      - More Features: user-guide.md
+      - More features: user-guide.md
   - Reference:
       - Configuration: configuration.md
       - Device API: device-api.md
-      - Backup & Restore: backup-restore.md
+      - Backup & restore: backup-restore.md
+      - Choosing an ebook edition: provider-ebook-file-selection.md
+      - How reading sessions are counted: reading-session-aggregation.md
+      - BookOrbit reading statistics: bookorbit-session-deduplication.md
+      - Transcription problems: TRANSCRIPTION_RECOVERY.md
   - Troubleshooting: troubleshooting.md
   - Changelog: changelog.md

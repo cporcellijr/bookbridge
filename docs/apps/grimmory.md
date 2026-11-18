@@ -17,7 +17,7 @@ Grimmory can hold both the audiobook and the ebook. BookBridge syncs your listen
 <div class="bb-callouts" markdown>
 1. **Enable.**
 2. **Server URL:** the address the BookBridge server reaches Grimmory at.
-3. **Test** checks the connection, then **Save Settings**.
+3. **Save Settings**, then add and save your login in step 2. **Test** checks the connection once that login is saved.
 </div>
 
 ## 2. Add your login (each reader)

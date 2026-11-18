@@ -6,7 +6,7 @@ description: "BookBridge has two interfaces, Classic and New. Both use the same 
 
 # Classic and New
 
-BookBridge has two interfaces, **Classic** and **New**. They use the same books, progress, connections and actions, so switching changes only how things look. Classic is the default. Each reader picks their own: click your name, choose **Display**, and pick under **Look**. See [Display](using/display.md#1-open-display).
+BookBridge has two interfaces, **Classic** and **New**. They use the same books, progress, connections and actions, so switching changes only how things look. Classic is the default. Each reader picks their own: click your name and choose **Display**. Classic calls the choice **Interface**; New calls it **Look**. On phones, open the account avatar at the top right. See [Display](using/display.md#1-open-display).
 
 These docs show the New interface. Where Classic uses a different name:
 

@@ -17,7 +17,7 @@ BookBridge syncs your reading position with Kavita both ways and can link its EP
 <div class="bb-callouts" markdown>
 1. **Enable.**
 2. **Server URL:** the address the BookBridge server reaches Kavita at.
-3. **Test** checks the connection, then **Save Settings**.
+3. **Save Settings**, then add and save your login in step 2. **Test** checks the connection once that login is saved.
 </div>
 
 ## 2. Add your key (each reader)

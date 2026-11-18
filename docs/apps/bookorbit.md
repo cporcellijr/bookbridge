@@ -17,7 +17,7 @@ BookOrbit can hold both the audiobook and the ebook. BookBridge syncs your liste
 <div class="bb-callouts" markdown>
 1. **Enable.**
 2. **Server URL:** the address the BookBridge server reaches BookOrbit at.
-3. **Test** checks the connection, then **Save Settings**.
+3. **Save Settings**, then add and save your login in step 2. **Test** checks the connection once that login is saved.
 </div>
 
 ## 2. Add your login (each reader)
@@ -30,12 +30,12 @@ BookOrbit can hold both the audiobook and the ebook. BookBridge syncs your liste
 1. **Enable** it for your account.
 2. **Username** of your BookOrbit web account.
 3. **Password** of that account.
-4. **API key** instead of the password, on BookOrbit 3.8 and newer. It also works when BookOrbit only allows single sign-on. Create it in BookOrbit under **Settings → API keys** with **Write** access and the Download, Upload, Delete books and Manage libraries permissions.
+4. **API key** instead of the password, on BookOrbit 3.8 and newer. It also works when BookOrbit only allows single sign-on. Create it in BookOrbit under **Settings → You → API keys** with **Read and write** access and the Download, Upload, Delete books and Manage libraries permissions. Your BookOrbit account needs the **Create API keys** permission.
 </div>
 
 Then **Save integrations**.
 
-**Highlights from BookOrbit's web reader** need the **KOReader sync username** and **password** further down: the separate KOReader sync login from BookOrbit's own settings, not your web account.
+**Web-reader highlights and KOReader reading statistics** need your BookOrbit **KOReader sync username** and **password** further down: the separate KOReader sync login from BookOrbit's own settings, not your web account. Keep your BookOrbit **Username** filled in when using an API key. **KOReader sync owner**, or the sync username when owner is blank, must match that BookOrbit username. See [BookOrbit reading statistics](../bookorbit-session-deduplication.md).
 
 ??? info "Other options"
     - **Collection name** (My Integrations): matched books are moved to this BookOrbit collection.

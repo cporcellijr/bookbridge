@@ -14,7 +14,7 @@ Display holds every look-and-feel choice for your account, including switching b
 
     ![The account menu in the New interface](../assets/guide/use-display-menu.webp){ .bb-shot loading=lazy }
 
-    1. Click your name at the bottom of the sidebar.
+    1. Click your name at the bottom of the sidebar. On phones, open the account avatar at the top right.
     2. Choose **Display**.
 
 === "Classic"
@@ -23,6 +23,9 @@ Display holds every look-and-feel choice for your account, including switching b
 
     1. Click your name at the top right.
     2. Choose **Display**.
+
+    Classic opens the **Display** card on Account. Choose **New** under **Interface** to use the controls shown below.
+    Classic's series preference uses **Save display**.
 
 ## 2. Choose how it looks
 

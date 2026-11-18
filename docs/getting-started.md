@@ -82,7 +82,7 @@ Connections live in two places, and each has its own screen:
 1. **Pick the app** in the Connections list. Each one shows whether it is configured.
 2. **Turn it on** with Enable. Switch off the apps you don't use, Audiobookshelf included.
 3. **Enter its address**, the URL you open the app at from the BookBridge server.
-4. **Test** checks that BookBridge can reach it.
+4. **Test** checks that BookBridge can reach it. It uses your saved login, so use it after you save My Integrations below.
 5. **Save Settings.** A change marked RESTART restarts BookBridge, which takes a few seconds.
 </div>
 
@@ -93,7 +93,7 @@ Connections live in two places, and each has its own screen:
 2. **Turn it on for you.**
 3. **Your login**: a token, API key or username and password, depending on the app.
 4. **Optional fields**, such as an Audiobookshelf library to search.
-5. **Save integrations.**
+5. **Save integrations.** Then go back to Settings → Services and use **Test** to check the connection.
 </div>
 
 What to fill in for your setup:

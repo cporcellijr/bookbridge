@@ -1,74 +1,40 @@
-# Choosing the ebook that belongs to an audiobook
+---
+hide:
+  - toc
+description: "When a BookOrbit or Grimmory book has more than one ebook file, pick the edition that belongs to your audiobook."
+---
 
-For an Audiobookshelf audiobook, create **one mapping in BookBridge**:
+# Choosing an ebook edition
 
-1. Open **Discover → Search** (or review a pair suggestion).
-2. Select the audiobook from **Audiobookshelf**.
-3. Select the corresponding ebook from **BookOrbit** or **Grimmory**.
-4. Select the book card. When it has multiple compatible files, **Choose an
-   edition** opens in a modal. Pick the exact publication and confirm **Use this
-   edition**. A single compatible file is selected directly, without a popup.
-5. Add the pair and run the normal match workflow. A ready-made read-along can
-   supply SMIL timings; it does not need another read-along generated inside it.
+Some books in BookOrbit or Grimmory have more than one ebook file, such as two editions, or an EPUB and a read-along EPUB. BookBridge asks which one belongs to your audiobook and keeps using it.
 
-Search groups files into one card per provider book. The edition chooser is also
-available on pair suggestions, without forcing a detail request for every book during a
-full-library scan. Comic files remain ebook-only: they cannot be paired to audio.
-Both Classic and New UI use the same accessible dialog, with theme-aware styling.
-Filenames, available file sizes and the provider's primary-file marker distinguish editions.
-An explicit media-overlay badge is based on provider metadata, not a filename
-guess; Grimmory may not expose that metadata.
-BookOrbit's catalog retains every supported ebook filename for local-choice
-deduplication, including non-primary editions. These files stay under the
-provider card instead of reappearing as local choices. This uses the existing
-catalog response, without a detail request per book; unreported local filenames
-remain available.
+## 1. Pick the edition
 
-Keep the matching text/audio/read-along in one BookOrbit entry if using its native
-read-aloud synchronization. Do not also create a competing BookOrbit-audio mapping
-for the same ABS pairing, and do not use **Move Audiobooks to BookOrbit** unless
-you actually intend to replace ABS as the mapping's audio provider.
+1. Open **Discover → Search**, or review a pair on **Pairs**.
+2. Choose the audiobook.
+3. Choose the ebook from BookOrbit or Grimmory. When the book has more than one file, **Choose an edition** opens: pick the file and confirm **Use this edition**. A book with one file is picked straight away.
+4. Add the pair and match it as usual.
 
-## Identity and existing mappings
+The chooser shows each file's name, size and which file the app marks as its main one. A read-along badge comes from the app's own details, which Grimmory may not report. Classic and New use the same chooser. Comics stay ebook-only.
 
-The persisted selection uses the provider book ID, `ebook_source_file_id` and
-exact source filename (`original_ebook_filename`, or `ebook_filename` without an
-original). A nullable-column migration leaves all existing mappings unpinned,
-with their existing behavior. A selection is pinned only when the provider book
-offers more than one ebook file; a book whose only ebook is the chosen file stays
-unpinned and keeps following the provider's primary, so replacing that file does
-not stop its sync. Rematching a mapping to a different file or provider book
-without a new pick clears an old pin. Pinned selections are verified within the
-book's freshly fetched metadata for downloads and BookOrbit progress. Missing,
-replaced, or ambiguous files fail closed rather than
-silently substituting whichever EPUB is now primary. This deliberately does not
-claim that a file rename is the same document.
+## 2. What BookBridge remembers
 
-Downloads for hashing, matching, Forge, cached-library acquisition and device
-delivery retain that selection. An explicitly different EPUB does not inherit a
-manual hash override intended for the old document. Changing the publication may
-require rebuilding its alignment: two EPUBs of the same text can have different
-DOMs, CFIs and hashes. Existing mappings are not changed just by listing files.
+- The chosen file is used for downloads, matching, read-along building and delivery to devices.
+- If that file disappears or is replaced, BookBridge stops and asks instead of switching to whichever file is now the main one. A renamed file counts as a different file.
+- A book with only one file follows the app's main file, so replacing that file keeps it syncing.
+- Matching the book to another file or book without picking again clears the old choice.
+- Moving to another edition can need a new alignment: two EPUBs of the same text can differ inside.
 
-## Grimmory progress limitation
+## Using BookOrbit's own read-along
 
-Grimmory exposes alternate-file downloads, but the inspected API exposes merged
-book-level EPUB progress, without identifying which EPUB produced its CFI.
-BookBridge must not apply a primary EPUB's CFI to an alternate EPUB's DOM.
-Therefore alternate Grimmory files can supply text/SMIL for ABS and KoSync, but
-Grimmory's native progress reads/writes are skipped for them. For a newly pinned
-primary EPUB with another EPUB in the same entry, native progress is also skipped:
-the merged CFI could belong to either file. A primary-file change fails closed
-until the mapping is reviewed. Full native alternate-
-EPUB progress sync needs a file-specific read API in Grimmory.
+If you use BookOrbit's read-along sync, keep the matching ebook, audiobook and read-along in one BookOrbit entry. Don't also create a separate BookOrbit audiobook mapping for the same Audiobookshelf pairing, and use **Move Audiobooks to BookOrbit** only if you mean to replace Audiobookshelf as that book's audio.
 
-BookOrbit exposes per-file progress and supports the selected file in both
-directions. Its internal mirroring between ebook, read-along and audio remains
-BookOrbit's responsibility.
+??? info "Grimmory reading position with more than one file"
+    Grimmory keeps one reading position for the whole book, without saying which EPUB it came from. So for a file
+    that is not the main one, and for a chosen main file when the book holds another EPUB, BookBridge does not read
+    or write Grimmory's position. The file still supplies text and read-along timing for Audiobookshelf and
+    KOReader. BookOrbit keeps a position for each file, so the chosen file syncs both ways there.
 
-## Other sources
-
-ABS already enumerates its ebook files. CWA resolves a format-specific download;
-Kavita's mapped source identity selects the downloadable edition/chapter. This
-change does not invent an EPUB-file API for providers that do not expose one.
-Local-file selection remains distinct from authenticated provider selection.
+??? info "Other apps"
+    Audiobookshelf lists its ebook files, Calibre-Web Automated downloads the format chosen, and Kavita uses the
+    linked edition. Apps that do not list their files have no chooser.

@@ -18,4 +18,4 @@ Every reader can open **Stats** for their own reading and listening. It has the 
 ??? info "How listening time is counted"
     Listening time BookBridge records itself is an estimate from changes in audio position, and covers only
     sessions it saw, not a service's whole history. Removing a book from BookBridge keeps its sessions, so your
-    totals stay.
+    totals stay. [How reading sessions are counted](../reading-session-aggregation.md) explains how sessions are grouped.

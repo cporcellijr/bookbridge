@@ -18,7 +18,7 @@ BookBridge can find and download ebooks from Calibre-Web Automated (CWA). With K
 1. **Enable.**
 2. **Server URL:** the address the BookBridge server reaches CWA at.
 3. **Enable Sync** under Reading Progress Sync, if you want Kobo position sync.
-4. **Test** checks the connection, then **Save Settings**.
+4. **Save Settings**, then add and save your login in step 2. **Test** checks the connection once that login is saved.
 </div>
 
 ## 2. Add your login (each reader)
@@ -31,7 +31,7 @@ BookBridge can find and download ebooks from Calibre-Web Automated (CWA). With K
 1. **Enable** it for your account.
 2. **Username** of your CWA account.
 3. **Password** of that account.
-4. **Kobo sync token:** the part after `/kobo/` in the sync address your Kobo uses with CWA. Tick **Kobo sync enabled** as well.
+4. **Kobo sync token:** in CWA, edit your user and open **OAuth & API Integrations → Kobo Sync Token → Create/View**. Enter only the part after `/kobo/` in the address it shows, not the whole URL. Tick **Kobo sync enabled** as well.
 </div>
 
 Then **Save integrations**.
