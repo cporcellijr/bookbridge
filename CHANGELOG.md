@@ -25,6 +25,16 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **BookOrbit audiobooks with unmeasured files no longer jump to the last file.** When
+  BookOrbit has no duration for some files of a multi-file audiobook, BookBridge can't tell
+  where each file starts, so it now skips that audiobook with a warning instead of writing
+  the position into the final file. It syncs again once a BookOrbit library scan measures
+  the files. (#601)
+
+- **BookOrbit audio writes recover after a library scan changes the audiobook.** Every write
+  failed with `status=412` until a restart once BookOrbit measured or changed the files.
+  BookBridge now picks up the new layout on the next sync. (#602)
+
 - **KOReader statistics reach BookOrbit with their original device identity.** Raw page
   events use BookOrbit's native endpoint, so direct plugin uploads and BridgeSync uploads
   can share the same event identity. Retries reuse durable receipts; account changes hold
