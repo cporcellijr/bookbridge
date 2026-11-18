@@ -2488,8 +2488,8 @@ end
 function BridgeSync:_findStatisticsDbPath()
     local settings_dir = DataStorage:getSettingsDir()
     local candidates = {
-        settings_dir .. "/statistics.sqlite",
         settings_dir .. "/statistics.sqlite3",
+        settings_dir .. "/statistics.sqlite",
     }
     for _, path in ipairs(candidates) do
         if self:_fileExists(path) then
