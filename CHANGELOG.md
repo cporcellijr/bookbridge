@@ -25,6 +25,40 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Suggestions tolerates disappearing local files and unavailable ebook mounts.** A
+  filesystem race no longer discards other searchable books, and a disconnected
+  `/books` mount marks the local catalog incomplete without stopping healthy remote
+  provider discovery.
+
+- **PDFs are no longer passed into EPUB parsing during sync.** Unsupported files are
+  rejected before ebooklib, while EPUB handling and the existing CBZ path remain intact.
+
+- **KoSync hash reconciliation identifies the actual conflicting book.** When a hash
+  belongs to another book's primary identity but has no document row, diagnostics now
+  identify that owner without weakening the atomic adoption guard.
+
+- **Regenerating a BookOrbit read-along works when the old copy is still attached.**
+  BookOrbit refuses an upload whose filename is taken, so regeneration used to stop there.
+  BookBridge now uploads the new edition beside the old one under a content-based name,
+  and never deletes the old copy or its reading history. It reports the new edition as
+  active only when BookOrbit's read-along sync actually uses that file; if BookOrbit
+  keeps using the old copy, the job warns that you need to make the new file the book's
+  primary file in BookOrbit.
+
+- **Concurrent read-along work holds database connections for less time.** Large
+  alignment-map serialization and decoding now happen outside database sessions,
+  avoiding a proven path to QueuePool exhaustion during overlapping reads and
+  dashboard requests. Pool sizes and SQLite journal settings are unchanged.
+
+- **Read-along final clips no longer produce a false short-overlay warning.**
+  A clip already reaching beyond the probed audio duration needs no extension; missing
+  duration probes still warn, and segment-scoped clips remain unchanged.
+
+- **Parallel Storyteller transcript ingests publish consistent snapshots.**
+  Each backfill stages immutable chapter files and atomically publishes their manifest,
+  so one worker cannot remove another worker's in-flight copy; older valid manifests
+  and their chapter files remain usable if publication fails.
+
 - **BookOrbit audiobooks with unmeasured files no longer jump to the last file.** When
   BookOrbit has no duration for some files of a multi-file audiobook, BookBridge can't tell
   where each file starts, so it now skips that audiobook with a warning instead of writing

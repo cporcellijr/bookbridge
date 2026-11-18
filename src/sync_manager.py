@@ -320,6 +320,13 @@ class SyncManager:
             return None, 0
         if is_cbz_filename(ebook_filename):
             return None, 0
+        if not is_linkable_ebook_filename(ebook_filename):
+            get_persistent_condition_logger().warn(
+                logger, f"unsupported_sync_ebook:{ebook_filename}",
+                "Skipping unsupported ebook for text parsing: '%s' (EPUB required)",
+                sanitize_log_data(ebook_filename),
+            )
+            return None, 0
 
         cached = self._sync_cycle_ebook_cache.get(ebook_filename)
         if cached is not None:
@@ -2439,8 +2446,8 @@ class SyncManager:
         return None
 
     def _get_local_epub(self, ebook_filename):
-        """Resolve an EPUB path once per sync cycle."""
-        if not ebook_filename:
+        """Resolve an EPUB or CBZ path once per sync cycle."""
+        if not ebook_filename or not is_linkable_ebook_filename(ebook_filename):
             return None
         if not hasattr(self, "_sync_cycle_local_epub_cache"):
             self._sync_cycle_local_epub_cache = {}
@@ -2448,6 +2455,12 @@ class SyncManager:
             return self._sync_cycle_local_epub_cache[ebook_filename]
 
         resolved = self._resolve_local_epub_uncached(ebook_filename)
+        if isinstance(resolved, (str, os.PathLike)) and not is_linkable_ebook_filename(Path(resolved).name):
+            logger.warning(
+                "Resolved ebook has unsupported format; refusing EPUB parser input: '%s'",
+                sanitize_log_data(resolved),
+            )
+            resolved = None
         self._sync_cycle_local_epub_cache[ebook_filename] = resolved
         return resolved
 

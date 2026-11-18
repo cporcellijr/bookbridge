@@ -1223,7 +1223,7 @@ def _extend_clips_to_contiguous(
             target_end = audio_duration_seconds if audio_duration_seconds is not None else target_end
         if target_end is not None and target_end > last.ts_end:
             extended[-1] = replace(last, ts_end=target_end)
-    else:
+    elif audio_duration_seconds is None:
         logger.warning(
             "Read-along: could not extend final clip %s to the real audio "
             "duration (probed=%s, clip end=%.3f); overlay total will run short",

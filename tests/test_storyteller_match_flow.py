@@ -157,7 +157,9 @@ class TestStorytellerMatchFlow(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest["format"], "storyteller_manifest")
         self.assertEqual(manifest["chapter_count"], 1)
-        self.assertTrue((manifest_path.parent / "00000-00001.json").exists())
+        published_chapter = manifest["chapters"][0]["file"]
+        self.assertEqual(Path(published_chapter).name, "00000-00001.json")
+        self.assertTrue((manifest_path.parent / published_chapter).exists())
 
     @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-story-uuid-1")

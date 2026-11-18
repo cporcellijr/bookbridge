@@ -1,6 +1,8 @@
 """C15 helpers extracted from web_server with no behavior change."""
 
 from importlib import import_module
+import os
+from pathlib import Path
 from typing import Optional
 
 _WEB_MODULE = None
@@ -100,6 +102,39 @@ def _refuse_regular_user_local_selection(
     return local
 
 
+def _iter_local_ebook_files(web, on_error):
+    """Yield available local EPUB/CBZ files, surviving individual filesystem races."""
+    for directory, _subdirs, filenames in os.walk(web.EBOOK_DIR, onerror=on_error):
+        for filename in filenames:
+            eb = Path(directory) / filename
+            try:
+                if eb.suffix.lower() not in web.LINKABLE_EBOOK_EXTENSIONS or not eb.is_file():
+                    continue
+                if web.is_generated_readalong_epub(eb.name) or web.is_in_hidden_folder(eb, web.EBOOK_DIR):
+                    continue
+                file_stat = eb.stat()
+            except OSError as exc:
+                on_error(exc)
+                continue
+            yield eb, file_stat
+
+
+def _local_mount_exists(web, source_states=None, scan_metadata=None, enabled=True):
+    """An unavailable /books mount is a failed local source, not a provider failure."""
+    try:
+        return web.EBOOK_DIR.exists()
+    except OSError as exc:
+        if scan_metadata is not None:
+            scan_metadata["_error_type"] = type(exc).__name__
+        if source_states is not None:
+            web._record_suggestions_source_state(
+                source_states, "Local File", "ebook", enabled,
+                complete=False, error_type=type(exc).__name__,
+            )
+        web.logger.warning("⚠️ Filesystem search failed: %s", exc, exc_info=True)
+        return False
+
+
 def _build_local_ebook_title_index(scan_metadata=None):
     """Map normalized title -> filename for every epub on the local /books disk.
 
@@ -111,33 +146,32 @@ def _build_local_ebook_title_index(scan_metadata=None):
     scheme ('Author - Series 15 - Title.epub', #549)."""
     web = _web_server()
     index = {}
-    try:
-        if web.EBOOK_DIR.exists():
-            for eb in web.EBOOK_DIR.rglob('*'):
-                if eb.suffix.lower() not in web.LINKABLE_EBOOK_EXTENSIONS or not eb.is_file():
-                    continue
-                if web.is_generated_readalong_epub(eb.name) or web.is_in_hidden_folder(eb, web.EBOOK_DIR):
-                    continue
-                stem = eb.stem
-                title_part = stem.split(" - ", 1)[0]
-                metadata, series = web.read_local_ebook_metadata(eb), web.read_local_ebook_series(eb)
-                metadata_title, metadata_authors = metadata
-                if scan_metadata is not None:
-                    stat = eb.stat()
-                    scan_metadata[str(eb)] = {
-                        "path": eb,
-                        "metadata": metadata,
-                        "series": series,
-                        "mtime_ns": stat.st_mtime_ns,
-                        "size": stat.st_size,
-                    }
-                for key in (_ebook_title_key(title_part), _ebook_title_key(stem), _ebook_title_key(metadata_title)):
-                    if key:
-                        index.setdefault(key, eb.name)
-    except Exception as e:
+
+    def on_error(exc):
         if scan_metadata is not None:
-            scan_metadata["_error_type"] = type(e).__name__
-        web.logger.warning(f"⚠️ Failed to build local ebook title index: {e}", exc_info=True)
+            scan_metadata["_error_type"] = type(exc).__name__
+        web.logger.warning("⚠️ Failed to build local ebook title index: %s", exc,
+                           exc_info=(type(exc), exc, exc.__traceback__))
+
+    for eb, file_stat in _iter_local_ebook_files(web, on_error):
+        try:
+            stem = eb.stem
+            title_part = stem.split(" - ", 1)[0]
+            metadata, series = web.read_local_ebook_metadata(eb), web.read_local_ebook_series(eb)
+            metadata_title, metadata_authors = metadata
+            if scan_metadata is not None:
+                scan_metadata[str(eb)] = {
+                    "path": eb,
+                    "metadata": metadata,
+                    "series": series,
+                    "mtime_ns": file_stat.st_mtime_ns,
+                    "size": file_stat.st_size,
+                }
+            for key in (_ebook_title_key(title_part), _ebook_title_key(stem), _ebook_title_key(metadata_title)):
+                if key:
+                    index.setdefault(key, eb.name)
+        except OSError as exc:
+            on_error(exc)
     return index
 
 
@@ -170,8 +204,13 @@ def get_searchable_ebooks(
         raise
 
     local_index = None
+    local_available = None
     if discovery:
-        if web.EBOOK_DIR.exists() and not regular_user:
+        if not regular_user:
+            local_available = _local_mount_exists(
+                web, source_states, scan_local_metadata, not exclude_local_files,
+            )
+        if local_available:
             local_index = _build_local_ebook_title_index(scan_local_metadata)
             error_type = scan_local_metadata.get("_error_type") if isinstance(scan_local_metadata, dict) else None
             web._record_suggestions_source_state(
@@ -180,7 +219,7 @@ def get_searchable_ebooks(
                 count=None if exclude_local_files or error_type else len(scan_local_metadata),
                 error_type=None if exclude_local_files else error_type,
             )
-        else:
+        elif not (isinstance(scan_local_metadata, dict) and scan_local_metadata.get("_error_type")):
             web._record_suggestions_source_state(
                 source_states, "Local File", "ebook", False, complete=None,
             )
@@ -680,25 +719,46 @@ def get_searchable_ebooks(
             web.logger.warning("⚠️ CWA catalog capture failed (%s)", type(e).__name__, exc_info=True)
 
     # 4. Search filesystem (Local) - LOW PRIORITY
-    if web.EBOOK_DIR.exists() and not skip_local:
+    if not skip_local and (local_available if local_available is not None else
+                           _local_mount_exists(web, source_states, scan_local_metadata)):
         try:
             if discovery and scan_local_metadata is not None:
-                local_files = [
+                local_files = (
                     details for key, details in scan_local_metadata.items()
                     if not str(key).startswith("_")
-                ]
+                )
             else:
-                local_files = [
+                def local_error(exc):
+                    if discovery and isinstance(scan_local_metadata, dict):
+                        scan_local_metadata["_error_type"] = type(exc).__name__
+                    if discovery:
+                        web._record_suggestions_source_state(
+                            source_states, "Local File", "ebook", True,
+                            complete=False, error_type=type(exc).__name__,
+                        )
+                        web.logger.warning("⚠️ Filesystem scan failed (%s)", type(exc).__name__,
+                                           exc_info=(type(exc), exc, exc.__traceback__))
+                    else:
+                        web.logger.warning("⚠️ Filesystem search failed: %s", exc,
+                                           exc_info=(type(exc), exc, exc.__traceback__))
+
+                local_files = (
                     {"path": eb, "metadata": None, "series": None,
-                     "mtime_ns": eb.stat().st_mtime_ns, "size": eb.stat().st_size}
-                    for eb in web.EBOOK_DIR.rglob('*')
-                    if eb.suffix.lower() in web.LINKABLE_EBOOK_EXTENSIONS and eb.is_file()
-                    and not web.is_generated_readalong_epub(eb.name)
-                    and not web.is_in_hidden_folder(eb, web.EBOOK_DIR)
-                ]
+                     "mtime_ns": file_stat.st_mtime_ns, "size": file_stat.st_size}
+                    for eb, file_stat in _iter_local_ebook_files(web, local_error)
+                )
             for details in local_files:
                 eb = details["path"]
-                if eb.suffix.lower() not in web.LINKABLE_EBOOK_EXTENSIONS or not eb.is_file():
+                try:
+                    if eb.suffix.lower() not in web.LINKABLE_EBOOK_EXTENSIONS or not eb.is_file():
+                        continue
+                except OSError as exc:
+                    if discovery:
+                        web._record_suggestions_source_state(
+                            source_states, "Local File", "ebook", True,
+                            complete=False, error_type=type(exc).__name__,
+                        )
+                    web.logger.warning("⚠️ Filesystem search failed: %s", exc, exc_info=True)
                     continue
                 fname_lower = eb.name.lower()
                 stem_lower = eb.stem.lower()
@@ -745,7 +805,8 @@ def get_searchable_ebooks(
                 web.logger.warning(f"⚠️ Filesystem search failed: {e}", exc_info=True)
 
     # Check if we have no sources at all
-    if (not results and not web.EBOOK_DIR.exists()
+    if (not results and not (local_available if local_available is not None else
+                             _local_mount_exists(web, source_states, scan_local_metadata))
             and not clients.booklore_client.is_configured()
             and not clients.bookorbit_client.is_configured()
             and not web._optional_client_configured(clients, "kavita_client")

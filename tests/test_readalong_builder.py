@@ -1351,6 +1351,24 @@ def test_extend_clips_to_contiguous_never_shrinks_when_duration_too_short_or_mis
     assert extended_short_probe[-1].ts_end == 5.0  # 3.0 < 5.0, so left alone
 
 
+def test_final_clip_already_covers_probed_audio_has_no_short_overlay_warning(caplog):
+    """10182: a clip ending beyond the probed audio cannot leave the overlay short."""
+    clips = [_clip("c44-s17", 44, 50130.0, 50132.472)]
+    with caplog.at_level("WARNING", logger="src.services.readalong_builder"):
+        extended = _extend_clips_to_contiguous(
+            clips, audio_duration_seconds=50131.949002,
+        )
+    assert extended[-1].ts_end == 50132.472
+    assert "overlay total will run short" not in caplog.text
+
+
+def test_final_clip_missing_audio_probe_still_warns(caplog):
+    clips = [_clip("c44-s17", 44, 50130.0, 50132.472)]
+    with caplog.at_level("WARNING", logger="src.services.readalong_builder"):
+        _extend_clips_to_contiguous(clips, audio_duration_seconds=None)
+    assert "overlay total will run short" in caplog.text
+
+
 def test_extend_clips_to_contiguous_empty_list():
     assert _extend_clips_to_contiguous([], 10.0) == []
 

@@ -74,6 +74,36 @@ def test_get_cached_ebook_text_uses_local_epub_hydration(tmp_path):
     manager.ebook_parser.extract_text_and_map.assert_called_once_with(hydrated_path)
 
 
+def test_pdf_in_sync_cycle_never_reaches_epub_parser(tmp_path):
+    """7811: a linked PDF must not be logged as Parsing EPUB every cycle."""
+    manager = _build_manager(tmp_path)
+    manager._get_local_epub = MagicMock(return_value=tmp_path / "Obstetric Anesthesia.pdf")
+
+    assert manager._get_cached_ebook_text("Obstetric Anesthesia.pdf") == (None, 0)
+    manager._get_local_epub.assert_not_called()
+    manager.ebook_parser.extract_text_and_map.assert_not_called()
+
+
+def test_local_epub_resolution_rejects_pdf_but_keeps_cbz(tmp_path):
+    manager = _build_manager(tmp_path)
+    pdf = tmp_path / "books" / "Obstetric Anesthesia.pdf"
+    cbz = tmp_path / "books" / "comic.cbz"
+    manager._resolve_local_epub_uncached = MagicMock(side_effect=[cbz])
+
+    assert manager._get_local_epub(pdf.name) is None
+    manager._resolve_local_epub_uncached.assert_not_called()
+    assert manager._get_local_epub(cbz.name) == cbz
+    manager._resolve_local_epub_uncached.assert_called_once_with(cbz.name)
+
+
+def test_local_epub_resolution_refuses_mislabeled_pdf_path(tmp_path):
+    manager = _build_manager(tmp_path)
+    manager._resolve_local_epub_uncached = MagicMock(
+        return_value=tmp_path / "Obstetric Anesthesia.pdf",
+    )
+    assert manager._get_local_epub("Obstetric Anesthesia.epub") is None
+
+
 def test_get_local_epub_resolves_once_per_cycle(tmp_path):
     manager = _build_manager(tmp_path)
     resolved_path = tmp_path / "books" / "cached.epub"

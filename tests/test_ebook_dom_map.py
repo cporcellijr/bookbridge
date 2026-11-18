@@ -58,6 +58,21 @@ def _write_epub(path: Path, items: Dict[str, bytes], spine_idrefs: List[str] = N
             z.writestr(f"OEBPS/{item_id}.xhtml", content)
 
 
+def test_epub_text_parser_refuses_pdf_at_shared_boundary(tmp_path, caplog):
+    """7811: direct parser callers must never send PDFs into ebooklib."""
+    import logging
+    from unittest.mock import patch
+
+    parser = _parser(tmp_path)
+    document = tmp_path / "books" / "Obstetric Anesthesia.pdf"
+    document.write_bytes(b"%PDF-1.4\n")
+    with patch("src.utils.ebook_utils._read_epub") as epub_reader, \
+            caplog.at_level(logging.INFO, logger="src.utils.ebook_utils"):
+        assert parser.extract_text_and_map(document) == ("", [])
+    epub_reader.assert_not_called()
+    assert "Parsing EPUB" not in caplog.text
+
+
 def test_nested_inline_tags_reproduced_byte_identical():
     """A sentence split across nested <em>/<strong> reconstructs identically."""
     with tempfile.TemporaryDirectory() as tmp_str:

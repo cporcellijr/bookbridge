@@ -107,6 +107,73 @@ def test_get_alignment_caches_parsed_map(service, mock_db):
     assert mock_db.get_session.call_count == 1  # DB hit only on the first call
 
 
+def test_pool_checkout_not_held_while_decoding_alignment_json(tmp_path, monkeypatch):
+    """10177: concurrent long-book map parsing must not monopolize DB connections.
+
+    Hold 15 real readers at JSON decoding (the default QueuePool capacity);
+    a dashboard-style 16th query must still acquire a connection. This fails
+    with the original inside-session json.loads and passes once parsing is
+    moved after the session closes.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock
+    from sqlalchemy import text
+    from unittest.mock import patch
+    from src.db.database_service import DatabaseService
+    from src.db.models import DatabaseManager
+    from src.utils.ebook_utils import LRUCache
+    import src.services.alignment_service as alignment_module
+
+    monkeypatch.delenv("DB_JOURNAL_MODE", raising=False)
+    db_mgr = DatabaseManager(str(tmp_path / "readalong-pool.db"))
+    try:
+        BookAlignment.__table__.create(db_mgr.engine)
+        raw_map = json.dumps([{"char": 0, "ts": 0.0}, {"char": 100, "ts": 10.0}])
+        with db_mgr.engine.begin() as connection:
+            connection.execute(BookAlignment.__table__.insert(), [
+                {"abs_id": f"readalong-{i}", "alignment_map_json": raw_map}
+                for i in range(15)
+            ])
+        db_mgr.engine.pool._timeout = 0.30  # test-only bounded failure time
+        db = object.__new__(DatabaseService)
+        db.db_manager = db_mgr
+        alignment = AlignmentService(db, Polisher())
+        alignment._alignment_cache = LRUCache(capacity=20)
+
+        release = Event()
+        all_decoding = Event()
+        mutex = Lock()
+        decoding = 0
+        real_loads = json.loads
+
+        def blocked_loads(value, *args, **kwargs):
+            nonlocal decoding
+            if value == raw_map:
+                with mutex:
+                    decoding += 1
+                    if decoding == 15:
+                        all_decoding.set()
+                assert release.wait(8), "alignment JSON decode was never released"
+            return real_loads(value, *args, **kwargs)
+
+        with patch.object(alignment_module.json, "loads", side_effect=blocked_loads):
+            with ThreadPoolExecutor(max_workers=15) as executor:
+                futures = [
+                    executor.submit(alignment._get_alignment, f"readalong-{i}")
+                    for i in range(15)
+                ]
+                try:
+                    assert all_decoding.wait(8), "not all alignment readers entered JSON decoding"
+                    with db.get_session() as session:
+                        assert session.execute(text("SELECT 1")).scalar() == 1
+                finally:
+                    release.set()
+                assert all(len(f.result(timeout=8)) == 2 for f in futures)
+        assert db_mgr.engine.pool.checkedout() == 0
+    finally:
+        db_mgr.close()
+
+
 def test_save_alignment_invalidates_cache(service, mock_db):
     stale_map = [{'char': 0, 'ts': 0.0}]
     fresh_map = [{'char': 0, 'ts': 0.0}, {'char': 50, 'ts': 5.0}]

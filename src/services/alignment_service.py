@@ -11,6 +11,7 @@ import math
 import os
 import re
 import shutil
+import uuid
 from pathlib import Path
 from statistics import median
 from typing import Any, Callable, List, Dict, Optional, Tuple
@@ -1959,9 +1960,9 @@ class AlignmentService:
         quality_score = quality.score if quality is not None else None
         quality_detail = map_quality.quality_detail_json(quality) if quality is not None else None
         segments_json = _segments_to_json(segments) if segments is not None else None
+        # Serialize large maps before checking out a pooled database connection.
+        json_blob = json.dumps(alignment_map)
         with self.database_service.get_session() as session:
-            json_blob = json.dumps(alignment_map)
-
             # Check exist
             existing = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
             if existing:
@@ -2172,12 +2173,15 @@ class AlignmentService:
         generation = self._cache_generation
         with self.database_service.get_session() as session:
             entry = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
-            if entry:
-                alignment = json.loads(entry.alignment_map_json)
-                if generation == self._cache_generation:
-                    self._alignment_cache.put(abs_id, alignment)
-                return alignment
+            raw_map = entry.alignment_map_json if entry else None
+        if raw_map is None:
             return None
+        # Parsing a 10-15MB CTC map while the session is still open can
+        # exhaust the default connection pool under concurrent read-along jobs.
+        alignment = json.loads(raw_map)
+        if generation == self._cache_generation:
+            self._alignment_cache.put(abs_id, alignment)
+        return alignment
 
     def _get_segments(self, abs_id: str) -> Optional[List[Dict]]:
         """Cached segment placement index for one book's map (issue #426
@@ -2210,10 +2214,10 @@ class AlignmentService:
             if entry is None:
                 return None
             raw = entry.segments_json
-            segments = json.loads(raw) if isinstance(raw, str) and raw else None
-            if generation == self._cache_generation:
-                self._segments_cache[abs_id] = segments
-            return segments
+        segments = json.loads(raw) if isinstance(raw, str) and raw else None
+        if generation == self._cache_generation:
+            self._segments_cache[abs_id] = segments
+        return segments
 
     def get_book_duration(self, abs_id: str) -> Optional[float]:
         """Get the total duration of the book from its alignment map."""
@@ -2637,6 +2641,8 @@ def ingest_storyteller_transcripts(
     expected_files = probe["expected_files"]
     chapterless_mode = probe["chapterless_mode"]
     audio_aligned = probe.get("audio_aligned", False)
+    if audio_aligned:
+        expected_count = len(expected_files)
 
     if chapterless_mode:
         logger.info(
@@ -2654,41 +2660,54 @@ def ingest_storyteller_transcripts(
     target_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = target_dir / "manifest.json"
 
-    existing_json_files = [p.name for p in target_dir.glob("*.json") if re.match(r"^00000-\d{5}\.json$", p.name)]
+    # Published manifests are replaced atomically and refer to immutable chapter
+    # generations. A concurrent backfill cannot delete/overwrite a file another
+    # copy2 or already-open transcript reader is using.
+    published = None
+    try:
+        if manifest_path.exists():
+            published = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    published_files = (
+        [str(ch.get("file") or "") for ch in published.get("chapters", [])]
+        if isinstance(published, dict) and isinstance(published.get("chapters"), list)
+        else []
+    )
     existing_valid = (
-        manifest_path.exists()
-        and len(existing_json_files) == expected_count
-        and all((target_dir / name).exists() for name in expected_files)
+        len(published_files) == expected_count == len(expected_files)
+        and all(
+            Path(name).name == expected and (target_dir / name).is_file()
+            and not Path(name).is_absolute() and ".." not in Path(name).parts
+            for name, expected in zip(published_files, expected_files)
+        )
     )
     if existing_valid:
-        logger.info(f"Storyteller ingest reuse for '{abs_id}' from '{target_dir}' ({len(expected_files)} files)")
+        chapter_files = published_files
+        logger.info(f"Storyteller ingest reuse for '{abs_id}' from '{target_dir}' ({len(chapter_files)} files)")
     else:
-        # Ensure stale canonical files are not mixed with a newly copied set.
-        for stale_file in target_dir.glob("*.json"):
-            if re.match(r"^00000-\d{5}\.json$", stale_file.name):
-                try:
-                    stale_file.unlink()
-                except Exception as delete_err:
-                    logger.warning(
-                        "Storyteller ingest could not remove stale transcript '%s' for '%s': %s",
-                        stale_file,
-                        abs_id,
-                        delete_err,
-                        exc_info=True,
-                    )
-        copied_count = 0
-        for source_name, target_name in zip(source_files, expected_files):
-            shutil.copy2(transcriptions_dir / source_name, target_dir / target_name)
-            copied_count += 1
+        generation = uuid.uuid4().hex
+        stage_dir = target_dir / ".revisions" / generation
+        stage_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            for source_name, target_name in zip(source_files, expected_files):
+                shutil.copy2(transcriptions_dir / source_name, stage_dir / target_name)
+            chapter_files = [
+                (Path(".revisions") / generation / name).as_posix()
+                for name in expected_files
+            ]
+        except Exception:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            raise
         logger.info(
-            f"Storyteller ingest copied for '{abs_id}': {copied_count} files from "
-            f"'{transcriptions_dir}' to '{target_dir}'"
+            "Storyteller ingest staged for '%s': %d files from '%s' to '%s'",
+            abs_id, len(chapter_files), transcriptions_dir, stage_dir,
         )
 
     chapter_entries = []
     if chapterless_mode or audio_aligned:
         cumulative_start = 0.0
-        for idx, chapter_file_name in enumerate(expected_files):
+        for idx, chapter_file_name in enumerate(chapter_files):
             chapter_file_path = target_dir / chapter_file_name
             text_len, text_len_utf16, local_duration = _read_storyteller_chapter_metrics(chapter_file_path)
             start = cumulative_start
@@ -2706,7 +2725,7 @@ def ingest_storyteller_transcripts(
         for idx, chapter in enumerate(chapter_list):
             start = float(chapter.get("start", 0.0) or 0.0)
             end = float(chapter.get("end", 0.0) or 0.0)
-            chapter_file_name = _storyteller_filename_for_abs_chapter(idx)
+            chapter_file_name = chapter_files[idx]
             chapter_file_path = target_dir / chapter_file_name
             text_len, text_len_utf16, _local_duration = _read_storyteller_chapter_metrics(chapter_file_path)
             chapter_entries.append({
@@ -2731,7 +2750,12 @@ def ingest_storyteller_transcripts(
         "chapter_count": expected_count,
         "chapters": chapter_entries
     }
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False)
+    temporary_manifest = target_dir / f".manifest.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(temporary_manifest, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False)
+        os.replace(temporary_manifest, manifest_path)
+    finally:
+        temporary_manifest.unlink(missing_ok=True)
 
     return str(manifest_path)
