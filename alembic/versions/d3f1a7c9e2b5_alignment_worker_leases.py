@@ -1,13 +1,13 @@
 """Lease columns on jobs for remote alignment workers.
 
 Revision ID: d3f1a7c9e2b5
-Revises: b7e528a0c1d2
+Revises: a7d3e9c2b1f4
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = "d3f1a7c9e2b5"
-down_revision = "b7e528a0c1d2"
+down_revision = "a7d3e9c2b1f4"
 branch_labels = None
 depends_on = None
 
