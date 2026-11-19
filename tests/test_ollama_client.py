@@ -152,6 +152,15 @@ class TestOllamaClientOptions(_EnvGuard):
         self.assertEqual(options["num_ctx"], 8192)
         self.assertEqual(options["temperature"], 0.0)
 
+    def test_judge_turns_thinking_off(self):
+        # qwen3:8b with thinking on spent all 200 tokens reasoning and answered "".
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.return_value = _FakeResp(200, {"message": {"content": "{}"}})
+        client.judge("prompt", schema={"type": "object"})
+        payload = client.session.post.call_args.kwargs["json"]
+        self.assertIs(payload["think"], False)
+
     def test_judge_omits_num_ctx_when_unset(self):
         client = OllamaClient()
         client.session = MagicMock()
