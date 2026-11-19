@@ -25,6 +25,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **BridgeSync reading stats sync uses KOReader's real statistics database.** A stray
+  `statistics.sqlite` file next to KOReader's `statistics.sqlite3` no longer makes Sync
+  Reading Stats fail with `no such table: book`. Update the BridgeSync plugin to 0.9.12
+  to get this. Contributed by [@jeffhammett](https://github.com/jeffhammett) in #603.
+
 - **Suggestions tolerates disappearing local files and unavailable ebook mounts.** A
   filesystem race no longer discards other searchable books, and a disconnected
   `/books` mount marks the local catalog incomplete without stopping healthy remote
