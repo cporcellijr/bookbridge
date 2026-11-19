@@ -451,6 +451,18 @@ def _prepared(main, owner="desk"):
     return claimed, manifest
 
 
+def test_llm_alignment_switches_follow_the_main_instance_but_not_its_endpoint(main, monkeypatch):
+    monkeypatch.setenv("OLLAMA_ENABLED", "true")
+    monkeypatch.setenv("OLLAMA_ALIGN_CONTENT_GUARD", "false")
+    monkeypatch.setenv("OLLAMA_URL", "http://main-only-ollama:11434")
+    monkeypatch.setenv("LLM_API_KEY", "sk-not-for-workers")
+    _, manifest = _prepared(main)
+    assert manifest["settings"]["OLLAMA_ENABLED"] == "true"
+    assert manifest["settings"]["OLLAMA_ALIGN_CONTENT_GUARD"] == "false"
+    assert "OLLAMA_URL" not in manifest["settings"]
+    assert "LLM_API_KEY" not in manifest["settings"]
+
+
 def test_inputs_are_resolved_on_the_main_instance_and_served_by_index(main):
     claimed, manifest = _prepared(main)
     assert manifest["book"]["abs_id"] == "river"

@@ -189,6 +189,9 @@ How books move:
   off, read-along timings, segmented maps and the content-match check are sent with
   each book. The engine is the worker's own: `CTC_MODEL`, `CTC_DEVICE`, `ALIGN_THREADS`,
   and the Whisper or transcription provider settings in its environment.
+  The Ollama switches (on or off, and its alignment checks) are sent too, but which LLM
+  answers is also the worker's: give it its own `OLLAMA_URL` and models, or it skips
+  those checks when it cannot reach one.
 - **Models.** A worker downloads the QuartzNet model (77 MB) and, for books that fall
   back to transcription, its `WHISPER_MODEL` (default `base`) into `/data/models` on
   first use, so give it internet access or copy them into that volume beforehand (then

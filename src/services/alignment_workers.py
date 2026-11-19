@@ -59,6 +59,21 @@ PIPELINE_SETTING_KEYS = (
     "TRANSCRIPT_MATCH_THRESHOLD",
     "TRANSCRIPT_MIN_COVERAGE",
     "AUDIO_SPLIT_DURATION_MINUTES",
+) + tuple(
+    # Whether the LLM checks run, and how strict they are, follow the main instance
+    # too (both spellings: llm_setting_value reads LLM_* before OLLAMA_*). Which LLM
+    # answers (OLLAMA_URL, models, keys) is the worker's own, like its Whisper engine.
+    prefix + name
+    for name in (
+        "ENABLED",
+        "ALIGN_CONTENT_GUARD",
+        "ALIGN_CONTENT_MIN_SIM",
+        "ALIGN_ANCHOR_RESCUE",
+        "ALIGN_FALLBACK",
+        "ALIGN_MAX_WINDOWS",
+        "ALIGN_SIM_THRESHOLD",
+    )
+    for prefix in ("OLLAMA_", "LLM_")
 )
 
 # Book fields the alignment pipeline reads; the worker's scratch copy of the book.
