@@ -1,5 +1,6 @@
 """Tests for the BookOrbit ebook + audio sync clients."""
 
+import logging
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,7 @@ from src.api.bookorbit_client import BookOrbitClient
 from src.sync_clients.bookorbit_sync_client import BookOrbitSyncClient
 from src.sync_clients.bookorbit_audio_sync_client import BookOrbitAudioSyncClient
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
+from src.utils.logging_utils import get_persistent_condition_logger
 
 
 def _book(**kw):
@@ -284,6 +286,9 @@ _UNMEASURED_INFO = {
 def test_audio_write_skips_book_with_unmeasured_tracks(caplog):
     """The ebook was at 13.1% and BookBridge resolved 22128.82s, but the write went
     into Part 6 at 6:08:48 (the epilogue). Skip it instead."""
+    # The warning is first-occurrence-only; another test may already have raised this key.
+    get_persistent_condition_logger().reset()
+    caplog.set_level(logging.WARNING, logger="src.sync_clients.bookorbit_audio_sync_client")
     client = MagicMock()
     client.get_audiobook_info.return_value = dict(_UNMEASURED_INFO)
     sc = BookOrbitAudioSyncClient(client, ebook_parser=None)

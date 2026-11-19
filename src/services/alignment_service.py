@@ -641,8 +641,11 @@ class AlignmentService:
                                   chapters, int(emission.shape[1]),
                                   anchor_spacing=self._SEARCH_ANCHOR_SPACING)
 
+        # A match with no anchors places none of its text and cannot vouch for order: an
+        # unnarrated endnotes chapter was squeezed into a 50s gap between narrated ones (#604).
+        found = [r for r in results if r.found and r.anchors]
         total_chars = sum(r.end_char - r.start_char for r in results) or 1
-        found_chars = sum(r.end_char - r.start_char for r in results if r.found)
+        found_chars = sum(r.end_char - r.start_char for r in found)
         coverage = found_chars / total_chars
         for r in results:
             if r.found:
@@ -651,11 +654,16 @@ class AlignmentService:
                     abs_id, r.start_char, r.end_char, r.start_frame * seconds_per_frame,
                     r.end_frame * seconds_per_frame, r.confidence, len(r.anchors),
                 )
+                if not r.anchors:
+                    logger.info(
+                        "🔎 CTC search %s: chapter chars %s-%s matched with no anchors -- treating it as not found",
+                        abs_id, r.start_char, r.end_char,
+                    )
             else:
                 logger.info("🔎 CTC search %s: chapter chars %s-%s not found", abs_id, r.start_char, r.end_char)
         logger.info(
             "🔎 CTC search %s: found %s/%s chapters, %.1f%% of the text",
-            abs_id, sum(r.found for r in results), len(results), coverage * 100,
+            abs_id, len(found), len(results), coverage * 100,
         )
         if coverage < self._SEARCH_MIN_COVERAGE:
             logger.warning(
@@ -665,7 +673,6 @@ class AlignmentService:
             )
             return None
 
-        found = [r for r in results if r.found]
         substantial = [r for r in found if r.end_char - r.start_char >= self._SEARCH_ORDER_MIN_CHARS]
         if any(b.start_frame <= a.start_frame for a, b in zip(substantial, substantial[1:])):
             logger.info(

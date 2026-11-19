@@ -242,3 +242,30 @@ def test_narration_that_departs_from_the_text_falls_back(service, caplog):
     assert ok is False
     assert calls == {}
     assert "sits in anchor gaps over 1500 chars" in caplog.text
+
+
+def test_an_unnarrated_chapter_matched_with_no_anchors_does_not_force_the_fallback(service, caplog):
+    """Issue #604: the endnotes (not narrated) were "found" in the 50s gap between two
+    narrated chapters with 0 anchors, which read as narration out of spine order and
+    sent an in-order book to Whisper. A zero-anchor match is now treated as not found."""
+    full, chapters = _book([3000, 3000, 3000])
+    emission, _ = _emission(full, chapters, [0, 1])
+    a, b, notes = chapters
+    a_anchors = _anchors(full, [a["start"] + 100, a["start"] + 1100, a["start"] + 2100], 50)
+    b_first = a_anchors[-1][1] + 4000
+    b_anchors = _anchors(full, [b["start"] + 100, b["start"] + 1100, b["start"] + 2100], b_first)
+    crafted = [
+        _result(0, a["start"], a["end"], True, 0, a_anchors),
+        _result(1, b["start"], b["end"], True, b_first - 50, b_anchors),
+        _result(2, notes["start"], notes["end"], True, b_first - 2500, []),
+    ]
+    with patch("src.services.ctc_search.search_chapters", return_value=crafted):
+        ok, calls, _emit = _run(service, full, chapters, emission)
+
+    assert ok is True
+    assert "out of spine order" not in caplog.text
+    assert (f"chapter chars {notes['start']}-{notes['end']} matched with no anchors -- "
+            "treating it as not found") in caplog.text
+    assert "found 2/3 chapters" in caplog.text
+    assert [bd["char"] for bd in calls["boundaries"]] == [c for c, _f in a_anchors + b_anchors]
+    assert calls["text_range"] == (a["start"], b["end"])

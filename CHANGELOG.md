@@ -25,6 +25,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Unread endnotes no longer send an in-order book to the slow Whisper path.** CTC's
+  chapter search could "find" a back-matter chapter the narrator never reads, squeezed into a
+  short gap between two narrated chapters with nothing tying its text to the audio. That
+  looked like chapters narrated out of order, so the book was transcribed with Whisper on top
+  of the CTC pass it already had. Such a match now counts as not found, like the other
+  unnarrated chapters.
+
 - **BridgeSync reading stats sync uses KOReader's real statistics database.** A stray
   `statistics.sqlite` file next to KOReader's `statistics.sqlite3` no longer makes Sync
   Reading Stats fail with `no such table: book`. Update the BridgeSync plugin to 0.9.12
