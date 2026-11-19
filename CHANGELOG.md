@@ -25,6 +25,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **The AI alignment checks work with thinking models such as qwen3.** These models spent
+  the whole answer budget thinking and returned nothing, so every check quietly fell back
+  as if Ollama were down. Contributed by [@eschatus](https://github.com/eschatus) in #605.
+
 - **Unread endnotes no longer send an in-order book to the slow Whisper path.** CTC's
   chapter search could "find" a back-matter chapter the narrator never reads, squeezed into a
   short gap between two narrated chapters with nothing tying its text to the audio. That
@@ -216,6 +220,15 @@ All notable changes to BookBridge will be documented in this file.
   disabled until running-job ownership and retention guarantees are complete.
 
 ### Added
+
+- **Other machines can work through the alignment queue.** Run the same image with
+  `BOOKBRIDGE_MODE=worker`, point it at this instance and give it the token from
+  Settings → Background jobs → Alignment worker token. Workers take books in Job Queue
+  order, and the Job Queue shows "Aligning on worker <name>". This instance still checks
+  and stores every map, and a worker never sees reading positions or credentials. If a
+  worker stops, its book goes back in the queue. Turn off "Also align here while workers
+  are on" to leave the alignment work to the workers. See docs/configuration.md.
+  Contributed by [@eschatus](https://github.com/eschatus) in #606, #607 and #608.
 
 - **Pick which ebook edition pairs with an audiobook when a BookOrbit or Grimmory book holds more than one.** Selecting such a book in Discover (Classic and New) opens an edition chooser with filenames, sizes, the primary-file marker and confirmed read-along labels; a book with a single ebook is selected directly. The chosen file is remembered for hashing, matching, Forge, library downloads, KOReader delivery and BookOrbit progress in both directions; if it is later removed or replaced, that book stops syncing its ebook rather than silently switching to another file. Grimmory reports one progress value for the whole book, so its native progress is skipped for alternate editions while ABS and KOReader keep syncing. BookOrbit's other editions stay under its card instead of reappearing as separate local files. Existing mappings are unchanged. Needs a migration and restart. See `docs/provider-ebook-file-selection.md`.
   Contributed by [@monkeCode](https://github.com/monkeCode) in #596.
