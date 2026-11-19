@@ -49,6 +49,7 @@ from .repositories.acquisition import AcquisitionMixin
 from .repositories.state import StateMixin
 from .repositories.books import BooksMixin
 from .repositories.bookorbit_stats import BookOrbitStatsMixin
+from .repositories.alignment_leases import AlignmentClaim, AlignmentLeasesMixin  # noqa: F401 (AlignmentClaim re-exported)
 
 class DatabaseService(
     TrackerDetailsMixin,
@@ -72,6 +73,7 @@ class DatabaseService(
     StateMixin,
     BooksMixin,
     BookOrbitStatsMixin,
+    AlignmentLeasesMixin,
 ):
     """
     Unified SQLAlchemy-based database service providing direct model operations.
@@ -94,6 +96,8 @@ class DatabaseService(
         self._default_uid = None  # cached default (admin) user id for state scoping
         self._catalog_change_callbacks: list[Callable[[], None]] = []
         self._ebook_source_claim_lock = threading.Lock()
+        # Serializes remote alignment claims, lease renewals and expiries, and results.
+        self._alignment_lease_lock = threading.RLock()
         self._pending_shelf_adds_lock = threading.Lock()
 
         # Run Alembic migrations to ensure schema is up to date

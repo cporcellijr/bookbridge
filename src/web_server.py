@@ -75,6 +75,8 @@ from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_s
 # setup_dependencies registers the blueprint.
 from src.api import reading_position_preview_routes  # noqa: E402,F401
 from src.api.admin_api import admin_api_bp, init_admin_api
+from src.api.alignment_worker_api import alignment_worker_api_bp, init_alignment_worker_api
+from src.services.alignment_workers import AlignmentWorkerCoordinator
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
 from src.api.storygraph_routes import storygraph_bp, init_storygraph_routes
 from src.api.goodreads_routes import goodreads_bp, init_goodreads_routes
@@ -487,6 +489,10 @@ def setup_dependencies(app, test_container=None):
     )
     app.register_blueprint(admin_api_bp)
 
+    # Token-authenticated remote alignment workers (disabled unless ALIGNMENT_WORKER_TOKEN is set)
+    init_alignment_worker_api(AlignmentWorkerCoordinator(manager, database_service))
+    app.register_blueprint(alignment_worker_api_bp)
+
     logger.info(f"🚀 Web server dependencies initialized (DATA_DIR={DATA_DIR})")
 
 
@@ -769,7 +775,7 @@ def require_login_guard():
         return None
     if request.blueprint == 'kosync':  # device sync API — own auth
         return None
-    if request.blueprint == 'admin_api':  # bearer-token admin API, own auth
+    if request.blueprint in ('admin_api', 'alignment_worker_api'):  # bearer-token APIs, own auth
         return None
     user = current_user()
     if user is None:
