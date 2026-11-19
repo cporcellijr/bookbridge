@@ -277,6 +277,22 @@ end)
 
 local BridgeSync = require("main")
 do
+    local existing_paths = {
+        [settings_dir .. "/statistics.sqlite"] = true,
+        [settings_dir .. "/statistics.sqlite3"] = true,
+    }
+    local probe = {
+        _fileExists = function(_, path)
+            return existing_paths[path] == true
+        end,
+    }
+    assert(BridgeSync._findStatisticsDbPath(probe) == settings_dir .. "/statistics.sqlite3",
+        "statistics.sqlite3 must take precedence when both statistics databases exist")
+    existing_paths[settings_dir .. "/statistics.sqlite3"] = nil
+    assert(BridgeSync._findStatisticsDbPath(probe) == settings_dir .. "/statistics.sqlite",
+        "statistics.sqlite must remain available as a fallback")
+end
+do
     local BookStatus = require("bridge_book_status")
     local original_collect = BookStatus.collect
     local original_apply = BookStatus.apply
