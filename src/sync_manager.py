@@ -3359,18 +3359,23 @@ class SyncManager:
         total_jobs = len(eligible_books)
         job_idx = (eligible_books.index(target_book) + 1) if total_jobs else 1
 
-        # 3. Mark book as 'processing' and create/update job record
+        # 3. Mark book as 'processing' (only if it is still where we found it, so
+        # no other claimant can be handed the same book) and create/update job record
+        expected_status = 'failed_retry_later' if retry_job else 'pending'
+        if not self.database_service.claim_alignment_book(target_book.abs_id, expected_status):
+            logger.info(
+                "📋 Alignment queue: '%s' is no longer %s; trying again next tick",
+                sanitize_log_data(target_book.abs_title), expected_status,
+            )
+            return
+        target_book.status = 'processing'
+        target_book.alignment_queue_position = None
         if not retry_job:
             logger.info(
                 "📋 Alignment queue: starting '%s' (1 of %s waiting)",
                 sanitize_log_data(target_book.abs_title), len(full_pipeline_books),
             )
         logger.info(f"⚡ [{job_idx}/{total_jobs}] Starting background transcription: {sanitize_log_data(target_book.abs_title)}")
-
-        # Update book status to processing
-        target_book.status = 'processing'
-        self.database_service.save_book(target_book)
-        self.database_service.clear_alignment_queue_position(target_book.abs_id)
 
         # Create or update job record
         prior_job = retry_job

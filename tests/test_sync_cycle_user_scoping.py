@@ -225,6 +225,15 @@ class TestSyncCycleUserScoping(unittest.TestCase):
             def clear_alignment_queue_position(self, abs_id):
                 pass
 
+            def claim_alignment_book(self, abs_id, expected_status):
+                for book in self.get_books_by_status(expected_status):
+                    if book.abs_id == abs_id:
+                        book.status = "processing"
+                        book.alignment_queue_position = None
+                        self.save_book(book)
+                        return True
+                return False
+
             def save_book(self, book):
                 self.book = book
 
@@ -287,6 +296,15 @@ class TestSyncCycleUserScoping(unittest.TestCase):
             def get_book_user_ids(self, abs_id):
                 return []
 
+            def claim_alignment_book(self, abs_id, expected_status):
+                for book in self.get_books_by_status(expected_status):
+                    if book.abs_id == abs_id:
+                        book.status = "processing"
+                        book.alignment_queue_position = None
+                        self.save_book(book)
+                        return True
+                return False
+
             def save_book(self, book):
                 self.book = book
 
@@ -324,6 +342,15 @@ class TestSyncCycleUserScoping(unittest.TestCase):
 
             def get_book_user_ids(self, abs_id):
                 return [2] if abs_id == "book-claim" else []
+
+            def claim_alignment_book(self, abs_id, expected_status):
+                for book in self.get_books_by_status(expected_status):
+                    if book.abs_id == abs_id:
+                        book.status = "processing"
+                        book.alignment_queue_position = None
+                        self.save_book(book)
+                        return True
+                return False
 
             def save_book(self, book):
                 self.book = book

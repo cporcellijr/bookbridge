@@ -979,6 +979,21 @@ class BooksMixin:
                 synchronize_session=False,
             )
 
+    def claim_alignment_book(self, abs_id: str, expected_status: str) -> bool:
+        """Mark a book 'processing' and drop its queue position, only if it still has
+        ``expected_status``. True when this caller got the book; False when anything
+        else (another claimant, a delete, a remap) changed it first."""
+        with self.get_session() as session:
+            flipped = session.query(Book).filter(
+                Book.abs_id == abs_id, Book.status == expected_status,
+            ).update(
+                {Book.status: 'processing', Book.alignment_queue_position: None},
+                synchronize_session=False,
+            )
+        if flipped == 1:
+            self._notify_catalog_change()
+        return flipped == 1
+
     @staticmethod
     def ebook_input_recovery_identity(book: Book | dict) -> str:
         """Hash the stable audio/ebook pairing fields for recovery CAS checks."""
