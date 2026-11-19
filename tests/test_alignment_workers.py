@@ -189,6 +189,34 @@ def test_the_local_job_leaves_worker_books_to_workers_when_told(db, monkeypatch)
     assert _claim(db).book.abs_id == "plain"
 
 
+def test_worker_settings_are_registered_everywhere():
+    from src.utils.config_loader import ALL_SETTINGS, DEFAULT_CONFIG
+    from src.utils.secret_store import secret_keys
+
+    root = Path(__file__).resolve().parent.parent
+    routes = (root / "src" / "web" / "routes" / "settings.py").read_text(encoding="utf-8")
+    form = (root / "templates" / "next" / "_settings_form.html").read_text(encoding="utf-8")
+    assert DEFAULT_CONFIG["ALIGNMENT_WORKER_TOKEN"] == ""
+    assert DEFAULT_CONFIG["ALIGNMENT_LOCAL_WORKER"] == "true"
+    assert {"ALIGNMENT_WORKER_TOKEN", "ALIGNMENT_LOCAL_WORKER"} <= set(ALL_SETTINGS)
+    # An unchecked checkbox is absent from the form: only bool_keys saves it as "false".
+    assert "'ALIGNMENT_LOCAL_WORKER'" in routes
+    assert 'name="ALIGNMENT_WORKER_TOKEN"' in form and 'type="password" name="ALIGNMENT_WORKER_TOKEN"' in form
+    assert "get_bool('ALIGNMENT_LOCAL_WORKER')" in form
+    assert "ALIGNMENT_WORKER_TOKEN" in secret_keys()
+
+
+@pytest.mark.parametrize("value, local", [
+    ("false", False), ("False", False), ("", False),
+    ("true", True), ("on", True), ("1", True),
+])
+def test_the_local_flag_reads_every_settings_spelling(monkeypatch, value, local):
+    # The Settings page saves "true"/"false"; env files and older saves use "on"/"1".
+    monkeypatch.setenv("ALIGNMENT_WORKER_TOKEN", TOKEN)
+    monkeypatch.setenv("ALIGNMENT_LOCAL_WORKER", value)
+    assert alignment_workers.local_worker_enabled() is local
+
+
 def test_the_local_flag_is_ignored_without_a_worker_api(db, monkeypatch):
     monkeypatch.setenv("ALIGNMENT_LOCAL_WORKER", "false")
     monkeypatch.setenv("ALIGNMENT_WORKER_TOKEN", "short")

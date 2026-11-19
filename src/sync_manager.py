@@ -3400,7 +3400,7 @@ class SyncManager:
         prior_job = retry_job
         candidate_job = None
         if not prior_job:
-            get_latest_job= getattr(self.database_service, "get_latest_job", None)
+            get_latest_job = getattr(self.database_service, "get_latest_job", None)
             if callable(get_latest_job):
                 try:
                     candidate_job = get_latest_job(

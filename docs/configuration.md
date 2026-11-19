@@ -135,10 +135,12 @@ The worker gets only what alignment needs: the EPUB and audio files of the book 
 took, served by this instance. It never sees the database, reading positions,
 readers, or any stored credentials, and it starts no web server, KoSync server or sync.
 
-On the main instance, set `ALIGNMENT_WORKER_TOKEN` to a random string of at least 32
-characters. Like `ADMIN_API_TOKEN`, it is read from the environment only; unset (or
-shorter), the worker API does not exist. It is a separate token from the admin API's
-and opens nothing else.
+On the main instance, open **Settings → Background jobs** and set **Alignment worker
+token** (`ALIGNMENT_WORKER_TOKEN`) to a random string of at least 32 characters; it
+applies on save. Empty (or shorter), the worker API does not exist. It is a separate
+token from the admin API's and opens nothing else. **Also align here while workers are
+on** (`ALIGNMENT_LOCAL_WORKER`) sits next to it. Both can also be set in the compose
+file, which seeds them on first boot only; after that the Settings page wins.
 
 ```yaml
 environment:

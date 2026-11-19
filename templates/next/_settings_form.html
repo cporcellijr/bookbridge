@@ -2236,6 +2236,20 @@
                         <input type="number" name="JOB_RETRY_DELAY_MINS" value="{{ get_val('JOB_RETRY_DELAY_MINS') }}">
                         <div class="help-text">{{ _('Minutes to wait before trying a failed job again.') }}</div>
                     </div>
+                    <div class="form-group full-width">
+                        <label>{{ _('Alignment worker token') }}</label>
+                        <input type="password" name="ALIGNMENT_WORKER_TOKEN" value="{{ get_val('ALIGNMENT_WORKER_TOKEN') }}" autocomplete="off">
+                        <div class="help-text">{{ _('Lets other machines running BookBridge in worker mode take books from the alignment queue. Use a random string of at least 32 characters and give each worker the same value as WORKER_TOKEN. Leave empty to turn workers off.') }}</div>
+                    </div>
+                    <div class="form-group full-width" style="align-items: center;">
+                        <label>{{ _('Also align here while workers are on') }}</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="ALIGNMENT_LOCAL_WORKER"
+                                {% if get_bool('ALIGNMENT_LOCAL_WORKER') %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <div class="help-text">{{ _('Turn off to leave books to the workers and keep this machine free. Books workers cannot take, such as Storyteller read-alongs, are still aligned here. Has no effect without a worker token.') }}</div>
+                    </div>
                 </div>
             </div>
 

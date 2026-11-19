@@ -34,7 +34,9 @@ from typing import Any, Optional
 
 from src.services.alignment_service import ContentMatchRejected
 from src.services.library_service import EbookInputError
+from src.services.audio_cache_ownership import cache_dir_name
 from src.services.segment_fit import Segment
+from src.utils.config_loader import env_truthy
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.transcriber import TranscriptionCancelled
 
@@ -118,8 +120,7 @@ def local_worker_enabled() -> bool:
     thread keeps aligning everything (with a warning).
     """
     global _local_flag_warned
-    value = os.environ.get("ALIGNMENT_LOCAL_WORKER", "true").strip().lower()
-    if value not in ("false", "0", "no", "off"):
+    if env_truthy("ALIGNMENT_LOCAL_WORKER", "true"):
         return True
     if worker_token() is None:
         if not _local_flag_warned:
@@ -375,7 +376,7 @@ class AlignmentWorkerCoordinator:
         ext = str(entry.get("ext") or "mp3").lower().lstrip(".")
         if not ext.isalnum():
             ext = "mp3"
-        target = data_dir / "audio_cache" / str(abs_id).replace(":", "_") / "source_tracks" / f"track_{idx:03d}.{ext}"
+        target = data_dir / "audio_cache" / cache_dir_name(abs_id) / "source_tracks" / f"track_{idx:03d}.{ext}"
         if not target.is_file() or target.stat().st_size == 0:
             target.parent.mkdir(parents=True, exist_ok=True)
             if not abs_client.download_file(stream_url, target):

@@ -55,7 +55,7 @@ def _mark_alive() -> None:
     try:
         ALIVE_FILE.touch()
     except OSError as e:
-        logger.warning("⚠️ Could not update %s for the healthcheck: %s", ALIVE_FILE, e)
+        logger.warning("⚠️ Could not update %s for the healthcheck: %s", ALIVE_FILE, e, exc_info=True)
 
 
 class LeaseLost(Exception):
@@ -172,13 +172,13 @@ class Heartbeat(threading.Thread):
             try:
                 self.client.heartbeat(self.lease_id, self.progress(), self.lease_seconds)
             except LeaseLost:
-                logger.warning("🛑 The main instance ended this lease; abandoning the book")
+                logger.warning("🛑 The main instance ended this lease; abandoning the book", exc_info=True)
                 self.lost.set()
                 self.on_lost()
                 return
             except requests.RequestException as e:
                 # The lease outlives a few missed beats; keep trying.
-                logger.warning("⚠️ Heartbeat failed: %s", e)
+                logger.warning("⚠️ Heartbeat failed: %s", e, exc_info=True)
 
     def stop(self) -> None:
         self._halt.set()
@@ -245,7 +245,7 @@ class AlignmentWorker:
                 claimed = self.client.claim(self.name, self.lease_seconds)
                 backoff = self.poll_seconds
             except requests.RequestException as e:
-                logger.warning("⚠️ Could not reach the main instance: %s", e)
+                logger.warning("⚠️ Could not reach the main instance: %s", e, exc_info=True)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 300)
                 continue
@@ -287,7 +287,7 @@ class AlignmentWorker:
                 outcome = self.client.result(lease_id, payload)
                 logger.info("✅ '%s' uploaded (%s)", claimed.get("title"), outcome.get("status"))
             except ResultRefused as refused:
-                logger.error("❌ The main instance refused the result: %s", refused)
+                logger.error("❌ The main instance refused the result: %s", refused, exc_info=True)
                 self.client.failure(lease_id, "ResultRefused", f"Result refused: {refused}")
         except LeaseLost:
             logger.info("🛑 Abandoned '%s'", claimed.get("title"))
@@ -299,7 +299,7 @@ class AlignmentWorker:
                 try:
                     self.client.failure(lease_id, type(e).__name__, str(e))
                 except (LeaseLost, requests.RequestException) as report_err:
-                    logger.warning("⚠️ Could not report the failure: %s", report_err)
+                    logger.warning("⚠️ Could not report the failure: %s", report_err, exc_info=True)
         finally:
             heartbeat.stop()
             unregister_worker(abs_id, token)

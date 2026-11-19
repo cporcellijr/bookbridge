@@ -147,7 +147,7 @@ def result(lease_id: str):
         return _gone()
     except (ValueError, TypeError, KeyError) as e:
         logger.warning("⚠️ Alignment worker API: refused a result for lease %s: %s",
-                       _printable(lease_id, 64), e)
+                       _printable(lease_id, 64), e, exc_info=True)
         return jsonify({"error": f"result refused: {e}"}), 422
     return jsonify(outcome), 200
 

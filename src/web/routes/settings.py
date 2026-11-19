@@ -145,6 +145,7 @@ def settings():
             'CTC_ENABLED',
             'SMIL_SKIP_CTC',
             'ALIGNMENT_SEGMENTED_MAPS',
+            'ALIGNMENT_LOCAL_WORKER',
             'CONTENT_MATCH_GUARD',
             'SHARE_ALL_BOOKS_WITH_ALL_USERS',
             'REMOTE_AUTH_ENABLED',
