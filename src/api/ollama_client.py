@@ -186,6 +186,10 @@ class OllamaClient:
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "format": schema if schema else "json",
+                # A thinking model (qwen3, deepseek-r1, ...) otherwise spends the whole
+                # num_predict budget reasoning and returns empty content, so every
+                # judge call silently falls back. Ignored by models that don't think.
+                "think": False,
                 "options": self._chat_options(),
             }),
             timeout=120,
