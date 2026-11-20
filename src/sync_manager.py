@@ -4833,6 +4833,33 @@ class SyncManager:
                     changed_client.lower() == "kosync"
                     and bool(config[changed_client].current.get("_kosync_recent_external_put"))
                 )
+                # Recency trusts a PUT that moved on, not one materially behind its peers:
+                # a device left open at an old page replays that page after the book was
+                # finished elsewhere. Such a rewind falls through to the demotion below and
+                # leads only if corroborated, as on the zero-delta path.
+                high_conf_peer_ts = [
+                    ts for name, ts in normalized_positions.items()
+                    if name != changed_client and name in vals and ts is not None
+                    and (
+                        name == primary_audio_client
+                        or config[name].current.get("_normalization_source") != "percent_fallback"
+                    )
+                ]
+                if (
+                    recent_external_kosync_put
+                    and changed_source == "percent_fallback"
+                    and changed_ts is not None
+                    and high_conf_peer_ts
+                    and changed_ts < max(high_conf_peer_ts) - MATERIAL_ROLLBACK_SECONDS
+                ):
+                    device = config[changed_client].current.get("_kosync_last_put_device") or "unknown"
+                    logger.info(
+                        f"🛑 '{abs_id}' '{title_snip}' Not trusting recent external KoSync PUT from "
+                        f"'{device}' (source=percent_fallback): uncorroborated rewind "
+                        f"{max(high_conf_peer_ts) - changed_ts:.1f}s behind its max peer "
+                        f"({changed_ts:.1f}s vs {max(high_conf_peer_ts):.1f}s)"
+                    )
+                    recent_external_kosync_put = False
                 if changed_source == "percent_fallback" and primary_audio_client in vals and recent_external_kosync_put:
                     device = config[changed_client].current.get("_kosync_last_put_device") or "unknown"
                     age = config[changed_client].current.get("_kosync_last_put_age_seconds")
