@@ -85,9 +85,10 @@ class TestPhaseDArrivals(unittest.TestCase):
         self.service.refresh_user(self.reader.id, None, None, library_clients=self.clients)
 
     def add_receipt(self, job, kind, service="Shelfmark", status="arrived",
-                    remote_status="complete", remote_id=None):
+                    remote_status="complete", remote_id=None, remote_kind=None):
         return self.db.add_acquisition_request_to_job(self.reader.id, job["id"], {
-            "service": service, "media_kind": kind, "remote_kind": "download" if service == "Shelfmark" else "request",
+            "service": service, "media_kind": kind,
+            "remote_kind": remote_kind or ("download" if service == "Shelfmark" else "request"),
             "remote_id": remote_id or f"{service}-{kind}", "status": status, "remote_status": remote_status,
         })
 
@@ -146,6 +147,168 @@ class TestPhaseDArrivals(unittest.TestCase):
         saved = self.db.get_acquisition_job(self.reader.id, job["id"])
         self.assertEqual(saved["audio_library_state"], "catalog_unavailable")
         self.assertIsNone(saved["audio_source_id"])
+
+    def test_shelfmark_completion_confirms_one_exact_unabridged_candidate_without_receipt_provenance(self):
+        job = self.make_job()
+        receipt = self.add_receipt(job, "audiobook")
+        delivered = audio("BookLore", "31")
+        delivered["title"] = "Title: A Novel (Unabridged)"
+        self.candidates["audiobook"] = [delivered]
+
+        self.refresh()
+
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        arrived = self.db.get_acquisition_request(self.reader.id, receipt["id"])
+        self.assertEqual((saved["audio_source"], saved["audio_source_id"]), ("BookLore", "31"))
+        self.assertEqual(saved["linked_abs_id"], "booklore:31")
+        self.assertIsNone(arrived["arrived_source_id"])
+
+    def test_ambiguous_shelfmark_unabridged_candidates_are_selectable(self):
+        job = self.make_job()
+        self.add_receipt(job, "audiobook")
+        first = audio("BookLore", "31")
+        first["title"] = "Title: A Novel (Unabridged)"
+        second = audio("ABS", "32")
+        second["title"] = "Title: A Novel (Unabridged)"
+        self.candidates["audiobook"] = [first, second]
+
+        self.refresh()
+
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertEqual(saved["audio_library_state"], "needs_review")
+        self.assertEqual(len(saved["review_candidates"]["audiobook"]), 2)
+        chosen, error = self.service.choose_review_candidate(
+            self.reader.id, job["id"], "audiobook", {"source": "BookLore", "source_id": "31"}, self.clients,
+        )
+        self.assertIsNone(error)
+        self.assertEqual((chosen["audio_source"], chosen["audio_source_id"]), ("BookLore", "31"))
+        self.refresh()
+        refreshed = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertEqual((refreshed["audio_library_state"], refreshed["linked_abs_id"]),
+                         ("indexed", "booklore:31"))
+
+    def test_verified_ebook_author_can_support_shelfmark_audio_suffix_match(self):
+        job = self.db.create_acquisition_job(
+            self.reader.id, "Title", ["ebook", "audiobook"],
+            ebook={"source": "BookOrbit", "source_id": "13", "filename": "Title.epub"},
+        )
+        self.add_receipt(job, "audiobook")
+        verified_ebook = ebook()
+        verified_ebook["authors"] = "Judd Trichter"
+        self.candidates["ebook"] = [verified_ebook]
+        delivered = audio("BookLore", "31")
+        delivered["title"] = "Title: A Novel (Unabridged)"
+        delivered["authors"] = "Judd Trichter"
+        self.candidates["audiobook"] = [delivered]
+
+        self.refresh()
+
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertEqual((saved["audio_source"], saved["audio_source_id"]), ("BookLore", "31"))
+        self.assertEqual(saved["linked_abs_id"], "booklore:31")
+
+    def test_verified_ebook_author_keeps_exact_and_suffixed_shelfmark_copies_ambiguous(self):
+        job = self.db.create_acquisition_job(
+            self.reader.id, "Title", ["ebook", "audiobook"],
+            ebook={"source": "BookOrbit", "source_id": "13", "filename": "Title.epub"},
+        )
+        self.add_receipt(job, "audiobook")
+        verified_ebook = ebook()
+        verified_ebook["authors"] = "Judd Trichter"
+        self.candidates["ebook"] = [verified_ebook]
+        exact = audio("ABS", "abs-15")
+        exact["authors"] = "Judd Trichter"
+        delivered = audio("BookOrbit", "31")
+        delivered["title"] = "Title: A Novel (Unabridged)"
+        delivered["authors"] = "Judd Trichter"
+        self.candidates["audiobook"] = [exact, delivered]
+
+        self.refresh()
+
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertEqual(saved["audio_library_state"], "needs_review")
+        self.assertIsNone(saved["audio_source_id"])
+        self.assertIsNone(saved["linked_abs_id"])
+        self.assertEqual(
+            {(hit["source"], hit["source_id"]) for hit in saved["review_candidates"]["audiobook"]},
+            {("ABS", "abs-15"), ("BookOrbit", "31")},
+        )
+
+    def test_conflicting_suffixed_shelfmark_copy_does_not_enable_exact_title_match(self):
+        job = self.db.create_acquisition_job(
+            self.reader.id, "Title", ["ebook", "audiobook"], series_name="Series", series_index=2,
+            ebook={"source": "BookOrbit", "source_id": "13", "filename": "Title.epub"},
+        )
+        self.add_receipt(job, "audiobook")
+        verified_ebook = ebook()
+        verified_ebook["authors"] = "Judd Trichter"
+        self.candidates["ebook"] = [verified_ebook]
+        exact = audio("ABS", "abs-15")
+        exact["authors"] = "Judd Trichter"
+        delivered = audio("BookOrbit", "31")
+        delivered["title"] = "Title: A Novel (Unabridged)"
+        delivered["authors"] = "Judd Trichter"
+        delivered["series_name"] = "Different Series"
+        self.candidates["audiobook"] = [exact, delivered]
+
+        self.refresh()
+
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertEqual(saved["audio_library_state"], "needs_review")
+        self.assertIsNone(saved["audio_source_id"])
+        self.assertEqual(
+            [(hit["source"], hit["source_id"]) for hit in saved["review_candidates"]["audiobook"]],
+            [("ABS", "abs-15")],
+        )
+
+    def test_fulfilled_shelfmark_request_can_match_unabridged_audio_suffix(self):
+        job = self.make_job(formats=("audiobook",))
+        self.add_receipt(job, "audiobook", remote_kind="request")
+        delivered = audio("BookLore", "31")
+        delivered["title"] = "Title: A Novel (Unabridged)"
+        self.candidates["audiobook"] = [delivered]
+
+        self.refresh()
+
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertEqual((saved["audio_source"], saved["audio_source_id"]), ("BookLore", "31"))
+
+    def test_delivered_audio_title_variants_match_like_discover(self):
+        # Suffixes seen in the live BookOrbit audiobook catalog (2026-11-20).
+        job = self.make_job(formats=("audiobook",))
+        for title, expected in (
+            ("Title (Unabridged)", True),
+            ("Title: A Novel", True),
+            ("Title: A Novel (Unabridged)", True),
+            ("Title (Audiobook, Unabridged)", True),
+            ("title [unabridged]", True),
+            ("Title (Dramatized Adaptation)", False),
+            ("Title (Abridged)", False),
+            ("Title, Book 2", False),
+            ("Title (Book 2)", False),
+            ("Title: A Novel of Monster Horror", False),
+            ("Title Two (Unabridged)", False),
+        ):
+            with self.subTest(title=title):
+                candidate = {**audio("BookLore", "31"), "title": title}
+                self.assertEqual(AcquisitionService._candidate_matches(
+                    job, candidate, shelfmark_delivered=True,
+                ), expected)
+                self.assertEqual(AcquisitionService._candidate_matches(job, candidate), title == "Title")
+
+    def test_shelfmark_suffix_requires_completed_download_and_exact_unabridged_suffix(self):
+        job = self.make_job(formats=("audiobook",))
+        self.add_receipt(job, "audiobook", status="in_progress", remote_status="downloading")
+        candidate = audio("BookLore", "31")
+        candidate["title"] = "Title: A Novel (Unabridged)"
+        self.candidates["audiobook"] = [candidate]
+
+        self.refresh()
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertIsNone(saved["audio_source_id"])
+        self.assertFalse(AcquisitionService._candidate_matches(
+            job, {**candidate, "title": "Title: Abridged"}, shelfmark_delivered=True,
+        ))
 
     def test_current_bookorbit_audio_detail_confirms_requested_isbn(self):
         from src.services.acquisition_library_catalog import search_reader_library
@@ -319,6 +482,230 @@ class TestPhaseDArrivals(unittest.TestCase):
         self.assertEqual((saved["audio_source_id"], saved["linked_abs_id"]),
                          ("42", "bookorbit:42"))
         self.assertEqual(len(self.pairer.calls), 1)
+
+    def test_confirmed_bookorbit_both_request_pairs_unabridged_suffix_after_reindex(self):
+        title = "Love in the Age of Mechanical Reproduction"
+        job = self.db.create_acquisition_job(
+            self.reader.id, title, ["ebook", "audiobook"],
+            ebook={"source": "BookOrbit", "source_id": "6508", "filename": "Love.epub"},
+        )
+        receipt = self.add_receipt(
+            job, "audiobook", service="BookOrbit", status="in_progress",
+            remote_status="downloading", remote_id="request35",
+        )
+        self.candidates["ebook"] = [{
+            "source": "BookOrbit", "source_id": "6508", "filename": "Love.epub",
+            "title": title, "authors": None,
+        }]
+        self.candidates["audiobook"] = []
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": 6509}
+        self.bo.get_book_detail.return_value = {
+            "id": 6509, "title": f"{title}: A Novel (Unabridged)",
+            "authors": [{"name": "Judd Trichter"}], "isbn13": "9781250036018",
+            "files": [{"id": "track-1", "format": "mp3", "role": "primary"}],
+        }
+
+        self.refresh()
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        arrived = self.db.get_acquisition_request(self.reader.id, receipt["id"])
+        self.assertEqual(arrived["arrived_source_id"], "6509")
+        self.assertIsNone(saved["linked_abs_id"])
+        self.assertEqual(saved["audio_library_state"], "waiting_import")
+
+        self.candidates["audiobook"] = [{
+            "source": "BookOrbit", "source_id": "6509",
+            "title": f"{title}: A Novel (Unabridged)", "authors": "Judd Trichter",
+            "isbn13": "9781250036018",
+        }]
+        self.db.update_acquisition_request(
+            self.reader.id, receipt["id"], last_checked_at=utcnow() - timedelta(minutes=11),
+        )
+        self.refresh()
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        arrived = self.db.get_acquisition_request(self.reader.id, receipt["id"])
+        self.assertEqual(saved["linked_abs_id"], "bookorbit:6509")
+        self.assertEqual((saved["ebook_source_id"], saved["audio_source_id"]), ("6508", "6509"))
+        self.assertEqual((arrived["arrived_source"], arrived["arrived_source_id"], arrived["status"]),
+                         ("BookOrbit", "6509", "paired"))
+        self.assertTrue(self.db.is_user_linked(self.reader.id, "bookorbit:6509"))
+        self.assertEqual(self.bo.get_book_detail.call_args.kwargs, {"force": True, "fresh_only": True})
+
+    def test_bookorbit_metadata_conflict_stays_needs_review_without_fallback(self):
+        title = "Love in the Age of Mechanical Reproduction"
+        job = self.db.create_acquisition_job(
+            self.reader.id, title, ["audiobook"], authors="Expected Author",
+        )
+        receipt = self.add_receipt(
+            job, "audiobook", service="BookOrbit", status="in_progress",
+            remote_status="downloading", remote_id="request35",
+        )
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": 6509}
+        self.bo.get_book_detail.return_value = {
+            "id": 6509, "title": f"{title}: A Novel (Unabridged)",
+            "authors": [{"name": "Different Author"}],
+            "files": [{"id": "track-1", "format": "mp3", "role": "primary"}],
+        }
+        self.candidates["audiobook"] = [{
+            "source": "BookLore", "source_id": "other-copy", "title": title,
+            "authors": "Expected Author",
+        }]
+
+        self.refresh()
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        receipt = self.db.get_acquisition_request(self.reader.id, receipt["id"])
+        self.assertEqual(saved["audio_library_state"], "needs_review")
+        self.assertIn("metadata conflicts", saved["audio_library_reason"])
+        self.assertEqual(receipt["status"], "needs_look")
+        self.assertIsNone(receipt["arrived_source_id"])
+        self.assertIsNone(saved["audio_source_id"])
+        self.assertIsNone(saved["linked_abs_id"])
+        self.assertEqual(saved["review_candidates"]["audiobook"], [])
+
+    def test_bookorbit_wrong_format_stays_needs_review_without_provenance(self):
+        job = self.db.create_acquisition_job(self.reader.id, "Title", ["audiobook"])
+        receipt = self.add_receipt(
+            job, "audiobook", service="BookOrbit", status="in_progress",
+            remote_status="downloading", remote_id="request35",
+        )
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": 6509}
+        self.bo.get_book_detail.return_value = {
+            "id": 6509, "title": "Title", "files": [{"id": "book-file", "format": "epub"}],
+        }
+
+        self.refresh()
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        receipt = self.db.get_acquisition_request(self.reader.id, receipt["id"])
+        self.assertEqual(saved["audio_library_state"], "needs_review")
+        self.assertIn("format could not be verified", saved["audio_library_reason"])
+        self.assertEqual(receipt["status"], "needs_look")
+        self.assertIsNone(receipt["arrived_source_id"])
+        self.assertIsNone(saved["linked_abs_id"])
+
+    def test_bookorbit_unabridged_suffix_is_provider_identity_only(self):
+        job = {"title": "Love in the Age of Mechanical Reproduction"}
+        candidate = {
+            "source": "BookOrbit", "source_id": "6509",
+            "title": f"{job['title']}: A Novel (Unabridged)",
+        }
+        self.assertFalse(AcquisitionService._candidate_matches(job, candidate))
+        self.assertTrue(AcquisitionService._candidate_matches(
+            job, candidate, explicit=True, provider_confirmed=True,
+        ))
+        self.assertFalse(AcquisitionService._candidate_matches(
+            job, {**candidate, "title": f"{job['title']}: Abridged"},
+            explicit=True, provider_confirmed=True,
+        ))
+
+    def test_bookorbit_arrival_rejects_contradictory_request_and_detail_ids(self):
+        job = self.db.create_acquisition_job(self.reader.id, "Title", ["audiobook"])
+        receipt = self.add_receipt(job, "audiobook", service="BookOrbit", remote_id="request-1")
+        detail = {
+            "id": 6509, "title": "Title", "files": [{"id": "track", "format": "mp3", "role": "primary"}],
+        }
+        self.bo.get_book_detail.return_value = detail
+
+        for remote in (
+            {"id": "other-request", "status": "available", "matchedBookId": 6509},
+            {"id": "request-1", "mediaKind": "ebook", "status": "available", "matchedBookId": 6509},
+        ):
+            self.service._record_bookorbit_job_arrival(self.reader.id, receipt, remote, self.bo)
+            self.assertIsNone(self.db.get_acquisition_request(self.reader.id, receipt["id"])["arrived_source_id"])
+        self.bo.get_book_detail.assert_not_called()
+
+        self.bo.get_book_detail.return_value = {**detail, "id": 6510}
+        self.service._record_bookorbit_job_arrival(self.reader.id, receipt, {
+            "id": "request-1", "mediaKind": "audiobook", "status": "available", "matchedBookId": 6509,
+        }, self.bo)
+        self.bo.get_book_detail.assert_called_once_with(6509, force=True, fresh_only=True)
+        self.assertIsNone(self.db.get_acquisition_request(self.reader.id, receipt["id"])["arrived_source_id"])
+
+    def test_unresolved_delivery_review_survives_transient_and_contradictory_refreshes(self):
+        title = "Love in the Age of Mechanical Reproduction"
+        job = self.db.create_acquisition_job(self.reader.id, title, ["audiobook"], authors="Expected Author")
+        receipt = self.add_receipt(
+            job, "audiobook", service="BookOrbit", status="in_progress",
+            remote_status="downloading", remote_id="request35",
+        )
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": 6509}
+        self.bo.get_book_detail.return_value = {
+            "id": 6509, "title": f"{title}: A Novel (Unabridged)",
+            "authors": [{"name": "Different Author"}],
+            "files": [{"id": "track-1", "format": "mp3", "role": "primary"}],
+        }
+        self.candidates["audiobook"] = [{
+            "source": "BookLore", "source_id": "other-copy", "title": title,
+            "authors": "Expected Author",
+        }]
+
+        self.refresh()
+        first = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertEqual(first["audio_library_state"], "needs_review")
+        for detail, remote in (
+            (None, {"status": "available", "matchedBookId": 6509}),
+            (self.bo.get_book_detail.return_value, {
+                "id": "another-request", "mediaKind": "audiobook",
+                "status": "available", "matchedBookId": 6509,
+            }),
+        ):
+            self.bo.get_book_detail.return_value = detail
+            self.bo.get_request.return_value = remote
+            self.db.update_acquisition_request(
+                self.reader.id, receipt["id"], last_checked_at=utcnow() - timedelta(minutes=11),
+            )
+            self.refresh()
+            saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+            saved_receipt = self.db.get_acquisition_request(self.reader.id, receipt["id"])
+            self.assertEqual(saved["audio_library_state"], "needs_review")
+            self.assertEqual(saved_receipt["status"], "needs_look")
+            self.assertEqual(saved_receipt["status_detail"], first["audio_library_reason"])
+            self.assertIsNone(saved["audio_source_id"])
+            self.assertEqual(saved["review_candidates"]["audiobook"], [])
+
+        self.bo.get_request.return_value = {
+            "id": "request35", "mediaKind": "audiobook", "status": "available", "matchedBookId": 6509,
+        }
+        self.bo.get_book_detail.return_value = {
+            "id": 6509, "title": title, "authors": [{"name": "Expected Author"}],
+            "files": [{"id": "track-1", "format": "mp3", "role": "primary"}],
+        }
+        self.candidates["audiobook"].append({
+            "source": "BookOrbit", "source_id": "6509", "title": title, "authors": "Expected Author",
+        })
+        self.db.update_acquisition_request(
+            self.reader.id, receipt["id"], last_checked_at=utcnow() - timedelta(minutes=11),
+        )
+        self.refresh()
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        saved_receipt = self.db.get_acquisition_request(self.reader.id, receipt["id"])
+        self.assertEqual((saved["audio_library_state"], saved["audio_source_id"]), ("indexed", "6509"))
+        self.assertEqual((saved_receipt["status"], saved_receipt["status_detail"]), ("arrived", None))
+
+    def test_dismissed_delivery_review_does_not_block_valid_library_match(self):
+        title = "Love in the Age of Mechanical Reproduction"
+        job = self.db.create_acquisition_job(self.reader.id, title, ["audiobook"], authors="Writer")
+        receipt = self.add_receipt(
+            job, "audiobook", service="BookOrbit", status="in_progress",
+            remote_status="downloading", remote_id="request35",
+        )
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": 6509}
+        self.bo.get_book_detail.return_value = {"id": 6509, "title": title, "files": []}
+        self.candidates["audiobook"] = []
+        self.refresh()
+        self.assertEqual(self.db.get_acquisition_job(self.reader.id, job["id"])["audio_library_state"], "needs_review")
+        self.db.update_acquisition_request(self.reader.id, receipt["id"], dismissed=True)
+        self.bo.get_book_detail.return_value = {
+            "id": 6509, "title": title,
+            "files": [{"id": "track-1", "format": "mp3", "role": "primary"}],
+        }
+        self.candidates["audiobook"] = [{
+            "source": "BookOrbit", "source_id": "6509", "title": title, "authors": "Writer",
+        }]
+
+        self.refresh()
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertEqual(saved["audio_source_id"], "6509")
+        self.assertEqual(saved["audio_library_state"], "indexed")
+        self.assertNotEqual(saved["audio_library_reason"], "BookOrbit confirmed an item, but its audiobook format could not be verified")
 
     def test_audio_first_on_other_day_reconciles(self):
         job = self.make_job()

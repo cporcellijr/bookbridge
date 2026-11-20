@@ -301,7 +301,17 @@ class AcquisitionMixin:
                     raise ValueError("Acquisition remote kind conflicts with the saved receipt")
                 if any(getattr(row, key) not in (None, value) for key, value in partner.items()):
                     raise ValueError("Acquisition receipt has a different pairing partner")
+                reset_unverified_arrival = (
+                    row.group_key is None and row.service == "BookOrbit" and not row.adopted
+                    and row.status != "paired" and not row.linked_abs_id
+                    and any((row.arrived_source, row.arrived_source_id, row.arrived_filename))
+                )
                 row.group_key = job_id
+                if reset_unverified_arrival:
+                    row.arrived_source = None
+                    row.arrived_source_id = None
+                    row.arrived_filename = None
+                    row.last_checked_at = None
                 for key, value in partner.items():
                     setattr(row, key, value)
                 fresh_status = fields.get("status", "waiting")

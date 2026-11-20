@@ -127,6 +127,15 @@ class TestResolution(LinkingBase):
         self.assertTrue(any("paired BookOrbit audiobook 7001" in line and "exact title and author match" in line
                             for line in logs.output))
 
+    def test_null_matched_book_falls_back_to_one_unabridged_title_match(self):
+        row = self.add_row()
+        self.bo.search_audiobooks.return_value = [
+            {"id": 7001, "title": "Example Book (Unabridged)", "authors": "A. Writer"},
+            {"id": 7002, "title": "Example Book (Dramatized Adaptation)", "authors": "A. Writer"},
+        ]
+        self.refresh()
+        self.assertEqual(self.row(row["id"])["linked_abs_id"], "bookorbit:7001")
+
     def test_exact_title_without_the_requests_authors_is_not_enough(self):
         row = self.add_row(authors=None)
         self.bo.search_audiobooks.return_value = [{"id": 7001, "title": "Example Book", "authors": "A. Writer"}]

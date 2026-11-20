@@ -338,6 +338,12 @@ class TestPairing(AdoptionBase):
         self.assertIn(f"user {self.user.id} adopted 1 BookOrbit request(s) made in BookOrbit", lines)
         self.assertIn(f"user {self.user.id} adopted request {row['id']} matched ebook 2167 (title, authors, series agree)", lines)
 
+    def test_unabridged_request_title_pairs_with_the_plain_ebook(self):
+        self.serve(_item(31, title="Example Book: A Novel (Unabridged)"))
+        self.refresh()
+        [row] = self.rows()
+        self.assertEqual((row["status"], row["partner_source_id"]), ("paired", "2167"))
+
     def assert_series_not_auto_paired(self, ebook_extra, request_extra):
         self.bo.get_all_ebooks.return_value = [_ebook(**ebook_extra)]
         self.review_scanner(_ebook(**ebook_extra))
@@ -474,11 +480,11 @@ class TestPairing(AdoptionBase):
         self.assertEqual([(m["audio_source"], m["audio_source_id"]) for m in json.loads(suggestion.matches_json)],
                          [("BookOrbit", "42")])
 
-    def _ambiguous_audio(self, matched_book_id=None, ebook=None):
+    def _ambiguous_audio(self, matched_book_id=None, ebook=None, audio_title="Example Book"):
         self.bo.get_request.return_value = {"status": "available", "matchedBookId": matched_book_id}
         self.bo.search_audiobooks.return_value = [
-            {"id": 7001, "title": "Example Book", "authors": "A. Writer"},
-            {"id": 7002, "title": "Example Book", "authors": "A. Writer"},
+            {"id": 7001, "title": audio_title, "authors": "A. Writer"},
+            {"id": 7002, "title": audio_title, "authors": "A. Writer"},
         ]
         self.review_scanner(ebook or _ebook())
         scanner = self.shelf._get_suggestions_service()
@@ -494,6 +500,12 @@ class TestPairing(AdoptionBase):
         self.serve(_item(31, matchedBookId=matched_book_id))
         self.refresh()
         return self.rows()[0]
+
+    def test_ambiguous_unabridged_audio_arrivals_go_to_review(self):
+        row = self._ambiguous_audio(audio_title="Example Book (Unabridged)")
+        self.assertEqual(row["status"], "needs_look")
+        for book_id in (7001, 7002):
+            self.assertIsNotNone(self.db.get_pending_suggestion(f"bookorbit:{book_id}", user_id=self.user.id))
 
     def test_ambiguous_audio_arrivals_offer_each_bookorbit_candidate_for_review(self):
         row = self._ambiguous_audio()

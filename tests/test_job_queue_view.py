@@ -296,6 +296,7 @@ class JobQueueRouteTests(unittest.TestCase):
                 self.assertNotIn("Private Acquisition", markup)
                 self.assertNotIn("RAW_INTERNAL_REASON_SENTINEL", markup)
                 self.assertNotIn("RAW_SCAN_REASON_SENTINEL", markup)
+                self.assertNotIn("The library copy needs review before this request can be paired.", markup)
                 self.assertIn("acquisition_jobs.js", markup)
 
         fragment = self.client.get(f"/job-queue?acquisition_fragment=1&acquisition_job={review['id']}")

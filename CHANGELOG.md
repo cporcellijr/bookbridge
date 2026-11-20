@@ -8,6 +8,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Changed
 
+- **BookOrbit-confirmed audiobook arrivals accept “(Unabridged)” and “: A Novel” title suffixes, matched the same way as Discover.** Edition credits such as “(Dramatized Adaptation)” or “(Abridged)” and volume numbers still have to match. The direct provider ID and fresh format check remain required; conflicting metadata stays under review across transient provider misses, and unverified standalone request IDs are refreshed when attached to a job.
+
+- **A completed Shelfmark audiobook can match the reader's unique library copy titled with “(Unabridged)” or “: A Novel”.** When the ebook supplies the author, BookBridge checks both exact titles and suffixed copies before deciding whether to pair. Ambiguous or insufficient matches go to reader review.
+
 - **Book-request panels without provider submission controls no longer repeatedly check provider availability.** When controls appear in a refreshed panel, BookOrbit/Shelfmark availability is checked normally, including for hidden or disabled controls. The 20-second delivery/status refresh, reconciliation, editor safeguards, and Classic/New behavior are unchanged.
 
 - **Processing refreshes book requests with less database work.** Normal acquisition-panel

@@ -198,7 +198,12 @@
                             {% elif half_receipts %}{{ _('A hidden provider request may still continue') }}
                             {% else %}{{ _('Waiting for delivery') }}{% endif %}
                         </dd></div>
-                        <div><dt>{{ _('Library') }}</dt><dd>{{ library_labels.get(job[prefix ~ '_library_state'], _('Not checked') if not job[prefix ~ '_library_state'] else _('Check in progress')) }}</dd></div>
+                        <div><dt>{{ _('Library') }}</dt><dd>
+                            {{ library_labels.get(job[prefix ~ '_library_state'], _('Not checked') if not job[prefix ~ '_library_state'] else _('Check in progress')) }}
+                            {% if job[prefix ~ '_library_state'] == 'needs_review' and not job.review_candidates[kind] %}
+                            <small class="job-queue-detail">{{ _('The library copy needs review before this request can be paired.') }}</small>
+                            {% endif %}
+                        </dd></div>
                     </dl>
                     {% if kind in job.formats and may_submit %}
                     <div class="acquisition-provider-controls" data-provider-controls data-job-id="{{ job.id }}"
@@ -253,7 +258,9 @@
             {% endif %}
             <p class="acquisition-job-pairing"><strong>{{ _('Pairing') }}:</strong>
                 {% if job.linked_abs_id %}{{ _('Paired into Bridge') }}
-                {% elif job.audio_library_state == 'needs_review' or job.ebook_library_state == 'needs_review' %}{{ _('Choose the correct edition to continue') }}
+                {% elif job.audio_library_state == 'needs_review' or job.ebook_library_state == 'needs_review' %}
+                    {% if job.review_candidates.audiobook or job.review_candidates.ebook %}{{ _('Choose the correct edition to continue') }}
+                    {% else %}{{ _('Review the acquisition details above') }}{% endif %}
                 {% else %}{{ _('Waiting for both copies to be verified') }}{% endif %}
             </p>
             {% if job.linked_abs_id %}

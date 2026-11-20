@@ -153,6 +153,14 @@ class AcquisitionJobActionsTests(SearchTabBase):
         self.assertIn('id="acqIsbnBothNote"', markup)
         self.assertIn("isbn13: choice === 'both' ? undefined", script)
 
+    def test_review_without_safe_copy_shows_reason_instead_of_pick_instruction(self):
+        markup = (Path(__file__).parents[1] / "templates/_acquisition_jobs_panel.html").read_text(encoding="utf-8")
+        self.assertIn("not job.review_candidates[kind]", markup)
+        self.assertNotIn("job[prefix ~ '_library_reason']", markup)
+        self.assertIn("The library copy needs review before this request can be paired.", markup)
+        self.assertIn("Review the acquisition details above", markup)
+        self.assertIn("job.review_candidates.audiobook or job.review_candidates.ebook", markup)
+
     def test_review_rejects_stale_or_tampered_candidate(self):
         job = self.make_job()
         offered = {

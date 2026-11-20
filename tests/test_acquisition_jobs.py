@@ -9,6 +9,7 @@ from unittest.mock import patch
 from sqlalchemy import event
 
 from src.db.database_service import DatabaseService
+from src.utils.time_utils import utcnow
 
 
 EBOOK = {"source": "BookOrbit", "source_id": "42", "filename": "Book.epub"}
@@ -205,14 +206,45 @@ class TestAcquisitionJobs(unittest.TestCase):
         self.assertEqual((repeated["status"], repeated["remote_status"], repeated["linked_abs_id"]),
                          ("paired", "available", "book-42"))
 
-    def test_ungrouped_receipt_can_be_attached_without_resetting_it(self):
-        fields = {**self.receipt(), "title": "Original metadata", "status": "arrived"}
+    def test_ungrouped_bookorbit_arrival_is_reverified_when_attached(self):
+        checked_at = utcnow()
+        fields = {
+            **self.receipt(), "title": "Original metadata", "status": "arrived",
+            "remote_status": "available", "arrived_source": "BookOrbit",
+            "arrived_source_id": "guessed-42", "arrived_filename": "guessed.epub",
+            "last_checked_at": checked_at,
+        }
         row = self.db.add_acquisition_requests(self.user.id, [fields])[0]
-        job = self.job()
+        job = self.job(formats=["ebook"])
         attached = self.add(job)
         self.assertEqual(attached["id"], row["id"])
         self.assertEqual((attached["title"], attached["status"]), ("Original metadata", "arrived"))
         self.assertEqual(attached["group_key"], job["id"])
+        self.assertEqual((attached["arrived_source"], attached["arrived_source_id"], attached["arrived_filename"]),
+                         (None, None, None))
+        self.assertIsNone(attached["last_checked_at"])
+
+    def test_attaching_other_provider_or_paired_bookorbit_history_preserves_arrival(self):
+        checked_at = utcnow()
+        for fields, title in (
+            ({**self.receipt(), "remote_id": "shelfmark-1", "service": "Shelfmark",
+              "remote_kind": "download", "status": "arrived", "remote_status": "complete",
+              "arrived_source": "BookLore", "arrived_source_id": "copy-1",
+              "arrived_filename": "copy.epub", "last_checked_at": checked_at}, "Shelfmark"),
+            ({**self.receipt(), "remote_id": "paired-1", "status": "paired", "remote_status": "available",
+              "arrived_source": "BookOrbit", "arrived_source_id": "paired-copy",
+              "arrived_filename": "paired.epub", "linked_abs_id": "book-1",
+              "last_checked_at": checked_at}, "Paired"),
+        ):
+            with self.subTest(title=title):
+                row = self.db.add_acquisition_requests(self.user.id, [{**fields, "title": title}])[0]
+                attached = self.add(self.job(formats=["ebook"]), remote_id=fields["remote_id"],
+                                    service=fields["service"], remote_kind=fields["remote_kind"])
+                self.assertEqual(attached["id"], row["id"])
+                self.assertEqual((attached["arrived_source"], attached["arrived_source_id"],
+                                  attached["arrived_filename"], attached["last_checked_at"]),
+                                 (fields["arrived_source"], fields["arrived_source_id"],
+                                  fields["arrived_filename"], checked_at))
 
     def test_receipt_cannot_be_reassigned_between_jobs(self):
         first, second = self.job(), self.job()
