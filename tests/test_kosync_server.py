@@ -379,7 +379,7 @@ class TestKosyncEndpoints(unittest.TestCase):
         """Non-numeric, out-of-range, bool and NaN percentages are 400 with no state written."""
         from src import web_server
         doc = 'p' * 32
-        for bad in ('abc', '0.5', 45, 1.01, -0.1, True, float('nan'), float('inf')):
+        for bad in ('abc', '0.5', 45, 1.01, -0.1, True, float('nan'), float('inf'), 10 ** 400):
             with self.subTest(percentage=bad):
                 response = self._put_raw({
                     'document': doc, 'progress': '/body/x', 'percentage': bad,

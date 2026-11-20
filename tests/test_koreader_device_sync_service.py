@@ -293,6 +293,23 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
 
         self.assertNotEqual(without_shelves, with_shelves)
 
+    def test_manifest_revision_changes_when_an_unavailable_book_is_removed(self):
+        """A device keeps an unavailable book; removing it later must change the
+        revision, or the plugin's unchanged-revision short-circuit skips the delete."""
+        from src.api import kosync_server
+
+        items = [{"abs_id": "abs-1", "filename": "Book.epub", "content_hash": "hash-1", "size": 123}]
+        self.assertNotEqual(
+            self.service._compute_revision(items, ["abs-lost"]), self.service._compute_revision(items, []),
+        )
+        self.assertNotEqual(
+            kosync_server._compute_manifest_revision(items, ["abs-lost"]),
+            kosync_server._compute_manifest_revision(items),
+        )
+        self.assertEqual(
+            self.service._compute_revision(items, []), kosync_server._compute_manifest_revision(items),
+        )
+
     def test_manifest_no_shelves_when_disabled(self):
         self._write_book_file("plain.epub")
         self.db.save_book(

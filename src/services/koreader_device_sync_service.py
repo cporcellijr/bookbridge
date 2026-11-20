@@ -129,7 +129,7 @@ class KOReaderDeviceSyncService:
 
         return {
             "generated_at": int(time.time()),
-            "revision": self._compute_revision(items),
+            "revision": self._compute_revision(items, unavailable_abs_ids),
             "delete_mode": "mirror",
             "books": items,
             "unavailable_abs_ids": unavailable_abs_ids,
@@ -810,7 +810,7 @@ class KOReaderDeviceSyncService:
         value = str(match.group("kavita_id") or "").strip()
         return value or None
 
-    def _compute_revision(self, items: list[dict]) -> str:
+    def _compute_revision(self, items: list[dict], unavailable_abs_ids: list[str] | None = None) -> str:
         digest_items = [
             {
                 "abs_id": item["abs_id"],
@@ -821,6 +821,9 @@ class KOReaderDeviceSyncService:
             }
             for item in sorted(items, key=lambda value: value["abs_id"])
         ]
+        if unavailable_abs_ids:
+            # A kept-but-unresolvable book must change the revision, or its later removal is skipped.
+            digest_items.append({"unavailable": sorted(str(abs_id) for abs_id in unavailable_abs_ids)})
         payload = json.dumps(digest_items, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 

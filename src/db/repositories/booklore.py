@@ -50,35 +50,39 @@ class BookloreMixin:
         from sqlalchemy import insert, select, update
 
         self._invalidate_booklore_snapshot()
-        with self.get_session() as session:
-            existing_id = select(BookloreBook.id).where(
-                BookloreBook.filename == booklore_book.filename
-            ).limit(1).scalar_subquery()
-            updated = session.execute(
-                update(BookloreBook).where(BookloreBook.id == existing_id).values(
-                    title=booklore_book.title,
-                    authors=booklore_book.authors,
-                    raw_metadata=booklore_book.raw_metadata,
-                    last_updated=utcnow(),
+        try:
+            with self.get_session() as session:
+                existing_id = select(BookloreBook.id).where(
+                    BookloreBook.filename == booklore_book.filename
+                ).limit(1).scalar_subquery()
+                updated = session.execute(
+                    update(BookloreBook).where(BookloreBook.id == existing_id).values(
+                        title=booklore_book.title,
+                        authors=booklore_book.authors,
+                        raw_metadata=booklore_book.raw_metadata,
+                        last_updated=utcnow(),
+                    )
                 )
-            )
-            if updated.rowcount == 0:
-                values = {
-                    "filename": booklore_book.filename,
-                    "title": booklore_book.title,
-                    "authors": booklore_book.authors,
-                    "raw_metadata": booklore_book.raw_metadata,
-                    "last_updated": booklore_book.last_updated or utcnow(),
-                }
-                if booklore_book.id is not None:
-                    values["id"] = booklore_book.id
-                session.execute(insert(BookloreBook).values(**values))
+                if updated.rowcount == 0:
+                    values = {
+                        "filename": booklore_book.filename,
+                        "title": booklore_book.title,
+                        "authors": booklore_book.authors,
+                        "raw_metadata": booklore_book.raw_metadata,
+                        "last_updated": booklore_book.last_updated or utcnow(),
+                    }
+                    if booklore_book.id is not None:
+                        values["id"] = booklore_book.id
+                    session.execute(insert(BookloreBook).values(**values))
 
-            saved = session.query(BookloreBook).filter(
-                BookloreBook.filename == booklore_book.filename
-            ).first()
-            session.expunge(saved)
-            return saved
+                saved = session.query(BookloreBook).filter(
+                    BookloreBook.filename == booklore_book.filename
+                ).first()
+                session.expunge(saved)
+                return saved
+        finally:
+            # A read that loaded during the write must not keep its pre-commit rows.
+            self._invalidate_booklore_snapshot()
 
     def delete_booklore_book(self, filename: str) -> bool:
         """Delete a Grimmory book from the cache table."""
@@ -94,6 +98,8 @@ class BookloreMixin:
         except Exception as e:
             logger.error(f"❌ Failed to delete Grimmory book '{filename}': {e}", exc_info=True)
             return False
+        finally:
+            self._invalidate_booklore_snapshot()
 
     def clear_all_booklore_books(self) -> bool:
         """Delete all cached Grimmory books."""
@@ -109,3 +115,4 @@ class BookloreMixin:
             return False
         finally:
             session.close()
+            self._invalidate_booklore_snapshot()

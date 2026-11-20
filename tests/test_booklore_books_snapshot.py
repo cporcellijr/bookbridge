@@ -7,7 +7,9 @@ view on the 9p /data mount.
 import shutil
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from src.db.database_service import DatabaseService
 from src.db.models import BookloreBook
@@ -46,6 +48,25 @@ class TestBookloreBooksSnapshot(unittest.TestCase):
 
         self.db.clear_all_booklore_books()
         self.assertEqual(self._names(), [])
+
+    def test_a_read_during_a_write_does_not_keep_pre_commit_rows(self):
+        self._names()
+        real_get_session = self.db.get_session
+        fired = []
+
+        @contextmanager
+        def session_with_a_concurrent_read():
+            if not fired:
+                fired.append(True)
+                # Another thread loads after the write's invalidation but before its commit.
+                self.db.get_all_booklore_books()
+            with real_get_session() as session:
+                yield session
+
+        with patch.object(self.db, "get_session", session_with_a_concurrent_read):
+            self.db.save_booklore_book(BookloreBook("a.epub", title="New"))
+
+        self.assertEqual([b.title for b in self.db.get_all_booklore_books()], ["New"])
 
     def test_callers_get_their_own_list(self):
         first = self.db.get_all_booklore_books()

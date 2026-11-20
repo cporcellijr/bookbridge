@@ -2707,7 +2707,7 @@ def ingest_storyteller_transcripts(
             shutil.rmtree(stage_dir, ignore_errors=True)
             raise
         logger.info(
-            "Storyteller ingest staged for '%s': %d files from '%s' to '%s'",
+            "Storyteller ingest copied for '%s': %d files from '%s' to '%s'",
             abs_id, len(chapter_files), transcriptions_dir, stage_dir,
         )
 

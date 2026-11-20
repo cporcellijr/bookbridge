@@ -532,7 +532,7 @@ class SyncManager:
         leader: str,
         abs_id: str,
         title_snip: str,
-    ) -> None:
+    ) -> dict[str, SyncResult]:
         """Mark a book finished on non-leader clients once the leader crosses
         the configured completion threshold.
 
@@ -540,8 +540,12 @@ class SyncManager:
         are driven by trailing-edge idle-cooldown handlers, and ABSEbook rejects
         a percentage-only locator. ABS uses mark_finished instead of
         update_progress.
+
+        Returns the failed non-ABS writes, which replaced the cycle's ordinary
+        follower write and so must register a write retry in its place.
         """
         current_time = time.time()
+        failed: dict[str, SyncResult] = {}
         request = UpdateProgressRequest(LocatorResult(percentage=1.0), "Book finished", previous_location=None)
         for client_name, client in self._iter_update_targets(active_clients, leader):
             if client_name in _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS:
@@ -574,8 +578,12 @@ class SyncManager:
                     else:
                         # Real failure: keep the existing warning line
                         logger.warning(f"⚠️ Completion propagation failed for '{client_name}': client reported unsuccessful write")
+                        failed[client_name] = SyncResult(None, False)
             except Exception as e:
                 logger.warning(f"⚠️ Completion propagation failed for '{client_name}': {e}", exc_info=True)
+                if client_name.lower() != 'abs':
+                    failed[client_name] = SyncResult(None, False)
+        return failed
 
     def _should_initialize_followers(self, config: dict, abs_id: str, title_snip: str) -> bool:
         """True when a follower_only client should be filled now.
@@ -4382,6 +4390,7 @@ class SyncManager:
         title_snip: str,
         is_primary_audio: bool = False,
         target_audio_ts: float | None = None,
+        target_pct: float | None = None,
     ) -> bool:
         """True when a finished follower must not take a finished leader's mapped position.
 
@@ -4389,8 +4398,8 @@ class SyncManager:
         matter is never narrated and credits have no text. Mapping one finished
         position onto the other lands a few percent short and un-finishes the
         book on the follower (#609, #610); BookOrbit then shows it as re-reading.
-        The primary audio client still takes a write known to move it forward,
-        which is how it gets finished.
+        The primary audio client still takes a write that moves both its
+        timestamp and its percentage forward, which is how it gets finished.
         """
         follower_pct = client_state.current.get('pct')
         if leader_pct is None or follower_pct is None:
@@ -4398,7 +4407,9 @@ class SyncManager:
         if leader_pct < threshold or follower_pct < threshold:
             return False
         follower_ts = client_state.current.get('ts')
-        if is_primary_audio and target_audio_ts is not None and follower_ts is not None and target_audio_ts >= follower_ts:
+        # The audio write also carries the locator's ebook percentage, which must not lower it either.
+        if (is_primary_audio and target_audio_ts is not None and follower_ts is not None
+                and target_audio_ts >= follower_ts and target_pct is not None and target_pct >= follower_pct):
             return False
         logger.info(
             f"🏁 '{abs_id}' '{title_snip}' Keeping '{client_name}' finished at {follower_pct:.2%}: "
@@ -6422,6 +6433,7 @@ class SyncManager:
                             leader, leader_pct, client_name, client_state, threshold, abs_id, title_snip,
                             is_primary_audio=client_name == primary_audio_client,
                             target_audio_ts=leader_normalized_ts,
+                            target_pct=getattr(locator, 'percentage', None),
                         ):
                             # Record what it reports so the unchanged finish is not
                             # re-detected as a fresh change every cycle.
@@ -6538,6 +6550,10 @@ class SyncManager:
                     )
                     continue
 
+                if propagating_completion:
+                    # A failed 100% write replaced the follower's ordinary write, so it retries like one.
+                    results.update(self._propagate_completion(book, active_clients, leader, abs_id, title_snip))
+
                 # Genuine failures only: a policy no-write is success=True, skipped=True.
                 retry_key = (get_current_user_id(), abs_id)
                 if any(not result.success for result in results.values()):
@@ -6560,8 +6576,6 @@ class SyncManager:
                     and leader_pct < threshold
                 ):
                     self._mark_koreader_reading(book, abs_id, title_snip, leader_pct)
-                if propagating_completion:
-                    self._propagate_completion(book, active_clients, leader, abs_id, title_snip)
 
                 # Save states directly to database service using State models
                 current_time = time.time()

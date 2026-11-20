@@ -6,7 +6,6 @@ import io
 import ipaddress
 import json
 import logging
-import math
 import mimetypes
 import os
 import re
@@ -345,7 +344,7 @@ def signal_manifest_rebuild() -> None:
             _start_manifest_prebuilder()
 
 
-def _compute_manifest_revision(items) -> str:
+def _compute_manifest_revision(items, unavailable_abs_ids=()) -> str:
     """Deterministic revision over a manifest's book items.
 
     Mirrors KOReaderDeviceSyncService._compute_revision so a user-scoped manifest
@@ -361,6 +360,9 @@ def _compute_manifest_revision(items) -> str:
         }
         for item in sorted(items, key=lambda value: str(value.get("abs_id")))
     ]
+    if unavailable_abs_ids:
+        # A kept-but-unresolvable book must change the revision, or its later removal is skipped.
+        digest_items.append({"unavailable": sorted(str(abs_id) for abs_id in unavailable_abs_ids)})
     payload = json.dumps(digest_items, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
@@ -694,7 +696,7 @@ def _scope_manifest_to_user(manifest, user_id):
         scoped["books"] = [dict(item) for item in manifest.get("books") or []]
         scoped["books"] = _apply_manifest_shelf_filter(scoped["books"], user_id, None)
         _apply_user_collection_source(scoped, user_id)
-        scoped["revision"] = _compute_manifest_revision(scoped["books"])
+        scoped["revision"] = _compute_manifest_revision(scoped["books"], scoped.get("unavailable_abs_ids"))
         return scoped
     try:
         owned_books = _database_service.get_books_by_status("active", user_id=user_id)
@@ -715,7 +717,7 @@ def _scope_manifest_to_user(manifest, user_id):
     scoped["books"] = books
     scoped["unavailable_abs_ids"] = owned_unavailable
     _apply_user_collection_source(scoped, user_id)
-    scoped["revision"] = _compute_manifest_revision(scoped["books"])
+    scoped["revision"] = _compute_manifest_revision(scoped["books"], scoped.get("unavailable_abs_ids"))
     return scoped
 
 
@@ -2096,7 +2098,7 @@ def kosync_put_progress():
 
     raw_percentage = data.get('percentage', 0)
     if (isinstance(raw_percentage, bool) or not isinstance(raw_percentage, (int, float))
-            or not math.isfinite(raw_percentage) or not 0 <= raw_percentage <= 1):
+            or not 0 <= raw_percentage <= 1):  # NaN fails the comparison; isfinite() overflows on huge ints
         logger.warning(f"KOSync: PUT progress with invalid percentage for doc {doc_hash} from {request.remote_addr}")
         return jsonify({"error": "Invalid percentage"}), 400
 

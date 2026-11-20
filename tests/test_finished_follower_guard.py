@@ -173,6 +173,17 @@ class TestPropagatedCompletionNotOverwritten(_FinishedBookCase):
         saved = self._saved(mocks, 'booklore')
         self.assertAlmostEqual(float(saved[-1].percentage), 1.0, places=4)
 
+    def test_failed_completion_write_registers_a_write_retry(self):
+        # The 100% write replaced the ordinary follower write, so its failure must retry like one.
+        manager, mocks = self._build_manager(propagation=True)
+        mocks['booklore_client'].update_progress.return_value = False
+
+        manager.sync_cycle()
+
+        self.assertTrue(mocks['booklore_client'].update_progress.called)
+        self.assertIn('test-abs-id-finished', [key[1] for key in manager._write_retry_state()])
+        self.assertFalse(self._saved(mocks, 'booklore'), "a failed write must not be recorded")
+
 
 class TestFinishedAudioFollower(unittest.TestCase):
     """A finished BookOrbit audiobook is not written back to the ebook's mapped end.
@@ -183,7 +194,7 @@ class TestFinishedAudioFollower(unittest.TestCase):
     no backward-write guard of its own.
     """
 
-    def _run(self, audio_current):
+    def _run(self, audio_current, locator_pct=0.9801921756687262):
         from types import SimpleNamespace
         from tests.test_leader_normalized_ts_write import _StubClient, _base_manager, _state, _wire_database
 
@@ -194,7 +205,7 @@ class TestFinishedAudioFollower(unittest.TestCase):
         manager._get_primary_audio_client_name = Mock(return_value="BookOrbitAudio")
         manager._determine_leader = Mock(return_value=("KoSync", 1.0))
         manager._resolve_alignment_locator_from_abs_timestamp = Mock(
-            return_value=(LocatorResult(percentage=0.9801921756687262, match_index=386924), "anchor"),
+            return_value=(LocatorResult(percentage=locator_pct, match_index=386924), "anchor"),
         )
         manager._completion_propagation_enabled = Mock(return_value=False)
         manager._mark_koreader_complete = Mock()
@@ -227,8 +238,15 @@ class TestFinishedAudioFollower(unittest.TestCase):
             for line in logs
         ), logs)
 
+    def test_forward_seek_that_lowers_the_percentage_is_not_written(self):
+        # The write carries the locator's 98.02%, which would un-finish a 99.3% audiobook.
+        audio, logs = self._run({"pct": 0.993, "ts": 30566.0})
+
+        audio.update_progress.assert_not_called()
+        self.assertTrue(any("Keeping 'BookOrbitAudio' finished at 99.30%" in line for line in logs), logs)
+
     def test_audiobook_short_of_the_target_still_takes_the_forward_write(self):
-        audio, _ = self._run({"pct": 0.993, "ts": 30566.0})
+        audio, _ = self._run({"pct": 0.993, "ts": 30566.0}, locator_pct=0.999)
 
         audio.update_progress.assert_called_once()
         self.assertAlmostEqual(audio.update_progress.call_args[0][1].target_audio_ts, 30749.07)
