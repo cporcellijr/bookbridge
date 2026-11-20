@@ -354,3 +354,30 @@
   .bb-btn { transition: none; }
   .bb-btn:hover { transform: none; }
 }
+
+/* From new book to in sync: the four-stop flow */
+.md-typeset .bb-flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.4rem; margin: 1.4em 0 0.8em; }
+.md-typeset .bb-flow__stop {
+  position: relative; background: var(--bb-surface); border: 1px solid var(--bb-line);
+  border-radius: var(--bb-radius); padding: 1rem 1rem 1.1rem;
+}
+.md-typeset .bb-flow__stop p { margin: 0.35em 0 0; color: var(--bb-text-2); font-size: 0.92em; }
+.md-typeset .bb-flow__stop p strong { color: var(--bb-text); }
+.md-typeset .bb-flow__stop:not(:last-child)::after {
+  content: "→"; position: absolute; right: -1.15rem; top: 50%; transform: translateY(-50%);
+  color: var(--bb-amber-text); font-weight: 700;
+}
+.md-typeset .bb-flow__icon { display: inline-grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: 10px; background: var(--bb-glow); color: var(--bb-amber-text); }
+.md-typeset .bb-flow__icon svg { width: 1.2rem; height: 1.2rem; fill: currentColor; }
+.md-typeset .bb-flow__side {
+  margin: 0 0 1.8em; padding: 0.7rem 1rem; border: 1px dashed var(--bb-line);
+  border-radius: var(--bb-radius); color: var(--bb-text-2);
+}
+.md-typeset .bb-flow__side p { margin: 0; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.md-typeset .bb-flow__side strong { color: var(--bb-text); }
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .bb-flow { grid-template-columns: minmax(0, 1fr); }
+  .md-typeset .bb-flow__stop:not(:last-child)::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -1.3rem; transform: translateX(-50%); }
+}
+.md-typeset figure.bb-align { width: 100%; max-width: 40rem; margin: 1.6em auto 1.2em; }
+.bb-more { margin: 1.6rem 0 0; text-align: center; }
