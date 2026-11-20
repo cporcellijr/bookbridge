@@ -25,6 +25,14 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **A finished book stays finished in Grimmory, KOReader and your other ebook apps.**
+  The end of an ebook and the end of its audiobook rarely line up: back matter is never
+  read aloud and the credits have no text. When both sides were finished, BookBridge
+  still wrote the audiobook's end back as about 98% of the ebook, so Grimmory moved the
+  book back to Reading and the Kobo kept showing it in progress. With *Propagate
+  Completion* on, the 100% write was also undone a few minutes later. An app that is
+  already finished is now left alone while the leading app is finished too. (#609, #610)
+
 - **The AI alignment checks work with thinking models such as qwen3.** These models spent
   the whole answer budget thinking and returned nothing, so every check quietly fell back
   as if Ollama were down. Contributed by [@eschatus](https://github.com/eschatus) in #605.

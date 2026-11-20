@@ -4371,6 +4371,34 @@ class SyncManager:
 
         return False
 
+    def _keeps_finished_follower(
+        self,
+        leader: str,
+        leader_pct: float | None,
+        client_name: str,
+        client_state,
+        threshold: float,
+        abs_id: str,
+        title_snip: str,
+    ) -> bool:
+        """True when a finished follower must not take a finished leader's mapped position.
+
+        An ebook's end and its audiobook's end rarely map onto each other: back
+        matter is never narrated and credits have no text. Mapping one finished
+        position onto the other lands a few percent short and un-finishes the
+        book on the follower (#609, #610).
+        """
+        follower_pct = client_state.current.get('pct')
+        if leader_pct is None or follower_pct is None:
+            return False
+        if leader_pct < threshold or follower_pct < threshold:
+            return False
+        logger.info(
+            f"🏁 '{abs_id}' '{title_snip}' Keeping '{client_name}' finished at {follower_pct:.2%}: "
+            f"leader '{leader}' is finished too, so its mapped position is not written back"
+        )
+        return True
+
     def _handle_storygraph_cooldown(
         self, book, config, now: float, schedule_followup: bool = True
     ) -> None:
@@ -6321,6 +6349,18 @@ class SyncManager:
                     and locator_source == "alignment_from_normalized_ts"
                     else None
                 )
+                threshold = self._completion_threshold()
+                previous_leader_pct = getattr(leader_state, 'previous_pct', None)
+                crossed_completion = (
+                    leader_pct is not None
+                    and leader_pct >= threshold
+                    and (previous_leader_pct is None or previous_leader_pct < threshold)
+                )
+                propagating_completion = (
+                    crossed_completion
+                    and not init_followers_only
+                    and self._completion_propagation_enabled()
+                )
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
@@ -6334,6 +6374,23 @@ class SyncManager:
                         if is_follower:
                             # Its state is a placeholder, not a prior read to reuse.
                             client_state = None
+                        if (
+                            propagating_completion
+                            and client_name.lower() != 'abs'
+                            and client_name not in _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS
+                        ):
+                            # _propagate_completion writes 100% to it below. The mapped
+                            # position would land first and its state row would replace
+                            # the 100% snapshot (#609). ABS keeps the position write:
+                            # mark_finished does not move its playhead.
+                            continue
+                        if client_state and client_name != primary_audio_client and self._keeps_finished_follower(
+                            leader, leader_pct, client_name, client_state, threshold, abs_id, title_snip
+                        ):
+                            # Record what it reports so the unchanged finish is not
+                            # re-detected as a fresh change every cycle.
+                            self._persist_state_snapshot(book, client_name, client_state.current, time.time())
+                            continue
                         if client_state and client_state.current.get('_readalong_mirror'):
                             # BookOrbit mirrors this format from the one we do write;
                             # writing it too would race its own derived position.
@@ -6455,13 +6512,6 @@ class SyncManager:
                         "'%s' Follower writes succeeded again", abs_id,
                     )
 
-                threshold = self._completion_threshold()
-                previous_leader_pct = getattr(leader_state, 'previous_pct', None)
-                crossed_completion = (
-                    leader_pct is not None
-                    and leader_pct >= threshold
-                    and (previous_leader_pct is None or previous_leader_pct < threshold)
-                )
                 # Deliberately NOT gated on SYNC_COMPLETION_PROPAGATION: telling the
                 # reader devices a book is finished is a different decision from
                 # pushing 100% into every other service, and wanting the first should
@@ -6474,7 +6524,7 @@ class SyncManager:
                     and leader_pct < threshold
                 ):
                     self._mark_koreader_reading(book, abs_id, title_snip, leader_pct)
-                if crossed_completion and self._completion_propagation_enabled():
+                if propagating_completion:
                     self._propagate_completion(book, active_clients, leader, abs_id, title_snip)
 
                 # Save states directly to database service using State models
