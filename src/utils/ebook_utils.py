@@ -814,8 +814,22 @@ class EbookParser:
         Uses BeautifulSoup.
         """
         filepath = Path(filepath)
+        # This is the common EPUB-text boundary for all callers, not just the
+        # sync-cycle resolver. PDFs, CBZs and other containers must never reach
+        # ebooklib's EPUB reader or its repair fallback.
+        if filepath.suffix.lower() != ".epub":
+            logger.debug("Skipping non-EPUB text extraction: %s", filepath.name)
+            if progress_callback:
+                progress_callback(1.0)
+            return "", []
         if not filepath.exists():
             filepath = self.resolve_book_path(filepath.name)
+            if filepath is None or Path(filepath).suffix.lower() != ".epub":
+                logger.warning(
+                    "Resolved ebook is missing or is not an EPUB; skipping text extraction: %s",
+                    filepath,
+                )
+                return "", []
         str_path = str(filepath)
         cache_key = self._file_cache_key(filepath)
 

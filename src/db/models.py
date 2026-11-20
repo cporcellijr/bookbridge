@@ -486,6 +486,17 @@ class Job(Base):
     # None the same as "no stage recorded" rather than an error.
     stage = Column(String(50), nullable=True)
     recovery_identity = Column(String(64), nullable=True)
+    # Remote alignment worker lease (see src/services/alignment_workers.py). Set
+    # only on the job row a remote worker claimed; every later job row for the
+    # book (success, failure, expiry) is written without them, which ends the
+    # lease. lease_id fences stale workers; queue_position_at_claim is where the
+    # book goes back in the pending queue if the lease expires.
+    lease_owner = Column(String(100), nullable=True)
+    lease_id = Column(String(64), nullable=True, index=True)
+    lease_expires_at = Column(Float, nullable=True)
+    queue_position_at_claim = Column(Float, nullable=True)
+    # Inputs the main instance resolved for the worker (EPUB and audio paths).
+    lease_inputs_json = Column(Text, nullable=True)
 
     # Relationship
     book = relationship("Book", back_populates="jobs")
@@ -493,7 +504,10 @@ class Job(Base):
     def __init__(self, abs_id: str, last_attempt: float = None,
                  retry_count: int = 0, last_error: str = None, progress: float = 0.0,
                  kind: str = JOB_KIND_ALIGNMENT, stage: Optional[str] = None,
-                 recovery_identity: Optional[str] = None):
+                 recovery_identity: Optional[str] = None,
+                 lease_owner: Optional[str] = None, lease_id: Optional[str] = None,
+                 lease_expires_at: Optional[float] = None,
+                 queue_position_at_claim: Optional[float] = None):
         self.abs_id = abs_id
         self.last_attempt = last_attempt
         self.retry_count = retry_count
@@ -502,6 +516,10 @@ class Job(Base):
         self.kind = kind
         self.stage = stage
         self.recovery_identity = recovery_identity
+        self.lease_owner = lease_owner
+        self.lease_id = lease_id
+        self.lease_expires_at = lease_expires_at
+        self.queue_position_at_claim = queue_position_at_claim
 
     def __repr__(self):
         return f"<Job(abs_id='{self.abs_id}', kind='{self.kind}', stage='{self.stage}', retries={self.retry_count})>"

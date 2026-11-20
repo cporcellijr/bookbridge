@@ -1,6 +1,9 @@
 import json
+import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.utils.storyteller_transcript import StorytellerTranscript
 from src.utils.transcriber import AudioTranscriber
@@ -177,17 +180,15 @@ def test_storyteller_ingest_rewrites_chapter_first_layout_to_canonical(tmp_path,
     manifest_file = Path(manifest_path)
     assert manifest_file.exists()
     target_dir = data_dir / "transcripts" / "storyteller" / "abs-ingest-1"
-    assert (target_dir / "00000-00001.json").exists()
-    assert (target_dir / "00000-00002.json").exists()
+    manifest_payload = json.loads(manifest_file.read_text(encoding="utf-8"))
+    chapter_files = [chapter["file"] for chapter in manifest_payload.get("chapters", [])]
+    assert [Path(name).name for name in chapter_files] == ["00000-00001.json", "00000-00002.json"]
+    assert all((target_dir / name).exists() for name in chapter_files)
     assert not (target_dir / "00001-00001.json").exists()
     assert not (target_dir / "00002-00001.json").exists()
 
-    manifest_payload = json.loads(manifest_file.read_text(encoding="utf-8"))
-    chapter_files = [chapter["file"] for chapter in manifest_payload.get("chapters", [])]
-    assert chapter_files == ["00000-00001.json", "00000-00002.json"]
 
-
-def test_storyteller_ingest_removes_stale_canonical_files(tmp_path, monkeypatch):
+def test_storyteller_ingest_republishes_without_exposing_stale_chapters(tmp_path, monkeypatch):
     assets_root = tmp_path / "storyteller_assets"
     data_dir = tmp_path / "data"
     transcriptions_dir = assets_root / "assets" / "Book Two" / "transcriptions"
@@ -205,6 +206,13 @@ def test_storyteller_ingest_removes_stale_canonical_files(tmp_path, monkeypatch)
         [{"start": 0.0, "end": 10.0}, {"start": 10.0, "end": 20.0}, {"start": 20.0, "end": 30.0}],
     )
     assert first_manifest is not None
+    target_dir = data_dir / "transcripts" / "storyteller" / "abs-ingest-2"
+    previous_chapter_files = [
+        target_dir / chapter["file"]
+        for chapter in json.loads(Path(first_manifest).read_text())["chapters"]
+    ]
+    assert len(previous_chapter_files) == 3
+    assert all(file.exists() for file in previous_chapter_files)
 
     (transcriptions_dir / "00003-00001.json").unlink()
     second_manifest = ingest_storyteller_transcripts(
@@ -215,9 +223,111 @@ def test_storyteller_ingest_removes_stale_canonical_files(tmp_path, monkeypatch)
     assert second_manifest is not None
 
     target_dir = data_dir / "transcripts" / "storyteller" / "abs-ingest-2"
-    assert (target_dir / "00000-00001.json").exists()
-    assert (target_dir / "00000-00002.json").exists()
+    published_files = [ch["file"] for ch in json.loads(Path(second_manifest).read_text())["chapters"]]
+    assert [Path(name).name for name in published_files] == ["00000-00001.json", "00000-00002.json"]
+    assert all((target_dir / name).exists() for name in published_files)
     assert not (target_dir / "00000-00003.json").exists()
+    # Readers holding the old manifest still have its immutable transcript set.
+    assert all(file.exists() for file in previous_chapter_files)
+    assert all(str(file.relative_to(target_dir)) not in published_files
+               for file in previous_chapter_files)
+
+
+def test_storyteller_ingest_parallel_publish_never_removes_inflight_copy(tmp_path, monkeypatch):
+    """9904: concurrent backfills cannot unlink a file before copy2/copystat finishes."""
+    assets_root = tmp_path / "assets_root"
+    source_dir = assets_root / "assets" / "Race Book" / "transcriptions"
+    source_dir.mkdir(parents=True)
+    for i in (1, 2):
+        _write_wordtimeline_file(source_dir, f"00001-{i:05d}.json", f"chapter {i}")
+    monkeypatch.setenv("STORYTELLER_ASSETS_DIR", str(assets_root))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    chapters = [{"start": 0.0, "end": 2.0}, {"start": 2.0, "end": 4.0}]
+    first_copy = threading.Event()
+    second_copy = threading.Event()
+    first_done = threading.Event()
+    real_copy2 = shutil.copy2
+    blocked = False
+
+    def controlled_copy2(src, dst, *args, **kwargs):
+        nonlocal blocked
+        if threading.current_thread().name.startswith("first") and not blocked:
+            blocked = True
+            result = real_copy2(src, dst, *args, **kwargs)
+            first_copy.set()
+            assert second_copy.wait(10), "second ingest did not reach its copy"
+            if not Path(dst).exists():
+                raise FileNotFoundError(2, "No such file after copy2", str(dst))
+            return result
+        if threading.current_thread().name.startswith("second"):
+            second_copy.set()
+            assert first_done.wait(10), "first ingest did not finish"
+        return real_copy2(src, dst, *args, **kwargs)
+
+    def first():
+        try:
+            return ingest_storyteller_transcripts("abs-race", "Race Book", chapters)
+        finally:
+            first_done.set()
+
+    def second():
+        return ingest_storyteller_transcripts("abs-race", "Race Book", chapters)
+
+    with patch("src.services.alignment_service.shutil.copy2", side_effect=controlled_copy2):
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="first") as executor:
+            first_future = executor.submit(first)
+            assert first_copy.wait(10)
+            # Give the second worker a distinct name to control the interleaving.
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="second") as other:
+                second_future = other.submit(second)
+                first_manifest = first_future.result(timeout=15)
+                second_manifest = second_future.result(timeout=15)
+
+    assert first_manifest == second_manifest
+    reader = StorytellerTranscript(first_manifest)
+    assert reader.chapter_count() == 2
+
+
+def test_storyteller_ingest_failed_republish_preserves_last_valid_manifest(tmp_path, monkeypatch):
+    """9904: a failed copy does not corrupt an earlier published transcript set."""
+    assets_root = tmp_path / "assets_root"
+    source_dir = assets_root / "assets" / "Rescue Book" / "transcriptions"
+    source_dir.mkdir(parents=True)
+    for i in (1, 2):
+        _write_wordtimeline_file(source_dir, f"00001-{i:05d}.json", f"old {i}")
+    monkeypatch.setenv("STORYTELLER_ASSETS_DIR", str(assets_root))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    two = [{"start": 0, "end": 1}, {"start": 1, "end": 2}]
+    manifest_path = Path(ingest_storyteller_transcripts("abs-rescue", "Rescue Book", two))
+    old_manifest = manifest_path.read_bytes()
+    old_chapters = [
+        (manifest_path.parent / ch["file"]).read_bytes()
+        for ch in json.loads(old_manifest)["chapters"]
+    ]
+
+    for i in (1, 2, 3):
+        _write_wordtimeline_file(source_dir, f"00001-{i:05d}.json", f"NEW {i}")
+    real_copy = shutil.copy2
+    count = 0
+
+    def fail_last_copy(src, dst, *args, **kwargs):
+        nonlocal count
+        count += 1
+        if count == 3:
+            raise OSError(112, "Host is down", str(src))
+        return real_copy(src, dst, *args, **kwargs)
+
+    with patch("src.services.alignment_service.shutil.copy2", side_effect=fail_last_copy):
+        import pytest
+        with pytest.raises(OSError, match="Host is down"):
+            ingest_storyteller_transcripts("abs-rescue", "Rescue Book", two)
+
+    assert manifest_path.read_bytes() == old_manifest
+    assert [
+        (manifest_path.parent / ch["file"]).read_bytes()
+        for ch in json.loads(old_manifest)["chapters"]
+    ] == old_chapters
+    assert StorytellerTranscript(manifest_path).chapter_count() == 2
 
 
 def test_storyteller_ingest_chapterless_mode_builds_manifest_from_transcripts(tmp_path, monkeypatch):
@@ -252,7 +362,7 @@ def test_storyteller_ingest_chapterless_mode_builds_manifest_from_transcripts(tm
     manifest_payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     assert manifest_payload["chapter_count"] == 2
     assert manifest_payload["duration"] == 8.0
-    assert [c["file"] for c in manifest_payload["chapters"]] == ["00000-00001.json", "00000-00002.json"]
+    assert [Path(c["file"]).name for c in manifest_payload["chapters"]] == ["00000-00001.json", "00000-00002.json"]
     assert manifest_payload["chapters"][0]["start"] == 0.0
     assert manifest_payload["chapters"][0]["end"] == 5.0
     assert manifest_payload["chapters"][1]["start"] == 5.0

@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -315,6 +316,68 @@ def test_update_audiobook_progress_uses_revisioned_playback_api(client):
     assert payload["manifestRevision"] == "b" * 64
     assert payload["capturedAt"].endswith("Z")
     assert len(payload["operationId"]) == 36
+
+
+def _two_asset_manifest(revision, duration_ms):
+    return {
+        "revision": revision,
+        "assets": [
+            {"assetId": "aud_1", "sequence": 0, "durationMs": duration_ms},
+            {"assetId": "aud_2", "sequence": 1, "durationMs": duration_ms},
+        ],
+    }
+
+
+def test_update_after_durations_measured_uses_new_manifest_revision(client, caplog):
+    """#602: a library scan measured the files, which bumped the manifest revision.
+    The cached manifest and the cached playback state both still carried the old
+    revision, so every write failed with
+    "BookOrbit audiobook update failed: book_id=12 status=412" until a restart."""
+    old = _two_asset_manifest("a" * 64, None)
+    new = _two_asset_manifest("c" * 64, 3_600_000)
+    client._audiobook_api = "playback"
+    client._audiobook_manifests[12] = old
+    client._audiobook_playback_states[12] = {
+        "assetId": "aud_1", "positionMs": 0, "revision": 3, "manifestRevision": old["revision"],
+    }
+    client.get_audiobook_info = MagicMock(return_value={"primary_playback_id": "aud_1"})
+    sent = []
+
+    def server(method, endpoint, payload=None):
+        if method == "GET" and endpoint == "/api/v1/audiobooks/12/manifest":
+            return _Resp(new)
+        sent.append(payload)
+        if payload["manifestRevision"] != new["revision"]:
+            return _Resp({"message": "Audiobook manifest has changed"}, status_code=412)
+        return _Resp({**payload, "revision": 4})
+
+    with patch.object(client, "_make_request", side_effect=server):
+        ok = client.update_audiobook_progress(12, position_seconds=10.0, percentage=0.1,
+                                              current_file_id="aud_2")
+
+    assert ok is True
+    assert sent[0]["manifestRevision"] == "c" * 64
+    assert "status=412" not in caplog.text
+
+
+def test_update_412_drops_cached_manifest_and_detail(client, caplog):
+    """A 412 means the track layout changed; the stale layout must not be reused
+    on the next cycle, so the cached manifest and book detail are dropped."""
+    manifest = _two_asset_manifest("b" * 64, 3_600_000)
+    client._audiobook_api = "playback"
+    client._audiobook_manifests[12] = manifest
+    client._detail_cache[12] = (time.time(), {"id": 12})
+    client._audiobook_playback_states[12] = {"revision": 3, "manifestRevision": manifest["revision"]}
+    client.get_audiobook_info = MagicMock(return_value={"primary_playback_id": "aud_1"})
+
+    with patch.object(client, "_make_request", return_value=_Resp({}, status_code=412)):
+        ok = client.update_audiobook_progress(12, position_seconds=10.0, percentage=0.1,
+                                              current_file_id="aud_1")
+
+    assert ok is False
+    assert "BookOrbit audiobook update failed: book_id=12 status=412" in caplog.text
+    assert 12 not in client._audiobook_manifests
+    assert 12 not in client._detail_cache
 
 
 def test_update_ebook_progress_uses_primary_file(client):

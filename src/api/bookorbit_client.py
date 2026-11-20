@@ -1622,7 +1622,13 @@ class BookOrbitClient:
         with self._cache_lock:
             cached = self._audiobook_manifests.get(book_id)
             state = self._audiobook_playback_states.get(book_id)
-        if cached and not force:
+        # The playback state keeps the revision of its last write, so it can't flag a
+        # newer manifest; one still missing durations is refetched until BookOrbit
+        # measures the files, since that measurement bumps the revision (#602).
+        complete = cached and all(
+            (asset.get("durationMs") or 0) > 0 for asset in cached.get("assets") or []
+        )
+        if cached and complete and not force:
             state_revision = state.get("manifestRevision") if isinstance(state, dict) else None
             if not state_revision or cached.get("revision") == state_revision:
                 return cached
@@ -1837,6 +1843,17 @@ class BookOrbitClient:
                 )
                 return True
             status = resp.status_code if resp is not None else "no response"
+            if status == 412:
+                # Track layout changed: drop it so the next cycle places the position
+                # on the new layout; resending this one could land in the wrong track.
+                with self._cache_lock:
+                    self._audiobook_manifests.pop(book_id, None)
+                    self._detail_cache.pop(book_id, None)
+                logger.error(
+                    "BookOrbit audiobook update failed: book_id=%s status=%s "
+                    "(manifest changed; refreshing it for the next sync)", book_id, status,
+                )
+                return False
             logger.error("BookOrbit audiobook update failed: book_id=%s status=%s", book_id, status)
             return False
 

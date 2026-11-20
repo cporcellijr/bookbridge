@@ -7,6 +7,7 @@ from src.api.bookorbit_client import BookOrbitClient
 from src.db.models import Book, State
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
 from src.utils.ebook_utils import EbookParser
+from src.utils.logging_utils import get_persistent_condition_logger
 from src.utils.progress_metadata import parse_service_timestamp
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,30 @@ class BookOrbitAudioSyncClient(SyncClient):
             cursor += duration
         return ranges
 
+    @staticmethod
+    def _track_layout_unknown(book: Book, book_id, info: Optional[dict]) -> bool:
+        """True (and warn) when a multi-file book lacks a duration for any track.
+
+        Without every duration the track boundaries are unknown, so a book
+        timestamp can't be placed in a track or rebuilt from one (#601).
+        """
+        ranges = BookOrbitAudioSyncClient._get_track_ranges(info)
+        key = f"bookorbit_audio_no_track_durations:{book_id}"
+        title = getattr(book, "abs_title", None) or book.abs_id
+        if len(ranges) > 1 and any(r["duration"] <= 0 for r in ranges):
+            get_persistent_condition_logger().warn(
+                logger, key,
+                "⚠️ BookOrbitAudio: skipping '%s' — BookOrbit has no duration for some of its "
+                "%d audio files, so positions can't be placed in a track (a BookOrbit library "
+                "scan with ffprobe available measures them)",
+                title, len(ranges),
+            )
+            return True
+        get_persistent_condition_logger().resolve(
+            logger, key, "✅ BookOrbitAudio: '%s' track durations are known again", title
+        )
+        return False
+
     def _resolve_absolute_timestamp(
         self, info: Optional[dict], current_file_id, position_seconds
     ) -> Optional[float]:
@@ -178,6 +203,8 @@ class BookOrbitAudioSyncClient(SyncClient):
         current_pct = progress.get("pct")
         # Detail is cached in the client, so this does not add a request per poll.
         info = self.client.get_audiobook_info(book_id) or {}
+        if self._track_layout_unknown(book, book_id, info):
+            return None
         duration = self._get_duration_seconds(book, info)
         current_ts = self._resolve_absolute_timestamp(
             info, progress.get("current_file_id"), progress.get("position_seconds")
@@ -223,6 +250,8 @@ class BookOrbitAudioSyncClient(SyncClient):
             return SyncResult(None, False)
 
         info = self.client.get_audiobook_info(book_id) or {}
+        if self._track_layout_unknown(book, book_id, info):
+            return SyncResult(None, False)
         target_ts = None
         if request.locator_result.percentage == 0.0:
             target_ts = 0.0

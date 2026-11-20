@@ -25,6 +25,7 @@ This page is for setting BookBridge up with environment variables in Docker Comp
 | `KOSYNC_PORT` | empty | Also serve the KOReader sync API alone on this port. See [Split-port security](#split-port-security-optional). |
 | `BOOKBRIDGE_SECRET_KEY` | empty | Encrypt stored credentials with this key instead of `DATA_DIR/secret.key`. `BOOKBRIDGE_SECRET_KEY_FILE` names a file holding it instead. See [Credential encryption](#credential-encryption). |
 | `ADMIN_API_TOKEN` | empty | Turns on the [admin API](#admin-api-optional). At least 32 characters. |
+| `BOOKBRIDGE_MODE` | empty | `worker` starts a [remote alignment worker](#remote-alignment-workers-optional) instead of BookBridge. The worker's other variables are listed there. |
 | `WEB_SECRET_KEY` | empty | Signs sign-in sessions. Empty generates a random key once and keeps it in the database. |
 | `SESSION_COOKIE_SECURE` | `false` | `true` sends the sign-in cookie over HTTPS only. Set it when every visit goes through HTTPS. |
 | `DB_JOURNAL_MODE` | empty | Forces the SQLite journal mode. Empty uses WAL, or DELETE on network and Docker Desktop mounts where WAL loses writes; leave it empty. |
@@ -639,7 +640,7 @@ Connection:
 | Enable | `OLLAMA_ENABLED` | `false` | Master switch for all Ollama features. |
 | Server URL | `OLLAMA_URL` | `http://ollama:11434` | Your Ollama server. Use container DNS (`http://ollama:11434`) or `http://localhost:11434`. |
 | Embedding Model | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Used for similarity. Pull it first: `ollama pull nomic-embed-text`. |
-| Chat / Judge Model | `OLLAMA_CHAT_MODEL` | `qwen2.5:14b` | Used to judge ambiguous matches. |
+| Chat / Judge Model | `OLLAMA_CHAT_MODEL` | `qwen2.5:14b` | Used to judge ambiguous matches. Thinking models such as qwen3 work too: BookBridge turns thinking off for these calls. |
 | Keep the model loaded for | `OLLAMA_KEEP_ALIVE` | `5m` | How long models stay loaded after a request (`5m`, `1h`, `-1` = forever, `0` = unload now). |
 | Chat Context Length | `OLLAMA_NUM_CTX` | empty | Context window for judge calls. Empty = server default. |
 
@@ -760,7 +761,7 @@ cooldown.
 
 ### Sync Tuning
 
-Found under **Settings → Reading & Sync**. Each app that cannot notify BookBridge has one row in **How often each app is checked**; Alignment Health is under **Settings → Alignment**.
+Found under **Settings → Reading & Sync**, except the two job-retry rows, which are under **Settings → Server → Background jobs**. Each app that cannot notify BookBridge has one row in **How often each app is checked**; Alignment Health is under **Settings → Alignment**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -1197,6 +1198,8 @@ settings read only at startup, which restart the app when saved in Settings.
 | [`JOB_MAX_RETRIES`](#sync-tuning) | `5` | server |  |
 | [`JOB_RETRY_DELAY_MINS`](#sync-tuning) | `15` | server |  |
 | [`WHISPER_MODEL`](#transcription-settings) | `tiny` | server |  |
+| [`ALIGNMENT_WORKER_TOKEN`](#on-the-main-instance) | empty | server |  |
+| [`ALIGNMENT_LOCAL_WORKER`](#on-the-main-instance) | `true` | server |  |
 | [`WHISPER_DEVICE`](#transcription-settings) | `auto` | server |  |
 | [`WHISPER_COMPUTE_TYPE`](#transcription-settings) | `auto` | server |  |
 | [`WHISPER_VAD_FILTER`](#transcription-settings) | `false` | server |  |
@@ -1237,6 +1240,88 @@ settings read only at startup, which restart the app when saved in Settings.
 | `DIAGNOSTICS_INGEST_TOKEN` | empty | server |  |
 
 <!-- settings-index:end -->
+
+## Remote Alignment Workers (Optional)
+
+Aligning an audiobook to its ebook is CPU-heavy, and BookBridge aligns one book at a
+time. A NAS with a `cpus:` limit can take days over a large backlog while a desktop on
+the same network sits idle. A **worker** is the same image started in worker mode on
+another machine. It takes books from this instance's alignment queue, aligns them
+with its own CPUs, and sends each map back. This instance stores the map through the
+same regression check as a local alignment, so a worse map never replaces a better one.
+
+The worker gets only what alignment needs: the EPUB and audio files of the book it
+took, served by this instance. It never sees the database, reading positions,
+readers, or any stored credentials, and it starts no web server, KoSync server or sync.
+
+### On the main instance
+
+Open **Settings → Server**. Under **Background jobs**, set **Alignment worker token** to a
+random string of at least 32 characters. It applies on save. Leave it empty and the worker
+API does not exist. It is a separate token from the admin API's and opens nothing else.
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Alignment worker token | `ALIGNMENT_WORKER_TOKEN` | empty | Turns on the worker API (`/api/v1/worker/*`, primary port only). At least 32 characters. Stored encrypted. |
+| Also align here while workers are on | `ALIGNMENT_LOCAL_WORKER` | `true` | Off leaves the books workers can take to the workers, so this machine's CPU stays free. Books workers are never given (see below) are still aligned here. No effect without a token. |
+
+Like every setting, both can be seeded from the compose file on first boot; after that the
+Settings page wins.
+
+### On the worker machine
+
+Run the same image in worker mode. The worker needs no settings page and no database of its own.
+
+```yaml
+services:
+  bookbridge-worker:
+    image: ghcr.io/cporcellijr/bookbridge:latest
+    restart: unless-stopped
+    environment:
+      - BOOKBRIDGE_MODE=worker
+      - WORKER_MAIN_URL=http://your-server:8080   # the dashboard port, not KOSYNC_PORT
+      - WORKER_TOKEN=a-long-random-string-only-your-workers-know
+      - WORKER_NAME=desktop                       # shown on the Job Queue page
+      # - ALIGN_THREADS=14                        # default: the CPUs the container may use, at most 8
+    volumes:
+      - ./worker-data:/data                       # model cache and scratch space
+```
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `BOOKBRIDGE_MODE` | empty | `worker` starts the worker instead of BookBridge. |
+| `WORKER_MAIN_URL` | required | The main instance's dashboard address. |
+| `WORKER_TOKEN` | required | The main instance's **Alignment worker token**. |
+| `WORKER_NAME` | hostname | Letters, digits, `.`, `_`, `-`. The Job Queue shows "Aligning on worker *name*". |
+| `WORKER_LEASE_SECONDS` | `300` | How long the main instance waits for a silent worker (60–3600). The worker reports every third of it. |
+| `WORKER_POLL_SECONDS` | `30` | How often an idle worker asks for a book. |
+
+### How books move
+
+- **One queue.** Workers and this instance take books in Job Queue order, so moving a
+  book up the queue applies to workers too. Two claimants never get the same book.
+- **Leases.** A worker that stops reporting (crashed, switched off) loses the book
+  after `WORKER_LEASE_SECONDS`. It goes back to its place in the queue, and that counts
+  as an attempt, so a book that keeps killing workers ends as failed after
+  `JOB_MAX_RETRIES` instead of cycling forever. Restarting this instance does not
+  interrupt a worker's book.
+- **Cancelling.** Deleting or re-matching a book while a worker has it tells the worker
+  to stop at its next report.
+- **Settings.** How a book is aligned follows this instance: forced alignment on or
+  off, read-along timings, segmented maps and the content-match check are sent with
+  each book. The engine is the worker's own: `CTC_MODEL`, `CTC_DEVICE`, `ALIGN_THREADS`,
+  and the Whisper or transcription provider settings in its environment.
+  The Ollama switches (on or off, and its alignment checks) are sent too, but which LLM
+  answers is also the worker's: give it its own `OLLAMA_URL` and models, or it skips
+  those checks when it cannot reach one.
+- **Models.** A worker downloads the QuartzNet model (77 MB) and, for books that fall
+  back to transcription, its `WHISPER_MODEL` (default `base`) into `/data/models` on
+  first use, so give it internet access or copy them into that volume beforehand (then
+  set `HF_HUB_OFFLINE=1`). A worker that cannot load a model fails that book, and it
+  is retried like any other failure.
+- **Local only.** Workers are offered books that need full alignment. Audio-only and
+  ebook-only books, books aligned from Storyteller transcripts, and ebook input
+  recovery stay on this instance.
 
 ## GPU Support (Optional)
 

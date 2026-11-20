@@ -1,5 +1,6 @@
 """Tests for the BookOrbit ebook + audio sync clients."""
 
+import logging
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,7 @@ from src.api.bookorbit_client import BookOrbitClient
 from src.sync_clients.bookorbit_sync_client import BookOrbitSyncClient
 from src.sync_clients.bookorbit_audio_sync_client import BookOrbitAudioSyncClient
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
+from src.utils.logging_utils import get_persistent_condition_logger
 
 
 def _book(**kw):
@@ -269,3 +271,66 @@ def test_audio_write_past_end_clamps_to_last_track():
     assert kwargs["current_file_id"] == 9382
     # clamped to the final track's duration
     assert kwargs["position_seconds"] <= 4484.0
+
+
+# #601: a 48-hour, 6-part MP3 book whose files BookOrbit never measured. The
+# manifest's durationMs is null for every asset, so every track reads as 0s long.
+_UNMEASURED_INFO = {
+    "primary_file_id": 501,
+    "duration_seconds": 48 * 3600.0,
+    "tracks": [{"id": 500 + i, "duration_seconds": 0.0} for i in range(1, 7)],
+    "playback_tracks": [{"id": f"aud_{i}", "duration_seconds": 0.0} for i in range(1, 7)],
+}
+
+
+def test_audio_write_skips_book_with_unmeasured_tracks(caplog):
+    """The ebook was at 13.1% and BookBridge resolved 22128.82s, but the write went
+    into Part 6 at 6:08:48 (the epilogue). Skip it instead."""
+    # The warning is first-occurrence-only; another test may already have raised this key.
+    get_persistent_condition_logger().reset()
+    caplog.set_level(logging.WARNING, logger="src.sync_clients.bookorbit_audio_sync_client")
+    client = MagicMock()
+    client.get_audiobook_info.return_value = dict(_UNMEASURED_INFO)
+    sc = BookOrbitAudioSyncClient(client, ebook_parser=None)
+    book = _multi_track_book()
+    book.abs_title = "Six Part Book"
+    req = UpdateProgressRequest(locator_result=LocatorResult(percentage=0.131),
+                                target_audio_ts=22128.82)
+
+    res = sc.update_progress(book, req)
+
+    assert res.success is False
+    client.update_audiobook_progress.assert_not_called()
+    assert "BookOrbitAudio: skipping 'Six Part Book'" in caplog.text
+
+
+def test_audio_read_skips_book_with_unmeasured_tracks():
+    """Listening in Part 2+ mapped back as 0 + position; report no state instead."""
+    client = MagicMock()
+    client.get_audiobook_info.return_value = dict(_UNMEASURED_INFO)
+    client.get_audiobook_progress.return_value = {
+        "pct": 0.3, "position_seconds": 1200.0, "current_file_id": "aud_3",
+    }
+    sc = BookOrbitAudioSyncClient(client, ebook_parser=None)
+
+    assert sc.get_service_state(_multi_track_book(), prev_state=None) is None
+
+
+def test_audio_single_unmeasured_file_still_syncs():
+    """One file has no track boundaries to place, so a missing duration is harmless."""
+    client = MagicMock()
+    client.get_audiobook_info.return_value = {
+        "primary_file_id": 11, "duration_seconds": 14400,
+        "tracks": [{"id": 11, "duration_seconds": 0.0}],
+    }
+    client.update_audiobook_progress.return_value = True
+    sc = BookOrbitAudioSyncClient(client, ebook_parser=None)
+    req = UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5),
+                                target_audio_ts=7200.0)
+
+    res = sc.update_progress(_multi_track_book(), req)
+
+    assert res.success is True
+    _, kwargs = client.update_audiobook_progress.call_args
+    assert kwargs["current_file_id"] == 11
+    assert kwargs["position_seconds"] == pytest.approx(7200.0)

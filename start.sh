@@ -12,6 +12,25 @@ cleanup() {
 # Set up signal handlers for graceful shutdown
 trap cleanup SIGTERM SIGINT
 
+if [ "${BOOKBRIDGE_MODE:-}" = "worker" ]; then
+    # Remote alignment worker: takes books from a main instance's alignment queue
+    # (WORKER_MAIN_URL, WORKER_TOKEN). No web server, KoSync, sync cycle or sync
+    # clients, and no migrations: it never opens the main instance's database.
+    echo "🛠️ Starting BookBridge alignment worker..."
+    while true; do
+        python /app/src/alignment_worker.py &
+        WEB_PID=$!
+        wait $WEB_PID
+        EXIT_CODE=$?
+        if [ "$EXIT_CODE" -eq 2 ]; then
+            echo "❌ Alignment worker is not configured (exit 2); not restarting."
+            exit 2
+        fi
+        echo "⚠️  Alignment worker exited with code $EXIT_CODE. Restarting in 10 seconds..."
+        sleep 10
+    done
+fi
+
 echo "🚀 Starting ABS-KoSync Enhanced (Integrated Mode)..."
 echo ""
 

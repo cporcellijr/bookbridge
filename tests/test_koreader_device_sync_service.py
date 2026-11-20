@@ -705,6 +705,28 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertFalse(self.db.ensure_linked_kosync_document('existing-hash', 'deleted'))
         self.assertEqual(self.db.get_kosync_document('existing-hash').linked_abs_id, 'remaining')
 
+    def test_reconcile_reports_primary_hash_owner_without_document_row(self):
+        """9846: a missing document row can still have a primary Book owner."""
+        self._write_book_file("shared.epub")
+        self.db.save_book(Book(
+            abs_id="primary-owner", abs_title="Primary owner",
+            kosync_doc_id="hash-shared", status="active",
+        ))
+        self.db.save_book(Book(
+            abs_id="requester", abs_title="Second copy",
+            original_ebook_filename="shared.epub", status="active",
+        ))
+        self.assertIsNone(self.db.get_kosync_document("hash-shared"))
+
+        with self.assertLogs("src.services.koreader_device_sync_service", level="WARNING") as logs:
+            summary = self.service.reconcile_hashes()
+
+        self.assertEqual(summary["conflicts"], 1)
+        self.assertIn("owned by 'primary-owner'", "\n".join(logs.output))
+        self.assertIsNone(self.db.get_kosync_document("hash-shared"))
+        self.assertEqual(self.db.get_book("primary-owner").kosync_doc_id, "hash-shared")
+        self.assertIsNone(self.db.get_book("requester").kosync_doc_id)
+
     def test_content_hash_not_recomputed_when_ebook_unchanged(self):
         """Regression for #342: the 60s prebuilder loop must not re-hash
         unchanged ebook files. The mtime/size cache should serve the second

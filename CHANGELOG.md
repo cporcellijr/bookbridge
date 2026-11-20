@@ -25,6 +25,66 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **The AI alignment checks work with thinking models such as qwen3.** These models spent
+  the whole answer budget thinking and returned nothing, so every check quietly fell back
+  as if Ollama were down. Contributed by [@eschatus](https://github.com/eschatus) in #605.
+
+- **Unread endnotes no longer send an in-order book to the slow Whisper path.** CTC's
+  chapter search could "find" a back-matter chapter the narrator never reads, squeezed into a
+  short gap between two narrated chapters with nothing tying its text to the audio. That
+  looked like chapters narrated out of order, so the book was transcribed with Whisper on top
+  of the CTC pass it already had. Such a match now counts as not found, like the other
+  unnarrated chapters.
+
+- **BridgeSync reading stats sync uses KOReader's real statistics database.** A stray
+  `statistics.sqlite` file next to KOReader's `statistics.sqlite3` no longer makes Sync
+  Reading Stats fail with `no such table: book`. Update the BridgeSync plugin to 0.9.12
+  to get this. Contributed by [@jeffhammett](https://github.com/jeffhammett) in #603.
+
+- **Suggestions tolerates disappearing local files and unavailable ebook mounts.** A
+  filesystem race no longer discards other searchable books, and a disconnected
+  `/books` mount marks the local catalog incomplete without stopping healthy remote
+  provider discovery.
+
+- **PDFs are no longer passed into EPUB parsing during sync.** Unsupported files are
+  rejected before ebooklib, while EPUB handling and the existing CBZ path remain intact.
+
+- **KoSync hash reconciliation identifies the actual conflicting book.** When a hash
+  belongs to another book's primary identity but has no document row, diagnostics now
+  identify that owner without weakening the atomic adoption guard.
+
+- **Regenerating a BookOrbit read-along works when the old copy is still attached.**
+  BookOrbit refuses an upload whose filename is taken, so regeneration used to stop there.
+  BookBridge now uploads the new edition beside the old one under a content-based name,
+  and never deletes the old copy or its reading history. It reports the new edition as
+  active only when BookOrbit's read-along sync actually uses that file; if BookOrbit
+  keeps using the old copy, the job warns that you need to make the new file the book's
+  primary file in BookOrbit.
+
+- **Concurrent read-along work holds database connections for less time.** Large
+  alignment-map serialization and decoding now happen outside database sessions,
+  avoiding a proven path to QueuePool exhaustion during overlapping reads and
+  dashboard requests. Pool sizes and SQLite journal settings are unchanged.
+
+- **Read-along final clips no longer produce a false short-overlay warning.**
+  A clip already reaching beyond the probed audio duration needs no extension; missing
+  duration probes still warn, and segment-scoped clips remain unchanged.
+
+- **Parallel Storyteller transcript ingests publish consistent snapshots.**
+  Each backfill stages immutable chapter files and atomically publishes their manifest,
+  so one worker cannot remove another worker's in-flight copy; older valid manifests
+  and their chapter files remain usable if publication fails.
+
+- **BookOrbit audiobooks with unmeasured files no longer jump to the last file.** When
+  BookOrbit has no duration for some files of a multi-file audiobook, BookBridge can't tell
+  where each file starts, so it now skips that audiobook with a warning instead of writing
+  the position into the final file. It syncs again once a BookOrbit library scan measures
+  the files. (#601)
+
+- **BookOrbit audio writes recover after a library scan changes the audiobook.** Every write
+  failed with `status=412` until a restart once BookOrbit measured or changed the files.
+  BookBridge now picks up the new layout on the next sync. (#602)
+
 - **KOReader statistics reach BookOrbit with their original device identity.** Raw page
   events use BookOrbit's native endpoint, so direct plugin uploads and BridgeSync uploads
   can share the same event identity. Retries reuse durable receipts; account changes hold
@@ -160,6 +220,15 @@ All notable changes to BookBridge will be documented in this file.
   disabled until running-job ownership and retention guarantees are complete.
 
 ### Added
+
+- **Other machines can work through the alignment queue.** Run the same image with
+  `BOOKBRIDGE_MODE=worker`, point it at this instance and give it the token from
+  Settings → Background jobs → Alignment worker token. Workers take books in Job Queue
+  order, and the Job Queue shows "Aligning on worker <name>". This instance still checks
+  and stores every map, and a worker never sees reading positions or credentials. If a
+  worker stops, its book goes back in the queue. Turn off "Also align here while workers
+  are on" to leave the alignment work to the workers. See docs/configuration.md.
+  Contributed by [@eschatus](https://github.com/eschatus) in #606, #607 and #608.
 
 - **Pick which ebook edition pairs with an audiobook when a BookOrbit or Grimmory book holds more than one.** Selecting such a book in Discover (Classic and New) opens an edition chooser with filenames, sizes, the primary-file marker and confirmed read-along labels; a book with a single ebook is selected directly. The chosen file is remembered for hashing, matching, Forge, library downloads, KOReader delivery and BookOrbit progress in both directions; if it is later removed or replaced, that book stops syncing its ebook rather than silently switching to another file. Grimmory reports one progress value for the whole book, so its native progress is skipped for alternate editions while ABS and KOReader keep syncing. BookOrbit's other editions stay under its card instead of reappearing as separate local files. Existing mappings are unchanged. Needs a migration and restart. See `docs/provider-ebook-file-selection.md`.
   Contributed by [@monkeCode](https://github.com/monkeCode) in #596.

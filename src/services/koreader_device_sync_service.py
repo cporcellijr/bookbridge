@@ -447,6 +447,10 @@ class KOReaderDeviceSyncService:
                 if not existing or existing.linked_abs_id != abs_id:
                     summary["conflicts"] += 1
                     other_owner = existing.linked_abs_id if existing else None
+                    if not other_owner:
+                        primary_owner = self.database_service.get_book_by_kosync_id(bound_hash)
+                        if primary_owner and primary_owner.abs_id != abs_id:
+                            other_owner = primary_owner.abs_id
                     get_persistent_condition_logger().warn(
                         logger,
                         f"hash_reconcile_conflict:{abs_id}:{bound_hash}",
