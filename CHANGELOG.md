@@ -32,6 +32,12 @@ All notable changes to BookBridge will be documented in this file.
   book back to Reading and the Kobo kept showing it in progress. With *Propagate
   Completion* on, the 100% write was also undone a few minutes later. An app that is
   already finished is now left alone while the leading app is finished too. (#609, #610)
+  This covers BookOrbit audiobooks too, which BookOrbit used to flip back to re-reading.
+
+- **A reader left open at an old page no longer pulls a finished book back.** If a Kobo
+  or other KOReader device sent its old position after you finished the book elsewhere,
+  and BookBridge could only place that position by percentage, it was trusted for being
+  recent and rewound your other apps. It now needs you to actually keep reading from there.
 
 - **The AI alignment checks work with thinking models such as qwen3.** These models spent
   the whole answer budget thinking and returned nothing, so every check quietly fell back
