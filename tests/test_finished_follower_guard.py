@@ -174,5 +174,65 @@ class TestPropagatedCompletionNotOverwritten(_FinishedBookCase):
         self.assertAlmostEqual(float(saved[-1].percentage), 1.0, places=4)
 
 
+class TestFinishedAudioFollower(unittest.TestCase):
+    """A finished BookOrbit audiobook is not written back to the ebook's mapped end.
+
+    From the owner's log: KoSync re-sent 100% on a finished book, and every cycle
+    wrote `BookOrbit audio: book_id=6497 → 30749.07s (98.0%)` over the finished
+    30782s, so BookOrbit showed the audiobook as re-reading. BookOrbitAudio has
+    no backward-write guard of its own.
+    """
+
+    def _run(self, audio_current):
+        from types import SimpleNamespace
+        from tests.test_leader_normalized_ts_write import _StubClient, _base_manager, _state, _wire_database
+
+        manager = _base_manager()
+        audio = _StubClient({"audiobook"})
+        kosync = _StubClient({"audiobook", "ebook"})
+        manager.sync_clients = {"BookOrbitAudio": audio, "KoSync": kosync}
+        manager._get_primary_audio_client_name = Mock(return_value="BookOrbitAudio")
+        manager._determine_leader = Mock(return_value=("KoSync", 1.0))
+        manager._resolve_alignment_locator_from_abs_timestamp = Mock(
+            return_value=(LocatorResult(percentage=0.9801921756687262, match_index=386924), "anchor"),
+        )
+        manager._completion_propagation_enabled = Mock(return_value=False)
+        manager._mark_koreader_complete = Mock()
+        manager._mark_koreader_reading = Mock()
+        book = SimpleNamespace(
+            abs_id="bookorbit:6497", abs_title="Finished audio", status="active", duration=30782.0,
+            transcript_file="DB_MANAGED", ebook_filename="book.epub", original_ebook_filename="book.epub",
+            audio_source="BookOrbit", sync_mode="audiobook",
+        )
+        _wire_database(manager, book)
+        manager._fetch_states_parallel = Mock(return_value={
+            "BookOrbitAudio": _state(audio_current, previous_pct=audio_current["pct"], threshold=60.0),
+            "KoSync": _state(
+                {"pct": 1.0, "xpath": "/body/DocFragment[34]/body/section/p[77].0",
+                 "_normalized_ts": 30749.07, "_normalization_source": "xpath"},
+                # The bridge had written 98.02% to KoSync; the device re-sent 100%.
+                previous_pct=0.9802, delta=0.0198, threshold=0.005,
+            ),
+        })
+        with self.assertLogs('src.sync_manager', level='INFO') as logs:
+            manager._sync_cycle_internal(target_abs_id=book.abs_id)
+        return audio, logs.output
+
+    def test_finished_audiobook_is_not_written_back_to_the_mapped_end(self):
+        audio, logs = self._run({"pct": 1.0, "ts": 30782.0})
+
+        audio.update_progress.assert_not_called()
+        self.assertTrue(any(
+            "Keeping 'BookOrbitAudio' finished at 100.00%: leader 'KoSync' is finished too" in line
+            for line in logs
+        ), logs)
+
+    def test_audiobook_short_of_the_target_still_takes_the_forward_write(self):
+        audio, _ = self._run({"pct": 0.993, "ts": 30566.0})
+
+        audio.update_progress.assert_called_once()
+        self.assertAlmostEqual(audio.update_progress.call_args[0][1].target_audio_ts, 30749.07)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

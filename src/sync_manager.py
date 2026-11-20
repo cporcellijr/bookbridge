@@ -4380,18 +4380,25 @@ class SyncManager:
         threshold: float,
         abs_id: str,
         title_snip: str,
+        is_primary_audio: bool = False,
+        target_audio_ts: float | None = None,
     ) -> bool:
         """True when a finished follower must not take a finished leader's mapped position.
 
         An ebook's end and its audiobook's end rarely map onto each other: back
         matter is never narrated and credits have no text. Mapping one finished
         position onto the other lands a few percent short and un-finishes the
-        book on the follower (#609, #610).
+        book on the follower (#609, #610); BookOrbit then shows it as re-reading.
+        The primary audio client still takes a write known to move it forward,
+        which is how it gets finished.
         """
         follower_pct = client_state.current.get('pct')
         if leader_pct is None or follower_pct is None:
             return False
         if leader_pct < threshold or follower_pct < threshold:
+            return False
+        follower_ts = client_state.current.get('ts')
+        if is_primary_audio and target_audio_ts is not None and follower_ts is not None and target_audio_ts >= follower_ts:
             return False
         logger.info(
             f"🏁 '{abs_id}' '{title_snip}' Keeping '{client_name}' finished at {follower_pct:.2%}: "
@@ -6384,8 +6391,10 @@ class SyncManager:
                             # the 100% snapshot (#609). ABS keeps the position write:
                             # mark_finished does not move its playhead.
                             continue
-                        if client_state and client_name != primary_audio_client and self._keeps_finished_follower(
-                            leader, leader_pct, client_name, client_state, threshold, abs_id, title_snip
+                        if client_state and self._keeps_finished_follower(
+                            leader, leader_pct, client_name, client_state, threshold, abs_id, title_snip,
+                            is_primary_audio=client_name == primary_audio_client,
+                            target_audio_ts=leader_normalized_ts,
                         ):
                             # Record what it reports so the unchanged finish is not
                             # re-detected as a fresh change every cycle.
