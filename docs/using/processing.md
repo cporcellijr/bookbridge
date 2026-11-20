@@ -12,7 +12,7 @@ Processing shows the work BookBridge is doing on your books: lining up a new aud
 
 <div class="bb-callouts" markdown>
 1. **Book requests:** books you asked for with [Get a missing book](get-books.md), from request to download, import and pairing.
-2. **Processing now:** the book being worked on, with its stage and progress.
+2. **Processing now:** the book being worked on, with its stage and progress. A book a [remote worker](../configuration.md#remote-alignment-workers-optional) has taken shows *Aligning on worker* and the worker's name.
 3. **Waiting:** books in line, with their place (for example *#1 of 2*). The arrows move a book up, down or to the top. You can move only your own books, and not one that has already started. The order is kept across restarts.
 4. **Finished (7 days):** work that finished in the last week.
 </div>

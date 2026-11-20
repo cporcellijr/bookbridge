@@ -50,7 +50,7 @@ the corrected alignment accounts for timestamp gaps between audio chapters.
 
 ### KOReader sends progress under the wrong book
 
-Install **BridgeSync 0.9.11** (the current release) on each device. Close affected managed books, then run
+Install **BridgeSync 0.9.12** (the current release) on each device. Close affected managed books, then run
 **Bridge Sync → Sync Reading Stats** to repair their saved book identities.
 Positions and highlights are retained; do not delete the books' metadata to repair
 the checksum. The plugin also uses KOReader's metadata handling when managed books
@@ -101,6 +101,10 @@ are renamed, replaced or removed.
 - For Grimmory, run **Refresh Grimmory Cache** after moving, rescanning, or replacing items.
 - For BookOrbit, confirm the item is still visible in BookOrbit and retry the matching or sync flow.
 - If the old source item was deleted and recreated with a new ID, rematch that book.
+- If the log says `BookOrbitAudio: skipping '…' — BookOrbit has no duration for some of its audio files`,
+  BookOrbit has not measured that multi-file audiobook yet, so BookBridge cannot tell where each file
+  starts and leaves its position alone rather than writing it into the wrong file. Run a library
+  scan in BookOrbit (it needs ffprobe to measure files); the book syncs again on the next cycle.
 
 ### BookOrbit books are not matching or syncing
 
@@ -168,6 +172,12 @@ New progress posts after the usual cooldown once the book is matched.
 - For BookFusion, enable **BookFusion → Highlight Sync** in that reader's Integrations and confirm the book is linked to BookFusion.
 - For Readest, enable **Readest → Highlight Sync** and enter that reader's Readest email/password.
 - For Hardcover, enable **Hardcover → Highlight Sync** and enter that reader's Hardcover API token.
+
+### Sync Reading Stats fails with "no such table: book"
+
+A stray `statistics.sqlite` file sat next to KOReader's real `statistics.sqlite3` and older
+plugins read the wrong one. Install **BridgeSync 0.9.12** or later on the device; it reads
+`statistics.sqlite3` first.
 
 ### Bridge Sync uses too much memory or a device download fails
 
@@ -305,6 +315,7 @@ ports:
 - Use a smaller local Whisper model such as `tiny`.
 - If you have an NVIDIA GPU, enable GPU support as described in the [Configuration Guide](configuration.md#gpu-support-optional).
 - If Storyteller transcript assets are available, configure them so the bridge can skip Whisper entirely for those books.
+- Let a faster machine on your network do the aligning: see [Remote alignment workers](configuration.md#remote-alignment-workers-optional).
 
 ---
 

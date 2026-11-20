@@ -69,7 +69,7 @@ Running BookBridge itself.
 - **Telegram Notifications:** errors sent to a Telegram chat.
 - **Reverse Proxy Auto-Login:** lets a sign-in page in front of BookBridge, such as Authelia or Authentik, sign people in.
 - **System Paths:** data and library folders, extra ebook libraries and Storyteller folders.
-- **Background jobs, Diagnostics:** how often a failed job, such as aligning a book, is retried; optional anonymous diagnostics and the **Send bug report** form.
+- **Background jobs, Diagnostics:** how often a failed job, such as aligning a book, is retried, and the token that lets [other machines align books](configuration.md#remote-alignment-workers-optional) for this one; optional anonymous diagnostics and the **Send bug report** form.
 
 ## Maintenance
 

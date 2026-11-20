@@ -47,7 +47,7 @@ See [Supported apps](supported-apps.md) for what BookBridge syncs with each app:
 - **Book upload to Readest** (optional, per reader) that copies matched books, or just the
   ones you are currently reading, into your Readest cloud library and files them into a group.
 - **Rich locators** using timestamps, href/fragment data, XPath, and EPUB CFI where available.
-- **Built-in audio ↔ text alignment**: forced alignment matches each audiobook directly against its ebook and finds every chapter in the audio itself, running on the CPU in every image with no extra services required. Whisper transcription and EPUB SMIL timing data are the automatic fallback for books it can't follow. Content-match protection catches wrong pairings, Alignment Health scores and restores maps, and Storyteller transcript assets remain a premium source when available.
+- **Built-in audio ↔ text alignment**: forced alignment matches each audiobook directly against its ebook and finds every chapter in the audio itself, running on the CPU in every image with no extra services required. Whisper transcription and EPUB SMIL timing data are the automatic fallback for books it can't follow. Other machines on your network can take books from the queue as [remote alignment workers](configuration.md#remote-alignment-workers-optional). Content-match protection catches wrong pairings, Alignment Health scores and restores maps, and Storyteller transcript assets remain a premium source when available.
 - **Resumable jobs** for background processing and transcript work.
 
 ### Management Web UI

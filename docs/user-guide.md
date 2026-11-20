@@ -263,6 +263,12 @@ reverse proxy or tunnel in front of it. A refused oversized upload names the fil
 log; a shared local mount lets BookBridge deliver directly instead. Audio loose in a library's
 root folder is refused either way: move it into its own book folder first.
 
+Regenerating through an upload adds the new EPUB beside the old one, under a new name, because
+BookOrbit refuses an upload whose filename is taken. BookBridge never deletes the old copy or
+its reading history. If BookOrbit's read-along sync keeps using the old copy, the log says
+`make the new file the entry's primary file in BookOrbit`: do that in BookOrbit and the new
+edition takes over.
+
 ### Coexistence with BookOrbit's own read-along sync
 
 BookOrbit 3.0 and later can keep a read-along book's audio and text positions in step by
