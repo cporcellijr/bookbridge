@@ -796,6 +796,18 @@ class AudioTranscriber:
             if not resuming:
                 # Skip the download only when every part is cached.
                 existing_files = self._cached_chunks(book_cache_dir, len(audio_urls))
+                if existing_files and not self._audio_covers_runtime(
+                        sum(self.get_audio_duration(f) for f in existing_files), expected_duration):
+                    # Trusting short chunks would fail the coverage check on every retry.
+                    logger.warning(
+                        f"⚠️ Cached audio for '{abs_id}' is shorter than the runtime the library "
+                        f"reports; discarding it and downloading again"
+                    )
+                    if not self._prune_audio_cache(book_cache_dir, remove_directories=True,
+                                                   cache_root=self.cache_root, own_token=cancellation_token):
+                        raise RuntimeError(
+                            f"Audio cache for {abs_id} could not be reset safely (in use or protected); failing this run")
+                    existing_files = None
 
                 if existing_files:
                     logger.info(f"♻️ Found valid cache ({len(existing_files)} files covering all {len(audio_urls)} parts). Skipping download.")
@@ -949,13 +961,14 @@ class AudioTranscriber:
                 # re-checks the same short audio forever instead of re-downloading.
                 # `_progress.json` stays: chunks are transcribed only after this check
                 # passes, so a resume misreading the cache costs a download, not hours.
-                if not raw_audio:
-                    self._prune_audio_cache(book_cache_dir, remove_directories=True, cache_root=self.cache_root,
-                                                own_token=cancellation_token)
+                cleared = not raw_audio and self._prune_audio_cache(
+                    book_cache_dir, remove_directories=True, cache_root=self.cache_root,
+                    own_token=cancellation_token)
+                outcome = ("Cleared the audio cache; the job will retry with a fresh download." if cleared
+                           else "The audio cache could not be cleared (in use, protected or raw audio).")
                 logger.error(
                     f"❌ '{abs_id}' {coverage_err} — the audio BookBridge fetched is shorter "
-                    f"than the runtime the library reports. Cleared the audio cache; the job "
-                    f"will retry with a fresh download.",
+                    f"than the runtime the library reports. {outcome}",
                     exc_info=True,
                 )
                 raise

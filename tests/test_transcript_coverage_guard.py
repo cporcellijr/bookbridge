@@ -243,37 +243,55 @@ class TestProcessAudioGuards(TranscriptCoverageTestCase):
         result = self.transcriber.process_audio(abs_id, [])
         self.assertEqual(len(result), 1)
 
-    def test_short_audio_rejected_before_any_transcription(self):
-        """Fail fast: a truncated download must not cost hours of Whisper."""
-        abs_id = "short-audio-book"
+    def _short_cached_chunk(self, abs_id):
         cache_dir = self.tmp / "audio_cache" / abs_id
         cache_dir.mkdir(parents=True, exist_ok=True)
         chunk = cache_dir / "part_000_split_001.wav"
         chunk.write_bytes(b"RIFF")
-
         self.transcriber.get_audio_duration = MagicMock(return_value=REPORTED_TRANSCRIPT_EXTENT)
+        return cache_dir, chunk
 
-        with patch("src.utils.transcriber.get_transcription_provider") as provider_factory:
-            provider = MagicMock()
-            provider.supports_raw_audio = False
-            provider.get_name.return_value = "test"
+    def _provider(self):
+        provider = MagicMock()
+        provider.supports_raw_audio = False
+        provider.get_name.return_value = "test"
+        return provider
+
+    def test_short_cached_audio_is_downloaded_again_not_rejected_forever(self):
+        """Finding 8895: a short cached chunk was trusted ("Found valid cache ...
+        Skipping download"), rejected for coverage, and found again on every retry."""
+        import requests
+        abs_id = "short-audio-book"
+        _cache_dir, chunk = self._short_cached_chunk(abs_id)
+        with patch("src.utils.transcriber.get_transcription_provider") as provider_factory,                 patch("src.utils.transcriber.requests.get",
+                      side_effect=requests.ConnectionError("offline")) as download:
+            provider = self._provider()
             provider_factory.return_value = provider
-
-            with self.assertRaises(ValueError) as ctx:
+            with self.assertRaises(Exception):
                 self.transcriber.process_audio(
                     abs_id,
                     [{"stream_url": "http://example.com/1.m4b", "ext": "m4b"}],
                     expected_duration=REPORTED_AUDIO_DURATION,
                 )
-
-            self.assertIn("Coverage too low", str(ctx.exception))
+            download.assert_called_once()
             provider.transcribe.assert_not_called()
+        self.assertFalse(chunk.exists(), "the short cached chunk must be discarded before re-downloading")
 
-        self.assertEqual(
-            list(cache_dir.iterdir()), [],
-            "the short audio cache must be cleared so the retry re-downloads",
-        )
-
+    def test_short_cache_that_cannot_be_cleared_fails_the_run_plainly(self):
+        abs_id = "short-audio-book"
+        _cache_dir, chunk = self._short_cached_chunk(abs_id)
+        self.transcriber._prune_audio_cache = MagicMock(return_value=False)
+        with patch("src.utils.transcriber.get_transcription_provider") as provider_factory,                 patch("src.utils.transcriber.requests.get") as download:
+            provider_factory.return_value = self._provider()
+            with self.assertRaises(RuntimeError) as ctx:
+                self.transcriber.process_audio(
+                    abs_id,
+                    [{"stream_url": "http://example.com/1.m4b", "ext": "m4b"}],
+                    expected_duration=REPORTED_AUDIO_DURATION,
+                )
+            download.assert_not_called()
+        self.assertIn("could not be reset safely", str(ctx.exception))
+        self.assertTrue(chunk.exists())
 
 if __name__ == "__main__":
     unittest.main()
