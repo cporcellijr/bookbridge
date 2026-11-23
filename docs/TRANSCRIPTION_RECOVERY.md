@@ -1,89 +1,59 @@
-# Transcription diagnostics and recovery
+---
+hide:
+  - toc
+description: "When a transcript is in the wrong language or picks up music, or an alignment is refused: what to check, and how to retry without losing work."
+---
 
-Local Whisper options are in **Settings → AI → Transcription**. Settings saved in
-the dashboard override compose environment values on an existing install.
+# Transcription problems
 
-- **Whisper Language** (`WHISPER_LANGUAGE`): blank detects each chunk's language;
-  a code such as `ru` requests Russian. It does not enable translation.
-- **Skip music and silence** (`WHISPER_VAD_FILTER`): off by default. Enable it to
-  test whether voice activity detection reduces output over music or silence.
-  Check quiet narration first. Word timestamps remain on the original audio
-  timeline; trailing music is not mistaken for truncated audio.
+Most books never need transcription: BookBridge lines the audio up with the ebook directly. A book falls back to Whisper transcription when it is not in English, its audio does not follow the text closely enough, or its chapters are read out of order. This page covers what to do when that transcript, or the alignment built from it, goes wrong.
 
-Options apply to newly transcribed chunks. A completed saved transcript is reused.
-The logs report requested/detected language, confidence and VAD for each chunk.
-For Russian and other supported Cyrillic languages, mostly Latin output produces
-a warning with segment count and first/last times within that chunk. This is a
-diagnostic warning: names and quoted passages can legitimately use Latin text.
-VAD and a language pin cannot guarantee a particular model's output.
+## 1. Check the transcription settings
 
-## When alignment is refused
+**Settings → Alignment → Transcription**
 
-Expand **Alignment needs attention** on the failed book's dashboard card. The
-lexical guard reports ebook/transcript token counts, their ratio, exact overlap
-in ebook quartiles, and the share of sampled sequences without an exact match.
-These measurements do not prove which text was unnarrated. Different editions,
-partial narration, transcription errors and language differences can all reduce
-exact overlap. The guard still refuses to publish a misleading map.
+- **Whisper Language:** leave it blank to detect the language of each part, or enter a code such as `ru` to ask for Russian. It does not translate.
+- **Skip music and silence:** off by default. Turn it on when music or silence comes out as words, then check that quiet narration is still transcribed.
 
-Completed transcripts survive alignment refusal and exhausted retries. The cache
-is `<DATA_DIR>/audio_cache/<book-id>/_progress.json`. Correct the ebook pairing
-and use Remap to re-align without repeating Whisper when valid word timings are
-available. Old untimed or invalid caches are re-transcribed. Keep the mapping:
-deleting a book still intentionally removes its cached data.
+Both apply to audio transcribed from now on; a transcript that is already saved is reused. The log shows the language asked for and the language detected for each part. For Russian and other Cyrillic languages, mostly Latin output logs a warning. Names and quotes can be Latin, so treat it as a hint, not proof.
 
-## When ebook input is refused
+## 2. When an alignment is refused
 
-Companion PDFs, MOBI and AZW3 files are skipped when acquiring an EPUB from ABS.
-An explicitly mapped CWA ebook wins over an ABS attachment, including when its
-cached copy must be downloaded again. Automatic CWA discovery retries simpler
-title queries and requires a unique matching title and author; choose the book
-manually when multiple records match.
+Expand **Alignment needs attention** on the book. It shows how much of the ebook and the transcript match. BookBridge refuses a map that would put you in the wrong place; a different edition, partial narration, transcription errors and a different language all lower the match.
 
-A non-EPUB file or EPUB with no readable text stops processing before hashing or
-transcription. The failed book's error names the file. Correct the selected ebook
-or replace its unusable cache copy, then retry/Remap. Preserve any existing timed
-transcript before replacing files; deleting the mapping also deletes cached data.
+- Check that the ebook is the same edition as the audiobook, and fix the pairing if it is not.
+- Then use **Remap alignment**. The finished transcript is kept, so a remap does not run Whisper again when the transcript has usable word timings.
+- Keep the book in BookBridge while you fix it: removing a book also deletes its saved transcript.
 
-The job scheduler automatically repairs provable legacy CWA input failures. It
-requires a numeric mapped CWA ID, the retained original EPUB, and a complete
-word-timed transcript with matching text. It can replace a hash proven to belong
-to that book's cached ABS companion PDF, or rebuild an actually zero-position map
-whose hash already matches the retained EPUB. It uses cached files only, preserves
-reader progress/history and existing alignment backups, and resumes sync after a
-usable map is published. Only the proven wrong PDF document link is removed; its
-document and reader progress rows remain.
+Don't lower the content-match threshold to force a map through. An ebook of seven books paired with an audiobook of three needs an ebook of the narrated books instead.
 
-Recovery approval records the inspected audiobook and ebook pairing. Retries and
-restarts retain that approval; changing either source requires manual review
-instead of applying the previous audiobook's cached timings. Older queued repairs
-without recorded approval also require review. Word timings must cover the
-normalized transcript text in order and stay within their segment bounds.
-The map, first backup, activation and job completion are committed together only
-while the inspected pairing, job, map version and document ownership still match.
-A remap, replacement map or deletion during calculation leaves newer state intact.
-Installations need the database migration and a bridge restart; prebuilt images
-receive these changes in the next published image.
+## 3. When the ebook is refused
 
-Suspicious mappings with incomplete proof show a manual-review error and stay out
-of sync. Verify the CWA ID, current/original filenames, retained EPUB and transcript,
-then correct the pairing and retry/Remap. A legitimate device hash is never replaced
-merely because it differs from the cached EPUB. If manual verification proves a
-wrong primary hash, use the existing hash-update action; Remap alone does not reset
-it. Hash updates retain the old linked document, so review an erroneous link in
-KoSync Documents separately. Clearing reader progress does not repair an input file.
+- A file that is not an EPUB, or an EPUB with no readable text, stops processing before transcription. The error names the file. Choose the right ebook or replace the unusable copy, then retry or use **Remap alignment**.
+- PDF, MOBI and AZW3 attachments in Audiobookshelf are skipped. A Calibre-Web Automated ebook you chose wins over an Audiobookshelf attachment.
+- Automatic Calibre-Web Automated lookup needs exactly one book matching the title and author. When several match, choose the book yourself.
 
-## Deliberately retrying transcription
+## 4. Retry the transcription itself
 
-For a failed alignment whose transcript itself is wrong, configure the new
-Whisper options first. Back up that book's `_progress.json` outside its audio
-cache directory, then remove only the original `_progress.json` and retry the
-book/Remap. With CTC disabled, this runs the normal full transcription pipeline.
-This can take as long as the original run; retain the backup until the new run
-succeeds. An already deleted transcript cannot be recovered by this fix.
+When the transcript itself is wrong:
 
-There is no arbitrary-span repair or ebook-subset selector. Interrupted jobs can
-resume their completed prefix when the chunk files remain. A seven-book ebook
-paired with three narrated books needs an ebook matching the narrated material;
-fixing language output does not supply the missing narration. Do not lower the
-global content-match threshold to bypass that mismatch.
+1. Change the settings in step 1 first.
+2. Copy the book's transcript, `<DATA_DIR>/audio_cache/<book-id>/_progress.json`, to somewhere outside that folder.
+3. Delete only the original `_progress.json`, then retry the book or use **Remap alignment**.
+
+With forced alignment (CTC) switched off, this runs a full transcription, which takes as long as the first one did. Keep your copy until the new transcript works; a transcript that is already deleted cannot be brought back. An interrupted run picks up from the parts already finished, as long as their files are still there.
+
+??? info "Automatic repair of older Calibre-Web Automated mistakes"
+    BookBridge repairs some older Calibre-Web Automated pairing failures by itself, but only when it can prove the
+    pairing: the book has a numeric CWA ID, the original EPUB is still cached, and a complete word-timed transcript
+    matches its text. It works from cached files only and keeps reading progress, history and alignment backups.
+    The check is tied to that audiobook and ebook; if either one changes, the book needs a manual review instead.
+
+    A book that cannot be proven shows a manual-review error and stays out of sync. Check the CWA ID, the file
+    names, the cached EPUB and the transcript, fix the pairing, then retry or use **Remap alignment**.
+
+??? info "KoSync hash"
+    A device's KoSync hash is never replaced just because it differs from the cached EPUB. If you have confirmed
+    the hash is wrong, set it from the **KoSync** entry in the book's apps; **Remap alignment** alone does not reset
+    it. The old document link is kept, so check it under **Reader Documents** on Discover's Search tab. Clearing
+    reading progress does not repair an input file.

@@ -21,9 +21,6 @@ fill every transcription mismatch, repeated passage or edition difference.
   BookBridge's dependencies; the selected model downloads on first use. CPU works
   in the regular image. Local CUDA needs the CUDA image/build and GPU access.
 
-The current local install already uses the server at
-`http://host.docker.internal:8000/v1/audio/transcriptions` with model
-`distil-large-v3`. No setting change or additional install is needed for that path.
 Whisper's supported word-timestamp option is documented in the
 [faster-whisper repository](https://github.com/SYSTRAN/faster-whisper#word-level-timestamps).
 
@@ -35,13 +32,13 @@ SQLite database. It parses the actual EPUB and verifies locator resolution. It
 does not connect to readers or open the live database. Temporary audio and maps
 are cleaned up; the JSON report contains timestamps and offsets for inspection.
 
-For this local Docker install, from PowerShell in the repository:
+From the repository, with your container name, transcription server and file paths:
 
-```powershell
-docker cp scripts/compare_word_alignment.py abs_kosync_enhanced:/tmp/compare_word_alignment.py
-docker exec -e TRANSCRIPTION_PROVIDER=whispercpp -e WHISPER_CPP_URL=http://host.docker.internal:8000/v1/audio/transcriptions -e WHISPER_MODEL=distil-large-v3 abs_kosync_enhanced python /tmp/compare_word_alignment.py --audio '/audiobooks/01 Heretic Spellblade/Heretic Spellblade - Book 1.m4b' --epub '/books/Heretic Spellblade - K.D. Robertson/Heretic Spellblade - K.D. Robertson.epub' --start 300 --seconds 90 --output /tmp/word-comparison.json
-docker cp abs_kosync_enhanced:/tmp/word-comparison.json ./word-comparison.json
-docker exec abs_kosync_enhanced rm -f /tmp/compare_word_alignment.py /tmp/word-comparison.json
+```bash
+docker cp scripts/compare_word_alignment.py bookbridge:/tmp/compare_word_alignment.py
+docker exec -e TRANSCRIPTION_PROVIDER=whispercpp -e WHISPER_CPP_URL=http://whisper-server:8000/v1/audio/transcriptions -e WHISPER_MODEL=distil-large-v3 bookbridge python /tmp/compare_word_alignment.py --audio '/audiobooks/Author/Book/Book.m4b' --epub '/books/Author/Book/Book.epub' --start 300 --seconds 90 --output /tmp/word-comparison.json
+docker cp bookbridge:/tmp/word-comparison.json ./word-comparison.json
+docker exec bookbridge rm -f /tmp/compare_word_alignment.py /tmp/word-comparison.json
 ```
 
 Change `--start`, `--seconds` and the two paths to compare another passage.

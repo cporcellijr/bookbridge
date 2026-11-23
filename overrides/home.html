@@ -1,0 +1,240 @@
+{% extends "main.html" %}
+
+{% block htmltitle %}<title>{{ page.meta.title }}</title>{% endblock %}
+
+{% block tabs %}
+{{ super() }}
+<div class="bb-home">
+
+  <section class="bb-hero">
+    <div class="bb-wrap bb-hero__grid">
+      <div>
+        <p class="bb-kicker">Audiobook and ebook progress sync</p>
+        <h1 id="bookbridge">Read it. Hear it.<br><em>Never lose your place.</em></h1>
+        <p class="bb-lede">Switch between the audiobook and the ebook of the same book, across the apps you already use. Open source and self-hosted.</p>
+        <div class="bb-cta">
+          <a class="bb-btn bb-btn--primary" href="{{ 'getting-started/' | url }}">Get started {% include ".icons/material/arrow-right.svg" %}</a>
+          <a class="bb-btn" href="{{ config.repo_url }}">{% include ".icons/material/github.svg" %} View on GitHub</a>
+        </div>
+        <p class="bb-meta"><span>Free and MIT licensed</span><span>Runs in Docker</span><span>No cloud account</span></p>
+      </div>
+      <div class="bb-hero__art">
+        <figure class="bb-frame">
+          <img src="{{ 'assets/site/library.webp' | url }}" width="1440" height="900" alt="The BookBridge Library: the book you are reading now on top, with its progress in each app, above your library" fetchpriority="high">
+        </figure>
+        <img class="bb-hero__phone" src="{{ 'assets/site/phone-library.webp' | url }}" width="780" height="1688" alt="The BookBridge Library on a phone">
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="bb-wrap">
+      <div class="bb-head">
+        <p class="bb-kicker">How it works</p>
+        <h2>Each linked app gets your latest position.</h2>
+        <p>BookBridge lines up the audiobook with the text of its ebook, so a minute in one is a page in the other.</p>
+      </div>
+      <div class="bb-steps">
+        <div class="bb-step">
+          <span class="bb-step__icon">{% include ".icons/material/headphones.svg" %}</span>
+          <h3>Listen or read in a linked app</h3>
+          <p>Play the audiobook in Audiobookshelf or BookOrbit, or read the ebook in KOReader, a Kobo or a web reader.</p>
+        </div>
+        <div class="bb-step">
+          <span class="bb-step__icon">{% include ".icons/material/waveform.svg" %}</span>
+          <h3>BookBridge finds the matching position</h3>
+          <p>Its alignment map turns a timestamp into a place in the text, and a place in the text back into a timestamp.</p>
+        </div>
+        <div class="bb-step">
+          <span class="bb-step__icon">{% include ".icons/material/book-open-page-variant.svg" %}</span>
+          <h3>Continue in the other format</h3>
+          <p>Every linked app gets the new position, so the next one you open is already where you stopped.</p>
+        </div>
+      </div>
+      <figure class="bb-align">
+        <svg viewBox="0 0 640 150" role="img" aria-label="An audio waveform with its playback position linked to the matching line of ebook text">
+          <g>
+            {% for h in [18, 34, 52, 30, 64, 42, 80, 56, 38, 70, 90, 60, 44, 76, 50, 28, 62, 84, 46, 34, 58, 40, 24, 48] %}
+            <rect class="wave{% if loop.index == 11 %} on{% endif %}" x="{{ 20 + loop.index0 * 10 }}" y="{{ 75 - h / 2 }}" width="5" height="{{ h }}" rx="2.5"></rect>
+            {% endfor %}
+          </g>
+          <path class="link" d="M 128 75 C 250 75, 300 63, 392 63"></path>
+          <circle class="dot" cx="128" cy="75" r="4"></circle>
+          <circle class="dot" cx="392" cy="63" r="4"></circle>
+          <g>
+            <rect class="line" x="404" y="20" width="216" height="8" rx="4"></rect>
+            <rect class="line" x="404" y="40" width="196" height="8" rx="4"></rect>
+            <rect class="line on" x="404" y="59" width="150" height="8" rx="4"></rect>
+            <rect class="line" x="404" y="79" width="210" height="8" rx="4"></rect>
+            <rect class="line" x="404" y="99" width="184" height="8" rx="4"></rect>
+            <rect class="line" x="404" y="119" width="120" height="8" rx="4"></rect>
+          </g>
+        </svg>
+        <figcaption>Built-in forced alignment, with Whisper, EPUB timing data and Storyteller transcripts as fallbacks.</figcaption>
+      </figure>
+      <p class="bb-more"><a class="bb-btn" href="{{ 'book-journey/' | url }}">How a new book gets synced {% include ".icons/material/arrow-right.svg" %}</a></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="bb-wrap">
+      <div class="bb-head">
+        <p class="bb-kicker">The dashboard</p>
+        <h2>Your library and reading progress.</h2>
+        <p>Shown with a demo library of public-domain classics.</p>
+      </div>
+      <figure class="bb-show__hero">
+        <div class="bb-frame"><img src="{{ 'assets/site/hero-card.webp' | url }}" width="1968" height="763" loading="lazy" alt="Currently-reading card: cover, synopsis, progress in each app, listening and reading stats, and a reading streak"></div>
+        <figcaption><b>The book you are reading now.</b> Optional; choose what it shows: synopsis, book stats, streak.</figcaption>
+      </figure>
+      <div class="bb-views">
+        <figure>
+          <div class="bb-frame"><img src="{{ 'assets/site/view-covers.webp' | url }}" width="1440" height="900" loading="lazy" alt="Library as Cards"></div>
+          <figcaption><b>Cards</b></figcaption>
+        </figure>
+        <figure>
+          <div class="bb-frame"><img src="{{ 'assets/site/view-spines.webp' | url }}" width="1440" height="900" loading="lazy" alt="Library as Spine shelves"></div>
+          <figcaption><b>Spine shelves</b></figcaption>
+        </figure>
+        <figure>
+          <div class="bb-frame"><img src="{{ 'assets/site/view-list.webp' | url }}" width="1440" height="900" loading="lazy" alt="Library as a List in the Day theme"></div>
+          <figcaption><b>List</b>, in the Day theme</figcaption>
+        </figure>
+        <figure>
+          <div class="bb-frame"><img src="{{ 'assets/site/book-drawer.webp' | url }}" width="1440" height="900" loading="lazy" alt="Book drawer showing the position in each app"></div>
+          <figcaption><b>Book drawer:</b> where you are in every app</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="bb-wrap">
+      <div class="bb-head">
+        <p class="bb-kicker">What it does</p>
+        <h2>Sync, alignment, highlights and more.</h2>
+      </div>
+      <div class="bb-cards">
+        <div class="bb-card">
+          <span class="bb-card__icon">{% include ".icons/material/book-sync.svg" %}</span>
+          <h3>Keeps your place across formats</h3>
+          <p>A minute in the audiobook becomes the matching page in the ebook, and back again. Go back on purpose and the other apps follow.</p>
+        </div>
+        <div class="bb-card">
+          <span class="bb-card__icon">{% include ".icons/material/waveform.svg" %}</span>
+          <h3>Alignment built in</h3>
+          <p>Forced alignment matches each audiobook against its ebook on the CPU. No extra services, no transcripts to supply.</p>
+        </div>
+        <div class="bb-card">
+          <span class="bb-card__icon">{% include ".icons/material/swap-horizontal.svg" %}</span>
+          <h3>Works with your apps</h3>
+          <p>Audiobookshelf, KOReader, BookOrbit, Grimmory, Storyteller, Kavita and more. Turn on the ones you use.</p>
+        </div>
+        <div class="bb-card">
+          <span class="bb-card__icon">{% include ".icons/material/bookmark-outline.svg" %}</span>
+          <h3>Highlights, notes and status</h3>
+          <p>With the Bridge Sync KOReader plugin, highlights, notes, reading status and stats move between devices and supported readers.</p>
+        </div>
+        <div class="bb-card">
+          <span class="bb-card__icon">{% include ".icons/material/compass-outline.svg" %}</span>
+          <h3>Finds audiobook and ebook pairs</h3>
+          <p>Discover scans your libraries for audiobook and ebook pairs, so you can review and link them in bulk.</p>
+        </div>
+        <div class="bb-card">
+          <span class="bb-card__icon">{% include ".icons/material/account-group.svg" %}</span>
+          <h3>Multiple readers</h3>
+          <p>Each reader signs in with their own app accounts and their own progress, even when two people share a book.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="bb-wrap">
+      <div class="bb-head">
+        <p class="bb-kicker">Works with</p>
+        <h2>Supported apps.</h2>
+        <p>Every one is optional. Ebook-only setups work too, keeping two reading apps on the same page.</p>
+      </div>
+      <div class="bb-apps">
+        <div class="bb-apps__group">
+          <h3>{% include ".icons/material/headphones.svg" %} Listen with</h3>
+          <p>Audiobook progress</p>
+          <ul class="bb-chips"><li>Audiobookshelf</li><li>BookOrbit</li><li>Grimmory</li></ul>
+        </div>
+        <div class="bb-apps__group">
+          <h3>{% include ".icons/material/book-open-page-variant.svg" %} Read with</h3>
+          <p>Ebook progress, two ways</p>
+          <ul class="bb-chips"><li>KOReader</li><li>Kobo via Calibre-Web Automated</li><li>Audiobookshelf</li><li>BookOrbit</li><li>Grimmory</li><li>Storyteller</li><li>Kavita</li><li>BookFusion</li></ul>
+        </div>
+        <div class="bb-apps__group">
+          <h3>{% include ".icons/material/chart-bar.svg" %} Track with</h3>
+          <p>Progress and status, sent one way</p>
+          <ul class="bb-chips"><li>Hardcover</li><li>StoryGraph</li><li>Goodreads</li></ul>
+        </div>
+      </div>
+      <p class="bb-apps__more">Readest takes highlights and book uploads. <a href="{{ 'supported-apps/' | url }}">See what each app supports</a>.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="bb-wrap bb-compare">
+      <div>
+        <p class="bb-kicker">Your own files</p>
+        <h2>Works with the books you already own.</h2>
+      </div>
+      <div class="bb-compare__body">
+        <p>Amazon's Whispersync for Voice does this for a Kindle book and its Audible audiobook bought from Amazon. BookBridge does it for audiobook and ebook files you already have.</p>
+        <ul style="margin-top: 1.2rem">
+          <li>{% include ".icons/material/check.svg" %}<span>Audiobooks and EPUBs from any store. The alignment is built from the audio and text themselves.</span></li>
+          <li>{% include ".icons/material/check.svg" %}<span>Runs on your own server in Docker, with no cloud service in between.</span></li>
+          <li>{% include ".icons/material/check.svg" %}<span>Works with KOReader, Kobo, web readers and audiobook apps.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="bb-wrap bb-install">
+      <div>
+        <div class="bb-head" style="margin-bottom: 1.6rem">
+          <p class="bb-kicker">Install</p>
+          <h2>Installation.</h2>
+        </div>
+        <ol>
+          <li><div><h3>Add it to Docker Compose</h3><p>One container, one data folder, and your ebook folder.</p></div></li>
+          <li><div><h3>Start it and sign in</h3><p>Run <code>docker compose up -d</code> and open the dashboard on port 8080.</p></div></li>
+          <li><div><h3>Connect your apps</h3><p>Add each app in Settings, test the connection and link your first book.</p></div></li>
+        </ol>
+        <div class="bb-cta"><a class="bb-btn bb-btn--primary" href="{{ 'getting-started/' | url }}">Read the setup guide {% include ".icons/material/arrow-right.svg" %}</a></div>
+      </div>
+<pre class="bb-code" aria-label="docker-compose.yml"><code><span class="k">services:</span>
+  <span class="k">bookbridge:</span>
+    <span class="k">image:</span> ghcr.io/cporcellijr/bookbridge:latest
+    <span class="k">restart:</span> unless-stopped
+    <span class="k">ports:</span>
+      - "8080:5757"
+    <span class="k">environment:</span>
+      - TZ=America/New_York
+    <span class="k">volumes:</span>
+      - ./data:/data
+      - /path/to/ebooks:/books
+<span class="c"># Everything else is set up in the web UI.</span></code></pre>
+    </div>
+  </section>
+
+  <section class="bb-final">
+    <div class="bb-wrap">
+      <h2>Free and open source.</h2>
+      <p>MIT licensed. Runs on your own server.</p>
+      <div class="bb-cta">
+        <a class="bb-btn bb-btn--primary" href="{{ 'getting-started/' | url }}">Get started {% include ".icons/material/arrow-right.svg" %}</a>
+        <a class="bb-btn" href="{{ config.repo_url }}/releases">Releases</a>
+      </div>
+    </div>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block content %}{% endblock %}

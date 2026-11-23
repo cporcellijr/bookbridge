@@ -326,8 +326,8 @@ All notable changes to BookBridge will be documented in this file.
   - The Shelfmark tab is gone from the navigation in both interfaces. `/shelfmark` still opens
     your Shelfmark site, and Settings has an "Open Shelfmark" link.
   - Known limits: arrivals are found in your BookOrbit library only. A Shelfmark download waits
-    as "Downloaded, waiting for the library" until BookOrbit has scanned it in. Classic interface
-    readers get no "Get it" dialog.
+    as "Downloaded, waiting for the library" until BookOrbit has scanned it in. The Get a book
+    dialog is available in Classic and New.
 - **BookOrbit audiobook tracks can be processed directly from a verified shared mount.**
   When BookOrbit supplies an absolute track path, matching filename, file ID
   and file size, BookBridge validates containment under `AUDIOBOOKS_DIR` and

@@ -1,61 +1,123 @@
 site_name: BookBridge
 site_url: https://cporcellijr.github.io/bookbridge/
 site_author: cporcellijr
-site_description: The ultimate bridge for cross-platform reading and listening synchronization.
+site_description: Open-source, self-hosted progress sync for audiobooks and ebooks across Audiobookshelf, KOReader, Storyteller, BookOrbit and more.
+copyright: Whispersync, Kindle and Audible are trademarks of Amazon.com, Inc. or its affiliates. BookBridge is not affiliated with or endorsed by Amazon.
+
+# Developer plans and handoff notes stay in the repo but off the public site.
+exclude_docs: |
+  /ARCHITECTURE_*.md
+  /OPTION_C_*.md
+  /PLAN_*.md
+  /PROMPT_*.md
+  /SLICE*.md
+  /epub-cover-memory-fix.md
+  /issue-*.md
+  /suggestions-redesign-backend-handoff.md
+  /test-suite-performance.md
+  /automated-review/
+  /omni-bridge.md
+  /security/
+  /triage/
 
 repo_name: cporcellijr/bookbridge
 repo_url: https://github.com/cporcellijr/bookbridge
 
 theme:
   name: material
-  logo: assets/icon.png
-  favicon: assets/icon.png
+  custom_dir: overrides
+  logo: assets/icon-192.png
+  favicon: assets/icon-192.png
+  # Fonts are bundled (the app's own Literata, Instrument Sans, IBM Plex Mono); no Google Fonts requests.
+  font: false
   features:
     - navigation.tabs
     - navigation.sections
     - navigation.top
+    - navigation.footer
     - search.suggest
     - search.highlight
     - content.code.copy
+    - content.tabs.link
   palette:
-    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
 
-    # Palette toggle for dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/weather-sunny
-        name: Switch to light mode
+extra_css:
+  - assets/fonts/fonts.css
+  - stylesheets/extra.css
 
 plugins:
   - search
 
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
   - pymdownx.details
   - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.emoji:
-      emoji_index: !!python/name:materialx.emoji.twemoji
-      emoji_generator: !!python/name:materialx.emoji.to_svg
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
   - Home: index.md
-  - Getting Started: getting-started.md
-  - User Guide: user-guide.md
-  - New Interface (Beta): new-interface.md
-  - Configuration: configuration.md
-  - Device API: device-api.md
-  - Backup & Restore: backup-restore.md
+  - Getting started:
+      - Install and first sync: getting-started.md
+      - Settings tour: settings-tour.md
+      - How it works: how-it-works.md
+      - How a new book gets synced: book-journey.md
+      - Supported apps: supported-apps.md
+  - Connect your apps:
+      - Overview: apps/index.md
+      - Listen and read:
+          - Audiobookshelf: apps/audiobookshelf.md
+          - BookOrbit: apps/bookorbit.md
+          - Grimmory: apps/grimmory.md
+          - Storyteller: apps/storyteller.md
+      - Readers:
+          - KOReader: apps/koreader.md
+          - Kavita: apps/kavita.md
+          - Calibre-Web Automated: apps/calibre-web-automated.md
+          - BookFusion: apps/bookfusion.md
+          - Readest: apps/readest.md
+      - Trackers:
+          - Hardcover: apps/hardcover.md
+          - StoryGraph: apps/storygraph.md
+          - Goodreads: apps/goodreads.md
+      - Getting books:
+          - Shelfmark: apps/shelfmark.md
+  - Using BookBridge:
+      - Library: using/library.md
+      - Discover: using/discover.md
+      - Get a missing book: using/get-books.md
+      - Processing: using/processing.md
+      - Stats: using/stats.md
+      - Display: using/display.md
+      - KOReader devices: using/koreader-devices.md
+      - Classic and New: new-interface.md
+      - More features: user-guide.md
+  - Reference:
+      - Configuration: configuration.md
+      - Device API: device-api.md
+      - Backup & restore: backup-restore.md
+      - Choosing an ebook edition: provider-ebook-file-selection.md
+      - How reading sessions are counted: reading-session-aggregation.md
+      - BookOrbit reading statistics: bookorbit-session-deduplication.md
+      - Transcription problems: TRANSCRIPTION_RECOVERY.md
   - Troubleshooting: troubleshooting.md
   - Changelog: changelog.md

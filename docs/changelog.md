@@ -6,12 +6,12 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ## [7.13.0]
 
-BookBridge has a New interface (beta), Suggestions grows into Discover for every reader,
+BookBridge has a New interface, Suggestions grows into Discover for every reader,
 and reader apps get a Device API for word-level read-along.
 
 ### What's New
 
-- **New interface (beta)**, opt-in per reader with **Classic | New**; Classic stays the
+- **New interface**, opt-in per reader with **Classic | New**; Classic stays the
   default. Redesigned Library, a format strip on each cover, progress on the cover, a book
   drawer with your current audiobook chapter (#428), Ctrl K / ⌘K search and phone navigation.
 - **Discover replaces Suggestions and Add Book**, with **Pairs**, **Ebook Only** and
@@ -821,7 +821,7 @@ The headline additions are BookOrbit support and an optional local-LLM assistant
 
 - **BookOrbit support.** BookOrbit can be used as an ebook source, an audiobook source, or both when you create a mapping. It also supports an optional "Up Next" collection watch that auto-matches books you drop onto a shelf. See [Configuration → BookOrbit](configuration.md#bookorbit). If you are moving over from Grimmory, a migration script re-points your existing links without rematching.
 
-- **Optional local LLM (Ollama).** If you run a local Ollama server, the bridge can use it to make smarter match suggestions and to rescue audio↔text alignments that plain text matching misses. Everything is off until you turn it on, and every feature falls back to the normal behavior if Ollama is unreachable, so it never blocks a sync. See [Configuration → Ollama](configuration.md#ollama-local-llm-optional).
+- **Optional local LLM (Ollama).** If you run a local Ollama server, the bridge can use it to make smarter match suggestions and to rescue audio↔text alignments that plain text matching misses. Everything is off until you turn it on, and every feature falls back to the normal behavior if Ollama is unreachable, so it never blocks a sync. See [Configuration → Ollama](configuration.md#ai-llm-providers-optional).
 
 - **Link Storyteller from any dashboard card.** The "Link" action that ebook-only mappings already had now appears on books with an audio↔ebook match too, so you can attach a Storyteller title to almost any book without rematching it.
 

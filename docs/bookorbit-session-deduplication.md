@@ -1,62 +1,41 @@
-# BookOrbit statistics: native KOReader page relay
+---
+hide:
+  - toc
+description: "Send KOReader reading statistics to BookOrbit through BookBridge: what you need, and how duplicates are avoided."
+---
 
-BridgeSync's raw statistics upload is forwarded through BookOrbit's native
-`/api/v1/koreader/plugin/page-stats` endpoint. The original KOReader `device_id`,
-book MD5, page, start time, duration and total page count are retained. BookOrbit
-derives the session and sets `source=koreader`; BookBridge does not pretend that
-the activity came from the hub or from the web reader.
+# BookOrbit reading statistics
 
-Direct BookOrbit plugin uploads and BridgeSync uploads from the same device use
-the same native event identity. Retries or different delivery order do not create
-another measured event. Books are resolved by BookOrbit's hash links, not by title
-or by guessing a different primary file. Unmatched hashes remain pending.
+With the Bridge Sync plugin, your KOReader reading statistics reach BookOrbit through BookBridge. BookOrbit records them as KOReader reading, exactly as if the device had sent them itself.
 
-## Settings and credentials
+## What you need
 
-There is no statistics-source owner selector. The earlier
-`BOOKORBIT_NATIVE_READING_SESSIONS` workaround and native-session importer have
-been removed. Existing imported history is preserved but not refreshed or deleted.
+- **BookOrbit: record my reading sessions** switched on under **Settings → Reading & Sync**.
+- Your BookOrbit **KOReader sync username** and **password** under **Account → My Integrations → BookOrbit**. That username must match your BookOrbit **Username**, or **KOReader sync owner** must name the same BookOrbit account. See [BookOrbit](apps/bookorbit.md).
+- Automatic statistics upload switched on in KOReader on each device.
 
-`BOOKORBIT_READING_SESSIONS` remains the existing outbound-statistics enable flag.
-The native relay uses `BOOKORBIT_KOSYNC_USER` and `BOOKORBIT_KOSYNC_KEY` (not JWT).
-Its KOReader username must match the configured BookOrbit username, or
-`BOOKORBIT_KOSYNC_OWNER` must explicitly identify that same BookOrbit account.
-Missing credentials leave the delivery pending; no generic web-session fallback
-is attempted.
+Without the sync login, statistics wait in BookBridge; nothing is sent another way.
 
-## Delivery and compatibility
+## How duplicates are avoided
 
-* Raw events are queued durably when a statistics upload is acknowledged.
-* Only stored canonical rows are queued, not incoming cross-device echoes rejected
-  by the statistics repository.
-* Each queue entry is scoped to the bridge user and BookOrbit account/server.
-  An in-flight relay stops if its server URL, username or API key changes; pending
-  receipts remain assigned to the previous destination identity.
-* Requests stay within 500 events and 50 books and retain the source UUID.
-* Acknowledged native duplicates count as delivered. Failures, unmatched hashes
-  and incomplete acknowledgements retain pending work.
-* No historical raw-event backfill is performed automatically.
-* Non-KOReader aggregate export, including ABS, retains replay-safe IDs, active
-  duration and frozen destination files.
-* Position synchronization, alignment maps, downloads and read-along policy are
-  independent of the statistics worker.
+- A device that also uploads to BookOrbit with BookOrbit's own plugin does not double up: both routes carry the same device and event, and BookOrbit counts them once.
+- Books are found through BookOrbit's file links, never by title. A book BookOrbit does not know yet waits until it does.
+- A retry never creates a second event.
 
-No plugin update is included. Existing BridgeSync versions already upload raw
-statistics with the shared KOReader UUID. They must have automatic statistics
-upload enabled. Old clients without raw statistics or a real UUID keep local
-coarse-session telemetry, but it is no longer exported as a duplicate web session.
-Missing or nonintegral raw fields are not invented or rounded into another event.
+??? info "Delivery details"
+    - Statistics are queued as soon as the device's upload is accepted, and sent in batches of up to 500 events
+      and 50 books.
+    - Each queued event belongs to one reader and one BookOrbit server and account. If the server address,
+      username or API key changes, events already queued stay with the old account.
+    - Failed, unmatched and partly accepted batches stay queued and are tried again. Older history is not sent
+      automatically.
+    - Older Bridge Sync versions that do not send raw statistics keep their sessions in BookBridge's own Stats
+      without sending them to BookOrbit.
+    - Position sync, alignment, downloads and read-along do not depend on this.
 
-## Known limitation: copied statistics
-
-Disable **Combine device reading stats** (`KOREADER_COMBINE_DEVICE_STATS`) for the
-temporary no-sharing setup. **Share recently-read books / History** is a different
-setting and does not stop page-stat copying.
-
-Rows already copied into another device's KOReader database have no reliable
-origin marker. The unmodified BookOrbit plugin may upload them under that other
-device's UUID. This relay does not solve that historical provenance problem or
-remove existing duplicates. The separately proposed BookOrbit cross-device echo
-filter addresses exact copied raw events; it is not required for same-device
-dual-route deduplication. Do not claim complete multi-device protection until the
-copying/provenance case has also been addressed.
+??? warning "Known limit: statistics copied between devices"
+    With **KOReader: combine reading statistics from all my devices** switched on, statistics copied onto another
+    device carry no record of where they came from, so BookOrbit's own plugin on that device can upload them again
+    under its own name. BookBridge cannot tell them apart and does not remove duplicates that are already there.
+    Switch that setting off if you also use BookOrbit's plugin. **KOReader: share recently-read books between
+    devices** is a different setting and does not copy statistics.
