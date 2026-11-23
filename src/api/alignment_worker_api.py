@@ -72,8 +72,11 @@ def _json_body() -> dict:
     """The request's JSON object, gunzipped when the worker compressed it."""
     raw = request.get_data(cache=False)
     if request.headers.get("Content-Encoding", "").lower() == "gzip":
-        with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
-            raw = stream.read(_MAX_RESULT_BYTES + 1)
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
+                raw = stream.read(_MAX_RESULT_BYTES + 1)
+        except (OSError, EOFError) as e:
+            raise ValueError("body is not valid gzip") from e
         if len(raw) > _MAX_RESULT_BYTES:
             raise ValueError("decompressed body is too large")
     body = json.loads(raw or b"{}")

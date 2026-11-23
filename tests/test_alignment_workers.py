@@ -4,6 +4,7 @@ main instance and worker run end to end in one process.
 See src/services/alignment_workers.py (main side), src/api/alignment_worker_api.py
 and src/alignment_worker.py (the worker).
 """
+import gzip
 import json
 import threading
 import time
@@ -371,6 +372,10 @@ def test_worker_routes_need_the_token(api_client):
     assert coordinator.claims == [("desk", 90)]
     assert client.post("/api/v1/worker/claim", json={"worker": "no spaces"},
                        headers=_auth()).status_code == 400
+    for corrupt in (b"not gzip at all", gzip.compress(b'{"worker": "desk"}')[:-6]):
+        response = client.post("/api/v1/worker/claim", data=corrupt,
+                               headers={**_auth(), "Content-Encoding": "gzip"})
+        assert response.status_code == 400
 
 
 def test_the_worker_token_does_not_open_the_admin_api(api_client):
