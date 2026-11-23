@@ -2416,6 +2416,9 @@ class SyncManager:
         if (mapped_book and (is_grimmory_source(getattr(mapped_book, "ebook_source", None)) or mapped_ebook_selection(mapped_book))
                 and getattr(mapped_book, "ebook_source_id", None)):
             return None
+        # A Storyteller artifact name is never in a library; searching for one only logs errors.
+        if is_storyteller_filename(ebook_filename):
+            return None
 
         # Try to download from Grimmory API
         # Note: We use hasattr to prevent crashes if BookloreClient wasn't updated with these methods yet

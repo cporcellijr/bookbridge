@@ -127,6 +127,24 @@ class TestBookOrbitApiOnlyAcquisition(unittest.TestCase):
         # BookLore untouched.
         booklore_client.find_book_by_filename.assert_not_called()
 
+    def test_storyteller_artifact_name_skips_library_filename_search(self):
+        """Finding 10441: while a Storyteller readaloud isn't ready, its storyteller_<uuid>.epub
+        name fell through to the BookOrbit/Grimmory filename search, which can never match,
+        and logged "❌ EPUB not found in BookOrbit" every cycle."""
+        manager = self._setup_manager_for_resolution(_build_manager(self.tmp_path))
+        manager.database_service.get_book_by_ebook_filename.return_value = None
+        for client in (manager.bookorbit_client, manager.booklore_client):
+            client.is_configured.return_value = True
+            client.find_book_by_filename = MagicMock(return_value=None)
+
+        with self.assertNoLogs("src.sync_manager", level="ERROR"):
+            result = manager._resolve_local_epub_uncached(
+                "storyteller_8a266da1-0000-4000-8000-000000000000.epub")
+
+        self.assertIsNone(result)
+        manager.bookorbit_client.find_book_by_filename.assert_not_called()
+        manager.booklore_client.find_book_by_filename.assert_not_called()
+
     def test_grimmory_uses_same_path_booklore(self):
         """
         B — Grimmory uses the same path.
