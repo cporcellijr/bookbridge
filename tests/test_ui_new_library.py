@@ -603,7 +603,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('class="book-select-hit"', cards)
         self.assertIn('type="checkbox" data-select-book', cards)
         self.assertIn('data-select-mode="off"] .book-select-hit', styles)
-        self.assertIn('data-view="spines"] #select-mode-button', styles)
+        self.assertIn('data-view="spines"]:not([data-library-style="faceout"]) #select-mode-button', styles)
         self.assertIn('id="selection-bar"', bar)
         self.assertIn('onclick="selectAllFilteredBooks()"', bar)
         self.assertIn('onclick="clearBookSelection()"', bar)
@@ -615,7 +615,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('bar.hidden = !librarySelectMode', scripts)
         self.assertIn('event.stopImmediatePropagation()', scripts)
         self.assertIn("event.key !== 'Escape'", scripts)
-        self.assertIn("if (initialLibraryView === 'spines') setBookSelectMode(false)", scripts)
+        self.assertIn("if (!selectable) setBookSelectMode(false)", scripts)
         self.assertIn("reloadAfterSelectionAction()", scripts)
 
         # Select mode is never introduced to the Classic Library template.

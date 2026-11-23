@@ -29,6 +29,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Select works again on Face-out shelves in the New Library.** Face-out shelves hid
+  the Select button the way Spine shelves do, so readers using that style lost bulk Sync
+  now, Mark finished, read-along and Remove. Face-out covers now take the same checkboxes
+  as Cards, and a selected cover gets a blue outline. Spine shelves are unchanged.
+
 - **A finished book stays finished in Grimmory, KOReader and your other ebook apps.**
   The end of an ebook and the end of its audiobook rarely line up: back matter is never
   read aloud and the credits have no text. When both sides were finished, BookBridge

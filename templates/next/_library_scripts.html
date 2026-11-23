@@ -1648,8 +1648,10 @@
     // The server chooses the view before paint; initialize its dependent controls once.
     if (libraryPage) {
         const initialLibraryView = libraryPage.dataset.view;
-        if (initialLibraryView === 'spines') setBookSelectMode(false);
-        if (selectModeButton) selectModeButton.hidden = initialLibraryView === 'spines';
+        // Face-out shelves show whole covers, so only thin spines lose selection.
+        const selectable = initialLibraryView !== 'spines' || libraryPage.dataset.libraryStyle === 'faceout';
+        if (!selectable) setBookSelectMode(false);
+        if (selectModeButton) selectModeButton.hidden = !selectable;
         applySeriesGrouping(initialLibraryView === 'covers' && seriesGroupingToggle.checked);
         seriesGroupingToggle.disabled = initialLibraryView !== 'covers';
         paintSpines(initialLibraryView === 'spines');
@@ -1667,7 +1669,7 @@
         });
     }
     function setBookSelectMode(enabled) {
-        librarySelectMode = !!enabled && libraryPage?.dataset.view !== 'spines';
+        librarySelectMode = !!enabled && !selectModeButton?.hidden;
         if (libraryPage) libraryPage.dataset.selectMode = librarySelectMode ? 'on' : 'off';
         if (selectModeButton) selectModeButton.setAttribute('aria-pressed', String(librarySelectMode));
         document.querySelectorAll('.book-open').forEach(link => {
@@ -1737,7 +1739,7 @@
         const summary = sessionStorage.getItem('bb-library-after-bulk');
         if (summary !== null) {
             sessionStorage.removeItem('bb-library-after-bulk');
-            if (libraryPage?.dataset.view !== 'spines') {
+            if (!selectModeButton?.hidden) {
                 setBookSelectMode(true);
                 document.getElementById('selection-count').textContent = summary;
             }

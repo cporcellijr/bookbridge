@@ -19,7 +19,7 @@
 .book-select-hit > .book-select {
     position: static; width: 21px; height: 21px; margin: 0; cursor: pointer;
 }
-.library-page[data-view="spines"] .book-select-hit { display: none; }
+.library-page[data-view="spines"]:not([data-library-style="faceout"]) .book-select-hit { display: none; }
 .library-page[data-view="list"] .book-select-hit { left: auto; right: 0; }
 
 /* The focus ring must survive Classic-derived pages' outline:none rules. */

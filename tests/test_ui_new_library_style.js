@@ -23,10 +23,11 @@ for (const [style, view] of [['cards', 'covers'], ['spines', 'spines'], ['list',
     vm.runInNewContext(script, context);
     assert.equal(libraryPage.dataset.view, view);
     assert.equal(libraryPage.dataset.libraryStyle, style);
-    assert.equal(selectModeButton.hidden, view === 'spines');
+    const thinSpines = view === 'spines' && style !== 'faceout';
+    assert.equal(selectModeButton.hidden, thinSpines, 'face-out covers keep Select; thin spines hide it');
     assert.equal(seriesGroupingToggle.disabled, view !== 'covers');
     assert.deepEqual(events.map(event => [...event]), [
-        ...(view === 'spines' ? [['select', false]] : []),
+        ...(thinSpines ? [['select', false]] : []),
         ['group', view === 'covers'], ['paint', view === 'spines']
     ]);
 }
