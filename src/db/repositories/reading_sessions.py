@@ -497,11 +497,14 @@ class ReadingSessionsMixin:
         end_progress: float = None,
         time_window_seconds: int = 600,
         progress_tolerance: float = 0.02,
+        user_id: int = None,
     ) -> bool:
-        """Delete the closest overlapping estimated KoSync session for a book."""
+        """Delete the user's closest overlapping estimated KoSync session for a book."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             candidates = session.query(ReadingSession).filter(
                 ReadingSession.abs_id == abs_id,
+                ReadingSession.user_id == uid,
                 ReadingSession.leader_client.like('KoSync:%'),
                 ReadingSession.start_time >= (start_time - time_window_seconds),
                 ReadingSession.start_time <= (start_time + time_window_seconds),
