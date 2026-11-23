@@ -29,6 +29,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **One reader's KOReader session upload no longer erases another reader's reading
+  history.** When two readers read the same book within a few minutes of each other,
+  a device session upload could replace the other reader's estimated session instead of
+  its own. It now only replaces the uploading reader's session.
+
 - **Select works again on Face-out shelves in the New Library.** Face-out shelves hid
   the Select button the way Spine shelves do, so readers using that style lost bulk Sync
   now, Mark finished, read-along and Remove. Face-out covers now take the same checkboxes
