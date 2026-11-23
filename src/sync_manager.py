@@ -306,6 +306,21 @@ class SyncManager:
         self.startup_checks()
         self.cleanup_stale_jobs()
 
+    def _same_timeline_position(self, config: dict, first: str, second: str) -> bool:
+        """Whether two clients sit at one audio-timeline position, within the cross-format deadband."""
+        positions = []
+        for name in (first, second):
+            state = config.get(name)
+            current = state.current if state is not None else {}
+            position = current.get("_normalized_ts")
+            client = self.sync_clients.get(name)
+            if position is None and client is not None and "audiobook" in client.get_supported_sync_types():
+                position = current.get("ts")
+            positions.append(position)
+        if None in positions:
+            return False
+        return abs(float(positions[0]) - float(positions[1])) <= getattr(self, "cross_format_deadband_seconds", 2.0)
+
     def _write_retry_state(self) -> dict:
         """Pending follower-write retries; tolerant of managers built without __init__."""
         if not hasattr(self, "_write_retries"):
@@ -6197,9 +6212,11 @@ class SyncManager:
                 if not leader:
                     continue
                 retry_leader = self._write_retry_state().get(retry_key, {}).get("leader") if force_write_retry else None
-                if retry_leader and leader != retry_leader:
+                if (retry_leader and leader != retry_leader
+                        and not self._same_timeline_position(decision_config, leader, retry_leader)):
                     # Idle cycles fall back to furthest-wins; re-pushing from another client
-                    # could undo a deliberate rewind whose propagation failed.
+                    # could undo a deliberate rewind whose propagation failed. A leader at the
+                    # recorded leader's own position (a follower that did take the write) is safe.
                     logger.info(f"🔁 '{abs_id}' '{title_snip}' Write retry dropped: '{leader}' would lead now, not '{retry_leader}'")
                     self._write_retry_state().pop(retry_key, None)
                     continue
@@ -6399,7 +6416,8 @@ class SyncManager:
                 crossed_completion = (
                     leader_pct is not None
                     and leader_pct >= threshold
-                    and (previous_leader_pct is None or previous_leader_pct < threshold)
+                    and (previous_leader_pct is None or previous_leader_pct < threshold
+                         or (force_write_retry and self._write_retry_state().get(retry_key, {}).get("completion")))
                 )
                 propagating_completion = (
                     crossed_completion
@@ -6557,7 +6575,9 @@ class SyncManager:
                 # Genuine failures only: a policy no-write is success=True, skipped=True.
                 retry_key = (get_current_user_id(), abs_id)
                 if any(not result.success for result in results.values()):
-                    self._write_retry_state().setdefault(retry_key, {"spent": 0})["leader"] = leader
+                    entry = self._write_retry_state().setdefault(retry_key, {"spent": 0})
+                    entry["leader"] = leader
+                    entry["completion"] = bool(propagating_completion)
                 elif results and self._write_retry_state().pop(retry_key, None) is not None:
                     get_persistent_condition_logger().resolve(
                         logger, f"write-retry:{retry_key[0]}:{abs_id}",

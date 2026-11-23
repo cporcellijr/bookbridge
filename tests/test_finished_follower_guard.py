@@ -184,6 +184,27 @@ class TestPropagatedCompletionNotOverwritten(_FinishedBookCase):
         self.assertIn('test-abs-id-finished', [key[1] for key in manager._write_retry_state()])
         self.assertFalse(self._saved(mocks, 'booklore'), "a failed write must not be recorded")
 
+    def test_retried_completion_write_sends_100_percent_again(self):
+        # The leader is already past the threshold on the retry cycle, so without the
+        # retry's completion flag it would send the mapped end and leave Grimmory unfinished.
+        manager, mocks = self._build_manager(propagation=True)
+        mocks['booklore_client'].update_progress.return_value = False
+        manager.sync_cycle()
+
+        for state in self.test_states:
+            if state.client_name == 'kosync':
+                state.percentage = 0.995
+            if state.client_name == 'abs':
+                state.percentage, state.timestamp = 1.0, 1000.0
+        mocks['kosync_client'].get_progress.return_value = (0.995, "/body/DocFragment[40]/body/p[1]")
+        mocks['booklore_client'].update_progress.reset_mock()
+        mocks['booklore_client'].update_progress.return_value = True
+        manager.sync_cycle()
+
+        written = [call.args[1] for call in mocks['booklore_client'].update_progress.call_args_list]
+        self.assertTrue(written, "the idle cycle must retry the failed follower write")
+        self.assertAlmostEqual(float(written[-1]), 1.0, places=4)
+
 
 class TestFinishedAudioFollower(unittest.TestCase):
     """A finished BookOrbit audiobook is not written back to the ebook's mapped end.
