@@ -37,6 +37,9 @@ from src.utils.ebook_dom_map import (
 from src.utils.logging_utils import get_persistent_condition_logger
 
 logger = logging.getLogger(__name__)
+# bs4 warns once per spine item whose bytes need U+FFFD replacements; the text is still
+# extracted, so a dirty EPUB otherwise floods diagnostics with WARNINGs (finding 10446).
+logging.getLogger("bs4.dammit").setLevel(logging.ERROR)
 
 # Import epubcfi library for accurate CFI parsing
 import epubcfi
