@@ -971,9 +971,12 @@ def _transcode_audio_for_embed(
             return _transcode_audio_for_embed(
                 audio_paths, _SOURCE_FALLBACK_AUDIO_BITRATE, output_path, progress_callback,
             )
+        # The exception names only the exit status; ffmpeg's own reason is in its output.
+        ffmpeg_output = str(getattr(e, "stderr", None) or getattr(e, "output", None) or "").strip()
         logger.error(
-            "Read-along audio transcode failed for %d part(s) at bitrate %s: %s",
-            len(audio_paths), bitrate, e, exc_info=True,
+            "Read-along audio transcode failed for %d part(s) at bitrate %s: %s%s",
+            len(audio_paths), bitrate, e,
+            f" | ffmpeg: {ffmpeg_output[-800:]}" if ffmpeg_output else "", exc_info=True,
         )
         return False
 

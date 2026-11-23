@@ -1741,6 +1741,20 @@ def test_failed_source_copy_retries_transcode(tmp_path):
     assert _probe_audio_packets(output)["streams"][0]["codec_name"] == "aac"
 
 
+def test_failed_transcode_logs_ffmpeg_reason(tmp_path, caplog):
+    """Finding 10445: "ffmpeg ... returned non-zero exit status 243" alone gives no cause."""
+    source = tmp_path / "part.mp3"
+    source.write_bytes(b"not audio")
+
+    def fail(cmd, *args, **kwargs):
+        raise subprocess.CalledProcessError(243, cmd, stderr="Invalid data found when processing input")
+
+    with patch.object(_readalong_builder_module.subprocess, "run", side_effect=fail),             caplog.at_level("ERROR", logger=_readalong_builder_module.logger.name):
+        assert not _transcode_audio_for_embed([source], "64k", tmp_path / "out.m4a")
+    failure = [r.getMessage() for r in caplog.records if "transcode failed" in r.getMessage()]
+    assert failure and "Invalid data found when processing input" in failure[0]
+
+
 def test_multi_file_audio_is_concatenated_into_one_embedded_file():
     """A multi-file audiobook's parts, given in order, are concatenated into
     the single physical file the SMIL references -- the embedded audio's
