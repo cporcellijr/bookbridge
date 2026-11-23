@@ -1,5 +1,6 @@
 """Tests for the BookOrbitClient — progress conversion, collections, sessions."""
 
+import logging
 import os
 import sys
 import time
@@ -868,11 +869,16 @@ def test_upload_retries_once_after_a_401_with_a_fresh_token(client, tmp_path):
     (413, "", "too_large"),
     (500, "", "failed"),
 ])
-def test_upload_refusals_are_classified(client, tmp_path, status, message, kind):
+def test_upload_refusals_are_classified(client, tmp_path, caplog, status, message, kind):
     from src.api.bookorbit_client import BookOrbitUploadError
-    error, _ = _upload(client, tmp_path, _Resp({"message": message} if message else None, status_code=status))
+    with caplog.at_level(logging.INFO, logger="src.api.bookorbit_client"):
+        error, _ = _upload(client, tmp_path, _Resp({"message": message} if message else None, status_code=status))
     assert isinstance(error, BookOrbitUploadError)
     assert (error.kind, error.status_code) == (kind, status)
+    # Findings 9993/10353: the uploader resolves these two kinds, so they are not warnings.
+    refused = [r for r in caplog.records if "refused: status=" in r.getMessage()]
+    expected = logging.INFO if kind in ("name_conflict", "duplicate") else logging.WARNING
+    assert [r.levelno for r in refused] == [expected]
 
 
 def test_upload_transport_error_and_missing_token(client, tmp_path):

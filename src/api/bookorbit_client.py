@@ -1215,8 +1215,10 @@ class BookOrbitClient:
             kind = "too_large"
         else:
             kind = "failed"
-        logger.warning("BookOrbit: upload of '%s' into book %s refused: status=%s kind=%s",
-                       sanitize_log_data(filename), book_id, resp.status_code, kind)
+        # The read-along uploader resolves a name clash or an identical file itself.
+        level = logging.INFO if kind in ("name_conflict", "duplicate") else logging.WARNING
+        logger.log(level, "BookOrbit: upload of '%s' into book %s refused: status=%s kind=%s",
+                   sanitize_log_data(filename), book_id, resp.status_code, kind)
         raise BookOrbitUploadError(kind, resp.status_code, message or f"HTTP {resp.status_code}")
 
     # ------------------------------------------------------------------
