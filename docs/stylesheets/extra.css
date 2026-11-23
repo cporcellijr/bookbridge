@@ -355,7 +355,7 @@
   .bb-btn:hover { transform: none; }
 }
 
-/* From new book to in sync: the four-stop flow */
+/* How a new book gets synced: the four-stop flow */
 .md-typeset .bb-flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.4rem; margin: 1.4em 0 0.8em; }
 .md-typeset .bb-flow__stop {
   position: relative; background: var(--bb-surface); border: 1px solid var(--bb-line);

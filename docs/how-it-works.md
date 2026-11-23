@@ -4,7 +4,7 @@ description: "How BookBridge keeps audiobook and ebook positions in sync: what y
 
 # How BookBridge works
 
-For the short, picture-led version, see [From new book to in sync](book-journey.md).
+For the short, picture-led version, see [How a new book gets synced](book-journey.md).
 
 BookBridge watches where you are in each app, picks the most trustworthy current position, translates it between audio time and ebook text using its own alignment map, and writes it back to every other app linked to that book.
 

@@ -1,7 +1,8 @@
 site_name: BookBridge
 site_url: https://cporcellijr.github.io/bookbridge/
 site_author: cporcellijr
-site_description: Open-source, self-hosted Whispersync alternative. Sync audiobook and ebook progress across Audiobookshelf, KOReader, Storyteller, BookOrbit and more.
+site_description: Open-source, self-hosted progress sync for audiobooks and ebooks across Audiobookshelf, KOReader, Storyteller, BookOrbit and more.
+copyright: Whispersync, Kindle and Audible are trademarks of Amazon.com, Inc. or its affiliates. BookBridge is not affiliated with or endorsed by Amazon.
 
 # Developer plans and handoff notes stay in the repo but off the public site.
 exclude_docs: |
@@ -79,7 +80,7 @@ nav:
       - Install and first sync: getting-started.md
       - Settings tour: settings-tour.md
       - How it works: how-it-works.md
-      - From new book to in sync: book-journey.md
+      - How a new book gets synced: book-journey.md
       - Supported apps: supported-apps.md
   - Connect your apps:
       - Overview: apps/index.md

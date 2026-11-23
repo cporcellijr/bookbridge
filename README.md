@@ -6,7 +6,7 @@
 
 **Read it. Hear it. Never lose your place.**
 
-Switch between your audiobook and your ebook across the apps you already use.<br>An open-source, self-hosted alternative to Amazon's Whispersync.
+Switch between your audiobook and your ebook across the apps you already use.<br>Open source and self-hosted.
 
 [![Documentation](https://img.shields.io/badge/docs-live-blue)](https://cporcellijr.github.io/bookbridge/)
 [![License](https://img.shields.io/github/license/cporcellijr/bookbridge)](LICENSE)
@@ -22,7 +22,7 @@ Switch between your audiobook and your ebook across the apps you already use.<br
 
 Listen in Audiobookshelf on the drive home, then open the book in KOReader and it is already where you stopped. Read a few chapters before bed, and the audiobook picks up from there in the morning.
 
-BookBridge lines up the audio with the text itself, so it works with the audiobook and EPUB files you already own. It runs on your own server in Docker: no Amazon account and no cloud service in between. Ebook-only setups work too, keeping two or more reading apps on the same page.
+Amazon's Whispersync for Voice does this for a Kindle book and its Audible audiobook bought from Amazon. BookBridge lines up the audio with the text itself, so it works with the audiobook and EPUB files you already have. It runs on your own server in Docker, with no cloud service in between. Ebook-only setups work too, keeping two or more reading apps on the same page.
 
 ## What it does
 
@@ -44,13 +44,13 @@ Forced alignment matches each audiobook against its ebook on the CPU and finds e
 <tr>
 <td valign="top">
 
-**Works with the apps you already use**<br>
+**Works with your apps**<br>
 Audiobookshelf, KOReader, BookOrbit, Grimmory, Storyteller, Kavita, Calibre-Web Automated and BookFusion, with Hardcover and StoryGraph for tracking. Discover scans them for audiobook and ebook pairs you can link in bulk.
 
 </td>
 <td valign="top">
 
-**A library worth opening**<br>
+**Library and dashboard**<br>
 An optional card for the book you are reading now, with its synopsis, listening and reading stats and your streak. Browse as Cards, Face-out shelves, Spine shelves or List, in Day or Night, or keep the Classic interface.
 
 </td>
@@ -64,7 +64,7 @@ With the Bridge Sync KOReader plugin, highlights, notes, reading status and read
 </td>
 <td valign="top">
 
-**One server for the whole household**<br>
+**Multiple readers**<br>
 Each reader signs in with their own service accounts and their own progress, and sees only the books they are reading, even when two people share a book.
 
 </td>
@@ -221,3 +221,5 @@ BookBridge began as a fork of [abs-kosync-bridge](https://github.com/J-Lich/abs-
 ## License
 
 Released under the [MIT License](LICENSE).
+
+Whispersync, Kindle and Audible are trademarks of Amazon.com, Inc. or its affiliates. BookBridge is not affiliated with or endorsed by Amazon.
