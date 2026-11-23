@@ -29,6 +29,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **A transcription stuck on short downloaded audio now recovers on its own.** If the
+  audio BookBridge had cached for a book was shorter than the runtime the library reports,
+  every retry reused it and failed the same way. BookBridge now throws the short audio away
+  and downloads it again, and the error log says plainly when the cache could not be cleared.
+
 - **One reader's KOReader session upload no longer erases another reader's reading
   history.** When two readers read the same book within a few minutes of each other,
   a device session upload could replace the other reader's estimated session instead of
