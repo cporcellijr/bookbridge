@@ -288,6 +288,11 @@ class TestPhaseDArrivals(unittest.TestCase):
             ("Title (Book 2)", False),
             ("Title: A Novel of Monster Horror", False),
             ("Title Two (Unabridged)", False),
+            ("Title (Unabridged): A Novel", True),
+            ("Title (Part 2)", False),
+            ("Title (Part Two)", False),
+            ("Title (Movie Tie-In)", False),
+            ("Title [Microsoft Reader]", False),
         ):
             with self.subTest(title=title):
                 candidate = {**audio("BookLore", "31"), "title": title}

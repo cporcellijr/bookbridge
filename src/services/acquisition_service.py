@@ -228,8 +228,11 @@ class AcquisitionService:
             return False
 
         def fold(text: str) -> tuple:
-            plain = re.sub(r"\s*:\s*a novel$", "",
-                           SuggestionsService._normalize_title_for_match(text, strip_volume=False), flags=re.I)
+            plain = re.sub(r"\s*(?:[\(\[]\s*(?:unabridged|audiobook)(?:\s*,\s*(?:unabridged|audiobook))*\s*[\)\]]"
+                           r"|:\s*a novel(?=\s*(?:[\(\[]|$)))", "", text, flags=re.I)
+            # Any other parenthetical ("(Part 2)", "(Movie Tie-In)") stays part of the title.
+            plain = re.sub(r"[\(\[]([^\)\]]*)[\)\]]", r" \1", plain)
+            plain = SuggestionsService._normalize_title_for_match(plain, strip_volume=False)
             return norm(plain), SuggestionsService._title_number(text, plain.casefold())
 
         return fold(candidate_title) == fold(title)
