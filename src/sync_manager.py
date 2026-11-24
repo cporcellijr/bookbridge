@@ -6343,8 +6343,14 @@ class SyncManager:
                 # longer resolves in this EPUB, or an out-of-range alignment timestamp
                 # mapping back to char 0 — pushing that 0% to ABS/the other clients
                 # silently wipes real progress (issue #290 follow-up). A genuine reset
-                # keeps leader_pct ~0 and is unaffected.
-                if self._locator_collapsed_to_start(locator, leader_pct):
+                # keeps leader_pct ~0 and is unaffected. An exact locator (#523) with
+                # the leader itself near the start is not screened: its share of the
+                # text can sit far below the reader's share of pages (image-only front
+                # matter). Further on, the resolver's fallbacks can still land at a
+                # chapter start, so the guard applies.
+                exact_near_start = (locator_source == "exact_locator"
+                                    and leader_pct is not None and leader_pct < 0.05)
+                if not exact_near_start and self._locator_collapsed_to_start(locator, leader_pct):
                     logger.warning(
                         f"⚠️ '{abs_id}' '{title_snip}' Resolved locator collapsed to "
                         f"start-of-book (0%) while leader '{leader}' is at "
