@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 from threading import Barrier, Event
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import sqlalchemy as sa
@@ -783,6 +784,104 @@ class TestSettingAndMigration(unittest.TestCase):
         cfg = Config(str(root / "alembic.ini"))
         cfg.set_main_option("script_location", str(root / "alembic"))
         self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["d3f1a7c9e2b5"])
+
+
+class TestPairAbsCopy(AdoptionBase):
+    """BOOKORBIT_PAIR_ABS_COPY: a requested audiobook pairs with the reader's Audiobookshelf copy of the same files."""
+
+    def setUp(self):
+        super().setUp()
+        self.abs = MagicMock()
+        self.abs.is_configured.return_value = True
+        self.abs.get_all_audiobooks.return_value = [
+            {"id": "li_copy", "path": "/audiobooks/A. Writer/Example Book", "isFile": False,
+             "media": {"duration": 36000.0}},
+            {"id": "li_other", "path": "/audiobooks/A. Writer/Another Book", "isFile": False,
+             "media": {"duration": 20000.0}},
+        ]
+        self.bo.get_audiobook_info.return_value = {"duration_seconds": 36000.0, "tracks": [
+            {"absolute_path": "/library/audio/A. Writer/Example Book/01.mp3"}]}
+        self.db.set_user_credential(self.user.id, "BOOKORBIT_PAIR_ABS_COPY", "true")
+        self.serve(_item(31))
+
+    def refresh_with_abs(self, abs_client="default"):
+        clients = SimpleNamespace(bookorbit_client=self.bo,
+                                  abs_client=self.abs if abs_client == "default" else abs_client)
+        return self.service.refresh_user(self.user.id, self.bo, library_clients=clients)
+
+    def assert_paired_with(self, abs_id, audio_source):
+        [row] = self.rows()
+        self.assertEqual((row["status"], row["linked_abs_id"]), ("paired", abs_id))
+        book = self.db.get_book(abs_id)
+        self.assertEqual((book.audio_source, book.ebook_source_id), (audio_source, "2167"))
+
+    def test_on_pairs_the_abs_item_in_the_same_folder(self):
+        with self.assertLogs(_LOG, level="INFO") as logs:
+            self.refresh_with_abs()
+        self.assert_paired_with("li_copy", "ABS")
+        self.assertIsNone(self.db.get_book("bookorbit:6099"))
+        self.assertIn(
+            f"user {self.user.id} pairs Audiobookshelf item li_copy instead of BookOrbit audiobook 6099 "
+            "(same files, 2 matching path parts)", " | ".join(logs.output))
+
+    def test_on_spelling_from_a_checkbox_also_enables_it(self):
+        self.db.set_user_credential(self.user.id, "BOOKORBIT_PAIR_ABS_COPY", "on")
+        self.refresh_with_abs()
+        self.assert_paired_with("li_copy", "ABS")
+
+    def test_off_keeps_the_bookorbit_copy(self):
+        self.db.set_user_credential(self.user.id, "BOOKORBIT_PAIR_ABS_COPY", "false")
+        self.refresh_with_abs()
+        self.assert_paired_with("bookorbit:6099", "BookOrbit")
+        self.abs.get_all_audiobooks.assert_not_called()
+
+    def test_reader_without_audiobookshelf_keeps_the_bookorbit_copy(self):
+        self.refresh_with_abs(abs_client=None)
+        self.assert_paired_with("bookorbit:6099", "BookOrbit")
+
+    def test_two_equally_matching_items_keep_the_bookorbit_copy(self):
+        self.abs.get_all_audiobooks.return_value.append(
+            {"id": "li_twin", "path": "/mnt/A. Writer/Example Book", "isFile": False, "media": {"duration": 36000.0}})
+        with self.assertLogs(_LOG, level="INFO") as logs:
+            self.refresh_with_abs()
+        self.assert_paired_with("bookorbit:6099", "BookOrbit")
+        self.assertIn("found no single Audiobookshelf copy of BookOrbit audiobook 6099 (2 items share its folder)",
+                      " | ".join(logs.output))
+
+    def test_folder_name_alone_needs_the_same_duration(self):
+        self.abs.get_all_audiobooks.return_value = [
+            {"id": "li_flat", "path": "/audiobooks/Example Book", "isFile": False, "media": {"duration": 36100.0}}]
+        self.bo.get_audiobook_info.return_value["tracks"] = [{"absolute_path": "/library/Example Book/01.mp3"}]
+        self.refresh_with_abs()
+        self.assert_paired_with("li_flat", "ABS")
+
+    def test_folder_name_alone_with_another_duration_keeps_the_bookorbit_copy(self):
+        self.abs.get_all_audiobooks.return_value = [
+            {"id": "li_flat", "path": "/audiobooks/Example Book", "isFile": False, "media": {"duration": 20000.0}}]
+        self.bo.get_audiobook_info.return_value["tracks"] = [{"absolute_path": "/library/Example Book/01.mp3"}]
+        self.refresh_with_abs()
+        self.assert_paired_with("bookorbit:6099", "BookOrbit")
+
+    def test_single_file_item_matches_on_the_file_itself(self):
+        self.abs.get_all_audiobooks.return_value = [
+            {"id": "li_file", "path": "/audiobooks/A. Writer/Example Book.m4b", "isFile": True, "media": {}}]
+        self.bo.get_audiobook_info.return_value["tracks"] = [
+            {"absolute_path": "/library/A. Writer/Example Book.m4b"}]
+        self.refresh_with_abs()
+        self.assert_paired_with("li_file", "ABS")
+
+    def test_bookorbit_without_file_paths_keeps_the_bookorbit_copy(self):
+        self.bo.get_audiobook_info.return_value["tracks"] = [{"absolute_path": None}]
+        self.refresh_with_abs()
+        self.assert_paired_with("bookorbit:6099", "BookOrbit")
+        self.abs.get_all_audiobooks.assert_not_called()
+
+    def test_setting_is_registered_per_user_with_a_false_default(self):
+        key = "BOOKORBIT_PAIR_ABS_COPY"
+        self.assertIn(key, ALL_SETTINGS)
+        self.assertEqual(DEFAULT_CONFIG[key], "false")
+        self.assertIn(key, PER_USER_CREDENTIAL_KEYS)
+        self.assertIn((key, "bool"), [(f[0], f[2]) for _group, fields in PER_USER_FIELD_GROUPS for f in fields])
 
 
 if __name__ == "__main__":

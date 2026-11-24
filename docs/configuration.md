@@ -614,6 +614,13 @@ BookOrbit readers can also turn on **Follow audiobook requests I make in BookOrb
 them with my ebook** (`BOOKORBIT_ADOPT_REQUESTS`, per reader, off by default) in their BookOrbit
 integration.
 
+**Pair requested audiobooks with my Audiobookshelf copy of the same files** (`BOOKORBIT_PAIR_ABS_COPY`,
+per reader, off by default) is for readers who listen in Audiobookshelf while BookOrbit imports requested
+audiobooks into a folder Audiobookshelf also scans. When a requested audiobook arrives, BookBridge pairs the
+Audiobookshelf item in the same folder instead of BookOrbit's copy. The two apps can mount the folder at
+different paths: the folder and its parent must match, or the folder name and a duration within 1%. If no
+single item matches, the BookOrbit copy is paired as before. Pairings made before you turn it on are not moved.
+
 ### Series Display
 
 Found under **Settings → Library & Matching**.

@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import math
 import re
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from pathlib import PurePath
+from pathlib import PurePath, PurePosixPath
 from types import SimpleNamespace
 from threading import Lock
 from typing import Any, Optional
@@ -34,6 +35,9 @@ ADOPTION_SCAN_INTERVAL = timedelta(minutes=10)
 ADOPTION_PAGE_SIZE = 100
 ADOPTION_MAX_PAGES = 20
 ADOPT_SETTING = "BOOKORBIT_ADOPT_REQUESTS"
+PAIR_ABS_SETTING = "BOOKORBIT_PAIR_ABS_COPY"
+# The reader's client bundle for the refresh in progress; a context variable keeps concurrent readers apart.
+_READER_CLIENTS: ContextVar[Any] = ContextVar("acquisition_reader_clients", default=None)
 STALLED_AFTER = timedelta(minutes=30)
 OPEN_STATUSES = ("waiting", "in_progress", "needs_look")
 STATUS_MAP = {
@@ -156,6 +160,7 @@ class AcquisitionService:
             if client is not None and not client.is_configured():
                 client = None
         now = utcnow()
+        clients_token = _READER_CLIENTS.set(library_clients)
         claimed = client is not None and self._claim_adoption(user_id)
         try:
             if claimed:
@@ -192,6 +197,7 @@ class AcquisitionService:
                 logger.warning("📥 Acquisition: user %s job reconciliation failed", user_id, exc_info=True)
             return self.database_service.get_acquisition_requests(user_id)
         finally:
+            _READER_CLIENTS.reset(clients_token)
             if claimed:
                 with self._adoption_claim_lock:
                     self._adoption_active.pop(user_id, None)
@@ -909,11 +915,15 @@ class AcquisitionService:
         user = self.database_service.get_user(user_id)
         if user is None or not (user.is_admin or env_truthy("ACQUISITION_ALLOW_READERS")):
             return False
+        return self._reader_opted_in(user_id, user, ADOPT_SETTING)
+
+    def _reader_opted_in(self, user_id: int, user: Any, key: str) -> bool:
+        """A per-reader switch read from the database (regular readers never inherit the admin's value)."""
         credentials = {
-            ADOPT_SETTING: self.database_service.get_user_credential(user_id, ADOPT_SETTING),
+            key: self.database_service.get_user_credential(user_id, key),
             _ALLOW_GLOBAL_FALLBACK_KEY: global_fallback_allowed(self.database_service, user),
         }
-        return str(resolve_setting(credentials, ADOPT_SETTING, "false")).strip().lower() in _TRUTHY_SETTING_VALUES
+        return str(resolve_setting(credentials, key, "false")).strip().lower() in _TRUTHY_SETTING_VALUES
 
     def _adoption_due(self, user_id: int) -> bool:
         if not self._adoption_enabled(user_id):
@@ -1643,6 +1653,55 @@ class AcquisitionService:
                 )
                 self._update(user_id, row, status="paired", linked_abs_id=abs_id, status_detail=None)
 
+    def _abs_copy_of(self, user_id: int, bookorbit_id: str, client: Any) -> Optional[tuple[str, Optional[float]]]:
+        """The reader's one Audiobookshelf item holding a BookOrbit audiobook's files, as (item id, duration).
+
+        Only for a reader who switched on BOOKORBIT_PAIR_ABS_COPY and has their own Audiobookshelf. The two
+        apps usually mount the shared folder at different roots, so paths are compared from the end: the
+        item must share at least two trailing path parts with the BookOrbit files (folder and its parent),
+        or one part plus a duration within 1%. Anything less certain keeps the BookOrbit copy.
+        """
+        abs_client = getattr(_READER_CLIENTS.get(), "abs_client", None)
+        if client is None or abs_client is None or not abs_client.is_configured():
+            return None
+        user = self.database_service.get_user(user_id)
+        if user is None or not self._reader_opted_in(user_id, user, PAIR_ABS_SETTING):
+            return None
+        info = client.get_audiobook_info(bookorbit_id) or {}
+        track = next((PurePosixPath(str(t["absolute_path"])) for t in info.get("tracks") or []
+                      if t.get("absolute_path")), None)
+        duration = info.get("duration_seconds")
+        scored = []
+        for item in (abs_client.get_all_audiobooks() or []) if track else []:
+            target = track if item.get("isFile") else track.parent
+            shared = 0
+            for item_part, target_part in zip(reversed(PurePosixPath(str(item.get("path") or "")).parts),
+                                              reversed(target.parts)):
+                if item_part != target_part or item_part == "/":
+                    break
+                shared += 1
+            if shared and item.get("id") is not None:
+                scored.append((shared, str(item["id"]), (item.get("media") or {}).get("duration")))
+        scored.sort(key=lambda entry: entry[0], reverse=True)
+        best = scored[0] if scored and (len(scored) == 1 or scored[1][0] < scored[0][0]) else None
+        if best and best[0] < 2:
+            close = duration and best[2] and abs(float(best[2]) - float(duration)) <= 0.01 * float(duration)
+            best = best if close else None
+        if best is None:
+            logger.info(
+                "📥 Acquisition: user %s found no single Audiobookshelf copy of BookOrbit audiobook %s (%s); "
+                "pairing the BookOrbit copy",
+                user_id, bookorbit_id,
+                "BookOrbit gave no file path" if track is None else f"{len(scored)} items share its folder",
+            )
+            return None
+        logger.info(
+            "📥 Acquisition: user %s pairs Audiobookshelf item %s instead of BookOrbit audiobook %s "
+            "(same files, %d matching path parts)",
+            user_id, best[1], bookorbit_id, best[0],
+        )
+        return best[1], best[2]
+
     def _pair_books(self, user_id: int, audio: tuple, ebook: tuple, title: str, client: Any) -> tuple[Optional[str], str]:
         """Map an audiobook to an ebook; (abs_id, '') on success or when already paired, else (None, reason).
 
@@ -1653,6 +1712,12 @@ class AcquisitionService:
         (audio_source, audio_id), (ebook_source, ebook_id, ebook_filename) = audio, ebook
         if not audio_source or not audio_id or not ebook_id or not ebook_filename:
             return None, "The other book's details are incomplete."
+        abs_duration = None
+        # An existing BookOrbit pairing stays as it is; only a new one may move to the reader's ABS copy.
+        if audio_source == "BookOrbit" and self._audio_book(audio_source, str(audio_id)) is None:
+            abs_copy = self._abs_copy_of(user_id, str(audio_id), client)
+            if abs_copy is not None:
+                audio_source, audio_id, abs_duration = "ABS", abs_copy[0], abs_copy[1]
         audio_book = self._audio_book(audio_source, audio_id)
         ebook_book = self._ebook_book(ebook_source, ebook_id, ebook_filename)
         if audio_book and ebook_book and audio_book.abs_id == ebook_book.abs_id:
@@ -1671,7 +1736,7 @@ class AcquisitionService:
         info = client.get_audiobook_info(audio_id) if audio_source == "BookOrbit" and client is not None else None
         saved = self.book_mapping_service.create_audio_mapping_from_match(
             audio_source=audio_source, audio_source_id=str(audio_id), audio_title=title,
-            audio_duration=(info or {}).get("duration_seconds"),
+            audio_duration=(info or {}).get("duration_seconds") or abs_duration,
             ebook_filename=ebook_filename, ebook_source=ebook_source, ebook_source_id=str(ebook_id),
             user_id=user_id,
         )

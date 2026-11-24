@@ -40,6 +40,9 @@ Then **Save integrations**.
 ??? info "Other options"
     - **Collection name** (My Integrations): matched books are moved to this BookOrbit collection.
     - **Follow audiobook requests I make in BookOrbit and pair them with my ebook** (My Integrations).
+    - **Pair requested audiobooks with my Audiobookshelf copy of the same files** (My Integrations): when you listen
+      in Audiobookshelf and it scans the folder BookOrbit imports into. See
+      [Configuration](../configuration.md#shelfmark).
     - **Auto-match books you start reading in BookOrbit** (Settings): once you pass 1% of an unmatched ebook,
       BookBridge looks for its audiobook and suggests the match.
     - **When BookOrbit syncs read-along books itself** (Settings): only matters when one BookOrbit entry holds both

@@ -46,5 +46,7 @@ A download with no progress for 30 minutes says so. Nothing is cancelled for you
       library** there so BookBridge asks BookOrbit to scan a new audiobook in.
     - **Follow audiobook requests I make in BookOrbit** also pairs audiobooks you requested inside BookOrbit in the
       last 30 days with your ebook when the title, authors and series match.
+    - **Pair requested audiobooks with my Audiobookshelf copy of the same files** links the Audiobookshelf item
+      instead of BookOrbit's copy, for readers who listen in Audiobookshelf and have it scan BookOrbit's folder.
     - New books are found in your BookOrbit library only.
     - See [Shelfmark](../apps/shelfmark.md) and [BookOrbit](../apps/bookorbit.md) for setup.

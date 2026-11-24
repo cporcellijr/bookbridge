@@ -6,6 +6,14 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Requested audiobooks can pair with your Audiobookshelf copy.** If you listen in Audiobookshelf and it
+  scans the folder BookOrbit imports requested audiobooks into, turn on **Pair requested audiobooks with my
+  Audiobookshelf copy of the same files** in your BookOrbit integration. A requested audiobook then pairs the
+  Audiobookshelf item holding the same files instead of BookOrbit's copy, and falls back to BookOrbit's copy
+  when no single item matches. Off by default; existing pairings are not moved (#585).
+
 ## [7.14.0] - 2026-11-24
 
 ### Added
