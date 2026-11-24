@@ -2972,6 +2972,23 @@ class TestKosyncEndpoints(unittest.TestCase):
             mtime=None, booklore_id='bl-1', hash_method='content',
         )
 
+    def test_plugin_session_upload_survives_a_debounce_loop_tick(self):
+        # Once any test has started it, _kosync_debounce_loop ticks every 10 s for the
+        # rest of the run; each tick finalizes open sessions idle for over 300 s.
+        from src.api import kosync_server
+
+        original = kosync_server._update_grouped_kosync_session
+        calls = []
+
+        def update_then_tick(*args, **kwargs):
+            original(*args, **kwargs)
+            calls.append(1)
+            if len(calls) == 2:
+                kosync_server._flush_stale_kosync_sessions()
+
+        with patch.object(kosync_server, "_update_grouped_kosync_session", update_then_tick):
+            self.test_plugin_session_upload_auto_classifies_device_and_replaces_estimated_overlap()
+
     def test_plugin_session_upload_auto_classifies_device_and_replaces_estimated_overlap(self):
         from src import web_server
         from src.api import kosync_server
@@ -2979,7 +2996,7 @@ class TestKosyncEndpoints(unittest.TestCase):
         doc_hash = 'u' * 32
         device = 'Kobo_monza'
         device_id = 'KOBO123'
-        start_time = 1_742_900_000.0
+        start_time = time.time() - 150.0  # recent: a debounce-loop tick must not finalize it
         end_time = start_time + 120.0
 
         book = Book(
