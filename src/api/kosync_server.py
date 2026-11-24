@@ -15,6 +15,7 @@ import unicodedata
 import zipfile
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -1917,32 +1918,35 @@ def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
     if not book or user_id is None:
         return
     try:
-        previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
-        # Keep the percentage the cycle last saw, across several PUTs, so the cycle
-        # measures (and accumulates) movement from it instead of seeing a delta of 0.
-        # Keep an approved rewind's cutoff too, as the cycle's own writes do.
-        metadata = state_metadata_kwargs({
-            "synced_pct": get_kosync_synced_pct(previous),
-            "kosync_approved_rewind_at": get_kosync_approved_rewind_at(previous),
-        })
-        if is_cbz_book(book):
-            # PUT updates the wire position immediately. Retain the last synced
-            # page until the cycle consumes it, including across several PUTs,
-            # so a single page turn is still detectable when its pct delta is 0.
+        # Under the lock every KoSync State save takes, so a sync cycle's save cannot
+        # land between this read and write and be answered with a stale baseline.
+        with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+            previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
+            # Keep the percentage the cycle last saw, across several PUTs, so the cycle
+            # measures (and accumulates) movement from it instead of seeing a delta of 0.
+            # Keep an approved rewind's cutoff too, as the cycle's own writes do.
             metadata = state_metadata_kwargs({
-                "page": page_from_persisted_state(previous),
+                "synced_pct": get_kosync_synced_pct(previous),
                 "kosync_approved_rewind_at": get_kosync_approved_rewind_at(previous),
             })
-        _database_service.save_state(State(
-            abs_id=book.abs_id,
-            client_name="kosync",
-            percentage=float(percentage or 0),
-            timestamp=int(datetime_to_epoch(timestamp)) if timestamp else int(time.time()),
-            last_updated=int(time.time()),
-            xpath=progress or "",
-            user_id=user_id,
-            **metadata,
-        ))
+            if is_cbz_book(book):
+                # PUT updates the wire position immediately. Retain the last synced
+                # page until the cycle consumes it, including across several PUTs,
+                # so a single page turn is still detectable when its pct delta is 0.
+                metadata = state_metadata_kwargs({
+                    "page": page_from_persisted_state(previous),
+                    "kosync_approved_rewind_at": get_kosync_approved_rewind_at(previous),
+                })
+            _database_service.save_state(State(
+                abs_id=book.abs_id,
+                client_name="kosync",
+                percentage=float(percentage or 0),
+                timestamp=int(datetime_to_epoch(timestamp)) if timestamp else int(time.time()),
+                last_updated=int(time.time()),
+                xpath=progress or "",
+                user_id=user_id,
+                **metadata,
+            ))
     except Exception as exc:
         logger.warning(
             "KOSync: failed to persist user-scoped state for '%s' user_id=%s: %s",
