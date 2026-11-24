@@ -219,14 +219,13 @@
         };
     }
 
+    // Native modal dialogs: focus moves in, Tab stays inside, Escape closes and focus returns.
     function openDayDetail() {
-        dayDetailBackdrop.classList.add("is-open");
-        dayDetailBackdrop.setAttribute("aria-hidden", "false");
+        if (!dayDetailBackdrop.open) dayDetailBackdrop.showModal();
     }
 
     function closeDayDetail() {
-        dayDetailBackdrop.classList.remove("is-open");
-        dayDetailBackdrop.setAttribute("aria-hidden", "true");
+        dayDetailBackdrop.close();
     }
 
     function renderReadingDayDetail(payload) {
@@ -870,11 +869,6 @@
     dayDetailBackdrop.addEventListener("click", event => {
         if (event.target === dayDetailBackdrop) closeDayDetail();
     });
-    document.addEventListener("keydown", event => {
-        if (event.key === "Escape" && dayDetailBackdrop.classList.contains("is-open")) {
-            closeDayDetail();
-        }
-    });
 
     const bookDetailBackdrop = document.getElementById("book-detail-backdrop");
     const bookDetailTitle = document.getElementById("book-detail-title");
@@ -884,12 +878,10 @@
     const bookDetailClose = document.getElementById("book-detail-close");
 
     function openBookDetailModal() {
-        bookDetailBackdrop.classList.add("is-open");
-        bookDetailBackdrop.setAttribute("aria-hidden", "false");
+        if (!bookDetailBackdrop.open) bookDetailBackdrop.showModal();
     }
     function closeBookDetailModal() {
-        bookDetailBackdrop.classList.remove("is-open");
-        bookDetailBackdrop.setAttribute("aria-hidden", "true");
+        bookDetailBackdrop.close();
     }
 
     function renderBookDetail(data) {
@@ -956,9 +948,6 @@
     bookDetailClose.addEventListener("click", closeBookDetailModal);
     bookDetailBackdrop.addEventListener("click", event => {
         if (event.target === bookDetailBackdrop) closeBookDetailModal();
-    });
-    document.addEventListener("keydown", event => {
-        if (event.key === "Escape" && bookDetailBackdrop.classList.contains("is-open")) closeBookDetailModal();
     });
 
     dashboardRoot.addEventListener("click", event => {

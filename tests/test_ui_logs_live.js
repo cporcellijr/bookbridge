@@ -1,4 +1,4 @@
-// Logs live mode polls only while the tab is visible and reloads the history when it is shown again.
+// Logs live mode and auto-refresh poll only while the tab is visible and catch up when it is shown again.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -12,7 +12,7 @@ const script = source.slice(start, end).replace(/\{\{.*?\}\}/g, '""');
 const calls = { history: 0, live: 0 };
 const intervals = new Map();
 let nextTimer = 1;
-const element = () => ({ checked: false, style: {}, children: [], addEventListener() {} });
+const element = () => ({ checked: false, style: {}, children: [], listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; } });
 const visibility = [];
 const sandbox = {
   document: { hidden: false, addEventListener: (type, fn) => { if (type === 'visibilitychange') visibility.push(fn); } },
@@ -54,5 +54,19 @@ const history = calls.history;
 show(true); show(false);
 assert.equal(calls.history, history);
 assert.equal(intervals.size, 0);
+
+// Auto-refresh (30 s) also skips hidden tabs and refreshes at once when shown.
+sandbox.autoRefresh.checked = true;
+sandbox.autoRefresh.listeners.change({ target: sandbox.autoRefresh });
+assert.equal(intervals.size, 1);
+const before = calls.history;
+tick();
+assert.equal(calls.history, before + 1, 'a visible tab auto-refreshes');
+show(true);
+tick(); tick();
+assert.equal(calls.history, before + 1, 'a hidden tab skips auto-refresh');
+show(false);
+assert.equal(calls.history, before + 2, 'showing the tab refreshes at once');
+assert.equal(calls.live, 2);
 
 console.log('logs live checks passed');

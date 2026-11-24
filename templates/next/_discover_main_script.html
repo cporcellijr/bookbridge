@@ -875,12 +875,12 @@
     const forgeStageModal = document.getElementById('forgeStageModal');
 
     function openForgeStageModal() {
-        if (forgeStageModal) forgeStageModal.classList.add('open');
+        if (forgeStageModal && !forgeStageModal.open) forgeStageModal.showModal();
     }
 
     function closeForgeStageModal() {
         pendingForgeOnlySubmit = false;
-        if (forgeStageModal) forgeStageModal.classList.remove('open');
+        if (forgeStageModal) forgeStageModal.close();
     }
 
     // The queue partial is re-rendered after every mutation, so look the form up when used.
@@ -894,7 +894,7 @@
         }
         stageInput.value = mode;
         pendingForgeOnlySubmit = true;
-        forgeStageModal.classList.remove('open');
+        forgeStageModal.close();
         form.requestSubmit(button);
     }
 
@@ -904,8 +904,10 @@
             if (option) chooseForgeStageMode(option.dataset.stageMode);
             else if (event.target === forgeStageModal) closeForgeStageModal();
         });
-        document.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape' && forgeStageModal.classList.contains('open')) closeForgeStageModal();
+        // Escape closes through the same path as Cancel.
+        forgeStageModal.addEventListener('cancel', (event) => {
+            event.preventDefault();
+            closeForgeStageModal();
         });
     }
 

@@ -407,8 +407,9 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   "return original.apply(this, arguments);\n"
   "};\n"
   "});",
-  "// Poll every 5s\n"
-  "setInterval(checkForgeStatus, 5000);\n"
+  "// Poll every 5s while the tab is visible, and check at once when it is shown again\n"
+  "setInterval(() => { if (!document.hidden) checkForgeStatus(); }, 5000);\n"
+  "document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForgeStatus(); });\n"
   "// Initial check\n"
   "document.addEventListener('DOMContentLoaded', checkForgeStatus);"),
  ("if (refreshPaused) return;",
@@ -697,7 +698,7 @@ class TestOpsPages(unittest.TestCase):
                         'id="loadMore"', 'toggleLiveMode();', 'id="scrollToTop"',
                         'id="scrollToBottom"', 'bbPlural(LINES_TOTAL,',
                         'setInterval(() => { if (!document.hidden) fetchLiveLogs(); }, 2000)',
-                        'setInterval(() => fetchLogs(), 30000)',
+                        'setInterval(() => { if (!document.hidden) fetchLogs(); }, 30000)',
                     ):
                         self.assertIn(expected, html)
                     scripts = re.findall(r'<script\b[^>]*>.*?</script>', html, flags=re.DOTALL)

@@ -324,8 +324,7 @@
         $('acqTitle').readOnly = false;
         $('acqAuthor').readOnly = false;
         $('acqResult').textContent = '';
-        $('acqModal').classList.add('open');
-        $('acqModal').setAttribute('aria-hidden', 'false');
+        if (!$('acqModal').open) $('acqModal').showModal();
         $('acqTitle').focus();
     }
 
@@ -378,8 +377,7 @@
 
     function closeAcqDialog() {
         resetAcqReleases();
-        $('acqModal').classList.remove('open');
-        $('acqModal').setAttribute('aria-hidden', 'true');
+        $('acqModal').close();
         if (acqSearchRefreshPending) {
             acqSearchRefreshPending = false;
             if (typeof window.refreshSuggestionSearch === 'function') window.refreshSuggestionSearch();
@@ -748,7 +746,7 @@
                     && affectsCurrentSearch(job);
             }));
             if (receiptArrived || indexedTransition) {
-                if (activeTab === 'search' && $('acqModal').classList.contains('open')) {
+                if (activeTab === 'search' && $('acqModal').open) {
                     acqSearchRefreshPending = true;
                 } else if (typeof window.refreshSuggestionSearch === 'function') {
                     window.refreshSuggestionSearch();
@@ -831,7 +829,8 @@
         $('acqShelfmarkBtn').addEventListener('click', findInShelfmark);
         $('acqCancelBtn').addEventListener('click', closeAcqDialog);
         $('acqModal').addEventListener('click', (event) => { if (event.target === $('acqModal')) closeAcqDialog(); });
-        document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && $('acqModal').classList.contains('open')) closeAcqDialog(); });
+        // Escape closes through the same path as Cancel, so the deferred search refresh still runs.
+        $('acqModal').addEventListener('cancel', (event) => { event.preventDefault(); closeAcqDialog(); });
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden && acquisitionNeedsPolling()) loadAcqMine();
         });

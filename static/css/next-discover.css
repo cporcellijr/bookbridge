@@ -177,7 +177,7 @@
     .acq-row:first-child { border-top: 0; }
     .acq-main { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
     #acqModal { display: none; }
-    #acqModal.open { display: flex; }
+    #acqModal[open] { display: flex; }
     #acqModal .form-input { margin-bottom: 12px; }
     .acq-formats { border: 0; padding: 0; margin: 0 0 4px; display: flex; flex-wrap: wrap; gap: 16px; }
     .acq-formats legend { padding: 0; }
@@ -192,7 +192,7 @@
     .acq-result { margin-top: 12px; min-height: 1.4em; color: var(--muted); font-size: 13px; }
     /* Forge staging modal (shared .modal-overlay/.modal visuals, page-toggled) */
     #forgeStageModal { display: none; }
-    #forgeStageModal.open { display: flex; }
+    #forgeStageModal[open] { display: flex; }
     .modal-card h3 { font-size: 20px; margin-bottom: 8px; }
     .modal-card p { color: var(--muted); font-size: 14px; line-height: 1.45; margin-bottom: 18px; }
     .modal-options { display: grid; gap: 12px; }
@@ -317,6 +317,8 @@
 }
 
 /* Dialogs: Classic gets these visuals from app.css, which New does not load. */
+dialog.modal-overlay { width: auto; height: auto; max-width: none; max-height: none; margin: 0; border: 0; color: inherit; }
+dialog.modal-overlay::backdrop { background: transparent; }
 .view .modal-overlay { position: fixed; inset: 0; z-index: 300; align-items: center; justify-content: center; padding: 20px; background: rgba(6, 8, 14, .72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 .view .modal { width: min(560px, 100%); max-height: min(85dvh, 860px); overflow: auto; overscroll-behavior: contain; padding: 24px; border: 1px solid var(--line-2); border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: 0 25px 70px rgba(0, 0, 0, .45); }
 .view #acqModal .modal { width: min(600px, 100%); }

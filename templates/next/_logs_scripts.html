@@ -372,7 +372,7 @@
                 liveMode.checked = false;
                 toggleLiveMode();
             }
-            autoRefreshInterval = setInterval(() => fetchLogs(), 30000);
+            autoRefreshInterval = setInterval(() => { if (!document.hidden) fetchLogs(); }, 30000);
         } else {
             if (autoRefreshInterval) {
                 clearInterval(autoRefreshInterval);
@@ -382,9 +382,11 @@
     });
 
     liveMode.addEventListener('change', toggleLiveMode);
-    // A hidden tab skips live polls; reload the history on return so nothing logged meanwhile is missed.
+    // A hidden tab skips live and auto-refresh polls; reload on return so nothing logged meanwhile is missed.
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && liveRefreshInterval) loadLiveHistory();
+        if (document.hidden) return;
+        if (liveRefreshInterval) loadLiveHistory();
+        else if (autoRefreshInterval) fetchLogs();
     });
 
     scrollToTop.addEventListener('click', () => {

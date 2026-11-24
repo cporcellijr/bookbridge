@@ -91,8 +91,10 @@
     .day-detail-backdrop {
         position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
         background: rgba(6, 8, 14, .72); padding: 20px; z-index: 220;
+        width: auto; height: auto; max-width: none; max-height: none; margin: 0; border: 0; color: inherit;
     }
-    .day-detail-backdrop.is-open { display: flex; }
+    .day-detail-backdrop[open] { display: flex; }
+    .day-detail-backdrop::backdrop { background: transparent; }
     .day-detail-modal {
         width: min(760px, 100%); max-height: min(82vh, 860px); overflow: hidden;
         border-radius: 24px; background: #11131b; border: 1px solid rgba(255,255,255,.1);
@@ -242,8 +244,8 @@
         <div class="loading"><span class="spinner" aria-hidden="true"></span><span>{{ _('Loading dashboard data…') }}</span></div>
     </section>
 </div>
-<div class="day-detail-backdrop" id="day-detail-backdrop" aria-hidden="true">
-    <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="day-detail-title">
+<dialog class="day-detail-backdrop" id="day-detail-backdrop" aria-labelledby="day-detail-title">
+    <div class="day-detail-modal">
         <div class="day-detail-head">
             <div>
                 <h3 id="day-detail-title">{{ _('Books read on this day') }}</h3>
@@ -254,9 +256,9 @@
         <div class="day-detail-summary" id="day-detail-summary">{{ _('No day selected.') }}</div>
         <div class="day-detail-body" id="day-detail-body"></div>
     </div>
-</div>
-<div class="day-detail-backdrop" id="book-detail-backdrop" aria-hidden="true">
-    <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="book-detail-title">
+</dialog>
+<dialog class="day-detail-backdrop" id="book-detail-backdrop" aria-labelledby="book-detail-title">
+    <div class="day-detail-modal">
         <div class="day-detail-head">
             <div>
                 <h3 id="book-detail-title">{{ _('Book detail') }}</h3>
@@ -267,6 +269,6 @@
         <div class="day-detail-summary" id="book-detail-summary">{{ _('Loading…') }}</div>
         <div class="day-detail-body" id="book-detail-body"></div>
     </div>
-</div>
+</dialog>
 {% endblock %}
 {% block scripts %}{% include 'next/_stats_scripts.html' %}{% endblock %}

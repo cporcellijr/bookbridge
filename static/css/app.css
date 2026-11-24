@@ -717,6 +717,11 @@ textarea.form-input {
     backdrop-filter: blur(6px);
 }
 
+/* A native <dialog> overlay keeps the full-screen layout above, not the browser's dialog box. */
+dialog.modal-overlay { width: auto; height: auto; max-width: none; max-height: none; margin: 0; border: 0; color: inherit; }
+dialog.modal-overlay:not([open]) { display: none; }
+dialog.modal-overlay::backdrop { background: transparent; }
+
 .modal {
     width: min(560px, 100%);
     max-height: min(85vh, 860px);

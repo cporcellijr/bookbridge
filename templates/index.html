@@ -2323,8 +2323,9 @@
                     })
                     .catch(e => console.debug("Forge status check failed", e));
             }
-            // Poll every 5s
-            setInterval(checkForgeStatus, 5000);
+            // Poll every 5s while the tab is visible, and check at once when it is shown again
+            setInterval(() => { if (!document.hidden) checkForgeStatus(); }, 5000);
+            document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForgeStatus(); });
             // Initial check
             document.addEventListener('DOMContentLoaded', checkForgeStatus);
         </script>

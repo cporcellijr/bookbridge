@@ -143,7 +143,7 @@ class AcquisitionJobActionsTests(SearchTabBase):
         self.assertIn("['waiting_import', 'catalog_unavailable', 'needs_review'].includes(library)", script)
         self.assertIn("current === 'indexed' && (!previous || previous[`${prefix}_library_state`] !== 'indexed')", script)
         self.assertIn("acqSearchRefreshPending = true", script)
-        self.assertIn("activeTab === 'search' && $('acqModal').classList.contains('open')", script)
+        self.assertIn("activeTab === 'search' && $('acqModal').open", script)
         self.assertIn("if (acqSearchRefreshPending)", script)
         self.assertIn("const knownIsbns = items.map", script)
         self.assertIn("const knownAuthors = items.map", script)

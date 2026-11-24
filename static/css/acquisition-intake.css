@@ -6,7 +6,7 @@
 .acq-row:first-child { border-top: 0; }
 .acq-main { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
 #acqModal { display: none; }
-#acqModal.open { display: flex; }
+#acqModal[open] { display: flex; }
 #acqModal .form-input, #acqModal .form-select { margin-bottom: 12px; }
 #acqModal .modal { width: min(920px, 100%); }
 .acq-formats, .acq-providers { border: 0; padding: 0; margin: 0 0 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }

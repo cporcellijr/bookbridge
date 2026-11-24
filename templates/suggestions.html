@@ -179,7 +179,7 @@
     .reader-docs-wrap { margin-top: 20px; }
     /* Forge staging modal (shared .modal-overlay/.modal visuals, page-toggled) */
     #forgeStageModal { display: none; }
-    #forgeStageModal.open { display: flex; }
+    #forgeStageModal[open] { display: flex; }
     .modal-card h3 { font-size: 20px; margin-bottom: 8px; }
     .modal-card p { color: var(--muted); font-size: 14px; line-height: 1.45; margin-bottom: 18px; }
     .modal-options { display: grid; gap: 12px; }
@@ -426,8 +426,8 @@
 
 {% include '_provider_edition_picker.html' %}
 {% if storyteller_enabled %}
-<div class="modal-overlay" id="forgeStageModal" aria-hidden="true">
-    <div class="modal modal-card" role="dialog" aria-modal="true" aria-labelledby="forgeStageTitle">
+<dialog class="modal-overlay" id="forgeStageModal" aria-labelledby="forgeStageTitle">
+    <div class="modal modal-card">
         <h3 id="forgeStageTitle">{{ _('Storyteller edition staging') }}</h3>
         <p>{{ _('Choose what happens to the staged source files after Storyteller finishes processing.') }}</p>
         <div class="modal-options">
@@ -444,7 +444,7 @@
             <button type="button" class="btn btn-secondary" data-stage-mode="">{{ _('Cancel') }}</button>
         </div>
     </div>
-</div>
+</dialog>
 {% endif %}
 
 {% include 'next/_discover_main_script.html' %}

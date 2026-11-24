@@ -5,8 +5,8 @@
     </section>
 </div>
 
-<div class="modal-overlay" id="acqModal" aria-hidden="true">
-    <div class="modal modal-card" role="dialog" aria-modal="true" aria-labelledby="acqModalTitle">
+<dialog class="modal-overlay" id="acqModal" aria-labelledby="acqModalTitle">
+    <div class="modal modal-card">
         <h3 id="acqModalTitle">{{ _('Get a book') }}</h3>
         <form id="acqForm">
             <label class="field-label" for="acqTitle">{{ _('Title') }}</label>
@@ -52,4 +52,4 @@
             <div class="acq-result" id="acqResult" role="status" aria-live="polite"></div>
         </form>
     </div>
-</div>
+</dialog>
