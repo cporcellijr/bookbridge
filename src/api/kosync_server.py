@@ -1868,13 +1868,14 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason,
     ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename, doc_hash_val)
     abs_ebook_item_id = _resolve_abs_ebook_item(epub_filename)
 
+    audio_source = candidate.get("audio_source") or "abs"
     saved = mapping_service.create_audio_mapping_from_match(
-        audio_source="abs",
+        audio_source=audio_source,
         audio_source_id=candidate["abs_id"],
         audio_title=candidate["title"],
         ebook_filename=epub_filename,
         audio_duration=candidate.get("duration") or None,
-        audio_cover_url=f"/api/cover-proxy/{candidate['abs_id']}",
+        audio_cover_url=f"/api/cover-proxy/{candidate['abs_id']}" if audio_source == "abs" else None,
         ebook_source=ebook_source,
         ebook_source_id=ebook_source_id,
         booklore_ebook_id=ebook_source_id if is_grimmory_source(ebook_source) else None,
@@ -1896,7 +1897,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason,
 
     ebook_label = f"{saved.ebook_source}:{saved.ebook_source_id}" if saved.ebook_source else "local file"
     logger.info(
-        f"✅ Auto-mapped '{candidate['title']}' (abs {candidate['abs_id']}) ↔ '{epub_filename}' "
+        f"✅ Auto-mapped '{candidate['title']}' ({audio_source} {candidate['abs_id']}) ↔ '{epub_filename}' "
         f"[ebook={ebook_label}] via {reason} (title_sim={candidate.get('title_sim')}, author_sim={candidate.get('author_sim')})"
     )
     if _manager:
@@ -1905,6 +1906,28 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason,
         except Exception as e:
             logger.debug(f"Auto-map: initial sync_cycle failed: {e}")
     return saved
+
+
+def _bookorbit_edition_audio_candidate(epub_filename, doc_hash=None):
+    """The one unmapped BookOrbit audiobook BookOrbit groups with this EPUB as an edition, else None."""
+    source, source_id = _resolve_library_ebook_source(epub_filename, doc_hash)
+    if source != "BookOrbit":
+        return None
+    try:
+        client = _discovery_client("bookorbit_client")
+        ebook = client.get_book_by_id(int(source_id)) or {}
+    except Exception as e:
+        logger.debug(f"Auto-map: BookOrbit edition lookup failed: {e}")
+        return None
+    audio_ids = ebook.get("editionAudioIds") or []
+    if len(audio_ids) != 1 or _database_service.get_book(f"bookorbit:{audio_ids[0]}"):
+        return None
+    audio = client.get_book_by_id(int(audio_ids[0]), allow_refresh=False) or {}
+    languages = {str(info.get("language") or "").casefold().split("-")[0] for info in (ebook, audio)} - {""}
+    if len(languages) > 1:
+        return None
+    return {"audio_source": "BookOrbit", "abs_id": audio_ids[0],
+            "title": audio.get("title") or ebook.get("title") or Path(epub_filename).stem}
 
 
 def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
@@ -4914,6 +4937,11 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None, *, epub_filen
         logger.debug("Auto-discovery: EPUB metadata read failed: %s", exc)
         ebook_meta = {}
     ebook_meta.setdefault("title", title)
+    if env_truthy('KOSYNC_AUTO_MAP_ON_AGREEMENT', default=True):
+        edition = _bookorbit_edition_audio_candidate(epub_filename, doc_hash_val)
+        if edition and _auto_map_ebook_to_audiobook(
+                doc_hash_val, epub_filename, edition, "BookOrbit edition", user_id=user_id):
+            return
     candidates = _autodiscovery_audiobook_candidates(epub_filename, ebook_meta)
     if candidates and env_truthy('KOSYNC_AUTO_MAP_ON_AGREEMENT', default=True):
         chosen, reason = _select_auto_map_candidate(ebook_meta, candidates)

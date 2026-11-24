@@ -828,7 +828,7 @@ def get_searchable_ebooks(
 
 
 def _promote_authoritative_ebook_matches(audiobooks, ebooks):
-    """Stable-sort ebooks so any whose abs_identifier matches an audiobook source_id rises to the top."""
+    """Stable-sort ebooks so a Calibre abs_identifier or a BookOrbit edition link to a listed audiobook rises to the top."""
     if not ebooks or not audiobooks:
         return ebooks
     ab_ids = set()
@@ -840,10 +840,16 @@ def _promote_authoritative_ebook_matches(audiobooks, ebooks):
                 ab_ids.add(sid_str)
     if not ab_ids:
         return ebooks
+    bookorbit_audio_ids = {
+        str(ab.source_id).strip() for ab in audiobooks
+        if str(getattr(ab, 'source', '') or '').casefold() == 'bookorbit' and getattr(ab, 'source_id', None) is not None
+    }
 
     def _key(eb):
         ident = getattr(eb, 'abs_identifier', None)
         if ident and str(ident).strip() in ab_ids:
+            return 0
+        if getattr(eb, 'source', None) == 'BookOrbit' and bookorbit_audio_ids & set(getattr(eb, 'edition_audio_ids', None) or []):
             return 0
         return 1
 

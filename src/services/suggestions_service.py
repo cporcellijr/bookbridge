@@ -1936,6 +1936,14 @@ class SuggestionsService:
             )
             return self._ebook_scan_status(anchor, [], discovery) if discovery["unknown"] else None
 
+        edition = self._bookorbit_edition_audio_match(ebook, candidate_pool)
+        if edition is not None:
+            self.logger.info(
+                f"📌 Authoritative match via BookOrbit edition for '{anchor['title']}' "
+                f"-> {edition['audio_title']}"
+            )
+            return self._ebook_scan_status(anchor, [edition], discovery)
+
         ebook_title = anchor["title"]
         ebook_author = anchor["author"]
         ebook_names = self._author_names(ebook_author)
@@ -2028,6 +2036,37 @@ class SuggestionsService:
             "candidate_count": discovery["candidate_count"],
             "visited_count": discovery["visited_count"],
         }
+
+    def _bookorbit_edition_audio_match(self, ebook: dict, candidate_pool: List[dict]) -> Optional[dict]:
+        """A 100 match for the one unmapped BookOrbit audiobook BookOrbit groups with this ebook.
+
+        Two audiobook editions, a known language mismatch or an audiobook already mapped
+        fall back to scoring.
+        """
+        audio_ids = {str(i) for i in ebook.get("edition_audio_ids") or ebook.get("editionAudioIds") or []}
+        if not audio_ids:
+            return None
+        partners = {
+            str(cand.get("audio_source_id")): cand for cand in candidate_pool
+            if str(cand.get("audio_source") or "").casefold() == "bookorbit"
+            and str(cand.get("audio_source_id")) in audio_ids
+        }
+        if len(partners) != 1:
+            return None
+        cand = next(iter(partners.values()))
+        ebook_language = str(ebook.get("language") or "").casefold().split("-")[0]
+        audio_language = str(cand.get("audio_language") or "").casefold().split("-")[0]
+        if ebook_language and audio_language and ebook_language != audio_language:
+            return None
+        if cand.get("bridge_key") and self.database_service.get_book(cand["bridge_key"]):
+            return None
+        match = {field: cand.get(field, "") for field in (
+            "audio_source", "audio_source_id", "bridge_key", "audio_title", "audio_author",
+            "audio_language", "audio_cover_url", "audio_provider_book_id", "audio_provider_file_id",
+        )}
+        match.update(audio_duration=cand.get("audio_duration"), score=100.0,
+                     match_reason="authoritative", authority="bookorbit_edition")
+        return match
 
     def _scan_single_ebook(self, ebook: dict, candidate_pool: List[dict]) -> Optional[dict]:
         """Compatibility wrapper used by shelf-watch callers."""

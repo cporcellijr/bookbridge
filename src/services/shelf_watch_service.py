@@ -300,6 +300,46 @@ class ShelfWatchService:
             self._process_reading_watch(user_id=user_id, active_client=active_client)
         except Exception:
             logger.warning("Reading-watch: pass failed", exc_info=True)
+        try:
+            self._process_listening_watch(user_id=user_id, active_client=active_client)
+        except Exception:
+            logger.warning("Listening-watch: pass failed", exc_info=True)
+
+    def _process_listening_watch(self, user_id: int = None, active_client=None) -> int:
+        """Map an in-progress BookOrbit audiobook to the one ebook BookOrbit groups with it as an edition.
+
+        Edition links only: no fuzzy matching, suggestions or audio-only mappings. Returns
+        how many audiobooks were mapped.
+        """
+        if not self._reading_watch_enabled():
+            return 0
+        client = active_client or self._resolve_client_for_user(user_id)
+        if client is None or not client.is_configured() or not hasattr(client, 'list_continue_listening_books'):
+            return 0
+        mapped = 0
+        for audio in client.list_continue_listening_books() or []:
+            audio_id = str(audio.get('id') or '').strip()
+            ebook_ids = audio.get('editionEbookIds') or []
+            if not audio_id or len(ebook_ids) != 1 or self.database_service.get_book(f"bookorbit:{audio_id}"):
+                continue
+            ebook_id = str(ebook_ids[0])
+            ebook = client._enrich_ebook(ebook_id, {}) or {}
+            filename = ebook.get('fileName') or ''
+            if not filename or self._is_already_mapped(ebook_id, filename, user_id=user_id):
+                continue
+            audio_language = str(audio.get('language') or '').casefold().split('-')[0]
+            ebook_language = str(ebook.get('language') or '').casefold().split('-')[0]
+            if audio_language and ebook_language and audio_language != ebook_language:
+                continue
+            logger.info(
+                "📌 Listening-watch: '%s' (bookorbit:%s) is a BookOrbit edition of '%s'; mapping",
+                audio.get('title'), audio_id, filename,
+            )
+            top = {'audio_source': 'BookOrbit', 'audio_source_id': audio_id,
+                   'audio_title': audio.get('title') or ebook.get('title') or '', 'score': 100.0}
+            self._create_audio_mapping_and_move(ebook, filename, ebook_id, top, None, None, user_id=user_id)
+            mapped += 1
+        return mapped
 
     def _process_watch_shelf(self, user_id: int = None, active_client=None) -> dict:
         """Scan the watch shelf and act on each book.
@@ -476,6 +516,7 @@ class ShelfWatchService:
             'authors': self._extract_author(grimmory_book),
             'grimmory_id': grimmory_id,
             'path': grimmory_book.get('filePath') or grimmory_book.get('filepath') or grimmory_book.get('path') or '',
+            'edition_audio_ids': grimmory_book.get('editionAudioIds') or [],
         }
 
         same_entry = self._same_entry_audio_match(grimmory_book, grimmory_id, active_client)
@@ -801,6 +842,7 @@ class ShelfWatchService:
             'authors': self._extract_author(book),
             'grimmory_id': source_id,
             'path': book.get('filePath') or book.get('filepath') or book.get('path') or '',
+            'edition_audio_ids': book.get('editionAudioIds') or [],
         }
 
         scan_result = self._get_suggestions_service()._scan_single_ebook(ebook_anchor, candidate_pool)

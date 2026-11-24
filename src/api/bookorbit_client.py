@@ -372,8 +372,9 @@ class BookOrbitClient:
         return info.get("kind") == kind
 
     @staticmethod
-    def _edition_audio_ids(book: dict) -> list:
-        """Ids of audiobook editions BookOrbit groups with this card (v3.7+ `linked`); [] without it."""
+    def _edition_ids(book: dict, kind: str = "audiobook") -> list:
+        """Ids of `kind` ('audiobook'|'ebook') editions BookOrbit groups with this card (v3.7+ `linked`); [] without it."""
+        kind_formats = _AUDIO_FORMATS if kind == "audiobook" else _EBOOK_FORMATS
         linked = book.get("linked")
         members = linked.get("books") if isinstance(linked, dict) else None
         ids = []
@@ -381,9 +382,14 @@ class BookOrbitClient:
             if not isinstance(member, dict) or member.get("bookId") is None:
                 continue
             formats = member.get("formats") if isinstance(member.get("formats"), list) else []
-            if member.get("mediaKind") == "audiobook" or any(str(f).lower() in _AUDIO_FORMATS for f in formats):
+            if member.get("mediaKind") == kind or any(str(f).lower() in kind_formats for f in formats):
                 ids.append(str(member["bookId"]))
         return ids
+
+    def _cached_edition_audio_ids(self, raw: dict) -> list:
+        """Audiobook editions of a non-list card (shelf, scroller), falling back to the list cache."""
+        return self._edition_ids(raw) or (
+            self.get_book_by_id(raw.get("id"), allow_refresh=False) or {}).get("editionAudioIds") or []
 
     def _build_light_info(self, book: dict) -> Optional[dict]:
         """Build a lightweight cache entry from a `/books/query` list row.
@@ -430,7 +436,8 @@ class BookOrbitClient:
             "primaryFileId": (primary or {}).get("id"),
             "primaryFormat": (primary_format or "").lower(),
             "kind": self._classify_format(primary_format),
-            "editionAudioIds": self._edition_audio_ids(book),
+            "editionAudioIds": self._edition_ids(book),
+            "editionEbookIds": self._edition_ids(book, "ebook"),
         }
 
     # ------------------------------------------------------------------
@@ -2351,6 +2358,7 @@ class BookOrbitClient:
                 "title": (raw.get("title") or "").strip(),
                 "author": self._format_authors(raw.get("authors")),
                 "fileName": filename,
+                "editionAudioIds": self._cached_edition_audio_ids(raw),
             })
         return out
 
@@ -2396,6 +2404,33 @@ class BookOrbitClient:
                 "author": self._format_authors(raw.get("authors")),
                 "fileName": filename,
                 "progress": progress,
+                "editionAudioIds": self._cached_edition_audio_ids(raw),
+            })
+        return out
+
+    def list_continue_listening_books(self, limit: int = 100) -> list:
+        """This user's in-progress audiobooks (Continue Listening scroller) with their ebook editions.
+
+        Returns ``{id, title, language, editionEbookIds}``; the ebook ids come from the card's
+        `linked` group, else from the list cache.
+        """
+        resp = self._make_request(
+            "GET", f"/api/v1/dashboard/scrollers/continue-listening?limit={limit}"
+        )
+        if not resp or resp.status_code != 200:
+            return []
+        data = self._parse_json(resp)
+        items = data.get("books") if isinstance(data, dict) else None
+        out = []
+        for raw in items or []:
+            if not isinstance(raw, dict) or raw.get("id") is None:
+                continue
+            cached = self.get_book_by_id(raw["id"], allow_refresh=False) or {}
+            out.append({
+                "id": raw["id"],
+                "title": (raw.get("title") or cached.get("title") or "").strip(),
+                "language": str(raw.get("language") or cached.get("language") or "").strip(),
+                "editionEbookIds": self._edition_ids(raw, "ebook") or cached.get("editionEbookIds") or [],
             })
         return out
 
