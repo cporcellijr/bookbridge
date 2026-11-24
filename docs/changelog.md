@@ -4,6 +4,72 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [7.14.0]
+
+BookBridge can get the half of a book you're missing and pair it when it arrives, spread
+alignment work over other machines, and track progress on Goodreads. The New interface gets
+a Display page, a hero card and one continuous Library grid.
+
+### What's New
+
+- **Get the missing ebook or audiobook (#585)** from Discover's Search tab, through BookOrbit
+  or Shelfmark with your own login. The arrival is paired with exactly that book, and **My
+  requests** and Processing follow each request. Readers need **Let readers get missing
+  books** switched on.
+- **Alignment workers**: run the image with `BOOKBRIDGE_MODE=worker` on another machine to
+  work through the alignment queue. Contributed by [@eschatus](https://github.com/eschatus).
+- **Pick the ebook edition** when a BookOrbit or Grimmory book holds more than one file.
+  Contributed by [@monkeCode](https://github.com/monkeCode).
+- **Goodreads progress tracking**, off by default.
+- **BookOrbit API keys**, so SSO-only BookOrbit installs work (#482).
+- **New interface:** a **Display** page (theme, Library style with Face-out shelves and shelf
+  finish, cover size and decorations, live preview), a hero card for your current book, one
+  Library grid sorted by reading status, and lighter covers.
+- Remove several books at once in Classic; CTC alignment jobs show progress during the model
+  pass. Contributed by [@hnrydvd](https://github.com/hnrydvd).
+
+### Changed
+
+- The documentation site and README are redesigned.
+- BookOrbit audiobook tracks are read from a verified shared mount instead of downloaded.
+- KOReader statistics reach BookOrbit with their original device identity. Contributed by
+  [@monkeCode](https://github.com/monkeCode).
+- Cache Cleanup previews (**Review Inactive Cache**) instead of deleting.
+- Changing a password signs the account out everywhere else; everyone signs in once after
+  updating.
+
+### Fixed
+
+- Finished books stay finished in Grimmory, KOReader and BookOrbit (#609, #610).
+- An old position on a device, or an older KOReader copy, no longer rewinds the book (#592);
+  an approved rewind survives further reading on any copy (#599). Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) and [@jucor](https://github.com/jucor).
+- KOReader: short sessions in long books sync; Calibre/CWA renames keep the file (#589);
+  catalog downloads find progress in filename mode (#590); malformed hashes and positions are
+  rejected (#591). Contributed by [@chemicalsno](https://github.com/chemicalsno).
+- BridgeSync 0.9.12: books aren't deleted from the device when the server briefly can't find
+  them, your own collections are left alone, and reading stats use KOReader's real database
+  (#603). Contributed by [@jeffhammett](https://github.com/jeffhammett).
+- BookOrbit: unmeasured multi-file audiobooks (#601), writes after a library scan (#602), and
+  regenerating an attached read-along.
+- CWA no longer re-downloads every book on every poll (#593).
+- Failed writes are retried, re-aligned maps apply at once, and audiobooks linked to an
+  existing ebook-only book no longer break (#597).
+- Alignment: unread endnotes no longer force Whisper (#604); short cached audio is downloaded
+  again; qwen3-style thinking models work (#605, [@eschatus](https://github.com/eschatus));
+  cover extraction from large read-aloud EPUBs (#595,
+  [@monkeCode](https://github.com/monkeCode)).
+- URL-encoded Readium positions (#594). Contributed by
+  [@josephyancey](https://github.com/josephyancey).
+- Discover finds BookOrbit ebooks with a different file name (#586); "Clear stale
+  suggestions" keeps your "Never suggest" list.
+- Security: the Audiobookshelf API key stays out of logs, wrong passwords behind a proxy no
+  longer lock others out, and a Classic script-injection path is closed.
+- Telegram alerts containing `<`, the New interface's integration Test button (#584), and
+  Forge & Match collections.
+
+---
+
 ## [7.13.0]
 
 BookBridge has a New interface, Suggestions grows into Discover for every reader,
