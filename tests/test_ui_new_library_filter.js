@@ -335,6 +335,30 @@ assert.equal(trigger.focusCount, 1, 'Closing returns focus to the trigger');
 panelContext.openFilterPanel();
 panelContext.closeFilterPanel(false);
 assert.equal(trigger.focusCount, 1, 'A click outside leaves focus where the reader clicked');
+// On a phone the open sheet makes the page around it inert; the backdrop stays tappable.
+function node(name, children = [], inert = false) {
+  const element = {name, children, inert, parentElement: null};
+  children.forEach(child => { child.parentElement = element; });
+  return element;
+}
+const sheetPanel = Object.assign(node('panel'), {hidden: true, querySelector: () => null, style: {removeProperty() {}, setProperty() {}}, getBoundingClientRect: () => ({left: 0, width: 300})});
+const sheetBackdrop = node('backdrop');
+const toolbar = node('toolbar'), shelf = node('shelf'), header = node('header'), drawer = node('drawer', [], true);
+node('main', [node('host', [toolbar, sheetBackdrop, sheetPanel]), shelf]);
+const body = node('body', [header, sheetPanel.parentElement.parentElement, drawer]);
+const sheetWindow = {innerWidth: 390, addEventListener() {}};
+const sheetContext = scope(extract('function closeFilterPanel(', 'function chooseLibraryFilter('), {
+  filterPanel: sheetPanel, filterBackdrop: sheetBackdrop, filterButton: trigger, window: sheetWindow, document: {body},
+});
+sheetContext.openFilterPanel();
+assert.deepEqual([toolbar, shelf, header].map(e => e.inert), [true, true, true], 'Phone sheet makes the page behind it inert');
+assert.equal(sheetBackdrop.inert, false, 'The backdrop stays tappable so it can close the sheet');
+sheetContext.closeFilterPanel();
+assert.deepEqual([toolbar, shelf, header, drawer].map(e => e.inert), [false, false, false, true], 'Closing restores only what the sheet made inert');
+sheetWindow.innerWidth = 1280;
+sheetContext.openFilterPanel();
+assert.equal(toolbar.inert || shelf.inert || header.inert, false, 'The desktop popover leaves the page usable');
+sheetContext.closeFilterPanel();
 assert.match(source, /event.key === 'Escape'[\s\S]*?closeFilterPanel\(\)/);
 assert.match(source, /!event.composedPath\(\)\.includes\(filterHost\)\) \{\s*closeFilterPanel\(false\);/, 'Outside clicks close without stealing focus, even after an option is rebuilt');
 // Exercise Clear with the real filterBooks implementation and storage writes.

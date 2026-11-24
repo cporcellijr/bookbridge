@@ -301,8 +301,25 @@
                 if (!filterPanel || filterPanel.hidden) return;
                 filterPanel.hidden = true;
                 if (filterBackdrop) filterBackdrop.hidden = true;
+                setFilterSheetModal(false);
                 filterButton?.setAttribute('aria-expanded', 'false');
                 if (restoreFocus) filterButton?.focus();
+            }
+
+            // On a phone the panel is a modal bottom sheet: the page around it is inert while it is open
+            // (the backdrop stays live, since tapping it closes the sheet).
+            let filterSheetInert = [];
+            function setFilterSheetModal(open) {
+                filterSheetInert.forEach(element => { element.inert = false; });
+                filterSheetInert = [];
+                if (!open || typeof window === 'undefined' || window.innerWidth > 760) return;
+                for (let node = filterPanel; node?.parentElement && node !== document.body; node = node.parentElement) {
+                    Array.from(node.parentElement.children).forEach(sibling => {
+                        if (sibling === node || sibling === filterBackdrop || sibling.inert) return;
+                        sibling.inert = true;
+                        filterSheetInert.push(sibling);
+                    });
+                }
             }
 
             function positionLibraryFilterPopover() {
@@ -318,6 +335,7 @@
                 if (!filterPanel) return;
                 filterPanel.hidden = false;
                 if (filterBackdrop) filterBackdrop.hidden = false;
+                setFilterSheetModal(true);
                 filterButton?.setAttribute('aria-expanded', 'true');
                 positionLibraryFilterPopover();
                 filterPanel.querySelector('[data-filter-close]')?.focus();
