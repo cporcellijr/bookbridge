@@ -51,6 +51,29 @@ grid.children.reverse();
 window.bbShelfProps.place(grid);
 assert.equal(layout()[1], '19', 'props follow the new book order');
 
+// The reader's choices: only candles, no bookends, the most props (gaps 1, 3, 2, 3, 2).
+const page = {dataset: {shelfPropKinds: 'candle', shelfPropAmount: '5'}};
+grid.closest = selector => (selector === '.library-page' ? page : null);
+grid.children.sort((a, b) => Number(a.dataset.id) - Number(b.dataset.id));
+grid.children.forEach(card => { card.hidden = false; card.style.display = ''; card.classList.items.delete('hidden'); });
+window.bbShelfProps.place(grid);
+assert.deepEqual(layout(), ['0', 'candle', '1', '2', '3', 'candle', '4', '5', 'candle', '6', '7', '8', 'candle',
+    '9', '10', 'candle', '11', 'candle', '12', '13', '14', 'candle', '15', '16', 'candle', '17', '18', '19'],
+    'only the chosen trinket, at the chosen amount, and no bookends');
+page.dataset = {shelfPropKinds: 'bookends,plant,candle', shelfPropAmount: '2'};
+window.bbShelfProps.place(grid);
+const decor = () => layout().filter(item => !/^\d+$/.test(item));
+assert.deepEqual(decor(), ['bookend-start', 'plant', 'candle', 'bookend-end'], 'gaps 5, 10 cycle only the chosen kinds');
+assert.equal(layout().indexOf('candle'), 17, 'second decor after the 15th book');
+page.dataset.shelfPropAmount = '1';
+window.bbShelfProps.place(grid);
+assert.deepEqual(decor(), ['bookend-start', 'plant', 'bookend-end'], 'fewest: one decor in 20 books');
+assert.equal(layout().indexOf('plant'), 9, 'after the 8th book');
+page.dataset = {shelfPropKinds: '', shelfPropAmount: '3'};
+window.bbShelfProps.place(grid);
+assert.equal(grid.children.length, 20, 'no trinkets chosen means a bare shelf');
+delete grid.closest;
+
 grid.children.forEach(card => { card.hidden = true; });
 window.bbShelfProps.place(grid);
 assert.equal(grid.children.length, 20, 'no visible books means no props');

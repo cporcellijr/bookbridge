@@ -1182,6 +1182,8 @@ settings read only at startup, which restart the app when saved in Settings.
 | `UI_SHELF_FINISH` | `theme` | server default; each reader can override |  |
 | `UI_LIBRARY_BACKGROUND` | `none` | server default; each reader can override |  |
 | `UI_SHELF_PROPS` | `false` | server default; each reader can override |  |
+| `UI_SHELF_PROP_KINDS` | `bookends,plant,stack,candle` | server default; each reader can override |  |
+| `UI_SHELF_PROP_AMOUNT` | `3` | server default; each reader can override |  |
 | `UI_COVER_FINISH` | `standard` | server default; each reader can override |  |
 | `UI_COVER_SIZE` | `2` | server default; each reader can override |  |
 | `UI_SHOW_PROGRESS` | `true` | server default; each reader can override |  |

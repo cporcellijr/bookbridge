@@ -18,6 +18,11 @@ _HERO_ORDER = ("synopsis", "stats", "streak")
 _HERO_LEGACY = {"listened": "stats", "pages": "stats", "bars": ""}
 # Every valid stored value (including base-only) is an allowed configuration.
 _HERO_CHOICES = ("", "synopsis", "stats", "synopsis,stats", "stats,streak", "synopsis,stats,streak")
+_PROP_KINDS = ("bookends", "plant", "stack", "candle")
+# Any subset of the trinkets, in _PROP_KINDS order; empty leaves the shelves bare.
+_PROP_KIND_CHOICES = tuple(
+    ",".join(kind for bit, kind in enumerate(_PROP_KINDS) if mask >> bit & 1) for mask in range(1 << len(_PROP_KINDS))
+)
 
 DISPLAY_SETTINGS: dict[str, tuple[str, ...]] = {
     "UI_THEME": ("auto", "day", "night"),
@@ -26,6 +31,8 @@ DISPLAY_SETTINGS: dict[str, tuple[str, ...]] = {
     "UI_SHELF_FINISH": ("theme", "wood", "dark", "plain", "walnut", "cherry", "white", "glass", "pastel"),
     "UI_LIBRARY_BACKGROUND": ("none", "cover"),
     "UI_SHELF_PROPS": _BOOL,
+    "UI_SHELF_PROP_KINDS": _PROP_KIND_CHOICES,
+    "UI_SHELF_PROP_AMOUNT": ("1", "2", "3", "4", "5"),
     "UI_COVER_FINISH": ("standard", "hardcover", "paperback", "flat"),
     "UI_COVER_SIZE": ("1", "2", "3", "4", "5"),
     "UI_SHOW_PROGRESS": _BOOL,
@@ -52,6 +59,11 @@ def normalize_display_value(key: str, raw: object) -> Optional[str]:
         if "stats" not in choices:
             choices.discard("streak")
         return ",".join(piece for piece in _HERO_ORDER if piece in choices)
+    if key == "UI_SHELF_PROP_KINDS":
+        kinds = {part.strip() for part in value.split(",")} - {""}
+        if not kinds <= set(_PROP_KINDS):
+            return None
+        return ",".join(kind for kind in _PROP_KINDS if kind in kinds)
     if allowed is _BOOL:
         if value in _TRUE_SPELLINGS:
             return "true"

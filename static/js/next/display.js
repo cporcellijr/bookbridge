@@ -7,7 +7,7 @@
     var statuses = new WeakMap();
     var sizeRow = document.querySelector('.display-size-row');
     var finishRow = document.querySelector('.display-finish-row');
-    var propsRow = document.querySelector('.display-props-row');
+    var propsRows = document.querySelectorAll('.display-props-row');
     var faceoutRow = document.querySelector('.display-faceout-row');
     var previewSwitches = {
         UI_SHOW_PROGRESS: 'showProgress',
@@ -15,18 +15,31 @@
         UI_SHOW_FORMAT_STRIP: 'showFormatStrip',
         UI_SHOW_RATINGS: 'showRatings',
         UI_SHOW_TITLES: 'showTitles',
-        UI_SHELF_PROPS: 'shelfProps'
+        UI_SHELF_PROPS: 'shelfProps',
+        UI_SHELF_PROP_KINDS: 'shelfPropKinds',
+        UI_SHELF_PROP_AMOUNT: 'shelfPropAmount'
     };
     var sizeHelp = ['4 per row on a phone', '3 per row on a phone',
         '2 per row on a phone', '2 per row on a phone', '2 per row on a phone'];
 
+    // Forms whose value is a comma list of ticked pieces (hero content, trinkets).
+    function hasPieces(form) {
+        return !!form.querySelector('[data-hero-piece], [data-display-piece]');
+    }
+
+    function hasStepper(form) {
+        return form.querySelectorAll('[data-display-step]').length > 0;
+    }
+
+    function stored(form) {
+        return form.querySelector('input[name="' + form.dataset.displaySetting + '"]');
+    }
+
     function selected(form) {
-        if (form.dataset.displaySetting === 'UI_HERO_CONTENT') {
-            return Array.from(form.querySelectorAll('[data-hero-piece]:checked')).map(input => input.value).join(',');
+        if (hasPieces(form)) {
+            return Array.from(form.querySelectorAll('[data-hero-piece]:checked, [data-display-piece]:checked')).map(input => input.value).join(',');
         }
-        if (form.dataset.displaySetting === 'UI_COVER_SIZE') {
-            return form.querySelector('input[name="UI_COVER_SIZE"]').value;
-        }
+        if (hasStepper(form)) return stored(form).value;
         if (form.querySelector('[role="switch"]')) {
             return form.querySelector('[role="switch"]').checked ? 'true' : 'false';
         }
@@ -44,14 +57,18 @@
     function syncFinishRow() {
         var styleForm = document.querySelector('[data-display-setting="UI_LIBRARY_STYLE"]');
         var style = styleForm ? selected(styleForm) : (stage && stage.dataset.libraryStyle);
-        [finishRow, propsRow].forEach(function (row) {
-            if (row) row.hidden = style !== 'spines' && style !== 'faceout';
+        var shelves = style === 'spines' || style === 'faceout';
+        var propsSwitch = document.getElementById('display-switch-ui_shelf_props');
+        if (finishRow) finishRow.hidden = !shelves;
+        // Trinkets and How many only matter while Shelf props is on.
+        propsRows.forEach(function (row) {
+            row.hidden = !shelves || (row.classList.contains('display-props-detail') && !(propsSwitch && propsSwitch.checked));
         });
         if (faceoutRow) faceoutRow.hidden = style !== 'faceout';
     }
 
     function refreshSizeStepper(form, value) {
-        var input = form.querySelector('input[name="UI_COVER_SIZE"]');
+        var input = stored(form);
         if (!input) return;
         var n = Math.min(5, Math.max(1, Number(value) || 2));
         input.value = String(n);
@@ -64,7 +81,7 @@
             dot.classList.toggle('is-active', Number(dot.dataset.sizeDot) <= n);
         });
         var help = form.querySelector('.display-size-help');
-        if (help) help.textContent = window.bbT(sizeHelp[n - 1]);
+        if (help && form.dataset.displaySetting === 'UI_COVER_SIZE') help.textContent = window.bbT(sizeHelp[n - 1]);
     }
 
     function syncHeroChoices(form, value) {
@@ -80,8 +97,17 @@
         if (hidden) hidden.value = values.join(',');
     }
 
+    function syncPieces(form, value) {
+        if (form.dataset.displaySetting === 'UI_HERO_CONTENT') return syncHeroChoices(form, value);
+        var values = value ? value.split(',') : [];
+        form.querySelectorAll('[data-display-piece]').forEach(function (check) {
+            check.checked = values.includes(check.value);
+        });
+        stored(form).value = value;
+    }
+
     function setSelected(form, value) {
-        if (form.dataset.displaySetting === 'UI_HERO_CONTENT') syncHeroChoices(form, value);
+        if (hasPieces(form)) syncPieces(form, value);
         form.querySelectorAll('[data-display-value]').forEach(function (button) {
             button.setAttribute('aria-pressed', String(button.dataset.displayValue === value));
         });
@@ -91,8 +117,8 @@
             toggle.setAttribute('aria-checked', String(toggle.checked));
         }
         var key = form.dataset.displaySetting;
-        if (key === 'UI_COVER_SIZE') refreshSizeStepper(form, value);
-        if (key === 'UI_LIBRARY_STYLE') {
+        if (hasStepper(form)) refreshSizeStepper(form, value);
+        if (key === 'UI_LIBRARY_STYLE' || key === 'UI_SHELF_PROPS') {
             syncSizeRow();
             syncFinishRow();
         }
@@ -107,6 +133,9 @@
             if (key === 'UI_SHELF_FINISH') stage.dataset.shelfFinish = value;
             if (key === 'UI_COVER_FINISH') stage.dataset.coverFinish = value;
             if (previewSwitches[key]) stage.dataset[previewSwitches[key]] = value;
+            if ((key === 'UI_SHELF_PROP_KINDS' || key === 'UI_SHELF_PROP_AMOUNT') && window.bbShelfProps) {
+                window.bbShelfProps.place(stage.querySelector('.display-preview-flat'));
+            }
         }
         if (key === 'UI_THEME' && window.bbApplyThemePreference) window.bbApplyThemePreference(value);
         if (key === 'UI_ACCENT') document.documentElement.dataset.accent = value;
@@ -168,12 +197,12 @@
             showStatus(form, window.bbT('Saved'));
         }).catch(function () {
             setSelected(form, before);
-            if (key === 'UI_HERO_CONTENT') form.dataset.lastSavedValue = before;
+            if (hasPieces(form)) form.dataset.lastSavedValue = before;
             showStatus(form, window.bbT("Couldn't save"), true);
         }).finally(function () {
             controls.forEach(function (control) { control.disabled = false; });
-            if (key === 'UI_COVER_SIZE') refreshSizeStepper(form, selected(form));
-            if (key === 'UI_HERO_CONTENT') syncHeroChoices(form, selected(form));
+            if (hasStepper(form)) refreshSizeStepper(form, selected(form));
+            if (hasPieces(form)) syncPieces(form, selected(form));
         });
     }
 
@@ -190,16 +219,16 @@
             event.preventDefault();
             save(form, button.dataset.displayValue, selected(form));
         });
-        if (form.dataset.displaySetting === 'UI_HERO_CONTENT') {
+        if (hasPieces(form)) {
             var initial = selected(form);
-            syncHeroChoices(form, initial);
+            syncPieces(form, initial);
             form.addEventListener('change', function (event) {
-                if (!event.target.matches('[data-hero-piece]')) return;
+                if (!event.target.matches('[data-hero-piece], [data-display-piece]')) return;
                 var before = form.dataset.lastSavedValue ?? initial;
                 var next = selected(form);
                 initial = next;
                 form.dataset.lastSavedValue = next;
-                syncHeroChoices(form, next);
+                syncPieces(form, next);
                 save(form, next, before);
             });
         }

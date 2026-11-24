@@ -32,7 +32,7 @@
         <aside class="display-preview" aria-label="{{ _('Your library preview') }}">
             <div class="display-preview-head"><strong>{{ _('Your library') }}</strong><small>{{ _('Live preview') }}</small></div>
             {% if preview_mappings %}
-            <div id="display-preview-stage" class="library-page" data-view="{{ {'spines': 'spines', 'faceout': 'spines', 'list': 'list'}.get(display.UI_LIBRARY_STYLE, 'covers') }}" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-series-on="{{ display.SERIES_SHOW_CURRENT_BOOK_DETAIL }}" data-select-mode="off" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-shelf-props="{{ display.UI_SHELF_PROPS }}" data-cover-finish="{{ display.UI_COVER_FINISH }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}">
+            <div id="display-preview-stage" class="library-page" data-view="{{ {'spines': 'spines', 'faceout': 'spines', 'list': 'list'}.get(display.UI_LIBRARY_STYLE, 'covers') }}" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-series-on="{{ display.SERIES_SHOW_CURRENT_BOOK_DETAIL }}" data-select-mode="off" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-shelf-props="{{ display.UI_SHELF_PROPS }}" data-shelf-prop-kinds="{{ display.UI_SHELF_PROP_KINDS }}" data-shelf-prop-amount="{{ display.UI_SHELF_PROP_AMOUNT }}" data-cover-finish="{{ display.UI_COVER_FINISH }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}">
                 <div class="book-grid display-preview-flat">{% for mapping in preview_mappings %}{{ render_card(mapping, false) }}{% endfor %}</div>
                 <div class="book-grid display-preview-grouped">
                     {% for entry in preview_groups %}{% if entry.is_series_group %}
@@ -104,6 +104,29 @@
                     <label class="display-label" for="display-switch-ui_shelf_props"><strong>{{ _('Shelf props') }}</strong><small>{{ _('Bookends, plants, candles and book stacks between your books.') }}</small></label>
                     <input id="display-switch-ui_shelf_props" class="display-switch" type="checkbox" name="UI_SHELF_PROPS" value="true" role="switch" aria-checked="{{ 'true' if display.UI_SHELF_PROPS == 'true' else 'false' }}" {% if display.UI_SHELF_PROPS == 'true' %}checked{% endif %}>
                     <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
+                </form>
+                {% set props_detail_hidden = display.UI_LIBRARY_STYLE not in ('faceout', 'spines') or display.UI_SHELF_PROPS != 'true' %}
+                <form class="account-shelf-prop-kinds-form display-row display-props-row display-props-detail display-hero-choices" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_SHELF_PROP_KINDS" {% if props_detail_hidden %}hidden{% endif %}>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_SHELF_PROP_KINDS" value="{{ display.UI_SHELF_PROP_KINDS }}">
+                    <div class="display-label"><strong>{{ _('Trinkets') }}</strong><small>{{ _('Which props stand on your shelves.') }}</small></div>
+                    <div class="display-hero-checks" role="group" aria-label="{{ _('Trinkets') }}">
+                        {% for key, label in [('bookends', _('Bookends')), ('plant', _('Plants')), ('candle', _('Candles')), ('stack', _('Book stacks'))] %}
+                        <label><input type="checkbox" data-display-piece value="{{ key }}" {% if key in display.UI_SHELF_PROP_KINDS.split(',') %}checked{% endif %}><span>{{ label }}</span></label>
+                        {% endfor %}
+                    </div>
+                    <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
+                </form>
+                {% set amount = display.UI_SHELF_PROP_AMOUNT|int %}
+                <form class="account-shelf-prop-amount-form display-row display-props-row display-props-detail" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_SHELF_PROP_AMOUNT" {% if props_detail_hidden %}hidden{% endif %}>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_SHELF_PROP_AMOUNT" value="{{ amount }}">
+                    <div class="display-label"><strong>{{ _('How many trinkets') }}</strong></div>
+                    <div class="display-size-stepper" role="group" aria-label="{{ _('How many trinkets') }}">
+                        <button type="submit" data-display-step="-1" name="UI_SHELF_PROP_AMOUNT" value="{{ [1, amount-1]|max }}" aria-label="{{ _('Fewer trinkets') }}" {% if amount == 1 %}disabled{% endif %}>−</button>
+                        <span class="display-size-dots" aria-hidden="true">{% for n in range(1, 6) %}<span data-size-dot="{{ n }}" {% if n <= amount %}class="is-active"{% endif %}></span>{% endfor %}</span>
+                        <button type="submit" data-display-step="1" name="UI_SHELF_PROP_AMOUNT" value="{{ [5, amount+1]|min }}" aria-label="{{ _('More trinkets') }}" {% if amount == 5 %}disabled{% endif %}>+</button>
+                    </div>
                 </form>
                 <form class="account-cover-finish-form display-row display-faceout-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_COVER_FINISH" {% if display.UI_LIBRARY_STYLE != 'faceout' %}hidden{% endif %}>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

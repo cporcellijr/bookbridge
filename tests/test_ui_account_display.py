@@ -161,6 +161,49 @@ class TestAccountDisplayPage(unittest.TestCase):
         self.assertIn('data-shelf-props="true"', html)
         self.assertIn('name="UI_SHELF_PROPS" value="true" role="switch" aria-checked="true"', html)
 
+    def test_trinket_choices_and_amount_render_save_per_reader_and_reject_bad_values(self):
+        self._real_templates()
+        self._series_books()
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self.service.set_user_credential(self.reader.id, 'UI_LIBRARY_STYLE', 'spines')
+        self._login('ui-reader')
+
+        def forms():
+            html = self.client.get('/account/display').get_data(as_text=True)
+            kinds = re.search(r'<form class="account-shelf-prop-kinds-form.*?</form>', html, re.S).group()
+            amount = re.search(r'<form class="account-shelf-prop-amount-form.*?</form>', html, re.S).group()
+            return html, kinds, amount
+
+        html, kinds, amount = forms()
+        self.assertIn('data-shelf-prop-kinds="bookends,plant,stack,candle" data-shelf-prop-amount="3"', html)
+        for form in (kinds, amount):
+            self.assertIn(' hidden>', form.split('>')[0] + '>', 'trinket rows wait for the Shelf props switch')
+        for kind in ('bookends', 'plant', 'candle', 'stack'):
+            self.assertIn(f'data-display-piece value="{kind}" checked', kinds)
+        self.assertIn('name="UI_SHELF_PROP_AMOUNT" value="3"', amount)
+
+        response = self.client.post('/account/display', json={
+            'UI_SHELF_PROPS': 'true', 'UI_SHELF_PROP_KINDS': 'candle,bookends', 'UI_SHELF_PROP_AMOUNT': '5'}, headers={'Accept': 'application/json'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_PROP_KINDS'), 'bookends,candle')
+        self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_PROP_AMOUNT'), '5')
+        for key in ('UI_SHELF_PROP_KINDS', 'UI_SHELF_PROP_AMOUNT'):
+            self.assertIsNone(self.service.get_user_credential(self.admin.id, key))
+        html, kinds, amount = forms()
+        self.assertIn('data-shelf-prop-kinds="bookends,candle" data-shelf-prop-amount="5"', html)
+        self.assertNotIn(' hidden>', kinds.split('>')[0] + '>')
+        self.assertIn('data-display-piece value="candle" checked', kinds)
+        self.assertIn('data-display-piece value="plant" >', kinds)
+        self.assertIn('aria-label="More trinkets" disabled', amount)
+
+        for bad in ({'UI_SHELF_PROP_KINDS': 'plant,dragon'}, {'UI_SHELF_PROP_AMOUNT': '0'}, {'UI_SHELF_PROP_AMOUNT': '6'}):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.client.post('/account/display', json=bad).status_code, 400)
+        self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_PROP_KINDS'), 'bookends,candle')
+        self.client.post('/account/display', json={'UI_SHELF_PROP_KINDS': ''})
+        self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_PROP_KINDS'), '')
+        self.assertIn('data-shelf-prop-kinds=""', forms()[0], 'no trinkets is a real choice, not the default')
+
     def test_classic_menu_display_link_opens_existing_card(self):
         self._real_templates()
         self.service.set_user_credential(self.reader.id, 'UI_MODE', 'classic')

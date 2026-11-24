@@ -159,8 +159,97 @@ function mountCoverSetting(key, {initial = 'true', fails = false} = {}) {
     return {changeToggle, clickStep, requests, checkbox, input, down, up, dots, stage, help, status};
 }
 
+// Shelf props rows: the trinket chips and How many stepper save, re-place the preview, and
+// only show while the Shelf props switch is on.
+async function verifyTrinketControls() {
+    const requests = [], placed = [], listeners = new Map();
+    let fails = false;
+    const status = {textContent: '', toggleAttribute() {}, removeAttribute() {}};
+    const group = {querySelector() { return status; }};
+    const flat = {id: 'flat'};
+    const stage = {dataset: {view: 'spines', libraryStyle: 'spines', shelfPropKinds: 'bookends,plant,stack,candle', shelfPropAmount: '3'},
+        querySelectorAll() { return []; }, querySelector(selector) { return selector === '.display-preview-flat' ? flat : null; }};
+    function form(key, {selectors = {}, lists = {}, detail = false} = {}) {
+        const node = {dataset: {displaySetting: key}, hidden: false,
+            classList: {contains(name) { return name === 'display-props-detail' && detail; }},
+            addEventListener(name, fn) { listeners.set(key + ':' + name, fn); },
+            querySelector(selector) { return typeof selectors[selector] === 'function' ? selectors[selector]() : (selectors[selector] || null); },
+            querySelectorAll(selector) { return typeof lists[selector] === 'function' ? lists[selector]() : (lists[selector] || []); },
+            closest() { return group; }, contains() { return true; }};
+        return node;
+    }
+    const toggle = {checked: false, attrs: {}, addEventListener(name, fn) { listeners.set('switch:' + name, fn); },
+        setAttribute(name, value) { this.attrs[name] = value; }};
+    const switchForm = form('UI_SHELF_PROPS', {selectors: {'[role="switch"]': toggle}});
+    const checks = ['bookends', 'plant', 'candle', 'stack'].map(value => ({value, checked: true, disabled: false}));
+    const kindsInput = {value: 'bookends,plant,stack,candle'};
+    const kinds = form('UI_SHELF_PROP_KINDS', {detail: true,
+        selectors: {'[data-hero-piece], [data-display-piece]': checks[0], 'input[name="UI_SHELF_PROP_KINDS"]': kindsInput},
+        lists: {'[data-display-piece]': checks, 'button, input[type="checkbox"]': checks,
+            '[data-hero-piece]:checked, [data-display-piece]:checked': () => checks.filter(check => check.checked)}});
+    const amountInput = {value: '3'};
+    const down = {dataset: {displayStep: '-1'}, value: '2', disabled: false};
+    const up = {dataset: {displayStep: '1'}, value: '4', disabled: false};
+    const dots = Array.from({length: 5}, (_, i) => ({dataset: {sizeDot: String(i + 1)}, active: i < 3,
+        classList: {toggle(name, value) { dots[i].active = value; }}}));
+    const amount = form('UI_SHELF_PROP_AMOUNT', {detail: true,
+        selectors: {'input[name="UI_SHELF_PROP_AMOUNT"]': amountInput},
+        lists: {'[data-display-step]': [down, up], '[data-size-dot]': dots, 'button, input[type="checkbox"]': [down, up]}});
+    const rows = [switchForm, kinds, amount];
+    const document = {
+        querySelector(selector) { return selector === '.display-page' ? {classList: {add() {}}} : null; },
+        querySelectorAll(selector) {
+            if (selector === '.display-props-row') return rows;
+            return selector === '.display-page form[data-display-setting]' ? rows : [];
+        },
+        getElementById(id) { return id === 'display-preview-stage' ? stage : id === 'display-switch-ui_shelf_props' ? toggle : null; },
+        addEventListener() {}
+    };
+    const window = {bbT: value => value, setTimeout: () => 1, clearTimeout() {},
+        bbShelfProps: {place(grid) { placed.push([grid, stage.dataset.shelfPropKinds, stage.dataset.shelfPropAmount]); }},
+        fetch(url, options) { requests.push(JSON.parse(options.body)); return Promise.resolve({ok: !fails}); }};
+    vm.runInNewContext(source, {document, window, WeakMap, console});
+    const tick = () => new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(rows.map(row => row.hidden), [false, true, true], 'trinket rows wait for the switch');
+    toggle.checked = true;
+    listeners.get('switch:change')();
+    await tick();
+    assert.deepEqual(requests.pop(), {UI_SHELF_PROPS: 'true'});
+    assert.deepEqual(rows.map(row => row.hidden), [false, false, false], 'switch on shows the trinket rows');
+
+    placed.length = 0;
+    checks[1].checked = false;
+    listeners.get('UI_SHELF_PROP_KINDS:change')({target: {matches: () => true}});
+    await tick();
+    assert.deepEqual(requests.pop(), {UI_SHELF_PROP_KINDS: 'bookends,candle,stack'});
+    assert.equal(kindsInput.value, 'bookends,candle,stack');
+    assert.deepEqual(placed, [[flat, 'bookends,candle,stack', '3']], 'unticking a trinket re-places the preview');
+
+    listeners.get('UI_SHELF_PROP_AMOUNT:click')({target: {closest: selector => (selector === '[data-display-step]' ? up : null)}, preventDefault() {}});
+    await tick();
+    assert.deepEqual(requests.pop(), {UI_SHELF_PROP_AMOUNT: '4'});
+    assert.equal(amountInput.value, '4');
+    assert.equal(dots.filter(dot => dot.active).length, 4);
+    assert.deepEqual(placed.at(-1), [flat, 'bookends,candle,stack', '4'], 'more trinkets re-places the preview');
+
+    fails = true;
+    checks[2].checked = false;
+    listeners.get('UI_SHELF_PROP_KINDS:change')({target: {matches: () => true}});
+    await tick();
+    assert.equal(stage.dataset.shelfPropKinds, 'bookends,candle,stack', 'a failed save rolls the preview back');
+    assert.equal(checks[2].checked, true);
+    assert.equal(kindsInput.value, 'bookends,candle,stack');
+
+    fails = false;
+    toggle.checked = false;
+    listeners.get('switch:change')();
+    await tick();
+    assert.deepEqual(rows.map(row => row.hidden), [false, true, true], 'switch off hides them again');
+}
+
 (async () => {
     verifyShellThemeBridge();
+    await verifyTrinketControls();
     const good = mount();
     assert.equal(good.values.className, 'js-display');
     await good.click('faceout');

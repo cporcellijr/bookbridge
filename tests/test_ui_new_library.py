@@ -180,6 +180,10 @@ class TestNewLibrary(unittest.TestCase):
         self.assertLess(html.index('/static/js/next/shelf-props.js'), html.index("function placeShelfProps()"))
         self.service.set_user_credential(self.reader.id, "UI_SHELF_PROPS", "on")
         self.assertRegex(self.client.get("/").get_data(as_text=True), r'id="library-page"[^>]*data-shelf-props="true"')
+        self.service.set_user_credential(self.reader.id, "UI_SHELF_PROP_KINDS", "plant")
+        self.service.set_user_credential(self.reader.id, "UI_SHELF_PROP_AMOUNT", "4")
+        self.assertRegex(self.client.get("/").get_data(as_text=True),
+                         r'id="library-page"[^>]*data-shelf-prop-kinds="plant" data-shelf-prop-amount="4"')
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         self.assertIn(".shelf-prop { display: none; }", css)
         self.assertIn('.library-page[data-view="spines"][data-shelf-props="true"] .shelf-prop {', css)
