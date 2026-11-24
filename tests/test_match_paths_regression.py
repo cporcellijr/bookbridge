@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.web_server as web_server
+from src.db.models import Book
 
 
 class MockContainer:
@@ -225,6 +226,30 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.mock_container.mock_database_service.dismiss_suggestion.assert_any_call("hash-match-1")
         self.mock_container.mock_abs_client.add_to_collection.assert_called_once_with("ab-1", "Synced with KOReader")
         self.mock_container.mock_booklore_client.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
+
+    def _merge_into_audiobook(self, existing):
+        db = self.mock_container.mock_database_service
+        db.get_book_by_kosync_id.return_value = existing
+        with patch("src.web_server.get_kosync_id_for_ebook", return_value="e0262d5cceb927d0aa"):
+            response = self.client.post("/match", data={"audiobook_id": "ab-1", "ebook_filename": "book.epub"})
+        self.assertEqual(response.status_code, 302)
+        return db.save_book.call_args[0][0]
+
+    def test_match_merge_never_stores_an_ebook_only_key_as_the_abs_ebook_item(self):
+        """#597: merging an ebook-only row stored its `ebook-<hash>` key as the ABS ebook item."""
+        existing = Book(abs_id="ebook-e0262d5cceb927d0", abs_title="Book",
+                        ebook_filename="book.epub", kosync_doc_id="e0262d5cceb927d0aa")
+        self.assertIsNone(self._merge_into_audiobook(existing).abs_ebook_item_id)
+
+    def test_match_merge_clears_a_previously_stored_synthetic_abs_ebook_item(self):
+        existing = Book(abs_id="ebook-e0262d5cceb927d0", abs_title="Book", ebook_filename="book.epub",
+                        kosync_doc_id="e0262d5cceb927d0aa", abs_ebook_item_id="ebook-e0262d5cceb927d0")
+        self.assertIsNone(self._merge_into_audiobook(existing).abs_ebook_item_id)
+
+    def test_match_merge_keeps_a_real_abs_ebook_item_key(self):
+        existing = Book(abs_id="li_ebook_1", abs_title="Book",
+                        ebook_filename="book.epub", kosync_doc_id="e0262d5cceb927d0aa")
+        self.assertEqual(self._merge_into_audiobook(existing).abs_ebook_item_id, "li_ebook_1")
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
     def test_match_route_adopts_existing_kosync_document(self, _mock_kosync):
@@ -2094,7 +2119,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             self.assertEqual(session_data.get("suggestions_scan_job_id"), "job-1")
 
         with patch(
-            "src.web_server._get_suggestions_scan_job",
+            "src.web.suggestions_scan_workflow._get_suggestions_scan_job",
             return_value={
                 "status": "running",
                 "error": None,
@@ -2108,7 +2133,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             self.assertEqual(status_payload["progress"]["percent"], 40)
 
         with patch(
-            "src.web_server._get_suggestions_scan_job",
+            "src.web.suggestions_scan_workflow._get_suggestions_scan_job",
             return_value={
                 "status": "done",
                 "error": None,

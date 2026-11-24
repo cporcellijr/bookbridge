@@ -16,8 +16,9 @@ from src.utils.config_loader import (
 )
 
 ROOT = Path(__file__).parent.parent
-TEMPLATE = (ROOT / 'templates' / 'settings.html').read_text(encoding='utf-8')
+TEMPLATE = "".join((ROOT / 'templates' / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
 WEB_SERVER = (ROOT / 'src' / 'web_server.py').read_text(encoding='utf-8')
+SETTINGS_HANDLER = (ROOT / 'src' / 'web' / 'routes' / 'settings.py').read_text(encoding='utf-8')
 
 
 class TestMergedRegistry(unittest.TestCase):
@@ -89,7 +90,7 @@ class TestMergedValues(unittest.TestCase):
     def test_shortest_highlight_interval_and_longest_cooldown(self):
         values = merged_setting_values({**DEFAULT_CONFIG, 'READEST_ANNOTATION_SYNC_MINUTES': '5',
                                         'HARDCOVER_ANNOTATION_SYNC_MINUTES': '0',
-                                        'STORYGRAPH_UPDATE_COOLDOWN_MINS': '240'})
+                                        'GOODREADS_UPDATE_COOLDOWN_MINS': '240'})
         self.assertEqual(values['ALL_APPS_ANNOTATION_SYNC_MINUTES'], '5')
         self.assertEqual(values['ALL_APPS_TRACKER_COOLDOWN_MINS'], '240')
 
@@ -144,7 +145,7 @@ class TestEnvOnlySettingsNowOnThePage(unittest.TestCase):
             self.assertRegex(TEMPLATE, r'\sname="%s"' % key)
 
     def test_switches_are_bool_keys(self):
-        block = WEB_SERVER[WEB_SERVER.index('bool_keys = ['):]
+        block = SETTINGS_HANDLER[SETTINGS_HANDLER.index('bool_keys = ['):]
         block = block[:block.index(']')]
         for key in ('AUTO_CREATE_EBOOK_MAPPING', 'KOREADER_COMBINE_DEVICE_STATS'):
             self.assertIn(f"'{key}'", block)

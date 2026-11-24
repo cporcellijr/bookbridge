@@ -10,7 +10,8 @@ from src.db.models import Book, KosyncDocument
 from src.services.koreader_device_sync_service import KOReaderDeviceSyncService
 
 
-TEST_DIR = "/tmp/test_koreader_device_sync_service"
+from tests._tmpdirs import process_test_dir
+TEST_DIR = process_test_dir('test_koreader_device_sync_service')
 
 
 class TestKOReaderDeviceSyncService(unittest.TestCase):
@@ -209,6 +210,34 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertIsNone(sizes["abs-a"], "the un-stat-able book reports no size")
         self.assertEqual(sizes["abs-b"], len(b"epub"))
 
+    def test_unresolvable_book_is_reported_unavailable_not_silently_dropped(self):
+        """A book whose file cannot be resolved right now must be flagged so the
+        plugin does not delete the device copy; a deleted book is in neither list."""
+        self._write_book_file("outage_present.epub")
+        for abs_id, filename in (("abs-ok", "outage_present.epub"), ("abs-missing", "outage_absent.epub")):
+            self.db.save_book(
+                Book(
+                    abs_id=abs_id,
+                    abs_title=f"Book {abs_id}",
+                    original_ebook_filename=filename,
+                    kosync_doc_id=f"hash-{abs_id}",
+                    status="active",
+                )
+            )
+        self.db.save_book(
+            Book(abs_id="abs-gone", abs_title="Gone", original_ebook_filename="outage_gone.epub",
+                 kosync_doc_id="hash-gone", status="active")
+        )
+        real_get_book = self.db.get_book
+        with patch.object(
+            self.db, "get_book",
+            side_effect=lambda abs_id, *a, **k: None if abs_id == "abs-gone" else real_get_book(abs_id, *a, **k),
+        ):
+            manifest = self.service.build_manifest()
+
+        self.assertEqual([item["abs_id"] for item in manifest["books"]], ["abs-ok"])
+        self.assertEqual(manifest["unavailable_abs_ids"], ["abs-missing"])
+
     def test_resolve_download_uses_local_original_file(self):
         source_path = self.books_dir / "kavita_187.epub"
         source_path.write_bytes(b"epub")
@@ -263,6 +292,23 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         ])
 
         self.assertNotEqual(without_shelves, with_shelves)
+
+    def test_manifest_revision_changes_when_an_unavailable_book_is_removed(self):
+        """A device keeps an unavailable book; removing it later must change the
+        revision, or the plugin's unchanged-revision short-circuit skips the delete."""
+        from src.api import kosync_server
+
+        items = [{"abs_id": "abs-1", "filename": "Book.epub", "content_hash": "hash-1", "size": 123}]
+        self.assertNotEqual(
+            self.service._compute_revision(items, ["abs-lost"]), self.service._compute_revision(items, []),
+        )
+        self.assertNotEqual(
+            kosync_server._compute_manifest_revision(items, ["abs-lost"]),
+            kosync_server._compute_manifest_revision(items),
+        )
+        self.assertEqual(
+            self.service._compute_revision(items, []), kosync_server._compute_manifest_revision(items),
+        )
 
     def test_manifest_no_shelves_when_disabled(self):
         self._write_book_file("plain.epub")
@@ -611,6 +657,8 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertEqual(primary_doc.linked_abs_id, "abs-1")
 
     def test_ensure_linked_kosync_document_upserts_and_relinks(self):
+        for abs_id in ("abs-1", "abs-2"):
+            self.db.save_book(Book(abs_id=abs_id, status="active"))
         # Creates a row when missing.
         self.assertTrue(self.db.ensure_linked_kosync_document("h1", "abs-1"))
         doc = self.db.get_kosync_document("h1")
@@ -621,6 +669,80 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         # Relinks when pointing elsewhere.
         self.assertTrue(self.db.ensure_linked_kosync_document("h1", "abs-2"))
         self.assertEqual(self.db.get_kosync_document("h1").linked_abs_id, "abs-2")
+
+    def test_reconcile_skips_book_deleted_after_catalog_snapshot(self):
+        """A running pass must not resolve or link an already deleted snapshot entry."""
+        self._write_book_file("deleted.epub")
+        book = self.db.save_book(Book(abs_id="deleted", abs_title="Pattern Recognition",
+                                     original_ebook_filename="deleted.epub", status="active"))
+        snapshot = self.service._get_active_books()
+        self.db.delete_book(book.abs_id)
+        with patch.object(self.service, '_get_active_books', return_value=snapshot), \
+                patch.object(self.service, '_resolve_source_path') as resolve:
+            summary = self.service.reconcile_hashes()
+        resolve.assert_not_called()
+        self.assertEqual(summary['skipped'], 1)
+        self.assertEqual(summary['linked'], 0)
+        self.assertEqual(self.db.get_all_kosync_documents(), [])
+
+    def test_reconcile_cannot_link_book_deleted_during_resolution(self):
+        """Deletion during slow hashing must not recreate the reported orphan link."""
+        self._write_book_file("deleted.epub")
+        self.db.save_book(Book(abs_id="deleted", abs_title="Pattern Recognition",
+                               original_ebook_filename="deleted.epub", status="active"))
+        def hash_then_delete(path):
+            self.db.delete_book('deleted')
+            return 'stale-hash'
+        self.service.ebook_parser.get_kosync_content_id.side_effect = hash_then_delete
+        with self.assertLogs('src.services.koreader_device_sync_service', level='INFO') as logs:
+            summary = self.service.reconcile_hashes()
+        self.assertEqual(summary['linked'], 0)
+        self.assertFalse(any("bound new hash stale-hash to 'Pattern Recognition'" in line for line in logs.output))
+        self.assertIsNone(self.db.get_kosync_document('stale-hash'))
+
+    def test_stale_user_snapshot_does_not_resolve_unclaimed_shared_book(self):
+        user = self.db.create_user('removed-reader', 'password')
+        other = self.db.create_user('remaining-reader', 'password')
+        self.db.save_book(Book(abs_id='shared', original_ebook_filename='shared.epub',
+                               status='active', user_id=user.id))
+        self.db.link_user_book(other.id, 'shared')
+        self.service.user_id = user.id
+        snapshot = self.service._get_active_books()
+        self.db.unlink_user_book(user.id, 'shared')
+        with patch.object(self.service, '_get_active_books', return_value=snapshot), \
+                patch.object(self.service, '_resolve_source_path') as resolve:
+            summary = self.service.reconcile_hashes()
+        resolve.assert_not_called()
+        self.assertEqual(summary['skipped'], 1)
+        self.assertIsNotNone(self.db.get_book('shared'))
+
+    def test_missing_book_cannot_steal_existing_hash_link(self):
+        self.db.save_book(Book(abs_id='remaining', status='active'))
+        self.assertTrue(self.db.ensure_linked_kosync_document('existing-hash', 'remaining'))
+        self.assertFalse(self.db.ensure_linked_kosync_document('existing-hash', 'deleted'))
+        self.assertEqual(self.db.get_kosync_document('existing-hash').linked_abs_id, 'remaining')
+
+    def test_reconcile_reports_primary_hash_owner_without_document_row(self):
+        """9846: a missing document row can still have a primary Book owner."""
+        self._write_book_file("shared.epub")
+        self.db.save_book(Book(
+            abs_id="primary-owner", abs_title="Primary owner",
+            kosync_doc_id="hash-shared", status="active",
+        ))
+        self.db.save_book(Book(
+            abs_id="requester", abs_title="Second copy",
+            original_ebook_filename="shared.epub", status="active",
+        ))
+        self.assertIsNone(self.db.get_kosync_document("hash-shared"))
+
+        with self.assertLogs("src.services.koreader_device_sync_service", level="WARNING") as logs:
+            summary = self.service.reconcile_hashes()
+
+        self.assertEqual(summary["conflicts"], 1)
+        self.assertIn("owned by 'primary-owner'", "\n".join(logs.output))
+        self.assertIsNone(self.db.get_kosync_document("hash-shared"))
+        self.assertEqual(self.db.get_book("primary-owner").kosync_doc_id, "hash-shared")
+        self.assertIsNone(self.db.get_book("requester").kosync_doc_id)
 
     def test_content_hash_not_recomputed_when_ebook_unchanged(self):
         """Regression for #342: the 60s prebuilder loop must not re-hash

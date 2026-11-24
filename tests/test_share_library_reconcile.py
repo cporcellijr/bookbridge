@@ -115,7 +115,7 @@ class TestShareLibraryAdminAction(ShareLibraryReconcileTestCase):
         """Both settings.html and admin_users.html must have the share_library form."""
         templates_dir = Path(web_server.__file__).parent.parent / 'templates'
 
-        settings_html = (templates_dir / 'settings.html').read_text(encoding='utf-8')
+        settings_html = "".join((templates_dir / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         admin_users_html = (templates_dir / 'admin_users.html').read_text(encoding='utf-8')
 
         self.assertIn('share_library', settings_html, "settings.html must have share_library action")

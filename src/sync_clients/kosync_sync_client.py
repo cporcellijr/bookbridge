@@ -24,7 +24,9 @@ from src.utils.kosync_canonical import (
     prewarm_xpath_order_cache,
     resolve_canonical_position,
 )
-from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp
+from src.utils.progress_metadata import (
+    get_kosync_approved_rewind_at, get_kosync_synced_pct, parse_service_timestamp,
+)
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState, LocatorResult
 
 logger = logging.getLogger(__name__)
@@ -184,8 +186,8 @@ class KoSyncSyncClient(SyncClient):
         if ko_xpath is None:
             logger.debug(f"{book_label}KoSync xpath is None - using fallback text extraction")
 
-        # Get previous KoSync state
-        prev_kosync_pct = prev_state.percentage if prev_state else 0
+        # The position the last cycle saw, not one a device PUT already wrote
+        prev_kosync_pct = get_kosync_synced_pct(prev_state) or 0
 
         delta = abs(ko_pct - prev_kosync_pct)
 

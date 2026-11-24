@@ -33,7 +33,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y lua5.4
         python -m pip install --upgrade pip
-        pip install flake8 pytest pytest-cov
+        pip install flake8 'pytest>=9,<10' pytest-cov 'pytest-xdist>=3.8,<4'
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
     - name: Lint with flake8
       run: |
@@ -43,4 +43,4 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with pytest
       run: |
-        pytest tests/ --cov=src --cov-report=term-missing --cov-report=xml
+        python tests/run_all_tests.py --cov=src --cov-report=term-missing --cov-report=xml

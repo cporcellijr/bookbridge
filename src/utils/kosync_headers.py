@@ -8,6 +8,9 @@ the KoSync *client* (api_clients.KoSyncClient) and the KoSync
 import hashlib
 
 KOSYNC_ACCEPT = "application/vnd.koreader.v1+json"
+# Marks BookBridge's own KoSync requests. Its server doesn't count a read with this
+# header as sending a reader's device the book's position.
+BRIDGE_INTERNAL_HEADER = "X-BookBridge-Internal"
 
 
 def hash_kosync_key(plain_key: str) -> str:
@@ -38,9 +41,9 @@ def kosync_request_kwargs(
     """Build requests-compatible authentication arguments for a KoSync server."""
     if str(auth_method).strip().lower() == "basic":
         return {
-            "headers": {"accept": KOSYNC_ACCEPT},
+            "headers": {"accept": KOSYNC_ACCEPT, BRIDGE_INTERNAL_HEADER: "1"},
             "auth": (user, plain_key),
         }
 
     hashed_key = hash_kosync_key(plain_key) if plain_key else ""
-    return {"headers": kosync_auth_headers(user, hashed_key)}
+    return {"headers": {**kosync_auth_headers(user, hashed_key), BRIDGE_INTERNAL_HEADER: "1"}}

@@ -6,6 +6,7 @@ import re
 import unittest
 import tests.test_ui_new_foundation as foundation
 from src.db.models import Book, State
+from discover_template_source import discover_template_source
 
 
 class TestBookPage(unittest.TestCase):
@@ -124,6 +125,38 @@ class TestBookPage(unittest.TestCase):
         assert 'Not reported' not in text
         assert 'Last:' not in text  # no app is known to have moved the place last
 
+    def test_book_window_cover_uses_the_thumbnail_not_the_original(self):
+        # Measured live: the original cover was 3000x4794 (1.98 MB) for a 150x220 slot.
+        self.service.save_book(Book(abs_id='book-1', abs_title='A Reader’s Book',
+                                    ebook_filename='reader.epub', status='active',
+                                    duration=3600, kosync_doc_id='abc123'))
+        self._login('ui-reader')
+        globals_ = self.app.jinja_env.globals
+        with patch.dict(globals_, {'thumb_cover_src': lambda doc: '/covers/thumb/abc123.jpg?v=1-2'}):
+            text = self.client.get('/book/book-1?fragment=1').get_data(as_text=True)
+        cover = re.search(r'<img class="book-cover"[^>]*>', text).group(0)
+        assert 'src="/covers/thumb/abc123.jpg?v=1-2"' in cover
+        assert 'data-cover-original="/covers/abc123.jpg"' in cover  # an evicted thumbnail still has the original
+        with patch.dict(globals_, {'thumb_cover_src': lambda doc: None}):
+            text = self.client.get('/book/book-1?fragment=1').get_data(as_text=True)
+        cover = re.search(r'<img class="book-cover"[^>]*>', text).group(0)
+        assert 'src="/covers/abc123.jpg"' in cover and 'data-cover-original' not in cover
+
+    def test_goodreads_row_links_and_changes_the_link(self):
+        from src.db.models import GoodreadsDetails
+        self._login('ui-reader')
+        with patch('src.web_server._build_dashboard_integrations', return_value={'goodreads': True}):
+            unlinked = self.client.get('/book/book-1').get_data(as_text=True)
+            self.service.save_goodreads_details(GoodreadsDetails(
+                abs_id='book-1', goodreads_book_id='42', goodreads_url='https://www.goodreads.com/book/show/42'))
+            linked = self.client.get('/book/book-1').get_data(as_text=True)
+        for text in (unlinked, linked):
+            assert 'data-service="goodreads"' in text
+            assert 'linkGoodreads(event)' in text
+            assert 'id="goodreads-modal"' in text and '/static/js/goodreads-modal.js' in text
+        assert '>Link<' in unlinked and 'Not linked' in unlinked
+        assert '>Change link<' in linked and 'https://www.goodreads.com/book/show/42' in linked
+
     def test_hero_chips_link_to_the_audio_ebook_and_rating_sites(self):
         from src import web_server
         original = web_server._build_dashboard_mappings
@@ -207,20 +240,35 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
         page = (root / 'templates/next/index.html').read_text(encoding='utf-8')
         library = (root / 'templates/next/_library_scripts.html').read_text(encoding='utf-8')
         classic = '\n'.join(self._lines('templates/base.html') + self._lines('templates/index.html'))
+        # Goodreads build only: Classic's bulk-delete selection; New has its own selection bar and Remove.
+        bulk_start = classic.index('function filteredBookIds() {')
+        bulk_end = classic.index('return true;\n}', classic.index('function confirmBulkDelete(form) {')) + len('return true;\n}')
+        classic = classic[:bulk_start] + classic[bulk_end + 1:]
+        classic = classic.replace('updateBookSelection();\n', '')
         self.assertIn("{% include 'next/_book_scripts.html' %}", page)
         self.assertIn('openBookDrawer(this.href,this)', page)
         # Views and bulk actions are new, and exercised by test_ui_new_library.js.
         start = library.index('/* P3 additions:')
         end = library.index('</script>', start)
         library = library[:start] + library[end:]
+        # P16b's one-filter panel and P16c's hero lifecycle are New-only.
+        # Preserve exact Classic parity for the surrounding shared drawer/poll blocks.
+        for first, last in P16B_LIBRARY_NEW_ONLY + P16C_LIBRARY_NEW_ONLY + P16E_LIBRARY_NEW_ONLY:
+            start = library.index(first)
+            end = library.index(last, start)
+            library = library[:start] + '</script><script>' + library[end:]
         normalize = lambda text: '\n'.join(' '.join(line.split()) for line in text.splitlines() if line.strip())
         self.assertNotIn('function updateKoSyncHash(', library)
         self.assertNotIn('function linkBookFusion(', library)
         library = normalize(library)
         library = library.replace('// Initial Sort Defaults', '</script><script>// Initial Sort Defaults')
+        for updated, previous in reversed(P16A_LIBRARY_ALLOWED_CHANGES):
+            self.assertEqual(library.count(updated), 1, 'P16a allowed change drifted')
+            library = library.replace(updated, previous, 1)
+        library = normalize(library)
         # Exact allowed changes: new paired/attention predicates; localized counts;
         # storage denial handling; duplicate-card/spine updates and live sort values.
-        changes = LIBRARY_ALLOWED_CHANGES
+        changes = LIBRARY_HEADER_ALLOWED_CHANGES + LIBRARY_ALLOWED_CHANGES + P16C_LIBRARY_ALLOWED_CHANGES
         for new, original in changes:
             new = normalize(new)
             self.assertIn(new, library, 'Allowed change moved: review it explicitly')
@@ -235,20 +283,84 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
                 self.assertIn(block, classic, 'Classic changed: update the Library copy or document the exact deliberate change')
 
 
+# P16b: (first line, line that ends the New-only region) for the one-filter panel.
+P16B_LIBRARY_NEW_ONLY = (
+    ("const statusFilter = document.getElementById('status-filter');", "const seriesFilter = document.getElementById('series-filter');"),
+    ('filterGroups.author = authorFilter;', "const filterCount = document.getElementById('filter-count');"),
+    ('function updateFacetOptions() {', 'function clearLibraryFilters(focusTrigger = false) {'),
+    ('function matchesStatusFilter(', 'function matchesFormatFilter('),
+    ('function filterBooks() {', 'window.toggleSeries = function'),
+    ('// The hidden multi-selects are the canonical filter state.', 'if (dashboardSearch) {'),
+)
+
+
+# P16e: the reset references and its helper are New-only. Keep the shared
+# Classic filter/search blocks outside these exact slices.
+P16E_LIBRARY_NEW_ONLY = (
+    ('function clearLibraryFilters(focusTrigger = false) {',
+     "// Offers a route into the Search tab's"),
+)
+
+
+# P16c: only the hero lifecycle is New-only. Its two touches to shared
+# grid-count and polling code are pinned separately to catch accidental drift.
+P16C_LIBRARY_NEW_ONLY = (
+    ("const heroRoot = document.getElementById('library-hero');",
+     "let refreshPaused = false;"),
+)
+P16C_LIBRARY_ALLOWED_CHANGES = (
+    ("// The hero book leaves the grid as a standalone card; inside its series stack it stays.\n"
+     "const heroHidden = card.dataset.heroExcluded === 'true' && !card.closest?.('.series-group');\n"
+     "if (absId && !heroHidden && !seen.has(absId)) seen.set(absId, card);",
+     "if (absId && !seen.has(absId)) seen.set(absId, card);"),
+    ("refreshHeroFromPoll(data.mappings, cardsById);", ""),
+)
+
+
+# P16a's intentional New-only changes, reversed exactly for the copied-Classic check.
+P16A_LIBRARY_ALLOWED_CHANGES = (
+    ("const libraryGrid = document.getElementById('library-grid');", "const dashboardSections = Array.from(document.querySelectorAll('.dashboard-section'));\nconst dashboardGrids = Array.from(document.querySelectorAll('.dashboard-section .book-grid'));"),
+    ("const addBookSearchUrl = '{{ url_for('suggestions', tab='search') }}&q=';", "const addBookSearchUrl = '{{ url_for('suggestions', tab='search') }}&q=';\nconst notStartedSection = document.getElementById('not-started-section');\nconst notStartedHeader = document.getElementById('not-started-header');\nconst notStartedGrid = document.getElementById('not-started-grid');\nconst notStartedChevron = document.getElementById('not-started-chevron');"),
+    ("function hasVisibleGridItems() {\nif (!libraryGrid) return false;\nreturn Array.from(libraryGrid.children).some(entry =>\n!entry.classList.contains('hidden') &&\nentry.style.display !== 'none' &&\n(entry.classList.contains('book-card') ||\n(entry.classList.contains('series-group') &&\n!document.body.classList.contains('series-grouping-off'))));", "function updateNotStartedChevron(isExpanded) {\nif (notStartedChevron) {\nnotStartedChevron.textContent = isExpanded ? '▼' : '▶';"),
+    ('// Count every book once, regardless of its series presentation.', "if (notStartedHeader) {\nnotStartedHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');\n}\n}\nfunction updateDashboardSectionVisibility() {\ndashboardSections.forEach(section => {\nconst grid = section.querySelector('.book-grid');\nif (!grid) return;\nconst visibleCards = grid.querySelectorAll('.book-card:not(.hidden)');\nconst visibleGroups = grid.querySelectorAll('.series-group:not(.hidden)');\nif (visibleCards.length > 0 || visibleGroups.length > 0) {\nsection.classList.remove('hidden');\n} else {\nsection.classList.add('hidden');\n}\n});\n}\n// Finished volumes can appear in their series and under Finished.\n// Count each book once, regardless of grouping or duplicate cards."),
+    ('const noResults = !hasVisibleGridItems();', "const noResults = document.querySelectorAll('.dashboard-section:not(.hidden)').length === 0;"),
+    ("searchHandoff.classList.remove('hidden');\n}", "searchHandoff.classList.remove('hidden');\n}\nwindow.toggleNotStarted = function () {\nif (!notStartedGrid || !notStartedSection || !notStartedHeader) return;\nconst isShowing = notStartedGrid.classList.toggle('show');\nnotStartedSection.classList.toggle('active');\nnotStartedHeader.classList.toggle('active');\nupdateNotStartedChevron(isShowing);\ntry {\nlocalStorage.setItem('not_started_expanded', isShowing);\n} catch (e) {\nconsole.debug('LocalStorage error:', e);\n}\n};\n// Format and series are orthogonal axes, so each is its own predicate over\n// one card rather than a branch in a single mutually-exclusive filter."),
+    ("reading: 'asc', // In progress, Not started, Finished; newest sync first", "status: 'asc',"),
+    ("let savedSort = 'reading';\ntry { savedSort = localStorage.getItem('abs_kosync_sort') || 'reading'; } catch (e) { /* storage unavailable */ }\nif (savedSort === 'status' || !Object.prototype.hasOwnProperty.call(sortState, savedSort)) savedSort = 'reading';", "let savedSort = 'title';\ntry { savedSort = localStorage.getItem('abs_kosync_sort') || 'title'; } catch (e) { /* storage unavailable */ }"),
+    ('const storedDirections = JSON.parse(savedSortState);\nif (storedDirections.status && !storedDirections.reading) {\nstoredDirections.reading = storedDirections.status;\n}\ndelete storedDirections.status;\nsortState = { ...sortState, ...storedDirections };', 'sortState = { ...sortState, ...JSON.parse(savedSortState) };'),
+    ("function readingSortDetails(el) {\nconst cards = el.classList.contains('series-group')\n? Array.from(el.querySelectorAll('.book-card')) : [el];\nconst members = cards.length ? cards : [el];\nconst rank = Math.min(...members.map(card => {\nconst progress = parseFloat(card.dataset.progress || '0') || 0;\nif (progress > 0 && progress < 100) return 0;\nreturn progress >= 100 ? 2 : 1;\n}));\nreturn {\nrank,\nsyncAge: Math.min(getLastSyncAge(el), ...members.map(getLastSyncAge))\n};\n}", ''),
+    ('let comparison = 0;', "let comparison = 0;\nconst isSeries = (el) => el.classList.contains('series-group');"),
+    ("if (sortBy === 'reading') {\nconst statusA = readingSortDetails(a);\nconst statusB = readingSortDetails(b);\ncomparison = statusA.rank - statusB.rank;\nif (comparison === 0 && statusA.syncAge !== statusB.syncAge) {\ncomparison = statusA.syncAge < statusB.syncAge ? -1 : 1;\n}\nif (comparison === 0) comparison = sortTitleOf(a).localeCompare(sortTitleOf(b));\n} else if (sortBy === 'last_sync') {", "if (sortBy === 'last_sync') {"),
+    ('return titleA.localeCompare(titleB);\n}', "return titleA.localeCompare(titleB);\n}\n} else if (sortBy === 'status') {\nvalA = a.dataset.status || '';\nvalB = b.dataset.status || '';\ncomparison = valA.localeCompare(valB);"),
+    ('sortCards(libraryGrid, sortBy, direction);', 'dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));'),
+    ('// .series-children rather than a child of it -- it needs the same tag-and-restore', '// .series-children rather than a child of it -- it is a duplicate of a\n// flat card just like the others, so it needs the same tag-and-restore'),
+    ('if (!libraryGrid) return;', "const inProgressGrid = document.getElementById('in-progress-grid');\nconst notStartedGridEl = document.getElementById('not-started-grid');\nconst finishedGrid = document.getElementById('finished-grid');\n// Track abs-ids already rendered flat so series children don't duplicate.\nconst flatAbsIds = new Set();\ndocument.querySelectorAll('.book-grid > .book-card').forEach(c => {\nif (c.dataset.absId) flatAbsIds.add(c.dataset.absId);\n});"),
+    ('libraryGrid.appendChild(card);', "const absId = card.dataset.absId || '';\nif (absId && flatAbsIds.has(absId)) {\ncard.classList.add('flatten-duplicate');\nreturn;\n}\nconst progress = parseFloat(card.dataset.progress || '0') || 0;\nlet target;\nif (progress > 0 && progress < 100) target = inProgressGrid;\nelse if (progress >= 100) target = finishedGrid;\nelse target = notStartedGridEl;\nif (target) {\ntarget.appendChild(card);\nif (absId) flatAbsIds.add(absId);\n}"),
+    ('function restoreSeriesGroups() {', "function restoreSeriesGroups() {\n// Clear duplicate flags first.\ndocument.querySelectorAll('.book-card.flatten-duplicate').forEach(card => {\ncard.classList.remove('flatten-duplicate');\n});"),
+    ("if (typeof filterBooks === 'function') filterBooks();", "if (typeof filterBooks === 'function') filterBooks();\nupdateDashboardSectionVisibility();"),
+    ("}\ndocument.addEventListener('DOMContentLoaded', () => {", "}\ndocument.addEventListener('DOMContentLoaded', () => {\nif (notStartedHeader) {\nnotStartedHeader.addEventListener('click', window.toggleNotStarted);\nnotStartedHeader.addEventListener('keydown', (event) => {\nif (event.key === 'Enter' || event.key === ' ') {\nevent.preventDefault();\nwindow.toggleNotStarted();\n}\n});\n}\ntry {\nconst shouldExpand = localStorage.getItem('not_started_expanded') === 'true';\nif (shouldExpand && notStartedGrid && notStartedSection && notStartedHeader) {\nnotStartedGrid.classList.add('show');\nnotStartedSection.classList.add('active');\nnotStartedHeader.classList.add('active');\nupdateNotStartedChevron(true);\n} else {\nupdateNotStartedChevron(false);\n}\n} catch (e) {\nconsole.debug('LocalStorage error:', e);\nupdateNotStartedChevron(false);\n}"),
+    ('if (libraryGrid) {', 'if (dashboardGrids.length > 0) {'),
+)
+
 # (New lines, original Classic lines): deliberate P3 compatibility changes only.
 LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';", ''),
- ("if (formatValue === 'needs_attention') return card.classList.contains('out-of-sync') || "
-  "['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', "
-  "'pending'].includes(card.dataset.status);",
-  ''),
- ('filterCount.textContent = shown === total\n'
-  "? bbPlural({% call(n) plural_forms() %}{{ ngettext('{count} book', '{count} books', n) }}{% "
-  'endcall %}, total)\n'
-  ": bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total});",
+ ("                filterCount.textContent = hasActiveLibraryFilters()\n                    ? bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total})\n                    : '';",
   "const noun = total === 1 ? 'book' : 'books';\n"
   'filterCount.textContent = shown === total\n'
   "? total + ' ' + noun\n"
   ": shown + ' of ' + total + ' ' + noun;"),
+ # New retired "Has Audio" (Listening and reading + Audio only) and added "Has read-along".
+ ("if (formatValue === 'readalong') return card.dataset.readalong === 'true';\n"
+  "return (card.dataset.syncMode || 'audiobook') === formatValue;",
+  "const syncMode = card.dataset.syncMode || 'audiobook';\n"
+  "if (formatValue === 'has_audio') {\n"
+  "return syncMode === 'audiobook' || syncMode === 'audiobook_only';\n"
+  "}\n"
+  "return syncMode === formatValue;"),
+ # Multi-select: a facet keeps every picked option, not one select value.
+ ("if (!select) return;\nArray.from(select.querySelectorAll('option')).forEach(option => {",
+  "if (!select) return;\nconst selected = select.value;\nArray.from(select.querySelectorAll('option')).forEach(option => {"),
+ ("const keep = count > 0 || option.selected;", "const keep = count > 0 || option.value === selected;"),
  ("let savedSort = 'title';\n"
   "try { savedSort = localStorage.getItem('abs_kosync_sort') || 'title'; } catch (e) { /* storage "
   'unavailable */ }',
@@ -263,13 +375,54 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   '} catch (e) { /* storage unavailable */ }',
   "localStorage.setItem('abs_kosync_sort', sortBy);\n"
   "localStorage.setItem('abs_kosync_sort_state', JSON.stringify(sortState));"),
- ('                            const cards = '
-  'document.querySelectorAll(`.book-card[data-abs-id="${book.abs_id}"]`);\n'
-  '                            if (!cards.length) return;\n'
+ ('                        const cardsById = new Map();\n'
+  "                        document.querySelectorAll('.book-card').forEach(card => {\n"
+  '                            const list = cardsById.get(card.dataset.absId);\n'
+  '                            if (list) list.push(card); else cardsById.set(card.dataset.absId, [card]);\n'
+  '                        });\n'
+  '                        data.mappings.forEach(book => {\n'
+  '                            const cards = cardsById.get(String(book.abs_id));\n'
+  '                            if (!cards) return;\n'
   '                            cards.forEach(card => {\n'
   '    ',
+  'data.mappings.forEach(book => {\n'
   'const card = document.querySelector(`.book-card[data-abs-id="${book.abs_id}"]`);\n'
   'if (!card) return;\n'),
+ # Forge and progress polling run on the activity- and visibility-aware bbPoller.
+ ("function checkForgeStatus(signal) {", "function checkForgeStatus() {"),
+ ("return fetch('/api/forge/active', { signal })", "fetch('/api/forge/active')"),
+ ('return !!(tasks && tasks.length > 0);\n'
+  '})\n'
+  '.catch(e => console.debug("Forge status check failed", e));',
+  '})\n'
+  '.catch(e => console.debug("Forge status check failed", e));'),
+ ("// 5s while a forge task is running or work was just started, 30s when idle\n"
+  "// (tasks started elsewhere show up within one slow tick or on tab focus).\n"
+  "window.bbForgePoll = bbPoller({ name: 'forge', fastMs: 5000, slowMs: 30000, run: checkForgeStatus });\n"
+  "['syncNow', 'remapAlignment', 'generateReadalongEpub'].forEach(function (name) {\n"
+  "var original = window[name];\n"
+  "if (typeof original !== 'function') return;\n"
+  "window[name] = function () {\n"
+  "window.bbForgePoll.kick();\n"
+  "return original.apply(this, arguments);\n"
+  "};\n"
+  "});",
+  "// Poll every 5s\n"
+  "setInterval(checkForgeStatus, 5000);\n"
+  "// Initial check\n"
+  "document.addEventListener('DOMContentLoaded', checkForgeStatus);"),
+ ("if (refreshPaused) return;",
+  "// A hidden tab redraws nothing, so skip the round trip entirely.\n"
+  "if (refreshPaused || document.hidden) {\n"
+  "setTimeout(refreshDashboard, 30000);\n"
+  "return;\n"
+  "}"),
+ ("function refreshDashboard(signal) {", "function refreshDashboard() {"),
+ ("return fetch('/api/status/progress', { signal })", "fetch('/api/status/progress')"),
+ ('})\n.catch(() => { });\n}',
+  '})\n.catch(() => { })\n.finally(() => setTimeout(refreshDashboard, 30000));\n}'),
+ ("bbPoller({ name: 'library-progress', fastMs: 30000, slowMs: 30000, immediate: false, run: refreshDashboard });",
+  "setTimeout(refreshDashboard, 30000);"),
  # Cover badge/check/line: whole number, shown only when a state is above 0%.
  ("// Clear progress leaves 0% reset snapshots, so only a state above 0 counts as a position.\n"
   "const hasPosition = Object.values(book.states || {}).some(s => s.percentage > 0);\n"
@@ -291,10 +444,7 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
  ('                            card.dataset.progress = book.unified_progress;\n'
   "                            card.querySelectorAll('[data-app-pct]').forEach(node => { const app = book.states && book.states[node.dataset.appPct]; if (app) node.textContent = app.percentage.toFixed(1) + '%'; });\n"
   "                            const spine = card.querySelector('.spine-progress');\n"
-  '                            if (spine) {\n'
-  "                                spine.textContent = book.unified_progress.toFixed(0) + '%';\n"
-  '                                spine.hidden = !hasPosition;\n'
-  '                            }\n'
+  '                            if (spine) spine.hidden = !finished;\n'
   "                            card.toggleAttribute('data-reading', hasPosition && !finished);\n"
   '                            if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = '
   'book.last_sync_unix;\n'
@@ -304,11 +454,29 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   ''))
 
 
-# P4 Discover: every deviation from the copied Classic script is intentional.
+# Each Library-header exception to the Classic script is pinned explicitly.
+# This test removes only these approved deltas before comparing shared blocks.
+LIBRARY_HEADER_ALLOWED_CHANGES = (
+    ("                    banner.classList.toggle('active', isShowing);\n                    banner.setAttribute('aria-expanded', String(isShowing));\n                    document.getElementById('suggestions-section').hidden = !isShowing;",
+     "                    banner.classList.toggle('active');"),
+    ("                                banner.setAttribute('aria-expanded', 'true');\n                                document.getElementById('suggestions-section').hidden = false;",
+     ""),
+    ("            const attentionOnlyFilter = document.getElementById('attention-only-filter');",
+     ""),
+    ("            const attentionPopover = document.getElementById('needs-attention');\n            const attentionTrigger = attentionPopover?.querySelector('summary');\n            if (attentionPopover) {\n                function positionAttentionPopover() {\n                    if (!attentionPopover.open) return;\n                    const panel = attentionPopover.querySelector('.attention-list');\n                    if (!panel) return;\n                    panel.style.removeProperty('--attention-shift');\n                    const bounds = panel.getBoundingClientRect();\n                    const left = Math.max(14, Math.min(bounds.left, window.innerWidth - bounds.width - 14));\n                    panel.style.setProperty('--attention-shift', (left - bounds.left) + 'px');\n                }\n                attentionPopover.addEventListener('toggle', positionAttentionPopover);\n                window.addEventListener('resize', positionAttentionPopover);\n                document.addEventListener('click', event => {\n                    if (attentionPopover.open && !attentionPopover.contains(event.target)) {\n                        attentionPopover.open = false;\n                    }\n                });\n                document.addEventListener('keydown', event => {\n                    if (event.key === 'Escape' && attentionPopover.open) {\n                        event.preventDefault();\n                        attentionPopover.open = false;\n                        attentionTrigger?.focus();\n                    }\n                });\n            }",
+     ""),
+    ("            function needsAttention(card) {\n                return card.classList.contains('out-of-sync')\n                    || ['error', 'failed', 'failed_retry_later', 'failed_permanent'].includes(card.dataset.status);\n            }",
+     ""),
+)
+
+
+# P4/P5 Discover: every deviation from the copied Classic script is intentional.
 # (Original anchor, New anchor, fingerprint of the complete New hunk, rationale.)
 DISCOVER_ALLOWED_CHANGES = (
     ('', 'const ebookSelectedKeys = new Set();', '9311ccb1db68b3ca',
      'Separate ebook-only checkbox state and generation'),
+    ('', 'window.clearSuggestionsSearch = function clearSuggestionsSearch() {', '97349fd8a915d21c',
+     'Expose the shared acquisition handoff reset to Classic and New'),
     ('', "if (tab === 'ebook_only') {", 'adf84095df1bdf79',
      'Reset ebook-only selection when its scan changes'),
     ("$('layout').classList.toggle('no-queue', tab === 'ebook_only');",
@@ -324,6 +492,9 @@ DISCOVER_ALLOWED_CHANGES = (
      'ec0194e4eeb91021', 'Label the existing review-panel action Compare'),
     ('', '<input type="checkbox" class="ebook-row-check"', '926585e90630e26e',
      'Show ebook-only checkboxes'),
+    ('list.innerHTML = (rows.length ? `<div class="flat-list" role="list">',
+     'list.innerHTML = (rows.length ? `<div class="flat-list" role="list">',
+     '6f071ac6818272b0', 'Offer to get the missing half under Search results (New only)'),
     ('', 'updateEbookSelectionUi();', '931e7fe32e137cb2',
      'Update ebook selection state after every render'),
     ("addManyToQueue(visibleEntries('pairs').filter",
@@ -332,6 +503,8 @@ DISCOVER_ALLOWED_CHANGES = (
     ("if (box.classList.contains('row-check')) {",
      "if (box.classList.contains('ebook-row-check')) {", '46a6e59e4ff26f59',
      'Delegate ebook checkbox events without touching pair handling'),
+    ('', 'initAcquisition();', '3161f7c71c8e28a4',
+     'Start the get-the-missing-half controls (New only)'),
 )
 
 
@@ -343,9 +516,9 @@ class TestDiscoverScriptDrift(unittest.TestCase):
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        original = (root / 'templates/suggestions.html').read_text(encoding='utf-8')
+        original = discover_template_source('suggestions.html')
         classic_base = (root / 'templates/base.html').read_text(encoding='utf-8')
-        current = (root / 'templates/next/_discover_scripts.html').read_text(encoding='utf-8')
+        current = discover_template_source('next/_discover_scripts.html')
         classic_helper = classic_base.split('<script>', 1)[1].split('</script>', 1)[0]
         new_helper = current.split('<script>', 1)[1].split('</script>', 1)[0]
         self.assertEqual(new_helper, classic_helper)
@@ -481,33 +654,85 @@ class TestOpsPages(unittest.TestCase):
         self.assertIn('reorderSubmitting', html)
 
     def test_stats_dashboard_and_logs_live_controls_are_preserved(self):
-        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
         self._login('ui-reader')
-        html = self.client.get('/stats').get_data(as_text=True)
-        for expected in (
-            '/static/vendor/chart.umd.min.js',
-            '/api/stats/reading-calendar', '/api/stats/reading-day',
-            '/api/stats/book-detail', '/api/stats/yearly-recap',
-            'data-tab="combined"', 'data-tab="reading"', 'data-tab="listening"',
-            'day-detail-backdrop', 'book-detail-backdrop', 'loadYearlyRecap(',
-        ):
-            with self.subTest(stat=expected):
-                self.assertIn(expected, html)
+        stats_scripts = []
+        for mode in ('classic', 'new'):
+            with self.subTest(mode=mode):
+                self.service.set_user_credential(self.reader.id, 'UI_MODE', mode)
+                response = self.client.get('/stats')
+                self.assertEqual(response.status_code, 200)
+                html = response.get_data(as_text=True)
+                for expected in (
+                    '/static/vendor/chart.umd.min.js',
+                    '/api/stats/reading-calendar', '/api/stats/reading-day',
+                    '/api/stats/book-detail', '/api/stats/yearly-recap',
+                    'data-tab="combined"', 'data-tab="reading"', 'data-tab="listening"',
+                    'day-detail-backdrop', 'book-detail-backdrop', 'loadYearlyRecap(',
+                    'const BRIDGE_TIMEZONE =',
+                    'refreshButton.addEventListener("click", () => loadStats(true));',
+                    'loadStats();',
+                ):
+                    self.assertIn(expected, html)
+                scripts = re.findall(r'<script\b[^>]*>.*?</script>', html, flags=re.DOTALL)
+                chart = [i for i, script in enumerate(scripts) if '/static/vendor/chart.umd.min.js' in script]
+                stats = [i for i, script in enumerate(scripts) if 'const BRIDGE_TIMEZONE =' in script]
+                self.assertEqual(len(chart), 1)
+                self.assertEqual(len(stats), 1)
+                self.assertLess(chart[0], stats[0])
+                stats_scripts.append(scripts[stats[0]].strip())
+        self.assertEqual(stats_scripts[0], stats_scripts[1])
         self.client.get('/logout')
-        self.service.set_user_credential(self.admin.id, 'UI_MODE', 'new')
-        self._login('ui-admin')
-        html = self.client.get('/logs').get_data(as_text=True)
-        for expected in (
-            '/api/logs', '/api/logs/live', 'id="logLevel"', 'id="searchInput"',
-            'id="linesCount"', 'id="autoRefresh"', 'id="liveMode"',
-            'id="loadMore"', 'toggleLiveMode();',
-        ):
-            with self.subTest(log=expected):
-                self.assertIn(expected, html)
+        logs_scripts = []
+        for mode in ('classic', 'new'):
+            self.service.set_user_credential(self.admin.id, 'UI_MODE', mode)
+            self._login('ui-admin')
+            for path in ('/logs', '/logs?embed=1'):
+                with self.subTest(mode=mode, path=path):
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 200)
+                    html = response.get_data(as_text=True)
+                    for expected in (
+                        '/api/logs', '/api/logs/live', 'id="logLevel"', 'id="searchInput"',
+                        'id="linesCount"', 'id="autoRefresh"', 'id="liveMode"',
+                        'id="loadMore"', 'toggleLiveMode();', 'id="scrollToTop"',
+                        'id="scrollToBottom"', 'bbPlural(LINES_TOTAL,',
+                        'setInterval(fetchLiveLogs, 2000)',
+                        'setInterval(() => fetchLogs(), 30000)',
+                    ):
+                        self.assertIn(expected, html)
+                    scripts = re.findall(r'<script\b[^>]*>.*?</script>', html, flags=re.DOTALL)
+                    shared = [i for i, script in enumerate(scripts)
+                              if 'let autoRefreshInterval = null;' in script]
+                    options = [i for i, script in enumerate(scripts)
+                               if "document.getElementById('logsOptionsToggle')" in script]
+                    self.assertEqual(len(shared), 1)
+                    self.assertEqual(len(options), int(mode == 'new'))
+                    if options:
+                        self.assertLess(shared[0], options[0])
+                        self.assertIn("options.classList.toggle('open')", scripts[options[0]])
+                    if path == '/logs':
+                        logs_scripts.append(scripts[shared[0]].strip())
+            self.client.get('/logout')
+        self.assertEqual(logs_scripts[0], logs_scripts[1])
+
+    def test_logs_admin_only_classic_and_new_including_embedded(self):
+        for mode in ('classic', 'new'):
+            self.service.set_user_credential(self.reader.id, 'UI_MODE', mode)
+            self.service.set_user_credential(self.admin.id, 'UI_MODE', mode)
+            self._login('ui-reader')
+            for path in ('/logs', '/logs?embed=1', '/api/logs', '/api/logs/live'):
+                with self.subTest(mode=mode, user='reader', path=path):
+                    self.assertEqual(self.client.get(path).status_code, 403)
+            self.client.get('/logout')
+            self._login('ui-admin')
+            for path in ('/logs', '/logs?embed=1'):
+                with self.subTest(mode=mode, user='admin', path=path):
+                    self.assertEqual(self.client.get(path).status_code, 200)
+            self.client.get('/logout')
 
 
 class TestOpsScriptDrift(unittest.TestCase):
-    """The four P5 copied scripts have zero behavioral changes from Classic.
+    """P5 scripts stay shared where included and in sync where copied.
 
     Deliberate template-only differences:
     * next/base.html and an operations stylesheet, never changes in Classic;
@@ -522,16 +747,49 @@ class TestOpsScriptDrift(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent / 'templates'
         for page, start, end in (
             ('job_queue', "\n{% if queue_view['running'] %}\n<script>", "\n{% endblock %}\n{% endblock %}"),
-            ('stats', '<script src="/static/vendor/chart.umd.min.js"></script>', "\n{% endblock %}"),
+            ('stats', None, None),
             ('logs', '\n<script>', "\n{% endblock %}"),
         ):
             with self.subTest(page=page):
                 original = (root / f'{page}.html').read_text(encoding='utf-8')
                 partial = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
                 if page == 'job_queue':
-                    expected = original[original.index(start) + 1:original.rindex('\n{% endblock %}')]
+                    shared_include = "{% include 'next/_job_queue_scripts.html' %}"
+                    new_page = (root / 'next' / 'job_queue.html').read_text(encoding='utf-8')
+                    self.assertIn(shared_include, original)
+                    self.assertIn(shared_include, new_page)
+                    self.assertIn("acquisition_jobs.js", partial)
+                    self.assertIn("setInterval", partial)
+                    continue
+                elif page == 'stats':
+                    shared_include = "{% include 'next/_stats_scripts.html' %}"
+                    new_page = (root / 'next' / 'stats.html').read_text(encoding='utf-8')
+                    self.assertEqual(original.count(shared_include), 1)
+                    self.assertEqual(new_page.count(shared_include), 1)
+                    self.assertLess(original.index('{% block content %}'), original.index(shared_include))
+                    self.assertLess(original.index(shared_include), original.rfind('{% endblock %}'))
+                    self.assertNotIn('{% block scripts %}', original)
+                    self.assertIn('{% block scripts %}' + shared_include + '{% endblock %}', new_page)
+                    self.assertNotIn('<script', original)
+                    self.assertEqual(partial.count('/static/vendor/chart.umd.min.js'), 1)
+                    self.assertEqual(partial.count('const BRIDGE_TIMEZONE ='), 1)
+                    continue
                 elif page == 'logs':
-                    expected = original[original.index(start) + 1:original.rindex(end)]
+                    shared_include = "{% include 'next/_logs_scripts.html' %}"
+                    new_page = (root / 'next' / 'logs.html').read_text(encoding='utf-8')
+                    self.assertEqual(original.count(shared_include), 1)
+                    self.assertEqual(new_page.count(shared_include), 1)
+                    self.assertLess(original.index('{% block content %}'), original.index(shared_include))
+                    self.assertLess(original.index(shared_include), original.rfind('{% endblock %}'))
+                    self.assertNotIn('{% block scripts %}', original)
+                    self.assertNotIn('<script', original)
+                    self.assertIn('{% block scripts %}' + shared_include, new_page)
+                    self.assertEqual(new_page.count('<script>'), 1)
+                    self.assertLess(new_page.index(shared_include), new_page.index('<script>'))
+                    self.assertIn("document.getElementById('logsOptionsToggle')", new_page)
+                    self.assertEqual(partial.count('let autoRefreshInterval = null;'), 1)
+                    self.assertIn('plural_forms()', partial)
+                    continue
                 else:
                     expected = original[original.index(start):original.rindex(end)]
                 self.assertEqual(partial.strip(), expected.strip(),
@@ -545,7 +803,7 @@ class TestOpsScriptDrift(unittest.TestCase):
             self.assertNotIn(old_emoji, new_logs)
 
     def test_p6_classic_settings_and_account_scripts_remain_verbatim(self):
-        """Copied P6 scripts must change alongside Classic rather than drift."""
+        """Classic and New share each nonempty P6 script partial once."""
         from pathlib import Path
         root = Path(__file__).resolve().parent.parent / 'templates'
         for page in ('settings', 'account', 'account_integrations',
@@ -553,9 +811,16 @@ class TestOpsScriptDrift(unittest.TestCase):
             with self.subTest(page=page):
                 classic = (root / f'{page}.html').read_text(encoding='utf-8')
                 partial = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
-                script = (classic[classic.index('<script>'):classic.rfind('{% endblock %}')]
-                          if '<script>' in classic else '')
-                self.assertEqual(partial.strip(), script.strip())
+                if not partial.strip():
+                    self.assertNotIn('<script', classic)
+                    continue
+                shared_include = '{% include "next/_' + page + '_scripts.html" %}'
+                new_page = (root / 'next' / f'{page}.html').read_text(encoding='utf-8')
+                self.assertEqual(classic.count(shared_include), 1)
+                self.assertEqual(new_page.count(shared_include), 1)
+                self.assertNotIn('<script', classic)
+                self.assertLess(classic.index('{% block content %}'), classic.index(shared_include))
+                self.assertLess(classic.index(shared_include), classic.rfind('{% endblock %}'))
 
     def test_all_classic_ops_targets_exist_in_new(self):
         import re
@@ -566,7 +831,48 @@ class TestOpsScriptDrift(unittest.TestCase):
             next_page = (root / 'next' / f'{page}.html').read_text(encoding='utf-8')
             scripts = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
             source = next_page + '\n' + scripts
+            if page in ('stats', 'logs'):
+                original += '\n' + scripts  # Classic includes these partials rather than copying them.
             targets = re.findall(r'fetch\s*\(|href="/[^\"]*|action="/[^\"]*|url_for\s*\(', original)
             for target in targets:
                 with self.subTest(page=page, target=target):
                     self.assertIn(target, source)
+
+
+class TestLogsSplitLayout(unittest.TestCase):
+    """The New Logs layout keeps control ids while isolating the log scroller."""
+
+    def test_logs_page_keeps_every_control_and_adds_the_side_panel(self):
+        from pathlib import Path
+        html = (Path(__file__).resolve().parents[1] / 'templates/next/logs.html').read_text(encoding='utf-8')
+        for marker in ('class="logs-side"', 'id="logsOptionsToggle"', 'id="logsOptions"'):
+            self.assertIn(marker, html)
+        for element_id in (
+            'logLevel', 'searchInput', 'linesCount', 'refreshBtn', 'autoRefresh',
+            'liveMode', 'logContent', 'loadMore', 'scrollToTop', 'scrollToBottom',
+            'totalLinesStats', 'displayedLinesStats', 'lastUpdated',
+        ):
+            with self.subTest(element_id=element_id):
+                self.assertEqual(html.count(f'id="{element_id}"'), 1)
+        self.assertLess(html.index('id="searchInput"'), html.index('id="logsOptions"'))
+        self.assertLess(html.index('id="logsOptions"'), html.index('id="linesCount"'))
+
+    def test_log_list_is_the_only_scroller(self):
+        from pathlib import Path
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-ops.css').read_text(encoding='utf-8')
+        self.assertIn('body:has(.ops-logs:not(.embed)) .app-shell { height: 100dvh;', css)
+        self.assertIn('.view .logs-wrap:not(.embed) .log-container { height: auto;', css)
+        self.assertNotIn('flex: 1 1 180px', css)
+
+
+class TestStatsPhoneHeader(unittest.TestCase):
+    """The Stats introduction stays concise in the phone layout."""
+
+    def test_stats_intro_is_trimmed_on_phones(self):
+        from pathlib import Path
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-ops.css').read_text(encoding='utf-8')
+        rule = '.view .stats-wrap .hero p, .view .stats-wrap .hero-meta { display: none; }'
+        self.assertIn(rule, css)
+        phone_block = css.rfind('@media (max-width: 760px)', 0, css.index(rule))
+        self.assertNotEqual(phone_block, -1)
+        self.assertGreater(css.index(rule), phone_block)

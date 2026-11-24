@@ -169,7 +169,7 @@ class _FakeBookOrbitClient:
     def get_audiobook_info(self, book_id):
         return {"tracks": self._tracks}
 
-    def get_book_detail(self, book_id, force: bool = False):
+    def get_book_detail(self, book_id, force: bool = False, fresh_only: bool = False):
         return self._detail
 
     def get_libraries(self):

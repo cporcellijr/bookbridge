@@ -21,12 +21,12 @@ CSS cannot be executed here, so these are structural assertions.
 import re
 import unittest
 from pathlib import Path
+from discover_template_source import discover_template_source
 
-_SUGGESTIONS = Path(__file__).resolve().parents[1] / "templates" / "suggestions.html"
 
 
 def _source() -> str:
-    return _SUGGESTIONS.read_text(encoding="utf-8")
+    return discover_template_source("suggestions.html")
 
 
 def _rule(selector: str) -> str:

@@ -263,6 +263,9 @@ class ShelfWatchService:
         if bundle is None or client is None:
             logger.warning("Shelf-watch: no client bundle available for user %s", user_id)
             return self._disabled_stats()
+        if not client.is_configured():
+            # This user doesn't use the service; not worth a log line every poll.
+            return self._disabled_stats()
 
         user_token = None
         credentials_token = None
@@ -866,7 +869,8 @@ class ShelfWatchService:
     def _create_pending_suggestion(self, grimmory_book: dict, filename: str,
                                   grimmory_id: str, matches: list,
                                   origin: str = 'shelf_watch',
-                                  user_id: Optional[int] = None) -> bool:
+                                  user_id: Optional[int] = None,
+                                  acquisition_request_id: Optional[int] = None) -> bool:
         """Save a PendingSuggestion for the top match.
 
         Returns True if saved, False if there was no bridge key or an
@@ -900,6 +904,8 @@ class ShelfWatchService:
             'grimmory_title': grimmory_book.get('title') or '',
             'source_name': self._source_name,
         }
+        if acquisition_request_id is not None:
+            origin_payload['acquisition_request_id'] = acquisition_request_id
         suggestion = PendingSuggestion(
             source_id=bridge_key,
             title=top.get('audio_title') or grimmory_book.get('title') or '',

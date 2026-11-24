@@ -18,6 +18,7 @@ it is not necessarily the license of the logo artwork itself.
 | `storyteller.png` | Storyteller | https://github.com/smoores-dev/storyteller | MIT |
 | `shelfmark.png` | Shelfmark | https://github.com/calibrain/shelfmark | MIT |
 | `bookfusion.png` | BookFusion | https://www.bookfusion.com | Hosted service; not verified |
+| `goodreads.svg` | Goodreads | https://www.goodreads.com | Hosted service; not verified |
 | `hardcover.svg` | Hardcover | https://hardcover.app | Hosted service; not verified |
 | `storygraph.svg` | The StoryGraph | https://www.thestorygraph.com | Hosted service; not verified |
 

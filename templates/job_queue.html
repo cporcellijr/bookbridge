@@ -29,6 +29,8 @@
     {% endif %}
     {% endwith %}
 
+    {% include '_acquisition_jobs_panel.html' %}
+
     {% set sections = [
         ('running', _('Processing')),
         ('pending', _('Waiting')),
@@ -136,20 +138,5 @@
     </section>
     {% endfor %}
 </main>
-{% if queue_view['running'] %}
-<script>
-(function () {
-    let reorderSubmitting = false;
-    document.querySelectorAll('.job-queue-move-actions form').forEach(function (form) {
-        form.addEventListener('submit', function () {
-            reorderSubmitting = true;
-        });
-    });
-    window.setInterval(function () {
-        if (document.hidden || reorderSubmitting) return;
-        window.location.reload();
-    }, 20000);
-})();
-</script>
-{% endif %}
+{% include 'next/_job_queue_scripts.html' %}
 {% endblock %}

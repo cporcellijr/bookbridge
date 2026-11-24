@@ -9,6 +9,7 @@ from unittest.mock import patch
 from flask.signals import template_rendered
 
 import tests.test_ui_new_foundation as foundation
+from discover_template_source import discover_template_source
 
 
 class TestNewDiscover(unittest.TestCase):
@@ -183,7 +184,71 @@ class TestReadalongAskedOnceAtMatchAll(unittest.TestCase):
         root = Path(foundation._TEMPLATES)
         for page in ('suggestions.html', 'next/suggestions.html', 'next/_discover_scripts.html'):
             with self.subTest(page=page):
-                self.assertNotIn('readalongEpubCheckbox', (root / page).read_text(encoding='utf-8'))
+                self.assertNotIn('readalongEpubCheckbox', discover_template_source(page))
         for panel in ('_match_queue_panel.html', 'next/_match_queue_panel.html'):
             with self.subTest(panel=panel):
                 self.assertIn('id="queueReadalongCheckbox"', (root / panel).read_text(encoding='utf-8'))
+
+
+class TestNewDialogStyling(unittest.TestCase):
+    """The New view supplies its own dialog visuals without overriding visibility."""
+
+    def test_new_interface_styles_its_own_dialogs(self):
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('.view .modal-overlay {', css)
+        self.assertIn('.view .modal {', css)
+        self.assertIn('.view #acqModal .modal:has(#acqReleases:not([hidden]))', css)
+
+    def test_overlay_rule_never_forces_display(self):
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        for line in css.splitlines():
+            if line.strip().startswith('.view .modal-overlay'):
+                self.assertNotIn('display', line)
+
+
+class TestDiscoverPhoneFilters(unittest.TestCase):
+    """Discover keeps phone filters collapsed behind a visible control."""
+
+    def test_filters_fold_behind_a_button_on_phones(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/next/suggestions.html').read_text(encoding='utf-8')
+        css = (root / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('id="discoverFiltersToggle"', template)
+        self.assertLess(template.index('id="searchInput"'), template.index('id="discoverFiltersToggle"'))
+        self.assertLess(template.index('id="discoverFiltersToggle"'), template.index('id="seriesFilter"'))
+        self.assertIn('.discover-page #filterBar:not(.open) > .filter-field:not(.grow)', css)
+        self.assertIn('.discover-page .discover-filters-toggle { display: none; }', css)
+
+    def test_series_filter_width_does_not_follow_its_options(self):
+        # Measured live: the select grew 140 -> 281px when 199 series arrived, wrapping
+        # the filter row and shifting the results down 40px (CLS 0.28-0.60 on desktop).
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/next/suggestions.html').read_text(encoding='utf-8')
+        css = (root / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        field = template[:template.index('id="seriesFilter"')].rsplit('<div class="', 1)[1]
+        self.assertTrue(field.startswith('filter-field series-field"'), field)
+        self.assertIn('@media (min-width: 921px) { .discover-page .filter-field.series-field { flex: 0 0 240px; } }', css)
+
+
+class TestDiscoverPhoneQueueBar(unittest.TestCase):
+    """Phone Discover can reach the selected book and queued items without a long scroll."""
+
+    def test_queue_bar_and_row_scroll_are_available_on_phones(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / 'templates/next/suggestions.html').read_text(encoding='utf-8')
+        css = (root / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('id="discoverQueueBar"', template)
+        self.assertLess(template.index('id="layout"'), template.index('id="discoverQueueBar"'))
+        self.assertIn('scrollIntoView', template)
+        self.assertIn('queueCount', template)
+        self.assertIn('.discover-queue-bar:not([hidden]) { position: fixed;', css)
+
+
+class TestDiscoverTabletEbookRows(unittest.TestCase):
+    """Tablet-width ebook rows put their five buttons below the title instead of squeezing it."""
+
+    def test_narrow_results_list_stacks_ebook_row_actions(self):
+        css = (Path(__file__).resolve().parents[1] / 'static/css/next-discover.css').read_text(encoding='utf-8')
+        self.assertIn('.discover-page .results-list { container-type: inline-size; }', css)
+        rule = css[css.index('@container (max-width: 900px)'):]
+        self.assertIn('"actions actions actions actions"', rule[:rule.index('}')])

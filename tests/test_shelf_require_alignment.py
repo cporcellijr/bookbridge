@@ -189,10 +189,13 @@ class TestMatchTimeShelving:
         assert required.db.get_pending_shelf_adds() == []
 
     def test_every_match_path_hands_its_book_to_the_decision(self):
-        tree = ast.parse(Path(web_server.__file__).read_text(encoding="utf-8"))
+        # Routes call it as `web._shelve_matched_ebook(...)`, web_server as a bare name.
+        sources = [Path(web_server.__file__), *sorted((Path(web_server.__file__).parent / "web" / "routes").glob("*.py"))]
         calls = [
-            node for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_shelve_matched_ebook"
+            node for path in sources
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+            if isinstance(node, ast.Call)
+            and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "_shelve_matched_ebook"
         ]
         assert calls
         assert all(any(keyword.arg == "book" for keyword in call.keywords) for call in calls)
@@ -248,7 +251,7 @@ class TestOtherShelvingPathsDefer:
         book = required.book()
         reader, client = required.user("reader")
         required.acting_as(reader)
-        monkeypatch.setattr(web_server, "_shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))
+        monkeypatch.setattr("src.web.shelf_watch_service._shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))
 
         assert web_server._complete_shelf_watch_approval({"grimmory_filename": "a1.epub"}, book=book)
 
@@ -259,7 +262,7 @@ class TestOtherShelvingPathsDefer:
     def test_shelf_watch_approval_moves_when_off(self, shelving, monkeypatch):
         book = shelving.book()
         client = shelving.global_client
-        monkeypatch.setattr(web_server, "_shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))
+        monkeypatch.setattr("src.web.shelf_watch_service._shelf_watch_clients_for", lambda meta: (client, "Up Next", "ABS Synced"))
 
         assert web_server._complete_shelf_watch_approval({"grimmory_filename": "a1.epub"}, book=book)
 

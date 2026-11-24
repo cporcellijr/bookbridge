@@ -24,24 +24,31 @@ surface out of ``readalong_builder`` keeps that module's own tests
 network-free, and keeps this module's own tests focused on refusal/placement
 logic without dragging in SMIL/OPF assembly.
 
-**Idempotent replacement:** the generated file's name is derived
-deterministically from the source EPUB's filename
-(:func:`_readalong_filename`), so regenerating a book overwrites the same
-path rather than accumulating a new file each run --
+**Replacement:** the generated file's name is derived deterministically
+from the source EPUB's filename (:func:`_readalong_filename`). On the local
+delivery path regenerating a book overwrites that same path --
 :func:`~src.services.readalong_builder.build_readalong_epub` repackages via
 ``zipfile.ZipFile(output_path, "w")``, which truncates and rewrites the file
 in place, and BookOrbit's own incremental scan then re-indexes the same
-relative path as an update rather than a new file.
+relative path as an update rather than a new file. The upload path cannot
+overwrite: BookOrbit's upload API refuses an occupied filename, so a conflict
+adds a content-named revision beside the old attachment (never deleting it),
+and delivery is confirmed only when BookOrbit's ``readAloudSync`` reports the
+uploaded file as its ``overlayFileId``. BookOrbit picks the entry's primary
+file if it is an overlay EPUB, else the first one, so an older attachment can
+stay selected until an operator changes the primary file.
 """
+import hashlib
 import logging
 import os
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
 
 from src.api.bookorbit_client import _AUDIO_FORMATS, BookOrbitUploadError
+from src.services.audio_cache_ownership import safe_owned_path
 from src.services.audio_source_adapters import BookOrbitAudioSourceAdapter
 from src.services.readalong_builder import (
     ReadalongBuildResult,
@@ -356,17 +363,71 @@ def _upload_error_text(error: Optional[BookOrbitUploadError], size_mb: float) ->
 
 def _upload_replacing(
     bookorbit_client: "BookOrbitClient", audio_book_id: object, staged: Path, filename: str,
-) -> Tuple[bool, Optional[BookOrbitUploadError]]:
-    """Upload ``staged`` once, preserving any existing attachment on conflict.
+    content_hash: Optional[str],
+) -> Tuple[Optional[dict], Optional[BookOrbitUploadError]]:
+    """Upload a read-along without destroying an existing BookOrbit attachment.
 
-    ``duplicate`` (identical bytes already attached) counts as delivered.
+    BookOrbit refuses an occupied filename and has no replace operation, so a
+    name conflict adds a content-named revision to the same verified book; older
+    attachments and their reader history stay untouched. ``duplicate`` means
+    these bytes (BookOrbit's partial-MD5 ``fileHash``, ``content_hash`` here) are
+    already attached to this book, possibly under another name, so that
+    attachment is found by hash, never by the requested filename. Returns the
+    delivered attachment (``id``, ``filename``) or ``(None, error)``; callers
+    must still check that BookOrbit selected it before calling it active.
     """
     book_id = int(audio_book_id) if str(audio_book_id).isdigit() else audio_book_id
+
+    def fresh_files() -> List[dict]:
+        detail = bookorbit_client.get_book_detail(book_id, force=True, fresh_only=True)
+        files = detail.get("files") if isinstance(detail, dict) else None
+        if not isinstance(files, list):
+            return []
+        return [f for f in files if isinstance(f, dict) and f.get("id") is not None]
+
+    def upload(name: str) -> dict:
+        try:
+            response = bookorbit_client.upload_book_file(book_id, staged, name)
+        except BookOrbitUploadError as error:
+            if error.kind != "duplicate" or not content_hash:
+                raise
+            attached = next(
+                (f for f in fresh_files() if f.get("fileHash") == content_hash), None,
+            )
+            if attached is None:
+                raise
+            return attached
+        return {"id": response.get("id") if isinstance(response, dict) else None, "filename": name}
+
     try:
-        bookorbit_client.upload_book_file(book_id, staged, filename)
-        return True, None
+        try:
+            return upload(filename), None
+        except BookOrbitUploadError as error:
+            # Fail closed unless the conflicting name is a generated read-along
+            # that a fresh read finds in this exact book.
+            if error.kind != "name_conflict" or not is_generated_readalong_epub(filename):
+                raise
+            if not any(f.get("filename") == filename for f in fresh_files()):
+                raise
+        digest = hashlib.sha256()
+        with staged.open("rb") as content:
+            for chunk in iter(lambda: content.read(1024 * 1024), b""):
+                digest.update(chunk)
+        versioned_filename = (
+            f"{filename[:-len(_READALONG_SUFFIX)]}.{digest.hexdigest()[:12]}{_READALONG_SUFFIX}"
+        )
+        attachment = upload(versioned_filename)
+        logger.warning(
+            "BookOrbit: published read-along revision '%s' to entry %s; "
+            "retaining existing '%s' to protect reader progress",
+            attachment.get("filename"), book_id, filename,
+        )
+        return attachment, None
     except BookOrbitUploadError as error:
-        return (True, None) if error.kind == "duplicate" else (False, error)
+        return None, error
+    except Exception as exc:
+        logger.warning("BookOrbit: could not verify read-along revision", exc_info=True)
+        return None, BookOrbitUploadError("unverified", None, str(exc))
 
 
 def _deliver_by_upload(
@@ -434,24 +495,45 @@ def _deliver_by_upload(
             return None
         _safe_progress(progress_callback, "delivering", _STAGE_START["delivering"])
         size_mb = staged.stat().st_size / (1024 * 1024)
-        uploaded, error = _upload_replacing(bookorbit_client, audio_book_id, staged, filename)
+        attachment, error = _upload_replacing(
+            bookorbit_client, audio_book_id, staged, filename, parser.get_kosync_content_id(staged),
+        )
     finally:
         staged.unlink(missing_ok=True)
         try:
             staged.parent.rmdir()
         except OSError:
             pass
-    if not uploaded:
+    if attachment is None:
         logger.error(
             "🚫 Read-along upload for '%s' failed: %s",
             abs_id, _upload_error_text(error, size_mb),
         )
         return None
 
+    file_id = attachment.get("id")
+    delivered_filename = attachment.get("filename") or filename
+
+    def selects_upload(sync: Optional[dict]) -> bool:
+        # An enabled readAloudSync can still be reading an older attachment;
+        # only one fresh payload naming this file as its overlay counts.
+        return bool(
+            bookorbit_client.read_aloud_sync_is_active(sync) and file_id is not None
+            and str(sync.get("overlayFileId")) == str(file_id)
+        )
+
     read_aloud_sync = _wait_for_read_aloud_sync(
         bookorbit_client, audio_book_id, confirm_timeout_seconds, confirm_poll_interval_seconds,
+        is_ready=selects_upload,
     )
-    confirmed = bookorbit_client.read_aloud_sync_is_active(read_aloud_sync)
+    confirmed = selects_upload(read_aloud_sync)
+    if not confirmed and bookorbit_client.read_aloud_sync_is_active(read_aloud_sync):
+        logger.warning(
+            "BookOrbit: read-along '%s' (file %s) is attached to entry %s, but BookOrbit's "
+            "read-along sync uses file %s; make the new file the entry's primary file in "
+            "BookOrbit before treating the regenerated edition as active",
+            delivered_filename, file_id, audio_book_id, read_aloud_sync.get("overlayFileId"),
+        )
     try:
         ebook_book_id = ebook_sync_client.resolve_bookorbit_book_id(book)
     except Exception as e:
@@ -474,7 +556,7 @@ def _deliver_by_upload(
         )
     return ReadalongDeliveryResult(
         abs_id=abs_id, audio_book_id=audio_book_id, ebook_book_id=ebook_book_id,
-        library_id=library_id, audio_folder=None, output_path=filename,
+        library_id=library_id, audio_folder=None, output_path=delivered_filename,
         scan_triggered=False, confirmed=confirmed, read_aloud_sync=read_aloud_sync,
         build=build, delivery="upload",
     )
@@ -485,9 +567,10 @@ def _wait_for_read_aloud_sync(
     audio_book_id,
     timeout_seconds: float,
     poll_interval_seconds: float,
+    is_ready: Optional[Callable[[Optional[dict]], bool]] = None,
 ) -> Optional[dict]:
-    """Poll BookOrbit's read-along sync status until it reports ``enabled`` or
-    ``timeout_seconds`` elapses.
+    """Poll BookOrbit's read-along sync status until it reports ``enabled`` (or
+    ``is_ready`` accepts it) or ``timeout_seconds`` elapses.
 
     Returns the last-seen payload either way -- including a still-not-enabled
     one on timeout -- so the caller reports the real outcome instead of
@@ -495,8 +578,9 @@ def _wait_for_read_aloud_sync(
     the request was accepted, not that it finished).
     """
     deadline = time.monotonic() + timeout_seconds
+    ready = is_ready or bookorbit_client.read_aloud_sync_is_active
     sync = bookorbit_client.get_read_aloud_sync(audio_book_id, force=True)
-    while not bookorbit_client.read_aloud_sync_is_active(sync):
+    while not ready(sync):
         if time.monotonic() >= deadline:
             return sync
         time.sleep(poll_interval_seconds)
@@ -515,8 +599,9 @@ class ReadalongDeliveryResult:
 
     ``confirmed`` is ``True`` only when BookOrbit itself reported
     ``readAloudSync.state == 'enabled'`` for ``audio_book_id`` before the
-    confirmation timeout -- a scan that was merely *accepted*
-    (``scan_triggered``) is not the same claim. ``read_aloud_sync`` is the
+    confirmation timeout (for ``'upload'``, with the uploaded file as
+    ``overlayFileId``) -- a scan that was merely *accepted*
+    (``scan_triggered``) or an accepted upload is not the same claim. ``read_aloud_sync`` is the
     last-seen payload either way, so a caller can log/report the real reason
     (``unavailableReason``) when confirmation did not succeed.
     """
@@ -729,6 +814,11 @@ def remove_readalong_epub(
     """
     output_path = Path(output_path)
     filename = output_path.name
+    if not is_generated_readalong_epub(filename):
+        logger.warning(
+            "🛡️ Refused read-along cleanup of '%s': not a generated %s file", filename, _READALONG_SUFFIX,
+        )
+        return False
 
     detail = bookorbit_client.get_book_detail(audio_book_id, force=True)
     file_id = None
@@ -748,13 +838,16 @@ def remove_readalong_epub(
 
     disk_ok = True
     if output_path.is_absolute() and output_path.exists():
-        try:
-            output_path.unlink()
-        except OSError as e:
-            logger.error(
-                "Read-along cleanup: could not remove '%s' from disk: %s",
-                output_path, e, exc_info=True,
-            )
-            disk_ok = False
+        safe_output = safe_owned_path(output_path, _audiobooks_root(), protect_sources=False)
+        disk_ok = False
+        if safe_output is not None:
+            try:
+                safe_output.unlink()
+                disk_ok = True
+            except OSError as e:
+                logger.error(
+                    "Read-along cleanup: could not remove '%s' from disk: %s",
+                    output_path, e, exc_info=True,
+                )
 
     return bookorbit_ok and disk_ok

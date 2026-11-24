@@ -86,7 +86,7 @@ class TestLLMProviderTestEndpoint(unittest.TestCase):
         self.assertIn("not listed", result["message"])
 
     def test_ollama_provider_uses_legacy_probe(self):
-        with patch("src.web_server._test_ollama", return_value={"ok": True, "message": "ollama"}) as probe:
+        with patch("src.services.integration_connection_probes._test_ollama", return_value={"ok": True, "message": "ollama"}) as probe:
             result = _test_llm_provider(
                 True, "ollama", "", "", "generic-embed", "generic-chat",
                 "http://ollama:11434", "old-embed", "old-chat"

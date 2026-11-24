@@ -41,6 +41,7 @@ _SERVICE_LABELS = {
     "cwa": "CWA",
     "hardcover": "Hardcover",
     "storygraph": "StoryGraph",
+    "goodreads": "Goodreads",
     "slash_books": "/books mount",
 }
 _ANALYSIS_FIELD_RE = re.compile(

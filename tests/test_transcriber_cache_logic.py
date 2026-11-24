@@ -14,7 +14,9 @@ from utils.transcriber import AudioTranscriber
 
 class TestTranscriberCacheLogic(unittest.TestCase):
     def setUp(self):
-        self.mock_data_dir = Path("/tmp/mock_data")
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.mock_data_dir = Path(temp_dir.name)
         self.mock_smil_extractor = MagicMock()
         self.mock_polisher = MagicMock()
         self.transcriber = AudioTranscriber(self.mock_data_dir, self.mock_smil_extractor, self.mock_polisher)
@@ -24,7 +26,7 @@ class TestTranscriberCacheLogic(unittest.TestCase):
         self.transcriber.split_audio_file = MagicMock()
         self.transcriber.get_audio_duration = MagicMock(return_value=100.0)
         
-    @patch("src.utils.transcriber.requests.get")
+    @patch("utils.transcriber.requests.get")
     def test_partial_cache_triggers_redownload(self, mock_requests_get):
         """
         Bug Reproduction: 
@@ -52,9 +54,11 @@ class TestTranscriberCacheLogic(unittest.TestCase):
         # Part 1 and 2 are missing
         
         # Setup dependencies
-        with patch("src.utils.transcriber.get_transcription_provider") as mock_provider_getter:
+        with patch("utils.transcriber.get_transcription_provider") as mock_provider_getter:
             # Setup mock provider
             mock_provider = MagicMock()
+            mock_provider.supports_raw_audio = False
+            mock_provider.last_vad_filter = False
             mock_provider.transcribe.return_value = []
             mock_provider_getter.return_value = mock_provider
             
@@ -83,11 +87,13 @@ class TestTranscriberCacheLogic(unittest.TestCase):
             self.transcriber.split_audio_file.side_effect = mock_split
             
             # Execute
-            try:
+            with self.assertRaisesRegex(
+                ValueError, "Transcription completed without any segments"
+            ):
                 self.transcriber.process_audio(abs_id, audio_urls, progress_callback=MagicMock())
-            except Exception as e:
-                # print(f"Caught exception: {e}")
-                pass
+
+            mock_provider_getter.assert_called_once()
+            self.assertEqual(mock_provider.transcribe.call_count, 3)
 
             # ASSERTION
             # In fixed version, it should detect missing parts, wipe cache (rmtree), and download 3 times.

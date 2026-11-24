@@ -277,6 +277,22 @@ end)
 
 local BridgeSync = require("main")
 do
+    local existing_paths = {
+        [settings_dir .. "/statistics.sqlite"] = true,
+        [settings_dir .. "/statistics.sqlite3"] = true,
+    }
+    local probe = {
+        _fileExists = function(_, path)
+            return existing_paths[path] == true
+        end,
+    }
+    assert(BridgeSync._findStatisticsDbPath(probe) == settings_dir .. "/statistics.sqlite3",
+        "statistics.sqlite3 must take precedence when both statistics databases exist")
+    existing_paths[settings_dir .. "/statistics.sqlite3"] = nil
+    assert(BridgeSync._findStatisticsDbPath(probe) == settings_dir .. "/statistics.sqlite",
+        "statistics.sqlite must remain available as a fallback")
+end
+do
     local BookStatus = require("bridge_book_status")
     local original_collect = BookStatus.collect
     local original_apply = BookStatus.apply
@@ -558,8 +574,27 @@ local saved_items = nil
 bridge.delete_removed_books = true
 bridge._ensureDirectory = function() return true end
 bridge._getStateScalar = function() return "old-revision" end
+local keep_path = bridge.download_dir .. "/Keep.epub"
+local manifest_extra = {}
+local deleted_paths = {}
+bridge._loadStateItems = function()
+    return {
+        ["kobo-book"] = {
+            local_path = "/mnt/onboard/Koreaderbooks/Title.epub",
+            filename = "Title.epub",
+            content_hash = "hash-1",
+        },
+        ["keep-book"] = { local_path = keep_path, filename = "Keep.epub", content_hash = "hash-keep" },
+    }
+end
+bridge._fileExists = function() return true end
 bridge.api.getManifest = function()
-    return true, { revision = "new-revision", books = {} }
+    local manifest = {
+        revision = "new-revision",
+        books = { { abs_id = "keep-book", filename = "Keep.epub", content_hash = "hash-keep" } },
+    }
+    for key, value in pairs(manifest_extra) do manifest[key] = value end
+    return true, manifest
 end
 bridge._saveState = function(_, items)
     saved_items = items
@@ -567,12 +602,32 @@ bridge._saveState = function(_, items)
 end
 bridge._updateCollections = function() end
 bridge._isCurrentDocument = function() return false end
-bridge._deleteManagedFile = function() return false, "permission denied" end
+bridge._deleteManagedFile = function(_, path)
+    deleted_paths[#deleted_paths + 1] = path
+    return false, "permission denied"
+end
 local delete_result = bridge:_runSync()
 assert(delete_result.deleted == 0 and delete_result.errors == 1,
     "failed managed-file removal must be reported as an error, not a deletion")
 assert(saved_items["kobo-book"] ~= nil,
     "failed managed-file removal must retain state for a later retry")
+
+-- A book the server could not resolve this cycle is not a removal.
+deleted_paths = {}
+manifest_extra = { unavailable_abs_ids = { "kobo-book" } }
+local unavailable_result = bridge:_runSync()
+assert(#deleted_paths == 0 and unavailable_result.errors == 0,
+    "an entry listed in unavailable_abs_ids must never be deleted")
+assert(saved_items["kobo-book"] ~= nil, "an unavailable entry must stay in state")
+
+-- An empty manifest against local managed books is a server outage, not a mass removal.
+deleted_paths = {}
+manifest_extra = { books = {} }
+local empty_result = bridge:_runSync()
+assert(#deleted_paths == 0 and empty_result.deleted == 0 and empty_result.errors == 0,
+    "an empty manifest must skip the delete pass")
+assert(saved_items["kobo-book"] ~= nil and saved_items["keep-book"] ~= nil,
+    "an empty manifest must leave every managed entry in state")
 
 local marked_session_ids = nil
 bridge.pending_sessions = {
@@ -893,6 +948,98 @@ do
     sync._safeRemove = function() return false, "permission denied" end
     local ok = sync:_deleteManagedFile(original)
     assert(not ok and #metadata_events == 1, "failed deletion must retain metadata")
+end
+
+-- A failed move must never cost the book already at the destination.
+do
+    metadata_events = {}
+    local source = settings_dir .. "/move-source.epub"
+    local target = settings_dir .. "/move-target.epub"
+    local real_rename = os.rename
+    for _, mode in ipairs({ "always_fails", "eexist_then_ok" }) do
+        write_bytes(source, "new")
+        write_bytes(target, "old")
+        local sync = BridgeSync:new{
+            _fileExists = function(_, path) return file_bytes(path) ~= nil end,
+            _safeRemove = function(_, path) os.remove(path); return true end,
+        }
+        os.rename = function(src, dst)
+            if src == source and (mode == "always_fails" or file_bytes(dst) ~= nil) then
+                return nil, "EEXIST: file already exists"
+            end
+            return real_rename(src, dst)
+        end
+        local ok_call, moved = pcall(function() return sync:_moveFile(source, target) end)
+        os.rename = real_rename
+        assert(ok_call, moved)
+        if mode == "always_fails" then
+            assert(not moved and file_bytes(target) == "old", "a failed move deleted the existing book")
+        else
+            assert(moved and file_bytes(target) == "new", "the move-aside retry must publish the new file")
+        end
+        assert(file_bytes(target .. ".bak") == nil, "backup file leaked")
+        os.remove(source)
+        os.remove(target)
+    end
+end
+
+-- Server shelves must never replace a collection the reader made themselves,
+-- while collections BridgeSync made earlier are still rebuilt.
+do
+    local calls = {}
+    local saved_managed
+    package.loaded["readcollection"] = {
+        coll = { Favorites = { mine = true }, Kobo = { old = true } },
+        removeCollection = function(_, name) calls[#calls + 1] = "remove:" .. name end,
+        addCollection = function(_, name) calls[#calls + 1] = "add:" .. name end,
+        addItem = function(_, _, name) calls[#calls + 1] = "item:" .. name end,
+        write = function() end,
+    }
+    local sync = BridgeSync:new{
+        settings = {
+            readSetting = function(_, key) if key == "managed_collections" then return { "Kobo" } end end,
+            saveSetting = function(_, key, value) if key == "managed_collections" then saved_managed = value end end,
+            flush = function() end,
+        },
+        _fileExists = function() return true end,
+        _refreshCollectionsUI = function() end,
+        logInfo = function() end,
+        logWarn = function() end,
+    }
+    sync:_updateCollections({ a = { local_path = "/books/a.epub", shelves = { "Favorites", "Kobo" } } })
+    package.loaded["readcollection"] = nil
+    local joined = table.concat(calls, ",")
+    assert(not joined:find("Favorites", 1, true), "a reader's own collection was touched: " .. joined)
+    assert(joined:find("add:Kobo", 1, true) and joined:find("item:Kobo", 1, true), "a managed shelf must be rebuilt")
+    assert(#saved_managed == 1 and saved_managed[1] == "Kobo", "only BridgeSync's own collections are recorded")
+end
+
+-- A download cut off by power loss leaves a .part file; an old one is removed, a fresh one is not.
+do
+    local lfs = package.loaded["libs/libkoreader-lfs"]
+    local real_attributes, real_dir = lfs.attributes, lfs.dir
+    local times = { ["old.part"] = os.time() - 7200, ["fresh.part"] = os.time() }
+    local removed = {}
+    lfs.dir = function()
+        local names, i = { ".", "..", "old.part", "fresh.part" }, 0
+        return function() i = i + 1; return names[i] end
+    end
+    lfs.attributes = function(path, attribute)
+        if path == "/dl" and attribute == "mode" then return "directory" end
+        local name = path:match("[^/]+$")
+        if attribute == "modification" then return times[name] end
+        return nil
+    end
+    local sync = BridgeSync:new{
+        download_dir = "/dl",
+        _getStateScalarJSON = function() return {} end,
+        _saveStateScalarJSON = function() end,
+        _safeRemove = function(_, path) removed[#removed + 1] = path; return true end,
+    }
+    local ok_call, err = pcall(function() return sync:_buildHashIndex() end)
+    lfs.attributes, lfs.dir = real_attributes, real_dir
+    assert(ok_call, err)
+    assert(#removed == 1 and removed[1] == "/dl/old.part", "only a stale .part is removed: " .. table.concat(removed, ","))
 end
 
 -- The Kindle downloaded Household Inheritance then deleted it through its old

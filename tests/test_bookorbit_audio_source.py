@@ -562,13 +562,19 @@ def _buffer_row(book_id, candidates, session_type="EPUB", end_location=None):
         bookorbit_book_id=book_id, bookorbit_candidate_ids=json.dumps(candidates),
     )
 
-def test_bookorbit_session_logs_audio_leader_against_audio_book_id():
+def test_bookorbit_session_logs_audio_leader_against_audio_book_id(tmp_path):
+    from src.db.database_service import DatabaseService
+
     bo = MagicMock()
     bo.is_configured.return_value = True
     bo.find_covering_sessions.return_value = []  # BookOrbit has not logged it (#424)
     bo.create_reading_session.return_value = True
+    bo._get_base_url.return_value = 'https://books.test'
+    bo._get_username.return_value = 'reader'
+    bo._get_api_key.return_value = ''
+    bo._resolve_primary_file_id.return_value = 10
     sm = _sync_manager(bookorbit_client=bo)
-    sm.database_service = MagicMock()
+    sm.database_service = DatabaseService(str(tmp_path / 'audio-session.db'))
     book = SimpleNamespace(
         audio_source="BookOrbit",
         audio_provider_book_id="4345",
@@ -580,9 +586,12 @@ def test_bookorbit_session_logs_audio_leader_against_audio_book_id():
     )
     book_id, candidates = sm._resolve_bookorbit_session_ids(book, audio=True)
     assert book_id == 4345
-    assert sm._deliver_reading_session(
-        _buffer_row(book_id, candidates, session_type="AUDIOBOOK"), "bookorbit", 120,
-    )
+    try:
+        assert sm._deliver_reading_session(
+            _buffer_row(book_id, candidates, session_type="AUDIOBOOK"), "bookorbit", 120,
+        )
+    finally:
+        sm.database_service.db_manager.close()
     _, kwargs = bo.create_reading_session.call_args
     assert kwargs["book_id"] == 4345
     assert kwargs["book_type"] == "AUDIOBOOK"

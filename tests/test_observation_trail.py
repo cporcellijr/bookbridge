@@ -15,6 +15,7 @@ import logging
 import os
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.services import observation_trail
@@ -495,6 +496,8 @@ class TestIngestionHooks(unittest.TestCase):
 
         mock_db = MagicMock()
         mock_db.get_user_kosync_progress.return_value = None
+        # No KoSync State yet: a bare MagicMock State reads as 100% and holds the push.
+        mock_db.get_state.return_value = None
         original_db, original_manager = ks._database_service, ks._manager
         ks._database_service, ks._manager = mock_db, MagicMock()
         try:
@@ -659,9 +662,9 @@ class TestRewindTrustGate(unittest.TestCase):
 
         self.assertIn("SYNC_TRUST_CORROBORATED_REWIND", ALL_SETTINGS)
         self.assertIn("SYNC_TRUST_CORROBORATED_REWIND", DEFAULT_CONFIG)
-        web_server = open("src/web_server.py", encoding="utf-8").read()
+        web_server = open("src/web/routes/settings.py", encoding="utf-8").read()
         self.assertIn("'SYNC_TRUST_CORROBORATED_REWIND',", web_server)
-        template = open("templates/settings.html", encoding="utf-8").read()
+        template = "".join((Path("templates") / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         self.assertIn('name="SYNC_TRUST_CORROBORATED_REWIND"', template)
 
 

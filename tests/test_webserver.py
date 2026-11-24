@@ -14,7 +14,8 @@ import sys
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.utils.kosync_headers import KOSYNC_ACCEPT, hash_kosync_key
+from src.utils.kosync_headers import BRIDGE_INTERNAL_HEADER, KOSYNC_ACCEPT, hash_kosync_key
+from discover_template_source import discover_template_source
 
 
 def _http_response(status_code, payload=None, text="", headers=None):
@@ -85,6 +86,10 @@ class MockContainer:
 
     def user_client_registry(self):
         return self.mock_user_client_registry
+
+    def acquisition_service(self):
+        from src.services.acquisition_service import AcquisitionService
+        return AcquisitionService(self.mock_database_service, Mock())
 
     def sync_clients(self):
         """Return mock sync clients for integrations."""
@@ -158,6 +163,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_storygraph_details.return_value = []
+        self.mock_database_service.get_all_goodreads_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_reading_stats.return_value = {}
         self.mock_database_service.get_booklore_book.return_value = None
@@ -207,6 +213,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         cwa=False,
         hardcover=False,
         storygraph=False,
+        goodreads=False,
     ):
         clients_dict = {
             'ABS': Mock(is_configured=Mock(return_value=True)),
@@ -217,6 +224,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             'CWA': Mock(is_configured=Mock(return_value=cwa)),
             'Hardcover': Mock(is_configured=Mock(return_value=hardcover)),
             'StoryGraph': Mock(is_configured=Mock(return_value=storygraph)),
+            'Goodreads': Mock(is_configured=Mock(return_value=goodreads)),
         }
         self.mock_container.mock_sync_clients.items.return_value = clients_dict.items()
 
@@ -250,7 +258,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             src.web_server.render_template = original_render
 
     def _read_template_source(self, template_name: str) -> str:
-        return (Path(__file__).parent.parent / 'templates' / template_name).read_text(encoding='utf-8')
+        return discover_template_source(template_name)
 
     def test_manifest_rebuild_is_wired_to_catalog_changes_not_sync_cycles(self):
         """The device-sync manifest must be invalidated by catalog changes only.
@@ -409,6 +417,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_hardcover_details.return_value = None
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_storygraph_details.return_value = []
+        self.mock_database_service.get_all_goodreads_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
 
         # Mock the sync_clients call for integrations
@@ -441,7 +450,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             self.mock_database_service.get_all_states.assert_called_once()
             self.mock_database_service.get_all_hardcover_details.assert_called_once()
             self.mock_database_service.get_all_storygraph_details.assert_called_once()
-            self.mock_database_service.get_all_booklore_books.assert_called_once()
+            self.mock_database_service.get_all_booklore_books.assert_not_called()  # Grimmory is not configured
             self.mock_abs_client.get_all_audiobooks.assert_not_called()
             self.mock_abs_client.get_all_progress_raw.assert_not_called()
             self.mock_storyteller_client.get_book_details.assert_not_called()
@@ -1163,7 +1172,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
 
-        self._set_dashboard_integrations(storyteller=False)
+        self._set_dashboard_integrations(storyteller=False, booklore=True)
 
         mapping = self._capture_index_mapping()
         self.assertEqual(mapping['abs_title'], 'Displayed Title')
@@ -1173,6 +1182,35 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(mapping['display_subtitle'], 'Displayed Subtitle')
         self.assertEqual(mapping['display_author'], 'Displayed Author')
         self.assertEqual(mapping['display_filename'], 'book-file.epub')
+
+    def test_index_endpoint_ignores_the_grimmory_cache_when_grimmory_is_off(self):
+        """A disabled Grimmory leaves a cache nothing refreshes: never read it or show it."""
+        from src.db.models import Book, BookloreBook
+
+        test_book = Book(
+            abs_id='ebook-only-1',
+            abs_title='book-file',
+            ebook_filename='book-file.epub',
+            sync_mode='ebook_only',
+            status='active'
+        )
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = [BookloreBook(
+            filename='book-file.epub', title='Stale Title', authors='Stale Author',
+            raw_metadata=json.dumps({'id': 42, 'title': 'Stale Title', 'authors': 'Stale Author'}),
+        )]
+
+        self._set_dashboard_integrations(storyteller=False, booklore=False)
+
+        mapping = self._capture_index_mapping()
+        self.mock_database_service.get_all_booklore_books.assert_not_called()
+        self.mock_database_service.get_booklore_book.assert_not_called()
+        self.assertNotEqual(mapping['display_title'], 'Stale Title')
+        self.assertNotEqual(mapping['display_author'], 'Stale Author')
+        self.assertIsNone(mapping['booklore_id'])
 
     def test_index_endpoint_storyteller_uses_cached_audio_title_for_display(self):
         from src.db.models import Book
@@ -1305,7 +1343,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
-        self._set_dashboard_integrations(storyteller=False)
+        self._set_dashboard_integrations(storyteller=False, booklore=True)
 
         mapping = self._capture_index_mapping()
         self.assertEqual(mapping['display_title'], 'ABS Clean Title')
@@ -1527,7 +1565,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
-        self._set_dashboard_integrations(storyteller=False)
+        self._set_dashboard_integrations(storyteller=False, booklore=True)
 
         html = self._render_index_template_source()
         self.assertIn('data-filename="book-file.epub"', html)
@@ -1594,7 +1632,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
-        self._set_dashboard_integrations(storygraph=True)
+        self._set_dashboard_integrations(storygraph=True, booklore=True)
 
         mapping = self._capture_index_mapping()
 
@@ -1603,6 +1641,33 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(mapping['goodreads_rating'], 4.12)
         self.assertEqual(mapping['goodreads_review_count'], 3456)
         self.mock_storygraph_client.get_book_rating.assert_not_called()
+
+    def test_index_endpoint_prefers_linked_goodreads_rating(self):
+        from src.db.models import Book, BookloreBook, GoodreadsDetails
+
+        self.mock_database_service.get_all_books.return_value = [
+            Book(abs_id='ratings-linked', abs_title='Linked Ratings', ebook_filename='linked.epub', status='active')
+        ]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = [
+            BookloreBook(filename='linked.epub', raw_metadata=json.dumps({
+                'metadata': {'goodreadsRating': 4.12, 'goodreadsReviewCount': 3456}
+            }))
+        ]
+        self.mock_database_service.get_all_goodreads_details.return_value = [
+            GoodreadsDetails(
+                abs_id='ratings-linked', goodreads_book_id='123',
+                goodreads_url='https://www.goodreads.com/book/show/123',
+                goodreads_rating=4.73, goodreads_review_count=None,
+            )
+        ]
+        self.mock_booklore_client.is_configured.return_value = False
+        self._set_dashboard_integrations(storygraph=False, booklore=True)
+
+        mapping = self._capture_index_mapping()
+
+        self.assertEqual(mapping['goodreads_rating'], 4.73)
+        self.assertEqual(mapping['goodreads_review_count'], 3456)
 
     def test_index_template_renders_rating_badges_under_cover(self):
         from src.db.models import Book, BookloreBook, StorygraphDetails
@@ -1627,7 +1692,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         ]
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_booklore_client.is_configured.return_value = False
-        self._set_dashboard_integrations(storygraph=True)
+        self._set_dashboard_integrations(storygraph=True, booklore=True)
 
         html = self._render_index_template_source()
 
@@ -1875,6 +1940,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('Reader Documents', reader_docs_html)
         self.assertIn('/api/me/kosync-documents', reader_docs_html)
 
+    def test_reader_documents_list_loads_only_when_opened(self):
+        # Measured live: the closed panel fetched 3,657 documents (1.3 MB) on every Discover visit.
+        reader_docs_html = self._read_template_source('_reader_documents.html')
+        init = reader_docs_html[reader_docs_html.index("document.addEventListener('DOMContentLoaded'"):]
+        self.assertIn("fetchKosyncJson('/api/me/kosync-documents?summary=1')", init)
+        self.assertNotIn('loadKosyncDocuments(false)\n            .then(openKosyncSectionFromHash)', init)
+        self.assertIn("if (section.open) {\n                    loadKosyncDocuments(false)", init)
+
     def test_kosync_link_panel_suggests_filename_matches(self):
         reader_docs_html = self._read_template_source('_reader_documents.html')
 
@@ -1930,7 +2003,9 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(first["name"], "The Reader's Copy.epub")
         self.assertEqual(first["display_name"], "The Reader's Copy - A. Author")
         source = self._read_template_source('suggestions.html')
-        self.assertIn("card.onclick = () => selectEbookCard(card, ebookFilename, displayName", source)
+        self.assertIn("card.onclick = () => {", source)
+        self.assertIn("selectEbookCard(card, ebookFilename, displayName", source)
+        self.assertIn("card.onclick = () => chooseProviderEbook(card, { ...match, source, source_id: sourceId, display_name: displayName }, fileLabel)", source)
         self.assertNotIn('onclick="selectEbookCard(', source)
 
     def test_search_finds_quoted_and_plain_greene_shorts_editions(self):
@@ -1955,8 +2030,8 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         def ebook_search(query):
             return [book for book in ebooks if query.lower() in book.title.lower()]
 
-        with patch.object(ws, "get_searchable_audiobooks", side_effect=audio_search), \
-             patch.object(ws, "get_searchable_ebooks", side_effect=ebook_search):
+        with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", side_effect=audio_search), \
+             patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=ebook_search):
             for title in (plain, quoted, 'The “Greene Shorts”Incest Collection'):
                 with self.subTest(title=title):
                     response = self.client.get('/api/suggestions/search', query_string={'q': title})
@@ -2300,7 +2375,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
     @patch('src.web_server.requests.get')
     def test_test_connection_kosync_supports_cwa_basic_auth(self, mock_get):
         def fake_get(url, headers=None, auth=None, timeout=None):
-            self.assertEqual(headers, {'accept': KOSYNC_ACCEPT})
+            self.assertEqual(headers, {'accept': KOSYNC_ACCEPT, BRIDGE_INTERNAL_HEADER: '1'})
             self.assertEqual(auth, ('reader', 'cwa-password'))
             self.assertEqual(timeout, 5)
             if url == 'https://cwa.example/kosync/healthcheck':
@@ -2630,6 +2705,27 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('StoryGraph', html)
         self.assertIn('linkStorygraph(event)', html)
         self.assertIn('https://app.thestorygraph.com/books/sg-1', html)
+
+    def test_goodreads_card_renders_saved_link_and_progress(self):
+        from src.db.models import Book, GoodreadsDetails, State
+
+        self._set_dashboard_integrations(goodreads=True)
+        self.mock_database_service.get_all_books.return_value = [
+            Book(abs_id='abs-goodreads-1', abs_title='Goodreads Book', ebook_filename='book.epub')
+        ]
+        self.mock_database_service.get_all_states.return_value = [
+            State(abs_id='abs-goodreads-1', client_name='goodreads', percentage=0.42, last_updated=1)
+        ]
+        self.mock_database_service.get_all_goodreads_details.return_value = [
+            GoodreadsDetails('abs-goodreads-1', '123', 'https://www.goodreads.com/book/show/123')
+        ]
+
+        html = self._render_index_template_source()
+
+        self.assertIn('Goodreads', html)
+        self.assertIn('linkGoodreads(event)', html)
+        self.assertIn('https://www.goodreads.com/book/show/123', html)
+        self.assertIn('42%', html)
 
     def test_api_storygraph_resolve_uses_abs_metadata(self):
         from src.db.models import Book
@@ -3255,7 +3351,7 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
                 return [SimpleNamespace(name=fname, source="BookOrbit", source_id="42")]
             return [SimpleNamespace(name=fname, source="Local File", source_id=None)]
 
-        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+        with patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=fake_search):
             out = ws._search_ebooks_with_fallback("sublimation - isabel j. kim (2026)")
 
         self.assertEqual(len(out), 1)
@@ -3268,7 +3364,7 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
         def fake_search(term):
             return [SimpleNamespace(name="OnlyLocal.epub", source="Local File", source_id=None)]
 
-        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+        with patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=fake_search):
             out = ws._search_ebooks_with_fallback("only local (2020).epub")
 
         self.assertEqual(len(out), 1)
@@ -3283,7 +3379,7 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
                 return [SimpleNamespace(name="First Time Caller.epub", source="BookOrbit", source_id="42")]
             return []
 
-        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+        with patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=fake_search):
             out = ws._search_ebooks_with_fallback("first-time caller")
 
         self.assertEqual(len(out), 1)
@@ -3298,7 +3394,7 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
                 return [SimpleNamespace(name="First Time Caller.epub", source="BookOrbit", source_id="42")]
             return []
 
-        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+        with patch("src.web.suggestions_ebook_catalog.get_searchable_ebooks", side_effect=fake_search):
             out = ws._search_ebooks_with_fallback("First-Time Caller (Unabridged).epub")
 
         self.assertEqual(len(out), 1)

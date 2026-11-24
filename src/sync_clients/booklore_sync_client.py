@@ -141,7 +141,8 @@ class BookloreSyncClient(SyncClient):
         direct_rich_attempted = False
         if book_id and hasattr(self.booklore_client, "get_progress_rich_by_book_id"):
             direct_rich_attempted = True
-            candidate = self.booklore_client.get_progress_rich_by_book_id(book_id)
+            from src.utils.provider_ebook_files import mapped_ebook_selection
+            candidate = self.booklore_client.get_progress_rich_by_book_id(book_id, **mapped_ebook_selection(book))
             if isinstance(candidate, dict):
                 rich = candidate
         elif hasattr(self.booklore_client, "get_progress_rich"):
@@ -332,7 +333,8 @@ class BookloreSyncClient(SyncClient):
         if book_id is None and callable(getattr(self.booklore_client, "find_book_by_filename_exact", None)):
             return SyncResult(None, False)
         if book_id and hasattr(self.booklore_client, "update_progress_by_book_id"):
-            outcome = self.booklore_client.update_progress_by_book_id(book_id, pct, locator)
+            from src.utils.provider_ebook_files import mapped_ebook_selection
+            outcome = self.booklore_client.update_progress_by_book_id(book_id, pct, locator, **mapped_ebook_selection(book))
         else:
             outcome = self.booklore_client.update_progress(epub, pct, locator)
         if outcome is ProgressWriteOutcome.SKIPPED:

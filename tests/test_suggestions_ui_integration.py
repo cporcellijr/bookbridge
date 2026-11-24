@@ -14,13 +14,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import src.web_server as web_server
 from src.services.suggestions_view import project_suggestions
 from tests.test_webserver import MockContainer
+from discover_template_source import discover_template_source
 
-_SUGGESTIONS = Path(__file__).resolve().parents[1] / "templates" / "suggestions.html"
 TOKEN = "abs-secret-token"
 
 
 def _source() -> str:
-    return _SUGGESTIONS.read_text(encoding="utf-8")
+    return discover_template_source("suggestions.html")
 
 
 def _function_body(name: str) -> str:
@@ -160,7 +160,12 @@ class PageTests(AppTestCase):
                 self.assertEqual(self.client.get(f"/api/suggestions/discovery?tab={tab}").status_code, 200)
             start.assert_not_called()
         self.assertIn('role="tablist"', html)
-        self.assertEqual(len(re.findall(r'<button[^>]*role="tab"', html)), 3)
+        nav = re.search(
+            r'<div\b(?=[^>]*class="[^"]*\bsugg-tabs\b[^"]*")(?=[^>]*role="tablist")[^>]*>.*?</div>',
+            html, re.DOTALL,
+        )
+        self.assertIsNotNone(nav)
+        self.assertEqual(len(re.findall(r'<button[^>]*role="tab"', nav.group(0))), 3)
         self.assertIn('id="tab-pairs"', html)
         self.assertIn('id="tab-ebook_only"', html)
         self.assertIn('id="tab-search"', html)

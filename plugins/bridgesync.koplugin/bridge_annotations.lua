@@ -367,12 +367,6 @@ local function payloadSlice(state, count)
     }, max_sent, stop_index < #state.candidates, stop_index + 1
 end
 
-function BridgeAnnotations.buildBookPayload(book, watermark, keys_complete, ignore_watermark, offset)
-    local state = BridgeAnnotations.prepareBook(book, watermark, keys_complete, ignore_watermark)
-    state.offset = math.max(tonumber(offset) or 1, 1)
-    return payloadSlice(state, MAX_CHANGES_PER_BOOK)
-end
-
 -- ------------------------------------------------------------------
 -- Applying server-side changes
 -- ------------------------------------------------------------------

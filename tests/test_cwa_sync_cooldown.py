@@ -91,7 +91,7 @@ class TestCwaCooldown(unittest.TestCase):
 
     def test_connection_error_and_5xx_trigger(self):
         for effect in (requests.ConnectionError(), _resp(502), _resp(503), _resp(504), _resp(500)):
-            with self.subTest(effect=effect):
+            with self.subTest(effect=repr(effect)):
                 self.api._cooldown_until = 0.0
                 self.api._session.reset_mock()
                 self.api._session.get.side_effect = None

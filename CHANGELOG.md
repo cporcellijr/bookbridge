@@ -6,12 +6,301 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+## [7.14.0] - 2026-11-24
+
 ### Added
 
-- **Spines in the New Library now look like your books.** Each spine takes its colours from the
-  book's cover, with the title in light or dark ink to stay readable, and its thickness follows the
-  book's length (StoryGraph or Hardcover page count, or the audiobook's duration). Books you're
-  partway through stand face-out on the shelf, showing their cover and progress.
+- **Get the missing ebook or audiobook from Discover, and have it paired with the book you
+  already have** (#585). When a search on Discover's Search tab finds only one half of a book,
+  or neither, **Get the ebook**, **Get the audiobook** or **Get both** files a request with
+  BookOrbit or finds a release in Shelfmark, using your own login on each service. BookBridge
+  saves one request for the exact edition you asked about and, when the file arrives (even days
+  later or after a restart), pairs it with exactly that book. An arrival it can't identify with
+  certainty goes to Discover's review instead of being guessed.
+  - Admins can always use it; other readers need **Let readers get missing books** switched on
+    (off by default). Each reader adds their own Shelfmark login on their account's integrations
+    page and can choose an **Audiobook destination library**, so a finished Shelfmark audiobook
+    asks BookOrbit to scan that library.
+  - Processing follows each request through release, approval, delivery, import, review and
+    pairing, and a **My requests** strip shows where each one is until it arrives and is paired,
+    declined or cancelled. A partial or uncertain submission stays with its request and is never
+    sent twice.
+  - When BookOrbit is set not to grab releases automatically, you can pick the release for your
+    request in BookBridge. This needs the BookOrbit permission "Download books directly"
+    (`book_request_self_fulfill`) on the login or API key BookBridge uses.
+  - Shelfmark results only list releases of the format you asked for (an audiobook search no
+    longer offers an EPUB) and always name their source. A download that has made no progress for
+    30 minutes says so and suggests checking your download client or indexer sign-in; nothing is
+    cancelled automatically.
+  - Arrivals whose library title adds "(Unabridged)" or ": A Novel" still match. Edition credits
+    such as "(Abridged)" and series numbers have to agree.
+  - Optional, per reader: **Follow audiobook requests I make in BookOrbit** picks up the
+    audiobooks you requested inside BookOrbit itself in the last 30 days. They pair automatically
+    only with one BookOrbit ebook whose title, authors and series agree; anything less certain is
+    offered for review.
+  - The Shelfmark tab is gone from the navigation in both interfaces. `/shelfmark` still opens
+    your Shelfmark site, and Settings has an "Open Shelfmark" link.
+  - Known limits: arrivals are found in your BookOrbit library only, and a Shelfmark download
+    waits as "Downloaded, waiting for the library" until BookOrbit has scanned it in.
+
+- **Other machines can work through the alignment queue.** Run the same image with
+  `BOOKBRIDGE_MODE=worker`, point it at this instance and give it the token from
+  Settings → Server → Background jobs → Alignment worker token. Workers take books in Job Queue
+  order, and the Job Queue shows "Aligning on worker <name>". This instance still checks
+  and stores every map, and a worker never sees reading positions or credentials. If a
+  worker stops, its book goes back in the queue. Turn off "Also align here while workers
+  are on" to leave the alignment work to the workers. See
+  [Configuration](docs/configuration.md).
+  Contributed by [@eschatus](https://github.com/eschatus) in #606, #607 and #608.
+
+- **Pick which ebook edition pairs with an audiobook when a BookOrbit or Grimmory book holds
+  more than one.** Selecting such a book in Discover (Classic and New) opens an edition chooser
+  with filenames, sizes, the primary-file marker and confirmed read-along labels; a book with a
+  single ebook is selected directly. The chosen file is used for hashing, matching, Forge,
+  library downloads, KOReader delivery and BookOrbit progress. If it is later removed or
+  replaced, that book stops syncing its ebook rather than silently switching to another file.
+  Grimmory reports one progress value for the whole book, so its native progress is skipped for
+  alternate editions while ABS and KOReader keep syncing. Existing links are unchanged.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #596.
+
+- **Goodreads as a progress tracker, off by default.** Like Hardcover and StoryGraph,
+  BookBridge can now post your reading progress, page count and finished books to Goodreads.
+  Goodreads has no public API, so it works through your own signed-in Goodreads session,
+  ideally a Chrome container you sign in to once. See
+  [Configuration → Goodreads](docs/configuration.md#goodreads).
+
+- **BookOrbit can connect with an API key instead of a password.** BookOrbit 3.8 added
+  API keys; paste one into your BookOrbit account settings in BookBridge and it is used in
+  place of the username and password, with no login or token refresh. This makes BookOrbit
+  installs that sign in only through OIDC/SSO (`DISABLE_LOCAL_AUTH=true`) work with
+  BookBridge. Give the key **Write** access plus Download, Upload, Delete books and Manage
+  libraries; the Test button reports which BookOrbit account the key belongs to (#482).
+
+- **A Display page for the New interface, and more ways to show your Library.** Open
+  **Display** from the account menu (Classic readers find it there too). Changes save as you
+  make them, follow you to every device and show in a live preview built from your own books.
+  - **Theme:** Day, Night or Follow device (the default); the Day/Night button in the sidebar
+    changes the same setting.
+  - **Library style:** Cards, Face-out shelves, Spine shelves or List. Face-out stands every cover
+    on a shelf with its title and author below (three per shelf on phones), and Select works on it
+    like on Cards. Shelves can match the theme or use a Wood, Dark or Plain finish.
+  - **Book covers:** five cover sizes (three books per phone row by default) and separate
+    switches for progress, the finished tick, the format strip, rating stars, and title and author.
+  - **Current book on series stacks**, in both interfaces. This option moved here from My
+    Integrations; saved choices carry over.
+  - Switching between Classic and New also moved here, out of the navigation bar.
+
+- **The New Library shows your current book in a hero card.** Above the Library controls, one
+  card shows the most recently synced book in progress: its cover, where and when it last moved
+  ("Listening on BookOrbit · 29m ago"), the series and number, a star rating, the percentage with
+  time or pages left and an estimated finish date, and one progress bar that marks where each of
+  your other apps is. Under Display → Layout → Hero content you can add a two-line synopsis, book stats
+  (listening and reading side by side) and your reading streak. Phones show a compact card with
+  the percentage, time left and rating. Turn it off under Display → Behaviour. Classic is
+  unchanged.
+
+- **Remove several books at once from the Classic library.** Select books and delete them
+  together, with the same ownership checks as removing one.
+
+- **CTC alignment jobs show progress during the model pass.** The Job Queue advances from 10% to
+  90% as QuartzNet or MMS works through the audio, and from 91% to 95% during the
+  post-transcript upgrade. Contributed by [@hnrydvd](https://github.com/hnrydvd) in #587.
+
+### Changed
+
+- **The documentation site and README are redesigned.** The docs site opens on a new home page
+  with screenshots and a quick install, and adds a "How a new book gets synced" walkthrough, a
+  Settings tour, a Supported apps page and a page for each part of the app (Library, Discover,
+  Processing, Display, Stats, KOReader devices and getting a missing book), under a regrouped
+  menu. The README is shorter, with a feature grid and screenshots.
+
+- **The New Library is one continuous grid.** The In progress, Not started and Finished sections
+  are gone. Cards, shelves and List share one collection with every series volume shown once,
+  sorted by reading status by default (in progress first, then not started, then finished, most
+  recent sync first in each). Search, Filter, Sort and Select sit on one toolbar row on desktop
+  and tablets and two rows on phones. Saved Status sort preferences carry over.
+
+- **The New Library header is easier to scan.** The book count shows once beside the title,
+  with compact **Matches to review**, a Processing link, and **Needs attention** for failed or
+  out-of-sync books only, which can filter the affected books. Format, Author and Series filters
+  and the type-to-filter field stay visible on phones.
+
+- **Spines and covers in the New Library look more like your books.** Each spine carries the
+  edge of its cover's art (or its main colour), its thickness follows the book's length, and
+  shelves have depth and shadow in both themes. Books you're partway through stand face-out
+  with their progress, finished books get a gold tick, and hovering a spine shows its full
+  title. Covers fill their empty space with the book's own colour, the last-synced and
+  out-of-sync icons stay visible without hovering, and each book's rating shows as one star
+  figure beside the author.
+
+- **The New Library is lighter and faster.** Cards and series previews use reduced copies of
+  each cover (about 86% less to download); the original artwork is never changed. An idle
+  Library tab checks for running jobs every 30 seconds instead of every 5, and a tab in the
+  background makes no requests. The first page load after a restart no longer waits for the
+  out-of-sync checks, and a BookOrbit book list that is due a refresh is refreshed in the
+  background. The book window loads a thumbnail cover, the app icon is 42 KB instead of 1 MB,
+  and Discover's JSON is compressed.
+
+- **BookOrbit audiobook tracks are read straight from a verified shared mount.** When BookOrbit
+  supplies a track path that resolves inside `AUDIOBOOKS_DIR` with a matching name, file ID and
+  size, BookBridge reads the original file instead of downloading a copy. Anything unverified
+  uses the download cache as before, and a job whose original changes mid-run retries instead
+  of saving timings from changed audio.
+
+- **KOReader statistics reach BookOrbit with their original device identity.** Raw page events
+  go to BookOrbit's own endpoint, so direct plugin uploads and BridgeSync uploads share one event
+  identity, and retries never duplicate them. This needs matching BookOrbit KOReader credentials.
+  BookOrbit ebook movement no longer creates estimated local sessions.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #598.
+
+- **Cache Cleanup previews instead of deleting.** The old action could mistake BookOrbit cache
+  folders for unused ones. Both Settings interfaces now offer **Review Inactive Cache**, which
+  reports protected, unverified and possibly unused storage separately. Deleting from it is off
+  until BookBridge can guarantee that no running job owns a folder.
+
+- **Changing a password signs that account out everywhere else.** Only the browser where you
+  made the change stays signed in. Everyone signs in once after updating.
+
+### Fixed
+
+- **A finished book stays finished in Grimmory, KOReader and your other ebook apps.**
+  The end of an ebook and the end of its audiobook rarely line up, so BookBridge wrote the
+  audiobook's end back as about 98% of the ebook; Grimmory moved the book back to Reading, the
+  Kobo kept it in progress, and BookOrbit audiobooks flipped back to re-reading. With *Propagate
+  Completion* on, the 100% write was also undone a few minutes later. An app that is already
+  finished is now left alone while the leading app is finished too. (#609, #610)
+
+- **A reader left open at an old page no longer pulls a finished book back.** If a Kobo or
+  other KOReader device sent its old position after you finished the book elsewhere, and
+  BookBridge could only place that position by percentage, it rewound your other apps. It now
+  needs you to actually keep reading from there.
+
+- **A KOReader copy that is behind the book can no longer pull it back** (#592). One page turn
+  on an older copy could take the book back to where that copy was. A device now has to have
+  been sent the book's current position before its pushes can move the book back; a deliberate
+  rewind still works. Contributed by [@chemicalsno](https://github.com/chemicalsno) in #592.
+
+- **KoSync keeps an approved rewind when you continue reading, including on another copy of
+  the book** (#599). Contributed by [@jucor](https://github.com/jucor) in #600.
+
+- **Short reading sessions in KOReader sync again in long books.** A few pages in a long novel
+  can be under the 0.5% threshold but past the 2,000-character backstop, and that backstop
+  never fired for KOReader. KOReader progress now syncs after about 2,000 characters, and page
+  turns add up across pushes.
+
+- **A failed update to one app is retried instead of left behind.** If writing your position to
+  an app failed (for example a brief Audiobookshelf outage), that app stayed at the old spot
+  until you read again. BookBridge now retries up to five times, while the app with your latest
+  position would still lead. One app returning a broken reply no longer stops every other book
+  from syncing.
+
+- **A re-aligned book uses its new map straight away**, instead of possibly serving the old
+  positions until the next restart.
+
+- **The KoSync server rejects positions and document hashes it can't use.** A percentage outside
+  0–1 (for example `45` instead of `0.45`) was saved as your position, and a text percentage or a
+  malformed request caused a server error; these now get a clear "invalid" reply and nothing is
+  saved. A hash that isn't exactly 32 hex digits no longer starts a library-wide search.
+  Contributed by [@chemicalsno](https://github.com/chemicalsno) in #591.
+
+- **Books keep syncing after you rename them in Calibre or CWA.** Editing a book's title or
+  author renames its EPUB, and the bridge lost the file ("Could not locate or download locator
+  target EPUB" every cycle) until you matched the book again. It now follows the Calibre book to
+  its new name, including when the library is mounted twice.
+  Contributed by [@chemicalsno](https://github.com/chemicalsno) in #589.
+
+- **A book downloaded in KOReader from CWA's or Storyteller's catalog finds its progress in
+  filename mode** (#590). BookBridge now also matches the title and authors inside the EPUB.
+  Contributed by [@chemicalsno](https://github.com/chemicalsno) in #590.
+
+- **Readium reading positions resolve when chapter filenames are URL-encoded**, so readers such
+  as AudioBooth no longer fall back to a whole-book percentage.
+  Contributed by [@josephyancey](https://github.com/josephyancey) in #594.
+
+- **CWA sync no longer re-downloads every book on every poll.** With more than eight books linked
+  to Calibre-Web-Automated, each pass fetched every book's Kobo file again, which could freeze
+  CWA. Unchanged bookmarks now reuse the last position. (#593)
+
+- **Linking an audiobook to an ebook you had already added no longer breaks the book later.**
+  The book later failed with "library item no longer exists", and re-matching didn't help.
+  Affected books are repaired on upgrade. (#597)
+
+- **BookOrbit audiobooks with unmeasured files no longer jump to the last file.** When BookOrbit
+  has no duration for some files of a multi-file audiobook, BookBridge skips that audiobook with a
+  warning until a BookOrbit library scan measures them. (#601)
+
+- **BookOrbit audio writes recover after a library scan changes the audiobook.** Every write
+  failed with `status=412` until a restart; BookBridge now picks up the new layout on the next
+  sync. (#602)
+
+- **Regenerating a BookOrbit read-along works when the old copy is still attached.** BookBridge
+  uploads the new edition beside the old one and never deletes the old copy or its reading
+  history. If BookOrbit keeps using the old copy, the job tells you to make the new file the
+  book's primary file in BookOrbit.
+
+- **BridgeSync no longer deletes books from your e-reader when the server briefly can't find
+  them.** If the library folder or BookOrbit was unavailable while the device list was built,
+  devices with "delete removed books" on deleted those books with their position and highlights.
+  BridgeSync also no longer overwrites a KOReader collection you made yourself with a server
+  shelf of the same name, keeps the existing copy if a move to a new filename fails, and cleans up
+  downloads cut off by a power loss. Update the BridgeSync plugin to 0.9.12.
+
+- **BridgeSync reading stats sync uses KOReader's real statistics database.** A stray
+  `statistics.sqlite` next to `statistics.sqlite3` no longer makes Sync Reading Stats fail with
+  `no such table: book`. Update the BridgeSync plugin to 0.9.12.
+  Contributed by [@jeffhammett](https://github.com/jeffhammett) in #603.
+
+- **One reader's KOReader session upload no longer erases another reader's reading history**
+  when both read the same book within a few minutes of each other.
+
+- **Unread endnotes no longer send an in-order book to the slow Whisper path** (#604). A
+  back-matter chapter the narrator never reads could look like out-of-order narration; such a
+  match now counts as not found.
+
+- **A transcription stuck on short downloaded audio recovers on its own.** BookBridge now throws
+  away cached audio that is shorter than the library's runtime and downloads it again.
+
+- **The AI alignment checks work with thinking models such as qwen3**, which used up the whole
+  answer budget thinking and returned nothing. Contributed by
+  [@eschatus](https://github.com/eschatus) in #605.
+
+- **Extracting covers from large read-aloud EPUBs no longer loads their embedded narration**, and
+  existing artwork survives a failed extraction.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #595.
+
+- **Read-along and transcript work is steadier under load.** Overlapping read-along work no
+  longer runs out of database connections, a read-along's final clip no longer raises a false
+  short-overlay warning, and parallel Storyteller transcript imports no longer remove each
+  other's files.
+
+- **Suggestions no longer miss BookOrbit ebooks whose file name differs from their title**, and
+  readers who are not admins get BookOrbit ebooks in their Suggestions scan too (#586). A file
+  disappearing mid-scan or an unavailable `/books` mount no longer drops other books.
+
+- **"Clear stale suggestions" no longer erases your "Never suggest" list.** It removes only
+  pending suggestions for books that aren't in your library.
+
+- **Test on a Settings integration page in the New interface uses your saved account** instead of
+  reporting "Missing URL, username, or password" (#584).
+
+- **PDFs are no longer passed into EPUB parsing during sync.**
+
+- **Forge & Match adds the book to the reader's own Audiobookshelf collection name**, not the
+  admin's.
+
+- **Telegram alerts with a `<` in them arrive again.** Alerts are now plain text and cut to
+  Telegram's length limit.
+
+- **Wrong passwords from one person no longer lock everyone else out of sign-in.** Behind a
+  reverse proxy every visitor looked like the proxy; if your proxy is listed under **Trusted
+  proxy addresses**, each visitor is now counted separately.
+
+- **Your Audiobookshelf API key no longer shows up in logs.** A failed cover or audio download
+  could write the full URL, key included, to the logs, Telegram, Processing and diagnostics.
+  Covers now send the key in a header, and any `token=` value in a logged URL is redacted.
+
+- **Closed the last place in the Classic dashboard where a crafted book id from an external
+  server could run script in your browser.**
 
 ## [7.13.0] - 2026-11-10
 

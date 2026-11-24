@@ -5,7 +5,8 @@
 ### Do I need Storyteller?
 
 No. Storyteller is an optional integration. The bridge does audio ↔ ebook alignment itself
-using built-in Whisper transcription (or the EPUB's SMIL data), so cross-format sync works
+with built-in forced alignment (falling back to Whisper transcription or the EPUB's SMIL data),
+so cross-format sync works
 with just an audio source and an ebook client. Add Storyteller only if you actually use the
 Storyteller read-along app — the bridge will then sync its position and use its transcripts
 as a bonus alignment source.
@@ -15,7 +16,7 @@ as a bonus alignment source.
 - Confirm that the selected ebook and audiobook are the same edition. The
   **Refuse alignments that look like a different book** deliberately refuses maps with too little shared wording;
   leave it enabled unless you know the pairing is a rough but intended match.
-- Open **Settings -> Alignment -> Alignment Health**. A low-quality map can be rebuilt with
+- Open **Settings → Alignment → Alignment Health**. A low-quality map can be rebuilt with
   **Remap alignment**, and **Restore previous** returns to the last saved map if the
   replacement is worse.
 - If a collection's audiobook narrates chapters in a different order from the EPUB,
@@ -33,7 +34,7 @@ as a bonus alignment source.
   reuses valid word timings instead of transcribing again. Certain older CWA
   input failures recover automatically only when the retained ebook and complete
   transcript prove the original pairing; otherwise manual review is required.
-  See [transcription recovery](TRANSCRIPTION_RECOVERY.md).
+  See [Transcription problems](TRANSCRIPTION_RECOVERY.md).
 - If local Whisper detects the wrong language, set **Whisper Language** under
   Transcription to a code such as `ru` or `en`. **Skip music and silence** can
   reduce transcription over music and silence; test quiet narration first.
@@ -49,7 +50,7 @@ the corrected alignment accounts for timestamp gaps between audio chapters.
 
 ### KOReader sends progress under the wrong book
 
-Install **BridgeSync 0.9.10** on each device. Close affected managed books, then run
+Install **BridgeSync 0.9.12** (the current release) on each device. Close affected managed books, then run
 **Bridge Sync → Sync Reading Stats** to repair their saved book identities.
 Positions and highlights are retained; do not delete the books' metadata to repair
 the checksum. The plugin also uses KOReader's metadata handling when managed books
@@ -57,7 +58,7 @@ are renamed, replaced or removed.
 
 ### A deliberate rewind does not stick
 
-- Confirm **Honor a Deliberate Rewind** is enabled under **Settings -> Reading & Sync**.
+- Confirm **Honor a Deliberate Rewind** is enabled under **Settings → Reading & Sync**.
 - After going back, make some forward progress in the same app. One isolated backward
   report is intentionally held so a stale or echoed position cannot pull every reader
   backward.
@@ -67,7 +68,7 @@ are renamed, replaced or removed.
 
 - Make sure your `/books` volume is mounted correctly in `docker-compose.yml`.
 - Check file permissions for the user running the container.
-- If the missing books should come from Grimmory, run **Settings -> Maintenance -> Refresh Grimmory Cache**.
+- If the missing books should come from Grimmory, run **Settings → Maintenance → Refresh Grimmory Cache**.
 - If the missing books should come from BookOrbit, confirm BookOrbit is enabled, test the connection, and retry the matching flow.
 - If the missing books should come from CWA, confirm CWA is enabled, test the connection, and make sure the book is visible in Calibre-Web Automated.
 
@@ -88,10 +89,10 @@ are renamed, replaced or removed.
 
 ### BookFusion progress or highlights are not syncing
 
-- Open **Account -> My Integrations** and confirm BookFusion is linked and enabled for that reader.
+- Open **Account → My Integrations** and confirm BookFusion is linked and enabled for that reader.
 - If you entered a token manually, BookFusion API keys are available from the [BookFusion Calibre integration page](https://www.bookfusion.com/integrations/calibre).
 - Confirm the book is linked to a BookFusion book ID. If the book only exists locally, the dashboard link flow can **Upload to BookFusion** — this needs the reader's Calibre API key in My Integrations.
-- For highlights, also enable **BookFusion -> Highlight Sync** for that reader and keep the current **Bridge Sync** KOReader plugin installed on devices that should exchange annotations.
+- For highlights, also enable **BookFusion → Highlight Sync** for that reader and keep the current **Bridge Sync** KOReader plugin installed on devices that should exchange annotations.
 - If using custom polling, check the BookFusion poll interval and make sure it is not set higher than expected.
 
 ### Grimmory or BookOrbit audiobook links are not syncing
@@ -100,6 +101,10 @@ are renamed, replaced or removed.
 - For Grimmory, run **Refresh Grimmory Cache** after moving, rescanning, or replacing items.
 - For BookOrbit, confirm the item is still visible in BookOrbit and retry the matching or sync flow.
 - If the old source item was deleted and recreated with a new ID, rematch that book.
+- If the log says `BookOrbitAudio: skipping '…' — BookOrbit has no duration for some of its audio files`,
+  BookOrbit has not measured that multi-file audiobook yet, so BookBridge cannot tell where each file
+  starts and leaves its position alone rather than writing it into the wrong file. Run a library
+  scan in BookOrbit (it needs ffprobe to measure files); the book syncs again on the next cycle.
 
 ### BookOrbit books are not matching or syncing
 
@@ -160,13 +165,19 @@ New progress posts after the usual cooldown once the book is matched.
 ### Highlights or notes are not syncing
 
 - Update the **Bridge Sync** KOReader plugin to the current release or newer on every KOReader device that should sync annotations.
-- Plain KOReader/KOSync progress sync does not sync annotations. In KOReader, use **Tools -> Bridge Sync -> Sync Highlights** or **Sweep All Highlights**.
-- Make sure **Highlight Sync** is enabled on the **Settings -> Services -> KOReader / KoSync** card.
+- Plain KOReader/KOSync progress sync does not sync annotations. In KOReader, use **Tools → Bridge Sync → Sync Highlights** or **Sweep All Highlights**.
+- Make sure **Highlight Sync** is enabled on the **Settings → Services → KOReader / KoSync** card.
 - For Grimmory web-reader annotations, enable **Highlight Sync** in that reader's Grimmory integration.
 - For BookOrbit web-reader highlights, fill in the BookOrbit KOReader sync username/password in that reader's Integrations and make sure the owner matches the BookOrbit user.
-- For BookFusion, enable **BookFusion -> Highlight Sync** in that reader's Integrations and confirm the book is linked to BookFusion.
-- For Readest, enable **Readest -> Highlight Sync** and enter that reader's Readest email/password.
-- For Hardcover, enable **Hardcover -> Highlight Sync** and enter that reader's Hardcover API token.
+- For BookFusion, enable **BookFusion → Highlight Sync** in that reader's Integrations and confirm the book is linked to BookFusion.
+- For Readest, enable **Readest → Highlight Sync** and enter that reader's Readest email/password.
+- For Hardcover, enable **Hardcover → Highlight Sync** and enter that reader's Hardcover API token.
+
+### Sync Reading Stats fails with "no such table: book"
+
+A stray `statistics.sqlite` file sat next to KOReader's real `statistics.sqlite3` and older
+plugins read the wrong one. Install **BridgeSync 0.9.12** or later on the device; it reads
+`statistics.sqlite3` first.
 
 ### Bridge Sync uses too much memory or a device download fails
 
@@ -177,7 +188,7 @@ New progress posts after the usual cooldown once the book is matched.
 ### Books are not appearing in Readest
 
 - Uploading is off by default. Enable **Upload matched books to Readest** and/or **Upload
-  books you are currently reading** in that reader's **Account -> My Integrations**.
+  books you are currently reading** in that reader's **Account → My Integrations**.
 - The currently-reading sweep only sends books with a reading position above 0% and below
   the completion threshold. A book you have not opened anywhere will not be sent by it —
   match it with **Upload matched books** enabled, or start reading it.
@@ -191,7 +202,7 @@ New progress posts after the usual cooldown once the book is matched.
 
 ### Storyteller transcripts are not found
 
-- Verify the Docker volume is mounted as host Storyteller assets -> container `/storyteller/assets`.
+- Verify the Docker volume is mounted as host Storyteller assets → container `/storyteller/assets`.
 - In Settings, set **Storyteller Assets Path** to `/storyteller`, not `/storyteller/assets`.
 - Confirm the expected structure exists inside the container: `/storyteller/assets/{title}/transcriptions/*.json`.
 
@@ -222,7 +233,7 @@ error is almost always the address, the port, or the network path, not the passw
 
 Work through it in this order:
 
-1. **Use the address BookBridge suggests.** Open **Account -> Connect a KOReader device**.
+1. **Use the address BookBridge suggests.** Open **Account → Connect a KOReader device**.
    The suggested address is built from the address bar of the browser you are using, so it
    already carries the right port.
 2. **Enter the base address only.** No `/api`, `/koreader`, or `/users/auth` suffix —
@@ -264,7 +275,7 @@ Work through it in this order:
   so `8080:5757` still means `:8080`.
 - On a jailbroken Kindle running Tailscale through KUAL in **userspace/proxy mode**,
   starting Tailscale is not enough on its own. KOReader also has to be told to use the
-  proxy: **Settings -> Network -> HTTP proxy**, set to `http://localhost:1055`, and
+  proxy: **Settings → Network → HTTP proxy**, set to `http://localhost:1055`, and
   enabled. Without this, KOReader's requests bypass the tunnel and fail with
   "Unknown server error" while other Tailscale checks look healthy.
 - Confirm the tunnel independently before blaming BookBridge: from the device's own
@@ -275,7 +286,7 @@ Work through it in this order:
 - These features need the **BridgeSync 0.9.6** plugin (or newer) on every device involved —
   older plugin versions do not send or receive the extra data.
 - Status (reading / finished / abandoned) is shared through **Sync reading status between
-  devices** under **Settings -> Services -> KOReader / KoSync**. It is on by default.
+  devices** under **Settings → Services → KOReader / KoSync**. It is on by default.
   When two devices disagree, the one whose status changed most recently wins, and
   "finished" breaks a same-day tie.
 - Sharing History between devices is a separate, **off by default** switch — **Share
@@ -304,6 +315,7 @@ ports:
 - Use a smaller local Whisper model such as `tiny`.
 - If you have an NVIDIA GPU, enable GPU support as described in the [Configuration Guide](configuration.md#gpu-support-optional).
 - If Storyteller transcript assets are available, configure them so the bridge can skip Whisper entirely for those books.
+- Let a faster machine on your network do the aligning: see [Remote alignment workers](configuration.md#remote-alignment-workers-optional).
 
 ---
 

@@ -213,6 +213,7 @@ from src.services.readalong_segments import SentenceClip, build_sentence_clips
 from src.utils.audio_duration import probe_duration_seconds as _probe_duration_seconds
 from src.utils.forced_aligner import container_timeline_filter
 from src.utils.smil_extractor import AUDIO_DURATIONS_ENTRY
+from src.utils.source_fingerprint import SourceAudioChanged, fingerprint, verify_unchanged
 
 if TYPE_CHECKING:
     from src.services.alignment_service import AlignmentService
@@ -970,9 +971,12 @@ def _transcode_audio_for_embed(
             return _transcode_audio_for_embed(
                 audio_paths, _SOURCE_FALLBACK_AUDIO_BITRATE, output_path, progress_callback,
             )
+        # The exception names only the exit status; ffmpeg's own reason is in its output.
+        ffmpeg_output = str(getattr(e, "stderr", None) or getattr(e, "output", None) or "").strip()
         logger.error(
-            "Read-along audio transcode failed for %d part(s) at bitrate %s: %s",
-            len(audio_paths), bitrate, e, exc_info=True,
+            "Read-along audio transcode failed for %d part(s) at bitrate %s: %s%s",
+            len(audio_paths), bitrate, e,
+            f" | ffmpeg: {ffmpeg_output[-800:]}" if ffmpeg_output else "", exc_info=True,
         )
         return False
 
@@ -1222,7 +1226,7 @@ def _extend_clips_to_contiguous(
             target_end = audio_duration_seconds if audio_duration_seconds is not None else target_end
         if target_end is not None and target_end > last.ts_end:
             extended[-1] = replace(last, ts_end=target_end)
-    else:
+    elif audio_duration_seconds is None:
         logger.warning(
             "Read-along: could not extend final clip %s to the real audio "
             "duration (probed=%s, clip end=%.3f); overlay total will run short",
@@ -2301,6 +2305,10 @@ def _build_readalong_epub_impl(
         )
         return None
 
+    source_fingerprints = {
+        str(p): fingerprint(str(p)) for p in source_audio_paths if os.path.exists(p)
+    }
+
     _safe_progress(progress_callback, "parsing_epub", _STAGE_START["parsing_epub"])
     clip_result = build_sentence_clips(parser, epub_path, alignment_service, abs_id)
     if clip_result is None or not clip_result.clips:
@@ -2760,6 +2768,10 @@ def _build_readalong_epub_impl(
             for archive_path, (disk_path, _real_duration) in zip(audio_archive_paths, audio_files_on_disk)
         }
         _safe_progress(progress_callback, "packaging", _STAGE_START["packaging"])
+        try:
+            verify_unchanged(abs_id, source_fingerprints, "packaging the read-along EPUB")
+        except SourceAudioChanged:
+            return None
         try:
             _package_epub(epub_path, output_path, modified_files, new_bytes_files, new_disk_files)
         except ValueError as e:

@@ -49,7 +49,7 @@ class BookFusionHtmlTests(unittest.TestCase):
     """Authorization details must be escaped before translated HTML insertion."""
 
     def test_authorization_link_escapes_dynamic_values(self):
-        source = (TEMPLATES / "admin_user_integrations.html").read_text(encoding="utf-8")
+        source = (TEMPLATES / "next" / "_admin_user_integrations_scripts.html").read_text(encoding="utf-8")
         self.assertIn("url: escapeBookFusionHtml(data.verification_uri)", source)
         self.assertIn("code: escapeBookFusionHtml(data.user_code)", source)
         node = shutil.which("node")
@@ -162,7 +162,7 @@ class RenderedJsStringsTests(I18nTestBase):
         })
 
     def test_logs_filter_pending_is_checked_by_marker_not_text(self):
-        source = (TEMPLATES / "logs.html").read_text(encoding="utf-8")
+        source = self._page('/logs')
         script = source.split("<script>", 1)[1]
         self.assertNotIn("includes('Switching filter')", script)
         self.assertNotIn("includes('Applying filter')", script)

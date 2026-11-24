@@ -1111,6 +1111,30 @@ class TestShelfWatchPerUserClients(unittest.TestCase):
         bo_client_b.move_between_shelves.assert_called()
         global_client.move_between_shelves.assert_not_called()
 
+    def test_user_without_bookorbit_is_skipped_without_log_lines(self):
+        """A reader with BookOrbit off logged "Shelf-watch: BookOrbit client not
+        configured, skipping" and the Reading-watch twin on every poll tick."""
+        from src.services.shelf_watch_service import ShelfWatchService
+
+        off_client = MagicMock()
+        off_client.is_configured.return_value = False
+        registry = MagicMock()
+        registry.get_clients.return_value = MagicMock(bookorbit_client=off_client, credentials={})
+        svc = ShelfWatchService(
+            booklore_client=MagicMock(), database_service=self.db,
+            book_mapping_service=MagicMock(), suggestions_service_factory=MagicMock,
+            source_name="BookOrbit", env_prefix="BOOKORBIT", user_client_registry=registry,
+        )
+
+        with patch.dict(os.environ, {
+            "BOOKORBIT_SHELF_WATCH_ENABLED": "true",
+            "BOOKORBIT_READING_WATCH_ENABLED": "true",
+        }), self.assertNoLogs("src.services.shelf_watch_service", level="DEBUG"):
+            stats = svc.process_watch_shelf(user_id=self.user_b.id)
+
+        self.assertFalse(stats["enabled"])
+        off_client.list_books_on_shelf.assert_not_called()
+
     def test_per_user_suggestions_does_not_use_global_client(self):
         """When a per-user registry is available, the ShelfWatchService
         resolves the user's own library client, not the global singleton."""

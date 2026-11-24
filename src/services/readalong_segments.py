@@ -198,7 +198,7 @@ def split_sentences(text: str, hard_breaks: Optional[Sequence[int]] = None) -> L
     for match in _BOUNDARY_RE.finditer(text):
         punct = match.group('punct')
         content_end = match.start() + len(punct) + len(match.group('quotes'))
-        after = text[match.end():]
+        after = text[match.end():match.end() + 1]
 
         if not _is_real_boundary(text, match.start(), punct, after):
             continue

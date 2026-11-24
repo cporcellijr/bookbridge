@@ -253,6 +253,12 @@ class ForgeService:
                 storygraph._automatch_storygraph(book)
             except Exception as e:
                 logger.warning(f"Auto-Forge: StoryGraph automatch failed for '{book.abs_id}': {e}", exc_info=True)
+        goodreads = sync_clients.get('Goodreads')
+        if goodreads and goodreads.is_configured():
+            try:
+                goodreads._automatch(book)
+            except Exception as e:
+                logger.warning("Auto-Forge: Goodreads automatch failed for '%s': %s", book.abs_id, e, exc_info=True)
 
     def generate_readalong_if_requested(self, book) -> None:
         """Start read-along generation for ``book`` if it was matched with that
@@ -562,6 +568,17 @@ class ForgeService:
         copy_file_to_path(src_path, dest_path)
         logger.info(f"{context}: Copied local source '{src_path.name}'")
         return "copy"
+
+    def _stage_provider_ebook(self, client, book_id, text_item, output_path, fallback_filename=None):
+        file_id = text_item.get("ebook_source_file_id")
+        if file_id:
+            filename = self._extract_original_filename(text_item, fallback_filename)
+            return client.download_ebook_to_path(book_id, filename, output_path, ebook_file_id=file_id)
+        content = client.download_book(book_id)
+        if not content:
+            return False
+        output_path.write_bytes(content)
+        return True
 
     @staticmethod
     def _extract_original_filename(text_item, fallback_filename=None):
@@ -1269,9 +1286,7 @@ class ForgeService:
             elif source == 'Booklore':
                 booklore_id = text_item.get('booklore_id')
                 if booklore_id:
-                    content = self.booklore_client.download_book(booklore_id)
-                    if content:
-                        epub_path.write_bytes(content)
+                    if self._stage_provider_ebook(self.booklore_client, booklore_id, text_item, epub_path):
                         text_success = True
                         logger.info(f"⚡ Forge: Grimmory epub downloaded")
                     else:
@@ -1279,9 +1294,7 @@ class ForgeService:
             elif source == 'BookOrbit':
                 bookorbit_id = text_item.get('bookorbit_id') or text_item.get('source_id')
                 if bookorbit_id and self.bookorbit_client:
-                    content = self.bookorbit_client.download_book(bookorbit_id)
-                    if content:
-                        epub_path.write_bytes(content)
+                    if self._stage_provider_ebook(self.bookorbit_client, bookorbit_id, text_item, epub_path):
                         text_success = True
                         logger.info("⚡ Forge: BookOrbit epub downloaded")
                     else:
@@ -1525,14 +1538,11 @@ class ForgeService:
                     )
                 self._stage_local_file(src_path, epub_path, stage_mode, "Auto-Forge")
             elif source == 'Booklore':
-                content = self.booklore_client.download_book(text_item.get('booklore_id'))
-                if content: epub_path.write_bytes(content)
+                if not self._stage_provider_ebook(self.booklore_client, text_item.get('booklore_id'), text_item, epub_path, original_ebook_filename):
+                    raise Exception("Failed to download selected Grimmory ebook")
             elif source == 'BookOrbit':
                 bookorbit_id = text_item.get('bookorbit_id') or text_item.get('source_id')
-                content = self.bookorbit_client.download_book(bookorbit_id) if self.bookorbit_client and bookorbit_id else None
-                if content:
-                    epub_path.write_bytes(content)
-                else:
+                if not (self.bookorbit_client and bookorbit_id and self._stage_provider_ebook(self.bookorbit_client, bookorbit_id, text_item, epub_path, original_ebook_filename)):
                     logger.error(f"❌ Auto-Forge: BookOrbit download failed for '{bookorbit_id or 'unknown'}'")
             elif source == 'Kavita':
                 kavita_id = text_item.get('kavita_id') or text_item.get('source_id')
@@ -2044,8 +2054,16 @@ class ForgeService:
 
             # --- ADD TO COLLECTIONS/SHELVES ---
             try:
-                from src.utils.user_config import user_setting
-                abs_collection_name = user_setting("ABS_COLLECTION_NAME", "Synced with KOReader")
+                from src.utils.user_config import resolve_setting, user_setting
+                # This runs on a plain thread with no ambient user, so read the owner's choice directly.
+                owner_id = getattr(book, "user_id", None) if book else None
+                if owner_id is not None:
+                    abs_collection_name = resolve_setting(
+                        self.database_service.get_user_credentials(owner_id),
+                        "ABS_COLLECTION_NAME", "Synced with KOReader",
+                    )
+                else:
+                    abs_collection_name = user_setting("ABS_COLLECTION_NAME", "Synced with KOReader")
                 if not str(abs_id).startswith('booklore:'):
                     self.abs_client.add_to_collection(abs_id, abs_collection_name)
 
@@ -2124,6 +2142,22 @@ class ForgeService:
             )
             return self
         return self._for_client_bundle(bundle)
+
+    @staticmethod
+    def sweep_orphaned_staging() -> int:
+        """Remove staging folders a previous process left behind (startup only, no forge is running yet)."""
+        tmp = Path(tempfile.gettempdir())
+        removed = 0
+        try:
+            for entry in tmp.glob(".forge_tus_*"):
+                if entry.is_dir():
+                    shutil.rmtree(entry, ignore_errors=True)
+                    removed += 1
+        except OSError as exc:
+            logger.warning("Forge & Match: could not sweep leftover staging folders: %s", exc, exc_info=True)
+        if removed:
+            logger.info("Forge & Match: removed %d leftover staging folder(s) from a previous run", removed)
+        return removed
 
     def resume_pending_forge_matches(self, user_client_registry=None) -> int:
         """Re-attach Forge & Match work left behind by a previous run.

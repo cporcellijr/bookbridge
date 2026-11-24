@@ -132,7 +132,7 @@ class TestSearchApi(SearchTabBase):
         from src.services.audio_source_adapters import AudioResult
         return AudioResult(
             source="ABS", source_id="a1", title="Title", subtitle="Sub", authors="Auth",
-            cover_url=_RAW_COVER, duration=12.5,
+            cover_url=_RAW_COVER, duration=12.5, series_name="Saga", series_sequence=1.5,
         )
 
     def _ebook(self):
@@ -164,6 +164,7 @@ class TestSearchApi(SearchTabBase):
         ab = data["audiobooks"][0]
         self.assertEqual(ab["provider_book_id"], "a1")
         self.assertEqual(ab["duration"], 12.5)
+        self.assertEqual((ab["series_name"], ab["series_index"]), ("Saga", 1.5))
         self.assertNotIn("SECRET", resp.get_data(as_text=True))
         self.assertTrue(ab["cover_url"].startswith("/"))
         eb = data["ebooks"][0]

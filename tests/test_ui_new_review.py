@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import unittest
 from pathlib import Path
+from discover_template_source import discover_template_source
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -21,10 +22,18 @@ class TestP9ReviewFixes(unittest.TestCase):
                 self.assertNotRegex(text, r"btn\.innerHTML = '(❌|⏳) ' \+ (stagePrefix|label|\(data\.error)")
                 self.assertEqual(text.count("btn.textContent = '❌ '"), 4)
 
-    def test_has_audio_filter_is_a_visible_chip_like_classics_option(self):
+    def test_format_options_are_multi_select_and_attention_is_separate(self):
         page = source("templates/next/index.html")
-        chip = re.search(r'<button[^>]*data-format="has_audio"[^>]*>', page).group()
-        self.assertNotIn("hidden", chip)
+        dropdown = re.search(r'<select id="filter-select"([^>]*)>(.*?)</select>', page, re.S)
+        self.assertIsNotNone(dropdown)
+        self.assertNotIn("hidden", dropdown.group(1))
+        self.assertIn("multiple", dropdown.group(1))
+        # "Has Audio" is retired: Listening and reading + Audio only cover it.
+        self.assertNotIn('value="has_audio"', dropdown.group(2))
+        self.assertIn('<option value="readalong">', dropdown.group(2))
+        self.assertNotIn('value="needs_attention"', dropdown.group(2))
+        self.assertIn('id="attention-only-filter"', page)
+        self.assertNotIn("data-format=", page)
         self.assertNotIn("data-legacy-format", page + source("templates/next/_library_scripts.html"))
 
     def test_edition_picker_styles_the_classes_the_shared_builders_create(self):
@@ -36,7 +45,7 @@ class TestP9ReviewFixes(unittest.TestCase):
         self.assertNotIn(".sg-edition", css)
 
     def test_ebook_selection_clears_after_queueing_and_drops_hidden_books(self):
-        scripts = source("templates/next/_discover_scripts.html").split("// P4-only additions.", 1)[1]
+        scripts = discover_template_source("next/_discover_scripts.html").split("// P4-only additions.", 1)[1]
         # The queue keys ebook-only books as ebook:<filename>; ebook_key never matched it.
         self.assertNotIn("queued.has('ebook:' + key)", scripts)
         self.assertIn("queued.has('ebook:' + filenames.get(key))", scripts)
@@ -45,12 +54,13 @@ class TestP9ReviewFixes(unittest.TestCase):
     def test_library_refresh_updates_each_apps_position(self):
         page = source("templates/next/index.html")
         scripts = source("templates/next/_library_scripts.html")
-        self.assertIn('<span data-app-pct="{{ name }}">', page)
+        cards = source("templates/next/_library_cards.html")
+        self.assertIn('<span data-app-pct="{{ name }}">', cards)
         self.assertIn("card.querySelectorAll('[data-app-pct]')", scripts)
 
     def test_discover_starts_when_the_browser_blocks_storage(self):
         for path in ("templates/suggestions.html", "templates/next/_discover_scripts.html"):
-            text = source(path)
+            text = discover_template_source(path.removeprefix("templates/"))
             with self.subTest(path=path):
                 self.assertNotRegex(text, r"(readJson|writeJson)\((sessionStorage|localStorage),")
                 self.assertIn("try { return window.sessionStorage; } catch (e) { return null; }", text)
@@ -62,7 +72,8 @@ class TestP9ReviewFixes(unittest.TestCase):
 
     def test_new_tab_links_carry_rel(self):
         for path in ("templates/admin_user_integrations.html", "templates/next/_admin_user_integrations_scripts.html",
-                     "templates/settings.html", "templates/next/settings.html"):
+                     "templates/settings.html", "templates/next/settings.html",
+                     "templates/next/_settings_scripts.html"):
             with self.subTest(path=path):
                 self.assertNotRegex(source(path), r'target="_blank" style=')
 

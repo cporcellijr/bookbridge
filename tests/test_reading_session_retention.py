@@ -107,3 +107,17 @@ def test_migration_backfills_book_title_from_books():
 def test_migration_applies_base_to_head(database):
     columns = {c["name"]: c for c in sa.inspect(database.db_manager.engine).get_columns("reading_sessions")}
     assert columns["book_title"]["nullable"]
+
+
+def test_device_upload_replaces_only_its_own_readers_estimated_session(database):
+    """Two readers on one book: B's exact upload must not delete A's estimated KoSync session."""
+    a = database.create_user("reader-a").id
+    b = database.create_user("reader-b").id
+    database.record_reading_session("gone", "EBOOK", 1000.0, 1600.0, 600, 0.10, 0.20,
+                                    leader_client="KoSync:device-a", user_id=a)
+    assert not database.delete_recent_estimated_kosync_session(
+        "gone", 1010.0, 1590.0, 0.10, 0.20, user_id=b)
+    assert _count(database, ReadingSession) == 1
+    assert database.delete_recent_estimated_kosync_session(
+        "gone", 1010.0, 1590.0, 0.10, 0.20, user_id=a)
+    assert _count(database, ReadingSession) == 0

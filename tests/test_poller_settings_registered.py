@@ -60,7 +60,7 @@ class TestEveryPollablePrefixIsRegistered(unittest.TestCase):
     def test_settle_toggles_are_in_bool_keys(self):
         """A checkbox missing from bool_keys never persists 'false' — the most
         recurring bug class in this repo."""
-        source = (Path(__file__).parent.parent / "src" / "web_server.py").read_text(encoding="utf-8")
+        source = (Path(__file__).parent.parent / "src" / "web" / "routes" / "settings.py").read_text(encoding="utf-8")
         for _client, prefix in ClientPoller._POLLABLE:
             key = f"{prefix}_POLL_WAIT_FOR_SETTLE"
             self.assertIn(f"'{key}'", source, f"{key} missing from web_server bool_keys")
@@ -79,7 +79,7 @@ class TestEveryPollablePrefixIsRegistered(unittest.TestCase):
 
 class TestSettingsUiExposesThem(unittest.TestCase):
     def setUp(self):
-        self.html = (Path(__file__).parent.parent / "templates" / "settings.html").read_text(encoding="utf-8")
+        self.html = "".join((Path(__file__).parent.parent / "templates" / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
 
     def test_every_pollable_client_is_set_by_the_one_poll_control(self):
         """Settings shows one poll control; saving copies it into every pollable

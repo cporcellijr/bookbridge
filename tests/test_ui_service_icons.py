@@ -118,7 +118,7 @@ class ServiceIconUiTestCase(unittest.TestCase):
             self.assertIn(f'<img src="/static/{asset}" alt=""', html)
 
     def test_shelf_watch_bodies_use_section_body_collapse(self):
-        html = (ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
+        html = "".join((ROOT / "templates" / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         # One "Up Next" shelf card now covers Grimmory, BookOrbit and Kavita.
         for body in ("all_apps_shelf_watch_body",):
             with self.subTest(body=body):
@@ -129,7 +129,7 @@ class ServiceIconUiTestCase(unittest.TestCase):
 
     def test_third_party_logos_are_listed_in_notices(self):
         notices = (ROOT / "static" / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
-        for logo in sorted(p.name for p in (ROOT / "static").iterdir() if p.suffix in {".png", ".svg", ".webp"} and p.name != "icon.png"):
+        for logo in sorted(p.name for p in (ROOT / "static").iterdir() if p.suffix in {".png", ".svg", ".webp"} and p.name not in {"icon.png", "icon-192.png"}):
             with self.subTest(logo=logo):
                 self.assertIn(f"`{logo}`", notices)
 
@@ -141,7 +141,6 @@ class ServiceIconUiTestCase(unittest.TestCase):
             "koreader.png": index_html,
             "bookfusion.png": index_html,
             "hardcover.svg": index_html,
-            "shelfmark.png": nav_html,
             "calibre-web.png": index_html,
             "kavita.svg": index_html,
         }
@@ -156,16 +155,28 @@ class ServiceIconUiTestCase(unittest.TestCase):
     def test_docs_menu_and_github_pages_assets_render(self):
         nav_html = (ROOT / "templates" / "_nav.html").read_text(encoding="utf-8")
         docs_home = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+        home_template = (ROOT / "overrides" / "home.html").read_text(encoding="utf-8")
         mkdocs_config = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
-        docs_icon = ROOT / "docs" / "assets" / "icon.png"
+        docs_icon = ROOT / "docs" / "assets" / "icon-192.png"
 
         self.assertNotIn("📚 Docs", nav_html)
         self.assertIn('title="{{ _(\'Documentation\') }}"', nav_html)
         self.assertNotIn("{ .md-button", docs_home)
-        self.assertIn('class="md-button md-button--primary"', docs_home)
-        self.assertIn("logo: assets/icon.png", mkdocs_config)
+        self.assertIn("template: home.html", docs_home)
+        # Links go through the url filter so they resolve under the /bookbridge/ Pages subpath.
+        self.assertIn('class="bb-btn bb-btn--primary" href="{{ \'getting-started/\' | url }}"', home_template)
+        self.assertIn("logo: assets/icon-192.png", mkdocs_config)
         self.assertTrue(docs_icon.is_file())
-        self.assertEqual(docs_icon.read_bytes(), (ROOT / "static" / "icon.png").read_bytes())
+        self.assertEqual(docs_icon.read_bytes(), (ROOT / "static" / "icon-192.png").read_bytes())
+
+    def test_pages_use_the_small_app_icon(self):
+        # Measured live: the 1024px icon.png (992 KB) was ~1 MB of every page's first load.
+        small = ROOT / "static" / "icon-192.png"
+        self.assertTrue(small.is_file())
+        self.assertLess(small.stat().st_size, 64 * 1024)
+        for path in sorted((ROOT / "templates").rglob("*.html")):
+            with self.subTest(template=str(path.relative_to(ROOT))):
+                self.assertNotIn("/static/icon.png", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

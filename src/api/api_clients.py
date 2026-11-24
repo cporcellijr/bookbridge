@@ -244,9 +244,11 @@ class ABSClient:
         logger.warning(f"ABS: Failed to fetch audiobooks for library '{lib}'")
         return []
 
-    def search_audiobooks(self, query: str, library_id: str = None):
+    def search_audiobooks(self, query: str, library_id: str = None, *, strict: bool = False):
         """Search libraries for audiobook-capable items."""
         if not self.is_configured():
+            if strict:
+                raise RuntimeError("ABS is not configured")
             return []
         self._update_session_headers()
         results = []
@@ -255,11 +257,19 @@ class ABSClient:
             r_libs = self.session.get(f"{self.base_url}/api/libraries", timeout=self.timeout)
             if r_libs.status_code != 200:
                 logger.warning(f"ABS Audio Search: Failed to get libraries (status {r_libs.status_code})")
+                if strict:
+                    raise RuntimeError(f"ABS library lookup failed ({r_libs.status_code})")
                 return []
 
-            libraries = r_libs.json().get('libraries', []) or []
+            library_payload = r_libs.json()
+            if strict and (not isinstance(library_payload, dict)
+                           or not isinstance(library_payload.get("libraries"), list)):
+                raise RuntimeError("ABS library lookup returned an invalid response")
+            libraries = library_payload.get('libraries', []) or []
             if library_id:
                 libraries = [lib for lib in libraries if str(lib.get('id')) == str(library_id)]
+                if strict and not libraries:
+                    raise RuntimeError("ABS target library is unavailable")
 
             logger.debug(f"ABS Audio Search: Found {len(libraries)} libraries to search")
             for lib in libraries:
@@ -269,10 +279,16 @@ class ABSClient:
                 search_url = f"{self.base_url}/api/libraries/{lib['id']}/search"
                 r = self.session.get(search_url, params={'q': query, 'limit': 20}, timeout=self.timeout)
                 if r.status_code != 200:
+                    if strict:
+                        raise RuntimeError(f"ABS audio search failed ({r.status_code})")
                     continue
 
                 data = r.json() or {}
+                if strict and not isinstance(data, dict):
+                    raise RuntimeError("ABS audio search returned an invalid response")
                 items = data.get('book', []) or data.get('libraryItem', []) or data.get('results', []) or []
+                if strict and len(items) >= 20:
+                    raise RuntimeError("ABS audio search may have reached its result limit")
                 hit_count = 0
                 for item in items:
                     lib_item = item.get('libraryItem', item) if isinstance(item, dict) else {}
@@ -285,6 +301,8 @@ class ABSClient:
                         # ABS search in mixed "book" libraries can return skeletal matches
                         # without media/audio fields. Re-hydrate details before rejecting.
                         details = self.get_item_details(item_id)
+                        if strict and not details:
+                            raise RuntimeError("ABS audio item detail could not be verified")
                         if not details or not self._item_has_audio(details):
                             continue
                         lib_item = details
@@ -295,6 +313,8 @@ class ABSClient:
 
             return results
         except Exception as e:
+            if strict:
+                raise
             logger.error(f"ABS: Error searching audiobooks: {e}", exc_info=True)
             return []
 
@@ -353,16 +373,26 @@ class ABSClient:
             logger.error(f"❌ Error getting audio files: {e}", exc_info=True)
             return []
 
-    def get_ebook_files(self, item_id):
+    def get_ebook_files(self, item_id, *, strict: bool = False):
         """Get ebook files for an item (from libraryFiles)."""
-        if not self.is_configured(): return []
+        if not self.is_configured():
+            if strict:
+                raise RuntimeError("ABS is not configured")
+            return []
         self._update_session_headers()
         url = f"{self.base_url}/api/items/{item_id}"
         try:
             r = self.session.get(url, timeout=self.timeout)
             if r.status_code == 200:
                 data = r.json()
+                if strict and not isinstance(data, dict):
+                    raise RuntimeError("ABS item detail returned an invalid response")
+                if strict and "libraryFiles" not in data:
+                    raise RuntimeError("ABS item detail is missing its library file list")
                 library_files = data.get('libraryFiles', [])
+                if strict and (not isinstance(library_files, list)
+                               or any(not isinstance(item, dict) for item in library_files)):
+                    raise RuntimeError("ABS item detail has an invalid library file list")
                 ebook_files = []
                 
                 for f in library_files:
@@ -376,8 +406,12 @@ class ABSClient:
                              "ino": f['ino']
                          })
                 return ebook_files
+            if strict:
+                raise RuntimeError(f"ABS item detail failed ({r.status_code})")
             return []
         except Exception as e:
+            if strict:
+                raise
             logger.error(f"❌ Error getting ebook files: {e}", exc_info=True)
             return []
 
@@ -445,12 +479,15 @@ class ABSClient:
             return None
         return scored[0][1] if scored else None
 
-    def search_ebooks(self, query):
+    def search_ebooks(self, query, *, strict: bool = False):
         """Search for ebooks across all book libraries.
 
         Results carry "subtitle" and "seriesName" when ABS supplies them.
         """
-        if not self.is_configured(): return []
+        if not self.is_configured():
+            if strict:
+                raise RuntimeError("ABS is not configured")
+            return []
         self._update_session_headers()
         results = []
         try:
@@ -458,9 +495,15 @@ class ABSClient:
             r_libs = self.session.get(f"{self.base_url}/api/libraries", timeout=self.timeout)
             if r_libs.status_code != 200:
                 logger.warning(f"⚠️ ABS Search: Failed to get libraries (status {r_libs.status_code})")
+                if strict:
+                    raise RuntimeError(f"ABS library lookup failed ({r_libs.status_code})")
                 return []
-            
-            libraries = r_libs.json().get('libraries', [])
+
+            library_payload = r_libs.json()
+            if strict and (not isinstance(library_payload, dict)
+                           or not isinstance(library_payload.get("libraries"), list)):
+                raise RuntimeError("ABS library lookup returned an invalid response")
+            libraries = library_payload.get('libraries', [])
             logger.debug(f"ABS Search: Found {len(libraries)} libraries to search")
             
             # Search ALL libraries to support mixed content (e.g. ebooks in audiobook libraries)
@@ -475,12 +518,16 @@ class ABSClient:
                 
                 if r.status_code == 200:
                     data = r.json()
+                    if strict and not isinstance(data, dict):
+                        raise RuntimeError("ABS ebook search returned an invalid response")
                     # ABS returns different keys: book, podcast, libraryItem, etc.
                     # For books: data.get('book', [])
                     # For audiobooks in mixed mode: data might have 'libraryItem' or similar
                     
                     # Try different possible keys
                     items = data.get('book', []) or data.get('libraryItem', []) or data.get('results', [])
+                    if strict and len(items) >= 10:
+                        raise RuntimeError("ABS ebook search may have reached its result limit")
                     
                     if items:
                         logger.debug(f"   ABS Search: Found {len(items)} hits in library '{lib_name}'")
@@ -508,9 +555,13 @@ class ABSClient:
                         logger.debug(f"   No items found in library '{lib_name}'")
                 else:
                     logger.warning(f"⚠️    Search failed for library '{lib_name}' (status {r.status_code})")
+                    if strict:
+                        raise RuntimeError(f"ABS ebook search failed ({r.status_code})")
                     
             return results
         except Exception as e:
+            if strict:
+                raise
             logger.error(f"❌ Error searching ABS ebooks: {e}", exc_info=True)
             return []
 

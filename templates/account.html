@@ -6,6 +6,8 @@
     .account-wrap { padding: 40px 16px; }
     .account-wrap .card { max-width: 520px; margin: 0 auto; }
     .account-wrap .card + .card { margin-top: 16px; }
+    .account-wrap #account-display { scroll-margin-top: 88px; }
+    @media (max-width: 760px) { .account-wrap #account-display { scroll-margin-top: 140px; } }
     .account-wrap .card input[type="text"],
     .account-wrap .card input[type="password"] { margin-bottom: 14px; }
     .account-wrap h1 {
@@ -84,6 +86,28 @@
             <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save changes') }}</button>
         </form>
     </div>
+    <div class="card plugin-card" id="account-display">
+        <h2>{{ _('Display') }}</h2>
+        <form class="account-interface-form" method="POST" action="{{ url_for('account_interface', next=url_for('account')) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="section-title">{{ _('Interface') }}</div>
+            <div class="plugin-actions" role="group" aria-label="{{ _('Interface') }}">
+                <button type="submit" name="ui_mode" value="classic" class="btn {{ 'btn-primary' if get_user_val('UI_MODE', 'classic') != 'new' else 'btn-secondary' }}" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') != 'new' else 'false' }}">{{ _('Classic') }}</button>
+                <button type="submit" name="ui_mode" value="new" class="btn {{ 'btn-primary' if get_user_val('UI_MODE', 'classic') == 'new' else 'btn-secondary' }}" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') == 'new' else 'false' }}">{{ _('New') }}</button>
+            </div>
+        </form>
+        <form class="account-series-form" method="POST" action="{{ url_for('account_display', next=url_for('account')) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="section-title">{{ _('Series stacks') }}</div>
+            <input type="hidden" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="false">
+            <label for="series-show-current">
+                <input type="checkbox" id="series-show-current" name="SERIES_SHOW_CURRENT_BOOK_DETAIL" value="true" {% if display_settings()['SERIES_SHOW_CURRENT_BOOK_DETAIL'] == 'true' %}checked{% endif %}>
+                {{ _('Show the current book in series stacks') }}
+            </label>
+            <p class="help">{{ _('Show the book you are reading, or the next unread book, on each series stack in your Library.') }}</p>
+            <button type="submit" class="btn btn-primary">{{ _('Save display') }}</button>
+        </form>
+    </div>
     <div class="card plugin-card">
         <h2>{{ _('My Integrations') }}</h2>
         <p>
@@ -128,68 +152,5 @@
         </div>
     </div>
 </div>
-<script>
-    fetch('/api/kosync-plugin/version').then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) {
-            if (d && d.version) {
-                document.getElementById('bridgesync_plugin_version').textContent = 'v' + d.version;
-            }
-        }).catch(function () { });
-
-    function isLoopbackUrl(value) {
-        try {
-            var host = new URL(value).hostname.replace(/^\[|\]$/g, '').toLowerCase();
-            return host === 'localhost' || host === '127.0.0.1' || host === '::1';
-        } catch (err) {
-            return false;
-        }
-    }
-
-    function updatePublicUrlWarning() {
-        var input = document.getElementById('kosync_public_url');
-        var warning = document.getElementById('kosync_url_warning');
-        warning.hidden = !isLoopbackUrl(input.value);
-    }
-
-    (function () {
-        var urlInput = document.getElementById('kosync_public_url');
-        if (!urlInput) return;
-        var syncPort = {{ get_val('KOSYNC_PORT', '')|trim|tojson }};
-        var splitPort = syncPort !== '' && syncPort !== '5757';
-        urlInput.value = (location.protocol === 'https:' || !splitPort)
-            ? location.origin
-            : location.protocol + '//' + location.hostname + ':' + syncPort;
-        urlInput.addEventListener('input', updatePublicUrlWarning);
-        updatePublicUrlWarning();
-    })();
-
-    function showCopyResult(btn, text) {
-        var original = btn.textContent;
-        btn.textContent = text;
-        window.setTimeout(function () { btn.textContent = original; }, 1500);
-    }
-
-    function copyPublicUrl(btn) {
-        var input = document.getElementById('kosync_public_url');
-        if (isLoopbackUrl(input.value)) {
-            showCopyResult(btn, {{ _('Replace host')|tojson }});
-            return;
-        }
-        input.select();
-        input.setSelectionRange(0, 99999);
-        var copied;
-        try {
-            copied = navigator.clipboard && navigator.clipboard.writeText
-                ? navigator.clipboard.writeText(input.value)
-                : Promise.resolve(document.execCommand('copy'));
-        } catch (err) {
-            copied = Promise.reject(err);
-        }
-        copied.then(function (ok) {
-            showCopyResult(btn, ok === false ? {{ _('Copy failed')|tojson }} : {{ _('Copied')|tojson }});
-        }).catch(function () {
-            showCopyResult(btn, {{ _('Copy failed')|tojson }});
-        });
-    }
-</script>
+{% include "next/_account_scripts.html" %}
 {% endblock %}

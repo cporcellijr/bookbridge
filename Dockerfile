@@ -62,8 +62,12 @@ RUN sed -i 's/\r$//' /app/start.sh /app/scripts/backup_db.sh /app/scripts/repair
 
 EXPOSE 5757
 
+# Worker mode serves no HTTP port: it is healthy while its loop and heartbeats keep
+# touching /tmp/bookbridge-worker.alive (at most WORKER_LEASE_SECONDS/3 apart, <= 20 min).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:5757/ || exit 1
+    CMD if [ "$BOOKBRIDGE_MODE" = "worker" ]; then \
+          [ -n "$(find /tmp/bookbridge-worker.alive -mmin -30 2>/dev/null)" ]; \
+        else curl -f http://localhost:5757/; fi || exit 1
 
 CMD ["/app/start.sh"]
 # [END FILE]

@@ -16,11 +16,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.web_server as web_server
 from src.api.bookorbit_client import BookOrbitClient
+from discover_template_source import discover_template_source
 from tests.test_suggestions_redesign_api import (  # noqa: F401 (autouse fixture restores web globals)
     _app_and_patches, _close, restore_web_helpers,
 )
 
-_TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "suggestions.html"
 HASH = "a" * 32
 KEY = "ebook:selected"
 
@@ -232,7 +232,7 @@ def test_suggestions_ebook_result_rejects_cached_detail_when_fresh_read_fails(bo
 
 
 def _src() -> str:
-    return _TEMPLATE.read_text(encoding="utf-8")
+    return discover_template_source("suggestions.html")
 
 
 def test_template_load_view_rethrows_abort_error_when_reading_body():

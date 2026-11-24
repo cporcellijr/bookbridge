@@ -24,13 +24,13 @@ REPO = Path(__file__).parent.parent
 
 
 def _bool_keys() -> list:
-    src = io.open(REPO / 'src' / 'web_server.py', encoding='utf-8').read()
+    src = io.open(REPO / 'src' / 'web' / 'routes' / 'settings.py', encoding='utf-8').read()
     i = src.index("        bool_keys = [")
     return re.findall(r"'([A-Z0-9_]+)'", src[i:src.index("]", i)])
 
 
 def _settings_form_field_names() -> set:
-    html = io.open(REPO / 'templates' / 'settings.html', encoding='utf-8').read()
+    html = "".join((REPO / 'templates' / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
     return set(re.findall(r'<(?:input|select|textarea)[^>]*\bname="([^"]+)"', html))
 
 
@@ -80,7 +80,7 @@ class SaveLoopGuardTestCase(unittest.TestCase):
     """The guard itself, read off the save loop's source."""
 
     def _save_loop_source(self) -> str:
-        src = io.open(REPO / 'src' / 'web_server.py', encoding='utf-8').read()
+        src = io.open(REPO / 'src' / 'web' / 'routes' / 'settings.py', encoding='utf-8').read()
         start = src.index("        # 2. Handle Text Inputs")
         return src[start:src.index("new_booklore_settings", start)]
 

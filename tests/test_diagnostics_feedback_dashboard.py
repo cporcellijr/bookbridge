@@ -205,13 +205,16 @@ class TestRoutes(_Base):
         )
 
     def test_non_admin_cannot_send_or_read_instance_reports(self):
-        user = Mock(id=2, active=True, is_admin=False)
+        user = Mock(id=2, active=True, is_admin=False, password_hash='hash')
         self.container.mock_database_service.count_users.return_value = 1
         self.container.mock_database_service.get_user.return_value = user
         self.container.mock_database_service.get_user_credentials.return_value = {}
         self.app.config['LOGIN_DISABLED'] = False
         with self.client.session_transaction() as session:
             session['user_id'] = user.id
+            with self.app.app_context():
+                from src.web.session_auth import session_marker
+                session['session_marker'] = session_marker(user)
 
         history = self.client.get(
             '/api/diagnostics/submissions',
@@ -238,7 +241,7 @@ class TestTemplates(unittest.TestCase):
         self.assertNotIn('My Reports', content)
 
     def test_settings_has_accessible_manual_report_controls(self):
-        content = (self.templates / 'settings.html').read_text(encoding='utf-8')
+        content = "".join((self.templates / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         self.assertIn('What went wrong? (optional)', content)
         self.assertIn('maxlength="2000"', content)
         self.assertIn('Send bug report', content)
@@ -246,9 +249,11 @@ class TestTemplates(unittest.TestCase):
         self.assertIn('aria-live="polite"', content)
         self.assertNotIn('warning_count || 0', content)
 
-        start = content.index('function _renderDiagnosticsSubmissions')
-        end = content.index('function togglePollSeconds')
-        history_script = content[start:end]
+        script = (self.templates / 'next' / '_settings_scripts.html').read_text(encoding='utf-8')
+        self.assertNotIn('warning_count || 0', script)
+        start = script.index('function _renderDiagnosticsSubmissions')
+        end = script.index('function togglePollSeconds')
+        history_script = script[start:end]
         self.assertIn('textContent', history_script)
         self.assertNotIn('innerHTML', history_script)
 

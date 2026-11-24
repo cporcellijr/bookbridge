@@ -168,6 +168,43 @@
             </div>
         </div>
         <script src="/static/js/storygraph-modal.js"></script>
+        <div id="goodreads-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="closeGoodreadsModal()"></div>
+            <div class="hc-modal-content">
+                <div class="hc-modal-header">
+                    <h3>Link to Goodreads</h3>
+                    <button class="hc-modal-close" onclick="closeGoodreadsModal()" aria-label="Close">×</button>
+                </div>
+                <div class="hc-modal-body">
+                    <div id="gr-loading" class="hc-loading" style="display:none;">
+                        <div class="hc-loading-spinner"></div>
+                        <div class="hc-loading-text">Searching Goodreads...</div>
+                    </div>
+                    <div id="gr-found" style="display:none;">
+                        <div class="hc-book-info">
+                            <div class="hc-book-title" id="gr-title"></div>
+                            <div class="hc-book-author" id="gr-author"></div>
+                        </div>
+                        <p class="hc-text-muted"><a id="gr-found-url" href="#" target="_blank" rel="noopener noreferrer">Open in Goodreads</a></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showGoodreadsManualInput(); return false;">Wrong book? Enter a URL, ID, or search text</a></p>
+                    </div>
+                    <div id="gr-manual" style="display:none;">
+                        <p>Enter a Goodreads URL, book ID, or search text:</p>
+                        <input type="text" id="gr-input" placeholder="https://www.goodreads.com/book/show/...">
+                        <button onclick="resolveGoodreadsManualInput()">Resolve</button>
+                    </div>
+                    <div id="gr-error" style="display:none;">
+                        <p id="gr-error-msg" class="hc-text-error"></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showGoodreadsManualInput(); return false;">Try a URL or search text</a></p>
+                    </div>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="closeGoodreadsModal()">Cancel</button>
+                    <button id="gr-link-btn" class="hc-btn-link" onclick="linkSelectedGoodreadsBook()" disabled>Link Book</button>
+                </div>
+            </div>
+        </div>
+        <script src="/static/js/goodreads-modal.js"></script>
         <!-- Storyteller Link Modal -->
         <div id="st-modal" class="hidden">
             <div class="st-modal-content">

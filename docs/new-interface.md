@@ -1,25 +1,25 @@
-# New interface (beta)
+---
+hide:
+  - toc
+description: "BookBridge has two interfaces, Classic and New. Both use the same books, progress and connections; each reader picks one."
+---
 
-BookBridge has two interfaces: **Classic** (the default) and **New** (optional beta). They use the same books, progress, connections, and actions. Changing the interface does not change your sync settings or reading position.
+# Classic and New
 
-## Turn New on or off
+BookBridge has two interfaces, **Classic** and **New**. They use the same books, progress, connections and actions, so switching changes only how things look. Classic is the default. Each reader picks their own: click your name and choose **Display**. Classic calls the choice **Interface**; New calls it **Look**. On phones, open the account avatar at the top right. See [Display](using/display.md#1-open-display).
 
-Sign in with the Classic interface, then click **New interface** beside the account menu in the top bar. To switch back, use the **Classic | New** control above the account menu at the bottom of New's left rail. On phones, find the same control inside the account menu at the top.
+These docs show the New interface. Where Classic uses a different name:
 
-The choice saves as soon as you click, without a separate Save step or JavaScript, and the same page reloads in the chosen interface. Each reader has their own choice; Classic stays the default.
+| New | Classic |
+| :--- | :--- |
+| **Library** | **Dashboard** |
+| **Processing** | **Job Queue** |
+| Book drawer (click a book) | Actions on the book card |
+| Discover, Stats, Settings, Logs | Same names |
 
-## Find your way around
+## Getting around in New
 
-- **Library:** Switch between Covers, Spines and List. Filter, sort, or group by series. Open a book to see its progress across apps, its links and its actions. Covers arrange cards into a compact masonry grid. Each cover shows your progress (a percentage badge and a thin line, or a check once finished) and a strip of where the book is linked (ebook, audiobook, read-along, KOReader), with the app that led its last sync lit. With a mouse the strip appears when you hover over a card; on a touch screen it stays visible, and tapping an icon shows that app's position. The book drawer shows your current audiobook chapter for Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter information.
-- **Discover:** Find audiobook/ebook pairs, ebooks without an audio match, or search for another book. Review suggestions and add them to the queue.
-- **Processing:** See work in progress and waiting or recently finished jobs.
-- **Stats:** Every reader can see their own reading and listening statistics.
-- **Settings and Logs:** Available to admins; your account and integrations are available in the user menu.
-
-On a phone, the main sections appear in a bottom tab bar. The search control is at the top. Tap it, or press **Ctrl K** (Windows/Linux), **⌘K** (Mac) or **/** while outside a text field. Arrow keys choose results; Enter opens; Escape closes. Search only offers pages and actions your account can use.
-
-Use **Day theme / Night theme** at the top to change the color scheme in that browser.
-
-## iPad and accessibility
-
-Tap targets are designed for touch, and keyboard users can navigate the book drawer and search. If you're trying New on iPad Safari, check the bottom tabs, search and book drawer in portrait and landscape, and report any clipping, focus or scrolling issues. Classic remains available while New is in beta.
+- The sidebar holds **Library**, **Discover**, **Stats** and **Processing**, plus **Logs** and **Settings** for admins and **My apps** (your integrations) for everyone else. **Account** and **Display** are in the menu under your name.
+- On a phone, the main sections sit in a bottom tab bar.
+- **Search** at the top finds books, pages and settings. Press **Ctrl K** (Windows/Linux), **⌘K** (Mac) or **/** outside a text field to open it; arrow keys choose, Enter opens and Escape closes. It only offers what your account can use.
+- The book drawer and search work with the keyboard, and tap targets are sized for touch.

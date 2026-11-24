@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
@@ -58,11 +59,23 @@ def repair_mojibake(text):
     return repaired
 
 
+_URL_SECRET_RE = re.compile(
+    r"([?&](?:access_token|api_key|apikey|token)=)[^&\s'\"()<>]*", re.IGNORECASE
+)
+
+
+def redact_url_secrets(text: str) -> str:
+    """Replace query-string secrets (token, access_token, api_key, apikey) with ``[redacted]``."""
+    if not isinstance(text, str) or "=" not in text:
+        return text
+    return _URL_SECRET_RE.sub(r"\1[redacted]", text)
+
+
 class MojibakeSafeFormatter(logging.Formatter):
-    """Formatter that normalizes mojibake before logs are emitted."""
+    """Formatter that normalizes mojibake and redacts URL secrets before logs are emitted."""
 
     def format(self, record):
-        return repair_mojibake(super().format(record))
+        return redact_url_secrets(repair_mojibake(super().format(record)))
 
 
 class ThresholdExceptionFormatter(logging.Formatter):
@@ -136,7 +149,7 @@ class MemoryLogHandler(logging.Handler):
             log_entry = {
                 'timestamp': datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S'),
                 'level': record.levelname,
-                'message': repair_mojibake(record.getMessage()),
+                'message': redact_url_secrets(repair_mojibake(record.getMessage())),
                 'module': record.name
             }
             self.logs.append(log_entry)
@@ -225,11 +238,12 @@ class TelegramHandler(logging.Handler):
             return
 
         try:
-            message = self.format(record)
+            # Plain text: '<lambda>' or '<Response [500]>' in a message would make Telegram
+            # reject HTML. Telegram also rejects texts over 4096 UTF-16 units; emoji count twice.
+            message = self.format(record)[:4000]
             payload = {
                 'chat_id': self.chat_id,
                 'text': message,
-                'parse_mode': 'HTML',
                 'disable_notification': False
             }
             response = requests.post(self.api_url, data=payload, timeout=5)
@@ -256,7 +270,7 @@ def setup_telegram_logging():
     logger.info("Setting up telegram logger")
     handler = TelegramHandler(bot_token, chat_id, min_level=log_level)
     handler.setFormatter(MojibakeSafeFormatter(
-        '<b>[%(asctime)s]</b> <code>%(levelname)s</code> - <b>%(name)s</b>: %(message)s',
+        '[%(asctime)s] %(levelname)s - %(name)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'))
     root_logger = logging.getLogger()
     root_logger.addHandler(handler)

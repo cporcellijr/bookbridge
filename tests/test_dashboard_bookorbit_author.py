@@ -78,6 +78,9 @@ class TestPrefetchBookOrbitAuthors(unittest.TestCase):
             def is_configured(self):
                 return True
 
+            def book_cache_snapshot(self):
+                return [], True
+
             def get_all_books(self):
                 return books
         return _Client()

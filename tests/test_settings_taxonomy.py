@@ -25,6 +25,7 @@ CANONICAL_SERVICES = [
     "Calibre-Web Automated",
     "Hardcover",
     "StoryGraph",
+    "Goodreads",
 ]
 
 
@@ -37,12 +38,15 @@ class TestServiceTaxonomyParity(unittest.TestCase):
         # after KOReader / KoSync; it has no admin-side card.
         self.assertIn("KOReader Collections", labels)
         labels.remove("KOReader Collections")
+        # Shelfmark's server address lives in the admin Library card; the per-user
+        # card holds only each reader's own sign-in, so it comes last.
+        self.assertEqual(labels.pop(), "Shelfmark")
         # Reading preferences is the reader's own non-service card, pinned first.
         self.assertEqual(labels[0], "Reading preferences")
         self.assertEqual(labels[1:], CANONICAL_SERVICES)
 
     def test_admin_integrations_panel_matches_canonical_order(self):
-        source = (TEMPLATES / 'settings.html').read_text(encoding='utf-8')
+        source = "".join((TEMPLATES / n).read_text(encoding="utf-8") for n in ("settings.html", "next/_settings_styles.html", "next/_settings_form.html"))
         headers = [h.strip() for h in re.findall(r'<h3[^>]*>\s*([^<]+)', source)]
         found = [h for h in headers if h in CANONICAL_SERVICES]
         self.assertEqual(found, CANONICAL_SERVICES)
@@ -50,7 +54,7 @@ class TestServiceTaxonomyParity(unittest.TestCase):
     def test_user_test_services_use_canonical_names(self):
         from src.web_server import _USER_TEST_SERVICES
 
-        self.assertEqual(list(_USER_TEST_SERVICES.keys()), CANONICAL_SERVICES)
+        self.assertEqual(list(_USER_TEST_SERVICES.keys()), CANONICAL_SERVICES + ["Shelfmark"])
 
     def test_integration_templates_gate_keys_use_canonical_names(self):
         for template_name in ('account_integrations.html', 'admin_user_integrations.html'):

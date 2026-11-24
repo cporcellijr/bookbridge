@@ -207,7 +207,8 @@ def test_upload_without_device_identity_is_rejected(database):
 # Endpoints
 # ---------------------------------------------------------------------------
 
-TEST_DIR = '/tmp/test_koreader_book_status_sync'
+from tests._tmpdirs import process_test_dir
+TEST_DIR = process_test_dir('test_koreader_book_status_sync')
 _LEAKY_ENV = ('DATA_DIR', 'KOSYNC_USER', 'KOSYNC_KEY')
 
 

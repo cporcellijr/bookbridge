@@ -216,5 +216,55 @@ class TestEbookOnlyBookWithRealABSItem(_EbookOnlyCycleCase):
         self.assertEqual(written_id, 'li_8f2c1e')
 
 
+MERGED_ABS_ID = 'li_8f2c1e'
+MERGED_SYNTHETIC_ITEM = 'ebook-e0262d5cceb927d0'
+
+
+class TestMergedBookWithSyntheticABSEbookItem(_EbookOnlyCycleCase):
+    """#597: a match merge stored the ebook-only key as abs_ebook_item_id.
+
+    The audiobook item exists in ABS; the stored `ebook-<hash16>` id does not, so the
+    write 404'd and the book was marked 'error' with the #486 line.
+    """
+
+    abs_id = MERGED_ABS_ID
+
+    def setUp(self):
+        super().setUp()
+        self.test_book.abs_ebook_item_id = MERGED_SYNTHETIC_ITEM
+
+    def test_reported_book_is_not_marked_error_and_writes_the_real_item(self):
+        real = lambda item_id, *a, **k: item_id == MERGED_ABS_ID
+        original = self.setup_common_mocks
+
+        def keyed_mocks():
+            mocks = original()
+            abs_client = mocks['abs_client']
+            abs_client.get_progress_with_status.side_effect = None
+            abs_client.update_ebook_progress.side_effect = real
+            abs_client.item_exists.side_effect = real
+            return mocks
+
+        self.setup_common_mocks = keyed_mocks
+        mocks, log_output = self._run_cycle()
+
+        self.assertNotIn(
+            f"🛑 '{MERGED_ABS_ID}' '{REPORTED_TITLE}' Audiobookshelf library item no longer exists "
+            f"(reported by ABSEbook) — marking book as 'error'",
+            log_output,
+        )
+        mocks['database_service'].set_book_status.assert_not_called()
+        written = [c[0][0] for c in mocks['abs_client'].update_ebook_progress.call_args_list]
+        self.assertIn(MERGED_ABS_ID, written)
+        self.assertNotIn(MERGED_SYNTHETIC_ITEM, written)
+
+    def test_synthetic_item_is_not_an_explicit_abs_ebook(self):
+        book = Book(abs_id='ebook-e0262d5cceb927d0', abs_ebook_item_id=MERGED_SYNTHETIC_ITEM)
+        client = ABSEbookSyncClient(Mock(), Mock())
+        self.assertFalse(client.supports_book(book))
+        book = Book(abs_id=MERGED_ABS_ID, abs_ebook_item_id=MERGED_SYNTHETIC_ITEM)
+        self.assertEqual(ABSEbookSyncClient._resolve_target_id(book), MERGED_ABS_ID)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

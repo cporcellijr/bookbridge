@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.web_server as web_server
+from src.web import suggestions_scan_scheduler
 from src.utils.logging_utils import get_persistent_condition_logger
 from src.utils.user_config import _ALLOW_GLOBAL_FALLBACK_KEY
 from src.utils.user_context import (
@@ -297,7 +298,7 @@ class TestCronSchedule(ScheduledScanTestCase):
 class TestTick(ScheduledScanTestCase):
     def setUp(self):
         super().setUp()
-        patcher = patch.object(web_server, "_run_scheduled_suggestions_scan", side_effect=self.start_job)
+        patcher = patch.object(suggestions_scan_scheduler, "_run_scheduled_suggestions_scan", side_effect=self.start_job)
         self.run_scan = patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -480,7 +481,7 @@ class TestScheduledRun(ScheduledScanTestCase):
             )
             return "job-1"
 
-        with patch.object(web_server, "_start_suggestions_scan_job", side_effect=fake_start) as start:
+        with patch.object(suggestions_scan_scheduler, "_start_suggestions_scan_job", side_effect=fake_start) as start:
             job_id = web_server._run_scheduled_suggestions_scan(full=full)
         return job_id, captured, start
 
@@ -557,7 +558,7 @@ class TestOpenSession(ScheduledScanTestCase):
             "no_match_abs_ids": [],
             "stats": {"scanned_new": len(cache_by_abs), "reused_cached": 0, "total_unmatched": len(cache_by_abs)},
         }
-        with patch.object(web_server, "scan_library_suggestions", return_value=results):
+        with patch("src.web.suggestions_scan_workflow.scan_library_suggestions", return_value=results):
             job_id = web_server._run_scheduled_suggestions_scan(full=full)
         self.assertEqual("done", web_server.SUGGESTIONS_SCAN_JOBS[job_id]["status"])
 
@@ -598,7 +599,7 @@ class TestOpenSession(ScheduledScanTestCase):
     def test_open_session_retains_last_results_while_a_full_refresh_is_running(self):
         state = self.open_session_with({"ab-old": suggestion("ab-old")})
 
-        with patch.object(web_server, "_start_suggestions_scan_job", return_value="job-1"):
+        with patch.object(suggestions_scan_scheduler, "_start_suggestions_scan_job", return_value="job-1"):
             web_server._run_scheduled_suggestions_scan(full=True)
         with as_user(7):
             state = web_server._rehydrate_suggestions_state_from_cache(state)

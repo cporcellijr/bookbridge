@@ -12,16 +12,12 @@ import os
 import shutil
 
 # Set test environment
-TEST_DIR = '/tmp/test_kosync'
+from tests._tmpdirs import process_test_dir
+TEST_DIR = process_test_dir('test_kosync')
 os.environ['DATA_DIR'] = TEST_DIR
 os.environ['KOSYNC_USER'] = 'testuser'
 os.environ['KOSYNC_KEY'] = 'testpass'
 
-
-# Ensure test directory exists
-if os.path.exists(TEST_DIR):
-    shutil.rmtree(TEST_DIR)
-os.makedirs(TEST_DIR, exist_ok=True)
 
 from src.db.models import KosyncDocument, Book, ReadingSession, Setting, State, HardcoverDetails, UserCredential, KosyncUserProgress
 # Initialize DB service with test path
@@ -371,6 +367,40 @@ class TestKosyncEndpoints(unittest.TestCase):
             response.headers.get('X-Content-SHA256'),
             _hashlib.sha256(response.data).hexdigest(),
         )
+
+    def _put_raw(self, body):
+        return self.client.put('/syncs/progress', headers=self.auth_headers, json=body)
+
+    def test_put_rejects_non_object_body(self):
+        """A JSON list body is a 400, not a 500."""
+        self.assertEqual(self._put_raw([{'document': 'p' * 32}]).status_code, 400)
+
+    def test_put_rejects_invalid_percentage_and_stores_nothing(self):
+        """Non-numeric, out-of-range, bool and NaN percentages are 400 with no state written."""
+        from src import web_server
+        doc = 'p' * 32
+        for bad in ('abc', '0.5', 45, 1.01, -0.1, True, float('nan'), float('inf'), 10 ** 400):
+            with self.subTest(percentage=bad):
+                response = self._put_raw({
+                    'document': doc, 'progress': '/body/x', 'percentage': bad,
+                    'device': 'TestKobo', 'device_id': 'KOBO123',
+                })
+                self.assertEqual(response.status_code, 400)
+                self.assertIsNone(web_server.database_service.get_kosync_document(doc))
+                with web_server.database_service.get_session() as session:
+                    self.assertEqual(session.query(KosyncUserProgress).count(), 0)
+
+    def test_put_valid_percentage_still_succeeds(self):
+        """Boundary and missing percentages stay accepted."""
+        from src import web_server
+        for index, pct in enumerate((0.5, 0, 1, None)):
+            with self.subTest(percentage=pct):
+                body = {'document': f'{index}' * 32, 'progress': '/body/x',
+                        'device': 'TestKobo', 'device_id': 'KOBO123'}
+                if pct is not None:
+                    body['percentage'] = pct
+                self.assertEqual(self._put_raw(body).status_code, 200)
+        self.assertIsNotNone(web_server.database_service.get_kosync_document('0' * 32))
 
     def test_put_progress_creates_document(self):
         """Test that PUT creates a new document."""
@@ -1090,6 +1120,37 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertAlmostEqual(data["percentage"], 0.60, places=4)
         self.assertEqual(data["progress"], "/body/device-ahead.0")
 
+    def test_put_on_another_copy_marks_the_books_own_hash_as_a_device_put(self):
+        """A device reading another copy of the book PUTs that copy's hash. Its position
+        lands in the book's KoSync State, which the cycle reads with a GET on the book's
+        kosync_doc_id: that GET must still carry the recent-external-PUT marker."""
+        from src import web_server
+        from src.api import kosync_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        book_hash, copy_hash = "6" * 32, "7" * 32
+        svc.save_book(Book(
+            abs_id="copy-marker", abs_title="Copy Marker", ebook_filename="copy-marker.epub",
+            kosync_doc_id=book_hash, status="active", user_id=admin_id,
+        ))
+        svc.save_kosync_document(KosyncDocument(
+            document_hash=copy_hash, linked_abs_id="copy-marker", user_id=admin_id,
+        ))
+        patcher = patch.object(kosync_server, '_kosync_recent_external_puts', {})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        put = self.client.put("/syncs/progress", headers=self.auth_headers, json={
+            "document": copy_hash, "progress": "/body/DocFragment[9]/body/p[3].0",
+            "percentage": 0.30, "device": "Phone", "device_id": "P1",
+        })
+        self.assertEqual(put.status_code, 200)
+
+        data = self.client.get(f"/syncs/progress/{book_hash}", headers=self.auth_headers).get_json()
+        self.assertAlmostEqual(data["percentage"], 0.30, places=4)
+        self.assertTrue(data.get("_bridge_recent_external_put"))
+
     def test_same_library_same_hash_two_users_keep_separate_progress(self):
         """Two users reading the same EPUB hash should not share progress."""
         from src import web_server
@@ -1685,6 +1746,27 @@ class TestKosyncEndpoints(unittest.TestCase):
             target_book_ids=["42"],
         )
         self.assertEqual(scoped_again["books"][0]["shelves"], ["Fantasy"])
+
+    def test_device_sync_manifest_unavailable_ids_are_scoped_to_the_reader(self):
+        from src.api import kosync_server
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        svc.save_book(Book(abs_id="ua-mine", abs_title="Mine", ebook_filename="mine.epub",
+                           status="active", user_id=admin_id))
+        manifest = {
+            "generated_at": 1,
+            "revision": "abc",
+            "delete_mode": "mirror",
+            "books": [],
+            "unavailable_abs_ids": ["ua-mine", "ua-someone-else"],
+        }
+
+        scoped = kosync_server._scope_manifest_to_user(manifest, admin_id)
+
+        self.assertEqual(scoped["unavailable_abs_ids"], ["ua-mine"])
+        self.assertEqual(manifest["unavailable_abs_ids"], ["ua-mine", "ua-someone-else"])
 
     def test_device_sync_manifest_uses_unsorted_for_grimmory_match_outside_selected_shelves(self):
         from src.api import kosync_server
@@ -3928,6 +4010,9 @@ class TestResolveLibraryEbookSource(unittest.TestCase):
         with patch.object(kosync_server, '_container', container):
             source, source_id = kosync_server._resolve_library_ebook_source("Ember (2016).epub")
         self.assertEqual((source, source_id), ("BookOrbit", "3530"))
+        container.bookorbit_client.return_value.find_book_by_filename.assert_called_once_with(
+            "Ember (2016).epub", allow_refresh=True,
+        )
 
     def test_none_when_no_library_configured(self):
         from src.api import kosync_server

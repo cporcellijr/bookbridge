@@ -906,6 +906,64 @@ def test_recent_external_kosync_zero_delta_discrepancy_can_lead(caplog):
     ) in caplog.text
 
 
+def _stray_percent_fallback_put(kosync_pct, kosync_ts, previous_pct):
+    """A Kobo PUT whose position resolved only by percentage, beside a finished audiobook."""
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+    manager.sync_delta_between_clients = 0.005
+
+    class _Client:
+        def can_be_leader(self):
+            return True
+
+    manager.sync_clients = {"BookOrbit": _Client(), "KoSync": _Client(), "BookOrbitAudio": _Client()}
+    manager._has_significant_delta = lambda name, config, book: name == "KoSync"
+    manager._peer_position_is_own_writeback = MagicMock(return_value=False)
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"BookOrbit": 30782.0, "KoSync": kosync_ts, "BookOrbitAudio": 30782.0}
+    )
+    config = {
+        "BookOrbit": _state({"pct": 1.0, "_normalization_source": "cfi"}),
+        "KoSync": _state({
+            "pct": kosync_pct,
+            "_normalization_source": "percent_fallback",
+            "_kosync_recent_external_put": True,
+            "_kosync_last_put_device": "Kobo_monza",
+            "_kosync_last_put_age_seconds": 20.0,
+        }),
+        "BookOrbitAudio": _state({"pct": 1.0, "ts": 30782.0}),
+    }
+    config["KoSync"].previous_pct = previous_pct
+    book = SimpleNamespace(duration=30782.0, transcript_file="DB_MANAGED", audio_source="BookOrbit")
+    return manager._determine_leader(config, book, "stray-put-book", "book")
+
+
+def test_stray_percent_fallback_kosync_put_does_not_rewind_a_finished_book(caplog):
+    """A Kobo left open at 70% replays it after the audiobook finished.
+
+    Before: "Trusting recent external KoSync PUT from 'Kobo_monza' despite
+    source=percent_fallback, age=20.0s" then "KoSync leads at 70.0000% (only client
+    with change)", which rewound the finished BookOrbit ebook and audiobook.
+    """
+    caplog.set_level(logging.INFO)
+
+    leader, _ = _stray_percent_fallback_put(0.70, 0.70 * 30782.0, previous_pct=1.0)
+
+    assert leader == "BookOrbitAudio"
+    assert "despite source=percent_fallback" not in caplog.text
+    assert "Not trusting recent external KoSync PUT from 'Kobo_monza' (source=percent_fallback)" in caplog.text
+
+
+def test_recent_percent_fallback_kosync_put_within_rollback_window_is_still_trusted(caplog):
+    caplog.set_level(logging.INFO)
+
+    leader, pct = _stray_percent_fallback_put(0.95, 30770.0, previous_pct=0.90)
+
+    assert leader == "KoSync"
+    assert pct == 0.95
+    assert "Trusting recent external KoSync PUT from 'Kobo_monza' despite source=percent_fallback" in caplog.text
+
+
 def test_uncorroborated_recent_kosync_rewind_does_not_unfinish_a_finished_book(caplog):
     """A device replaying an old position must not lead on recency alone.
 

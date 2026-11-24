@@ -10,6 +10,7 @@ import src.web_server as web_server
 from src.services.audio_source_adapters import AudioResult
 from src.services.suggestions_service import SuggestionsService
 from src.utils import local_ebook_metadata
+from discover_template_source import discover_template_source
 
 AUTHOR = "Karl Ove Knausgaard"
 
@@ -196,7 +197,7 @@ def test_a_series_match_needs_the_same_author(library):
 def test_scan_records_carry_the_audiobook_series():
     item = AudioResult(source="ABS", source_id="abs-1", title="My Struggle, Book 3",
                        series_label="My Struggle #3", authors=AUTHOR)
-    with patch.object(web_server, "get_searchable_audiobooks", return_value=[item]), \
+    with patch("src.web.suggestions_audio_catalog.get_searchable_audiobooks", return_value=[item]), \
             patch.object(web_server, "_browser_cover_url", return_value=""):
         records = web_server.get_suggestion_audiobooks()
     assert records[0]["audio_series"] == "My Struggle #3"
@@ -248,21 +249,16 @@ def test_the_judge_does_not_suppress_a_series_match():
 
 
 def test_the_suggestion_card_marks_a_series_match():
-    from pathlib import Path
-
-    template = (Path(__file__).resolve().parents[1] / "templates" / "suggestions.html").read_text(encoding="utf-8")
+    template = discover_template_source("suggestions.html")
     assert "matchReason === 'same_series'" in template
     assert "'Same series'" in template
     assert ".source-badge.sameseries {" in template
 
 
 def test_the_ebook_card_marks_a_generated_readalong_copy():
-    from pathlib import Path
-
     from src.services.readalong_delivery import _READALONG_SUFFIX
 
-    root = Path(__file__).resolve().parents[1] / "templates"
     for page in ("suggestions.html", "next/_discover_scripts.html"):
-        template = (root / page).read_text(encoding="utf-8")
+        template = discover_template_source(page)
         assert f"ebookFilename.toLowerCase().endsWith('{_READALONG_SUFFIX}')" in template, page
         assert "_('Read-along')" in template, page

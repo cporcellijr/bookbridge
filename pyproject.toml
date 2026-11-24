@@ -21,8 +21,9 @@ license = { file = "LICENSE" }
 [project.optional-dependencies]
 # Install with: pip install -e ".[dev]"
 dev = [
-    "pytest>=8,<9",
+    "pytest>=9,<10",
     "pytest-cov>=5,<6",
+    "pytest-xdist>=3.8,<4",
     "ruff>=0.6,<1",
     "bandit>=1.7,<2",
     "pip-audit>=2.7,<3",

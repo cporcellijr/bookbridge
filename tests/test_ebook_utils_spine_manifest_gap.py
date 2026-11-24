@@ -125,3 +125,12 @@ def test_missing_manifest_item_does_not_abandon_the_book():
 
         assert text != ""
         assert spine_map != []
+
+
+def test_bs4_replacement_char_warnings_are_quiet():
+    """Finding 10446: bs4's per-item U+FFFD warning must not reach diagnostics."""
+    import logging
+
+    import src.utils.ebook_utils  # noqa: F401
+
+    assert not logging.getLogger("bs4.dammit").isEnabledFor(logging.WARNING)

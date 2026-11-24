@@ -95,6 +95,7 @@ class KOReaderDeviceSyncService:
         books = self._get_active_books()
         filename_map = self._build_manifest_filename_map(books)
         items = []
+        unavailable_abs_ids = []
 
         for book in books:
             filename = filename_map.get(str(book.abs_id))
@@ -102,6 +103,8 @@ class KOReaderDeviceSyncService:
                 continue
             resolved = self._resolve_download_artifact(book, device_filename=filename)
             if not resolved:
+                if self._still_claimed(book):
+                    unavailable_abs_ids.append(str(book.abs_id))
                 continue
 
             items.append({
@@ -126,10 +129,18 @@ class KOReaderDeviceSyncService:
 
         return {
             "generated_at": int(time.time()),
-            "revision": self._compute_revision(items),
+            "revision": self._compute_revision(items, unavailable_abs_ids),
             "delete_mode": "mirror",
             "books": items,
+            "unavailable_abs_ids": unavailable_abs_ids,
         }
+
+    def _still_claimed(self, book) -> bool:
+        """True when the book still exists and belongs to this reader, so a failed
+        artifact resolution is a transient outage rather than a removal."""
+        if self.database_service.get_book(book.abs_id) is None:
+            return False
+        return self.user_id is None or self.database_service.is_user_linked(self.user_id, book.abs_id)
 
     def resolve_download(self, abs_id: str) -> Optional[dict]:
         book = self.database_service.get_book(abs_id)
@@ -240,6 +251,11 @@ class KOReaderDeviceSyncService:
     def _resolve_download_artifact(self, book, link_hashes: bool = True,
                                    allow_revalidation: bool = False,
                                    device_filename: Optional[str] = None) -> Optional[dict]:
+        # Catalogue snapshots can outlive a deletion or removal of a user's claim.
+        if self.database_service.get_book(book.abs_id) is None:
+            return None
+        if self.user_id is not None and not self.database_service.is_user_linked(self.user_id, book.abs_id):
+            return None
         source_filename = self._select_source_filename(book)
         if not source_filename:
             return None
@@ -431,6 +447,10 @@ class KOReaderDeviceSyncService:
                 if not existing or existing.linked_abs_id != abs_id:
                     summary["conflicts"] += 1
                     other_owner = existing.linked_abs_id if existing else None
+                    if not other_owner:
+                        primary_owner = self.database_service.get_book_by_kosync_id(bound_hash)
+                        if primary_owner and primary_owner.abs_id != abs_id:
+                            other_owner = primary_owner.abs_id
                     get_persistent_condition_logger().warn(
                         logger,
                         f"hash_reconcile_conflict:{abs_id}:{bound_hash}",
@@ -633,11 +653,16 @@ class KOReaderDeviceSyncService:
             return False
 
         try:
+            from src.utils.provider_ebook_files import mapped_ebook_selection
+            selection = mapped_ebook_selection(book)
+            if selection:
+                return bool(self.bookorbit_client.download_ebook_to_path(book_id, output_path=cache_path, **selection)
+                            and cache_path.is_file() and cache_path.stat().st_size > 0)
             content = self.bookorbit_client.download_book(book_id)
             if not content:
                 return False
             cache_path.write_bytes(content)
-            return cache_path.exists() and cache_path.stat().st_size > 0
+            return cache_path.is_file() and cache_path.stat().st_size > 0
         except Exception as exc:
             logger.warning(
                 "KOReader device-sync BookOrbit download failed for '%s': %s",
@@ -659,11 +684,16 @@ class KOReaderDeviceSyncService:
             return False
 
         try:
+            from src.utils.provider_ebook_files import mapped_ebook_selection
+            selection = mapped_ebook_selection(book)
+            if selection:
+                return bool(self.booklore_client.download_ebook_to_path(book_id, output_path=cache_path, **selection)
+                            and cache_path.is_file() and cache_path.stat().st_size > 0)
             content = self.booklore_client.download_book(book_id)
             if not content:
                 return False
             cache_path.write_bytes(content)
-            return cache_path.exists() and cache_path.stat().st_size > 0
+            return cache_path.is_file() and cache_path.stat().st_size > 0
         except Exception as e:
             logger.warning(
                 "KOReader device-sync Grimmory download failed for '%s': %s",
@@ -780,7 +810,7 @@ class KOReaderDeviceSyncService:
         value = str(match.group("kavita_id") or "").strip()
         return value or None
 
-    def _compute_revision(self, items: list[dict]) -> str:
+    def _compute_revision(self, items: list[dict], unavailable_abs_ids: list[str] | None = None) -> str:
         digest_items = [
             {
                 "abs_id": item["abs_id"],
@@ -791,6 +821,9 @@ class KOReaderDeviceSyncService:
             }
             for item in sorted(items, key=lambda value: value["abs_id"])
         ]
+        if unavailable_abs_ids:
+            # A kept-but-unresolvable book must change the revision, or its later removal is skipped.
+            digest_items.append({"unavailable": sorted(str(abs_id) for abs_id in unavailable_abs_ids)})
         payload = json.dumps(digest_items, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 

@@ -28,6 +28,7 @@ def install_stubs():
     progress_metadata = types.ModuleType("src.utils.progress_metadata")
     progress_metadata.parse_service_timestamp = lambda value: value
     progress_metadata.get_kosync_approved_rewind_at = lambda state: None
+    progress_metadata.get_kosync_synced_pct = lambda state: getattr(state, "percentage", None)
     sys.modules[progress_metadata.__name__] = progress_metadata
 
     iface = types.ModuleType("src.sync_clients.sync_client_interface")

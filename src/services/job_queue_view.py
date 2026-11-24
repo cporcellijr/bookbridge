@@ -20,6 +20,12 @@ def _percent(value: object) -> float:
         return 0
 
 
+def _aligning_label(alignment) -> str:
+    """'Aligning', naming the remote worker when one holds the book's lease."""
+    owner = getattr(alignment, "lease_owner", None) if getattr(alignment, "lease_id", None) else None
+    return f"Aligning on worker {owner}" if isinstance(owner, str) and owner else "Aligning"
+
+
 def _entry(title: str, operation: str, status: str, *, detail: str = "",
            epub3: bool = False, percent: float | None = None,
            timestamp: float | None = None, order: int | None = None,
@@ -120,7 +126,8 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
                 detail=(f"#{position} of {len(alignment_queue)} waiting for alignment"
                         if position is not None else
                         {"pending": "Awaiting background processing",
-                         "processing": "Aligning", "forging": "Forging"}.get(status)),
+                         "processing": _aligning_label(alignment),
+                         "forging": "Forging"}.get(status)),
                 epub3=epub_intent, percent=alignment_pct,
                 timestamp=getattr(alignment, "last_attempt", None),
                 queue_key=abs_id if own_position is not None else None,
@@ -184,3 +191,32 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
             if entry.get("book_id") and (preflights or {}).get(entry["book_id"]):
                 entry["preflight"] = preflights[entry["book_id"]]
     return sections
+
+
+def acquisition_job_needs_choice(job: dict) -> bool:
+    """True when a saved book request waits on the reader: a release pick, an edition choice or a failed request."""
+    requests = job.get("requests") or []
+    for kind, prefix in (("ebook", "ebook"), ("audiobook", "audio")):
+        if job.get(f"{prefix}_submission_state") in ("needs_release", "failed"):
+            return True
+        if job.get(f"{prefix}_library_state") == "needs_review" and (job.get("review_candidates") or {}).get(kind):
+            return True
+        # Accepted, then the provider failed or declined it: the panel offers a new request.
+        half = [r for r in requests if r.get("media_kind") == kind]
+        if (kind in (job.get("formats") or []) and not job.get(f"{prefix}_source_id") and half
+                and all(r.get("status") in ("failed", "declined", "cancelled") for r in half)
+                and any(r.get("status") in ("failed", "declined") and not r.get("dismissed") for r in half)):
+            return True
+    return any(
+        receipt.get("decision_action") == "pick_release" and not receipt.get("dismissed")
+        and receipt.get("status") not in ("cancelled", "paired", "failed", "declined")
+        for receipt in requests
+    )
+
+
+def order_acquisition_jobs(jobs: list[dict], bridge_statuses: dict) -> list[dict]:
+    """Flag each job ``needs_choice``/``done`` and order: needs a choice, in progress, done (newest first within each)."""
+    for job in jobs:
+        job["needs_choice"] = acquisition_job_needs_choice(job)
+        job["done"] = bool(job.get("linked_abs_id")) and bridge_statuses.get(job["linked_abs_id"]) == "active"
+    return sorted(jobs, key=lambda job: 0 if job["needs_choice"] else 2 if job["done"] else 1)

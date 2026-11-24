@@ -362,6 +362,76 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_USER'), 'alice-ko')
         self.mock_container.mock_user_client_registry.invalidate.assert_called_with(alice.id)
 
+    def test_shelfmark_audio_destination_is_reader_scoped_and_blank_clears(self):
+        alice = self.svc.create_user("alice-scan", "pw", role="user")
+        bob = self.svc.create_user("bob-scan", "pw", role="user")
+        self.client.post('/login', data={'username': 'alice-scan', 'password': 'pw'})
+        with patch('src.web.account_helpers._reader_scan_libraries',
+                   return_value=([{'id': '7', 'name': 'Audiobooks'}], None)) as lookup:
+            response = self.client.post('/account/integrations', data={
+                'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7',
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.svc.get_user_credential(alice.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID'), '7')
+        self.assertNotEqual(self.svc.get_user_credential(bob.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID'), '7')
+        self.assertEqual(lookup.call_count, 1)
+        response = self.client.post('/account/integrations', data={'SHELFMARK_AUDIOBOOK_LIBRARY_ID': ''})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.svc.get_user_credential(alice.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID'), '')
+
+    def test_shelfmark_scan_target_refuses_invalid_or_inaccessible_library(self):
+        alice = self.svc.create_user("alice-scan-deny", "pw", role="user")
+        self.client.post('/login', data={'username': 'alice-scan-deny', 'password': 'pw'})
+        bad = self.client.post('/account/integrations', data={
+            'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '../7',
+        })
+        self.assertEqual(bad.status_code, 400)
+        with patch('src.web.account_helpers._reader_scan_libraries',
+                   return_value=([], 'This BookOrbit account needs Manage libraries.')):
+            denied = self.client.post('/account/integrations', data={
+                'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7',
+            })
+        self.assertEqual(denied.status_code, 400)
+        self.assertIsNone(self.svc.get_user_credential(alice.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID'))
+
+    def test_unrelated_edit_does_not_recheck_an_unchanged_audio_destination(self):
+        alice = self.svc.create_user("alice-scan-keep", "pw", role="user")
+        self.client.post('/login', data={'username': 'alice-scan-keep', 'password': 'pw'})
+        self.svc.set_user_credential(alice.id, 'SHELFMARK_AUDIOBOOK_LIBRARY_ID', '7')
+        with patch('src.web.account_helpers._reader_scan_libraries',
+                   return_value=([], 'BookOrbit is unreachable.')) as lookup:
+            response = self.client.post('/account/integrations', data={
+                'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7', 'KOSYNC_USER': 'alice-ko',
+            })
+        self.assertEqual(response.status_code, 200)
+        lookup.assert_not_called()
+        self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_USER'), 'alice-ko')
+
+    def test_refused_integrations_save_shows_the_form_not_raw_json(self):
+        self.svc.create_user("alice-scan-page", "pw", role="user")
+        self.client.post('/login', data={'username': 'alice-scan-page', 'password': 'pw'})
+        page = self.client.post('/account/integrations', data={'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '../7'})
+        self.assertEqual(page.status_code, 400)
+        self.assertIn('text/html', page.content_type)
+        self.assertIn(b'positive BookOrbit library ID', page.data)
+        self.assertIn(b'flash-message error', page.data)
+        api = self.client.post('/account/integrations', data={'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '../7'},
+                               headers={'Accept': 'application/json'})
+        self.assertEqual(api.status_code, 400)
+        self.assertIn('positive BookOrbit library ID', api.get_json()['error'])
+
+    def test_shelfmark_scan_picker_reads_only_own_libraries(self):
+        alice = self.svc.create_user("alice-scan-picker", "pw", role="user")
+        self.client.post('/login', data={'username': 'alice-scan-picker', 'password': 'pw'})
+        with patch('src.web_server._reader_scan_libraries',
+                   return_value=([{'id': '7', 'name': 'Audiobooks'}], None)) as lookup:
+            response = self.client.post('/api/account/bookorbit-scan-libraries', json={
+                'BOOKORBIT_API_KEY': 'test-only', 'SHELFMARK_AUDIOBOOK_LIBRARY_ID': '7',
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), [{'id': '7', 'name': 'Audiobooks'}])
+        self.assertEqual(lookup.call_args.args[0].id, alice.id)
+
     def test_regular_user_links_bookfusion_book_to_own_mapping(self):
         alice = self.svc.create_user("alice-bf", "pw", role="user")
         bob = self.svc.create_user("bob-bf", "pw", role="user")
@@ -632,6 +702,25 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertFalse(resp.get_json()['ok'])
         self.assertEqual(resp.get_json()['message'], 'Missing API token')
         mock_post.assert_not_called()
+
+    @patch('src.web_server.requests.post')
+    def test_settings_test_uses_admins_own_saved_account_584(self, mock_post):
+        """#584: Settings > BookOrbit > Test posts only URL + enable flag; the
+        login lives in the admin's own integrations, so it must be filled in."""
+        admin = self.svc.get_user_by_username("admin")
+        self.svc.set_user_credential(admin.id, 'BOOKORBIT_USER', 'admin-bo')
+        self.svc.set_user_credential(admin.id, 'BOOKORBIT_PASSWORD', 'admin-pw')
+        mock_post.return_value = MagicMock(status_code=200)
+
+        self._login()
+        resp = self.client.post('/api/test-connection/bookorbit', json={
+            'BOOKORBIT_ENABLED': True,
+            'BOOKORBIT_SERVER': 'http://bookorbit:3000',
+        })
+
+        self.assertEqual(resp.get_json(), {"ok": True, "message": "Authenticated successfully"})
+        self.assertEqual(mock_post.call_args.args[0], 'http://bookorbit:3000/api/v1/auth/login')
+        self.assertEqual(mock_post.call_args.kwargs['json'], {"username": "admin-bo", "password": "admin-pw"})
 
     # --- admin user management (Phase 6c) ---
     def test_admin_users_requires_admin(self):
@@ -1112,6 +1201,9 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         hashes = {doc["document_hash"] for doc in resp.get_json()["documents"]}
         self.assertEqual(hashes, {"b" * 32, "c" * 32})
+
+        summary = self.client.get('/api/me/kosync-documents?summary=1').get_json()
+        self.assertEqual(summary, {"total": 2, "linked": 1, "unlinked": 1})
 
         books_resp = self.client.get('/api/me/books')
         self.assertEqual(books_resp.status_code, 200)

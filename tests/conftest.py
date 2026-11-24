@@ -1,16 +1,40 @@
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+TESTS = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(TESTS) not in sys.path:
+    sys.path.insert(0, str(TESTS))
 
 from src.db.database_service import DatabaseService
+from suite_lock import SuiteLock, SuiteLockBusy
+
+TEST_SUITE_LOCK_PATH = Path(tempfile.gettempdir()) / "bookbridge-pytest-controller.lock"
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Prevent two pytest controllers from running the suite at once."""
+    config = session.config
+    if hasattr(config, "workerinput"):
+        return
+
+    lock = SuiteLock(TEST_SUITE_LOCK_PATH)
+    config.add_cleanup(lock.close)
+    try:
+        lock.acquire()
+    except SuiteLockBusy as exc:
+        raise pytest.UsageError(
+            "Another BookBridge pytest controller is already running "
+            f"(lock: {exc}). Wait for it to finish before retrying."
+        ) from exc
 
 # Env keys the per-module restore must NOT rewind (see restore_environ_after_module).
 _ENVIRON_CARRY_OVER = ("DATA_DIR",)

@@ -254,21 +254,6 @@ function displayBookWithEditions(data) {
     showHcState('found');
 }
 
-function formatEditionDetails(ed) {
-    var parts = [];
-    if (ed.audio_seconds && ed.audio_seconds > 0) {
-        var hours = Math.floor(ed.audio_seconds / 3600);
-        var mins = Math.floor((ed.audio_seconds % 3600) / 60);
-        parts.push(bbT('{hours}h {minutes}m', { hours: hours, minutes: mins }));
-    } else if (ed.pages && ed.pages > 0) {
-        parts.push(bbT('{count} pp', { count: ed.pages }));
-    }
-    if (ed.year) {
-        parts.push(ed.year);
-    }
-    return parts.join('  ·  ') || '—';
-}
-
 function selectEdition(div) {
     document.querySelectorAll('.hc-edition-option').forEach(function(el) {
         el.classList.remove('selected');

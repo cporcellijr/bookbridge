@@ -115,7 +115,10 @@ class BookOrbitSyncClient(SyncClient):
         # fall back to the classic (pct, cfi) tuple.
         rich = None
         if hasattr(self.client, "get_ebook_progress_rich"):
-            candidate = self.client.get_ebook_progress_rich(info["id"])
+            from src.utils.provider_ebook_files import mapped_ebook_selection
+            candidate = self.client.get_ebook_progress_rich(info["id"], **mapped_ebook_selection(book))
+            if candidate is None:
+                return None
             if isinstance(candidate, dict):
                 rich = candidate
         if rich is not None:
@@ -173,6 +176,10 @@ class BookOrbitSyncClient(SyncClient):
         edited_at = None
         if request.current_state is not None:
             edited_at = request.current_state.current.get("service_updated_at")
+        from src.utils.provider_ebook_files import mapped_ebook_selection
+        selection = mapped_ebook_selection(book)
+        if selection:
+            info = dict(info, bridgeEbookFilename=selection["ebook_filename"], bridgeEbookFileId=selection["ebook_file_id"])
         success = self.client.update_ebook_progress(info, pct, request.locator_result, edited_at=edited_at)
         if success:
             try:

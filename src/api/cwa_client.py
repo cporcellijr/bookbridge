@@ -274,12 +274,14 @@ class CWAClient:
         
         return None
 
-    def search_ebooks(self, query):
+    def search_ebooks(self, query, *, strict: bool = False):
         """
         Search CWA via OPDS feed for ebook matches.
         Returns a list of dicts: {'title': str, 'author': str, 'download_url': str, 'ext': str}
         """
         if not self.is_configured():
+            if strict:
+                raise RuntimeError("CWA is not configured")
             return []
 
         # Get search template (dynamic or fallback)
@@ -311,11 +313,19 @@ class CWAClient:
             
             if r.status_code != 200:
                 logger.warning(f"⚠️ CWA Search failed {r.status_code}: {search_url}")
+                if strict:
+                    raise RuntimeError(f"CWA search failed ({r.status_code})")
                 return []
-                
-            return self._parse_opds(r.text)
+
+            if strict:
+                feed = self._parse_opds_xml(r.text)
+                if feed.find("{http://www.w3.org/2005/Atom}link[@rel='next']") is not None:
+                    raise RuntimeError("CWA search results are paginated")
+            return self._parse_opds(r.text, strict=strict)
 
         except Exception as e:
+            if strict:
+                raise
             logger.error(f"❌ CWA Search Error: {e}", exc_info=True)
             return []
 

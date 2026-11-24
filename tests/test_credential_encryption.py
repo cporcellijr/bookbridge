@@ -107,7 +107,7 @@ class TestSecretStorePrimitives(SecretStoreTestCase):
             "ABS_KEY", "HARDCOVER_TOKEN", "STORYGRAPH_SESSION_COOKIE",
             "READEST_PASSWORD", "BOOKFUSION_API_KEY", "CWA_SYNC_TOKEN",
             "LLM_API_KEY", "DEEPGRAM_API_KEY", "TELEGRAM_BOT_TOKEN",
-            "WEB_SECRET_KEY",
+            "WEB_SECRET_KEY", "ALIGNMENT_WORKER_TOKEN",
         ):
             self.assertIn(key, keys, f"{key} must be encrypted at rest")
 

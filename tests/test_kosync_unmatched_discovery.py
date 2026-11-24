@@ -1,4 +1,4 @@
-"""A KOReader push matches an unlinked file only when the reader moves forward in it."""
+"""Opening an unmatched book must run the complete discovery pipeline."""
 
 import os
 import unittest
@@ -14,6 +14,7 @@ from src.api import kosync_server
 from src.db.database_service import DatabaseService
 from src.db.models import Book, KosyncDocument, State
 from src.utils.time_utils import utcnow
+from src.utils.user_context import get_current_user_id
 
 
 def _run_on_discovery_thread(callback):
@@ -107,6 +108,51 @@ class TestUnmatchedDiscovery(unittest.TestCase):
                 },
             )
         return response
+
+    def test_open_checks_audiobook_and_maps_agreement(self):
+        self.bundle.abs_client.is_configured.return_value = True
+        self.bundle.abs_client.get_all_audiobooks.return_value = [{
+            "id": "audio-1", "media": {"duration": 1000, "metadata": {
+                "title": "Unmatched Book", "authorName": "Test Author", "isbn": "1234567890",
+            }},
+        }]
+        self.container.ebook_parser.return_value.get_book_metadata.return_value["isbn"] = "1234567890"
+        mapping = self.container.book_mapping_service.return_value
+        def save_mapping(**kwargs):
+            book = self.db.save_book(Book(abs_id="audio-1", abs_title="Unmatched Book", status="pending"))
+            self.db.link_user_book(kwargs["user_id"], book.abs_id)
+            return book
+        mapping.create_audio_mapping_from_match.side_effect = save_mapping
+        self._open()
+        self.bundle.abs_client.get_all_audiobooks.assert_called_once()
+        kwargs = mapping.create_audio_mapping_from_match.call_args.kwargs
+        self.assertEqual(kwargs["ebook_source"], "BookOrbit")
+        self.assertEqual(kwargs["ebook_source_id"], "42")
+        self.assertEqual(kwargs["user_id"], self.user.id)
+        self.assertEqual(self.db.get_kosync_document(self.hash).linked_abs_id, "audio-1")
+        self.container.abs_client.assert_not_called()
+
+    def test_open_without_audio_keeps_bookorbit_identity_and_user(self):
+        self._open()
+        book = self.db.get_book_by_kosync_id(self.hash)
+        self.assertIsNotNone(book)
+        self.assertEqual((book.ebook_source, book.ebook_source_id), ("BookOrbit", "42"))
+        self.assertEqual(book.sync_mode, "ebook_only")
+        self.assertTrue(self.db.is_user_linked(self.user.id, book.abs_id))
+        link = self.db.get_user_bookorbit_link(self.user.id, book.abs_id)
+        self.assertEqual(link["ebook_id"], "42")
+        self.assertIsNone(get_current_user_id())
+        self.container.bookorbit_client.assert_not_called()
+
+    def test_open_known_unlinked_document_does_not_match(self):
+        self.db.save_kosync_document(KosyncDocument(
+            document_hash=self.hash, percentage=0.2, progress="/body/p[1]", user_id=self.user.id,
+        ))
+        with self.assertLogs(kosync_server.logger, level="INFO") as logs:
+            self._open(expected_status=200)
+        self.assertIsNone(self.db.get_book_by_kosync_id(self.hash))
+        self.assertAlmostEqual(float(self.db.get_kosync_document(self.hash).percentage), 0.2)
+        self.assertTrue(any(f"Not matching {self.hash} on open" in r.getMessage() for r in logs.records))
 
     def test_stale_backward_put_on_removed_book_does_not_rematch(self):
         from datetime import datetime
@@ -262,6 +308,19 @@ class TestUnmatchedDiscovery(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIsNone(self.db.get_book_by_kosync_id(self.hash))
 
+    def test_ambiguous_audio_becomes_suggestion_instead_of_ebook_only(self):
+        self.bundle.abs_client.is_configured.return_value = True
+        self.bundle.abs_client.get_all_audiobooks.return_value = [{
+            "id": "audio-1", "media": {"duration": 1000, "metadata": {
+                "title": "Unmatched Book", "authorName": "Test Author",
+            }},
+        }]
+        self.container.ollama_client.return_value.is_configured.return_value = False
+        self._open()
+        self.assertTrue(self.db.suggestion_exists(self.hash))
+        self.assertIsNone(self.db.get_book_by_kosync_id(self.hash))
+        self.container.book_mapping_service.assert_not_called()
+
     def _seed_linked_book(self, *, owner_id=None, linked=True, doc_hash=None):
         uid = self.user.id if owner_id is None else owner_id
         doc_hash = doc_hash or self.hash
@@ -343,18 +402,15 @@ class TestUnmatchedDiscovery(unittest.TestCase):
 
     def test_reported_zero_does_not_match_on_get(self):
         self._put(0)
-        with patch.object(kosync_server, "_schedule_auto_discovery") as schedule:
-            self._open()
-        schedule.assert_not_called()
+        self._open()
         self.assertIsNone(self.db.get_book_by_kosync_id(self.hash))
 
     def test_metadata_only_zero_stub_can_match_on_get(self):
         self.db.save_kosync_document(KosyncDocument(
             self.hash, filename="Unmatched Book.epub", user_id=self.user.id,
         ))
-        with patch.object(kosync_server, "_schedule_auto_discovery") as schedule:
-            self._open()
-        schedule.assert_called_once()
+        self._open()
+        self.assertIsNotNone(self.db.get_book_by_kosync_id(self.hash))
 
     def _assert_foreign_put_is_private(self, *, linked):
         owner = self.db.create_user("owner", "pw")

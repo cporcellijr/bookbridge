@@ -152,3 +152,17 @@ def get_kosync_approved_rewind_at(state: object) -> Optional[float]:
     except (TypeError, ValueError):
         pass
     return None
+
+
+def get_kosync_synced_pct(state: object) -> Optional[float]:
+    """The KoSync position the last sync cycle saw, kept while device PUTs overwrite
+    the State percentage; falls back to that percentage, or None without a State."""
+    if state is None:
+        return None
+    try:
+        metadata = json.loads(getattr(state, "locator_json", None) or "{}")
+        if isinstance(metadata, dict) and metadata.get("synced_pct") is not None:
+            return float(metadata["synced_pct"])
+    except (TypeError, ValueError):
+        pass
+    return getattr(state, "percentage", None)

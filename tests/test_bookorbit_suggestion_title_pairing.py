@@ -51,6 +51,35 @@ def test_full_scan_pairs_bookorbit_title_with_author_series_title_filename(tmp_p
     assert [(r.name, r.source, r.source_id) for r in results] == [(REPORTED_FILENAME, "BookOrbit", 4242)]
 
 
+def test_full_scan_asks_bookorbit_for_the_filename_when_the_local_index_misses(tmp_path):
+    """#586: the file's name and embedded title both differ from BookOrbit's clean
+    title, so the index misses; BookOrbit's own detail still names the file."""
+    clear_metadata_cache()
+    _epub(tmp_path / "01. The Wind-Up Bird Chronicle (1997).epub", "Nejimaki-dori kuronikuru", "Haruki Murakami")
+    bookorbit = [{"id": 6379, "title": "The Wind-Up Bird Chronicle", "authors": "Haruki Murakami",
+                  "language": "", "fileName": None, "ebookFileId": 91}]
+    clients = _clients(bookorbit)
+    clients.bookorbit_client._enrich_ebook.return_value = {"fileName": "01. The Wind-Up Bird Chronicle (1997).epub"}
+
+    with patch.object(ws, "EBOOK_DIR", tmp_path, create=True), patch.object(ws, "uc", return_value=clients):
+        results = ws.get_searchable_ebooks("")
+
+    assert [(r.name, r.source, r.source_id, r.ebook_file_id) for r in results] == [
+        ("01. The Wind-Up Bird Chronicle (1997).epub", "BookOrbit", 6379, 91)]
+    clients.bookorbit_client._enrich_ebook.assert_called_once_with(6379, bookorbit[0])
+
+
+def test_index_hit_needs_no_bookorbit_detail_call(tmp_path):
+    clear_metadata_cache()
+    _epub(tmp_path / "Dune.epub", "Dune", "Frank Herbert")
+    clients = _clients([{"id": 1, "title": "Dune", "authors": "Frank Herbert", "fileName": None}])
+
+    with patch.object(ws, "EBOOK_DIR", tmp_path, create=True), patch.object(ws, "uc", return_value=clients):
+        assert [r.name for r in ws.get_searchable_ebooks("")] == ["Dune.epub"]
+
+    clients.bookorbit_client._enrich_ebook.assert_not_called()
+
+
 def test_filename_keys_still_pair_title_author_names(tmp_path):
     clear_metadata_cache()
     (tmp_path / "Dune - Frank Herbert (1965).epub").write_bytes(b"not a zip")

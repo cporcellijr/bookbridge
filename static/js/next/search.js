@@ -101,9 +101,11 @@
                 .then(function (html) { settings = indexSettings(html); }));
         }
         const settled = await Promise.allSettled(sources);
+        const failed = settled.some(function (item) { return item.status === 'rejected'; });
         loading = false;
-        loaded = true;
-        message.textContent = settled.some(function (item) { return item.status === 'rejected'; }) ? labels.failed : '';
+        // A failed source is fetched again the next time search opens.
+        loaded = !failed;
+        message.textContent = failed ? labels.failed : '';
         render();
     }
 

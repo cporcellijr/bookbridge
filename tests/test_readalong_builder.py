@@ -1351,6 +1351,24 @@ def test_extend_clips_to_contiguous_never_shrinks_when_duration_too_short_or_mis
     assert extended_short_probe[-1].ts_end == 5.0  # 3.0 < 5.0, so left alone
 
 
+def test_final_clip_already_covers_probed_audio_has_no_short_overlay_warning(caplog):
+    """10182: a clip ending beyond the probed audio cannot leave the overlay short."""
+    clips = [_clip("c44-s17", 44, 50130.0, 50132.472)]
+    with caplog.at_level("WARNING", logger="src.services.readalong_builder"):
+        extended = _extend_clips_to_contiguous(
+            clips, audio_duration_seconds=50131.949002,
+        )
+    assert extended[-1].ts_end == 50132.472
+    assert "overlay total will run short" not in caplog.text
+
+
+def test_final_clip_missing_audio_probe_still_warns(caplog):
+    clips = [_clip("c44-s17", 44, 50130.0, 50132.472)]
+    with caplog.at_level("WARNING", logger="src.services.readalong_builder"):
+        _extend_clips_to_contiguous(clips, audio_duration_seconds=None)
+    assert "overlay total will run short" in caplog.text
+
+
 def test_extend_clips_to_contiguous_empty_list():
     assert _extend_clips_to_contiguous([], 10.0) == []
 
@@ -1721,6 +1739,20 @@ def test_failed_source_copy_retries_transcode(tmp_path):
     assert len(ffmpeg_commands) == 2
     assert ffmpeg_commands[1][ffmpeg_commands[1].index("-b:a") + 1] == "64k"
     assert _probe_audio_packets(output)["streams"][0]["codec_name"] == "aac"
+
+
+def test_failed_transcode_logs_ffmpeg_reason(tmp_path, caplog):
+    """Finding 10445: "ffmpeg ... returned non-zero exit status 243" alone gives no cause."""
+    source = tmp_path / "part.mp3"
+    source.write_bytes(b"not audio")
+
+    def fail(cmd, *args, **kwargs):
+        raise subprocess.CalledProcessError(243, cmd, stderr="Invalid data found when processing input")
+
+    with patch.object(_readalong_builder_module.subprocess, "run", side_effect=fail),             caplog.at_level("ERROR", logger=_readalong_builder_module.logger.name):
+        assert not _transcode_audio_for_embed([source], "64k", tmp_path / "out.m4a")
+    failure = [r.getMessage() for r in caplog.records if "transcode failed" in r.getMessage()]
+    assert failure and "Invalid data found when processing input" in failure[0]
 
 
 def test_multi_file_audio_is_concatenated_into_one_embedded_file():

@@ -1,7 +1,9 @@
 """Tests for the BookOrbitClient — progress conversion, collections, sessions."""
 
+import logging
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -315,6 +317,68 @@ def test_update_audiobook_progress_uses_revisioned_playback_api(client):
     assert payload["manifestRevision"] == "b" * 64
     assert payload["capturedAt"].endswith("Z")
     assert len(payload["operationId"]) == 36
+
+
+def _two_asset_manifest(revision, duration_ms):
+    return {
+        "revision": revision,
+        "assets": [
+            {"assetId": "aud_1", "sequence": 0, "durationMs": duration_ms},
+            {"assetId": "aud_2", "sequence": 1, "durationMs": duration_ms},
+        ],
+    }
+
+
+def test_update_after_durations_measured_uses_new_manifest_revision(client, caplog):
+    """#602: a library scan measured the files, which bumped the manifest revision.
+    The cached manifest and the cached playback state both still carried the old
+    revision, so every write failed with
+    "BookOrbit audiobook update failed: book_id=12 status=412" until a restart."""
+    old = _two_asset_manifest("a" * 64, None)
+    new = _two_asset_manifest("c" * 64, 3_600_000)
+    client._audiobook_api = "playback"
+    client._audiobook_manifests[12] = old
+    client._audiobook_playback_states[12] = {
+        "assetId": "aud_1", "positionMs": 0, "revision": 3, "manifestRevision": old["revision"],
+    }
+    client.get_audiobook_info = MagicMock(return_value={"primary_playback_id": "aud_1"})
+    sent = []
+
+    def server(method, endpoint, payload=None):
+        if method == "GET" and endpoint == "/api/v1/audiobooks/12/manifest":
+            return _Resp(new)
+        sent.append(payload)
+        if payload["manifestRevision"] != new["revision"]:
+            return _Resp({"message": "Audiobook manifest has changed"}, status_code=412)
+        return _Resp({**payload, "revision": 4})
+
+    with patch.object(client, "_make_request", side_effect=server):
+        ok = client.update_audiobook_progress(12, position_seconds=10.0, percentage=0.1,
+                                              current_file_id="aud_2")
+
+    assert ok is True
+    assert sent[0]["manifestRevision"] == "c" * 64
+    assert "status=412" not in caplog.text
+
+
+def test_update_412_drops_cached_manifest_and_detail(client, caplog):
+    """A 412 means the track layout changed; the stale layout must not be reused
+    on the next cycle, so the cached manifest and book detail are dropped."""
+    manifest = _two_asset_manifest("b" * 64, 3_600_000)
+    client._audiobook_api = "playback"
+    client._audiobook_manifests[12] = manifest
+    client._detail_cache[12] = (time.time(), {"id": 12})
+    client._audiobook_playback_states[12] = {"revision": 3, "manifestRevision": manifest["revision"]}
+    client.get_audiobook_info = MagicMock(return_value={"primary_playback_id": "aud_1"})
+
+    with patch.object(client, "_make_request", return_value=_Resp({}, status_code=412)):
+        ok = client.update_audiobook_progress(12, position_seconds=10.0, percentage=0.1,
+                                              current_file_id="aud_1")
+
+    assert ok is False
+    assert "BookOrbit audiobook update failed: book_id=12 status=412" in caplog.text
+    assert 12 not in client._audiobook_manifests
+    assert 12 not in client._detail_cache
 
 
 def test_update_ebook_progress_uses_primary_file(client):
@@ -805,11 +869,16 @@ def test_upload_retries_once_after_a_401_with_a_fresh_token(client, tmp_path):
     (413, "", "too_large"),
     (500, "", "failed"),
 ])
-def test_upload_refusals_are_classified(client, tmp_path, status, message, kind):
+def test_upload_refusals_are_classified(client, tmp_path, caplog, status, message, kind):
     from src.api.bookorbit_client import BookOrbitUploadError
-    error, _ = _upload(client, tmp_path, _Resp({"message": message} if message else None, status_code=status))
+    with caplog.at_level(logging.INFO, logger="src.api.bookorbit_client"):
+        error, _ = _upload(client, tmp_path, _Resp({"message": message} if message else None, status_code=status))
     assert isinstance(error, BookOrbitUploadError)
     assert (error.kind, error.status_code) == (kind, status)
+    # Findings 9993/10353: the uploader resolves these two kinds, so they are not warnings.
+    refused = [r for r in caplog.records if "refused: status=" in r.getMessage()]
+    expected = logging.INFO if kind in ("name_conflict", "duplicate") else logging.WARNING
+    assert [r.levelno for r in refused] == [expected]
 
 
 def test_upload_transport_error_and_missing_token(client, tmp_path):
@@ -978,3 +1047,82 @@ def test_update_ebook_progress_reading_progress_failure_does_not_fall_back(clien
     assert captured == [("PUT", "/api/v1/reading-progress")]
     assert f"BookOrbit ebook update failed: {status}" in caplog.text
     assert client._reading_progress_api is None
+
+
+@pytest.fixture
+def key_client():
+    """A BookOrbit 3.8+ account configured with an API key only (OIDC-only install, #482)."""
+    with patch.dict(os.environ, {
+        "BOOKORBIT_SERVER": "http://mock",
+        "BOOKORBIT_USER": "",
+        "BOOKORBIT_PASSWORD": "",
+        "BOOKORBIT_API_KEY": "bok_testkey",
+    }):
+        yield BookOrbitClient()
+
+
+def test_api_key_alone_counts_as_configured(key_client):
+    assert key_client.is_configured() is True
+    with patch.dict(os.environ, {"BOOKORBIT_API_KEY": ""}):
+        assert key_client.is_configured() is False
+
+
+def test_api_key_is_sent_as_bearer_and_never_logs_in(key_client):
+    with patch.object(key_client.session, "post") as login, \
+            patch.object(key_client.session, "get", return_value=_Resp({"ok": 1})) as get:
+        resp = key_client._make_request("GET", "/api/v1/libraries")
+    assert resp.status_code == 200
+    login.assert_not_called()
+    assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer bok_testkey"
+
+
+def test_api_key_wins_over_username_and_password(key_client):
+    with patch.dict(os.environ, {"BOOKORBIT_USER": "u", "BOOKORBIT_PASSWORD": "p"}), \
+            patch.object(key_client.session, "post") as login:
+        assert key_client._get_fresh_token() == "bok_testkey"
+    login.assert_not_called()
+
+
+def test_refused_api_key_is_not_retried_and_logs_once(key_client, caplog):
+    """A retry with the same key only feeds BookOrbit's per-IP failure limiter."""
+    from src.utils.logging_utils import get_persistent_condition_logger
+    conditions = get_persistent_condition_logger()
+    conditions.reset()
+    try:
+        with patch.object(key_client.session, "get", return_value=_Resp(status_code=401)) as get, \
+                caplog.at_level("WARNING", logger="src.api.bookorbit_client"):
+            assert key_client._make_request("GET", "/api/v1/libraries").status_code == 401
+            key_client._make_request("GET", "/api/v1/libraries")
+    finally:
+        conditions.reset()
+    assert get.call_count == 2
+    refused = [r for r in caplog.records if "BookOrbit API key refused (401)" in r.getMessage()]
+    assert len(refused) == 1
+
+
+def test_upload_does_not_retry_a_refused_api_key(key_client, tmp_path):
+    from src.api.bookorbit_client import BookOrbitUploadError
+    error, post = _upload(key_client, tmp_path, _Resp(status_code=401), _Resp({"id": 5}, status_code=201))
+    assert isinstance(error, BookOrbitUploadError)
+    assert error.status_code == 401
+    assert post.call_count == 1
+
+
+def test_connection_test_uses_api_key_against_auth_me():
+    from src import web_server
+    me = _Resp({"username": "reader"}, content=b"{}")
+    with patch.object(web_server.requests, "get", return_value=me) as get, \
+            patch.object(web_server.requests, "post") as login:
+        result = web_server._test_bookorbit(True, "http://mock", "", "", "bok_testkey")
+    assert result == {"ok": True, "message": "Authenticated with API key as reader"}
+    assert get.call_args.args[0] == "http://mock/api/v1/auth/me"
+    assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer bok_testkey"
+    login.assert_not_called()
+
+
+def test_connection_test_reports_a_refused_api_key():
+    from src import web_server
+    with patch.object(web_server.requests, "get", return_value=_Resp(status_code=401)):
+        result = web_server._test_bookorbit(True, "http://mock", "", "", "bok_bad")
+    assert result["ok"] is False
+    assert "API key refused" in result["message"]

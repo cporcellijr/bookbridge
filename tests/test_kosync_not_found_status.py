@@ -23,14 +23,12 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 # Set test environment BEFORE importing web_server
-TEST_DIR = '/tmp/test_kosync_not_found_status'
+from tests._tmpdirs import process_test_dir
+TEST_DIR = process_test_dir('test_kosync_not_found_status')
 os.environ['DATA_DIR'] = TEST_DIR
 os.environ['KOSYNC_USER'] = 'testuser'
 os.environ['KOSYNC_KEY'] = 'testpass'
 
-if os.path.exists(TEST_DIR):
-    shutil.rmtree(TEST_DIR)
-os.makedirs(TEST_DIR, exist_ok=True)
 
 from src.db.models import KosyncDocument, Book, State, ReadingSession, Setting, HardcoverDetails, UserCredential, KosyncUserProgress
 
@@ -67,6 +65,10 @@ class TestKosyncNotFoundStatus(unittest.TestCase):
         from src.api import kosync_server
 
         db = web_server.database_service
+        # Other files change these after this module set them at import.
+        credentials = patch.dict(os.environ, {'KOSYNC_USER': 'testuser', 'KOSYNC_KEY': 'testpass'})
+        credentials.start()
+        self.addCleanup(credentials.stop)
         database_binding = patch.object(kosync_server, '_database_service', db)
         database_binding.start()
         self.addCleanup(database_binding.stop)

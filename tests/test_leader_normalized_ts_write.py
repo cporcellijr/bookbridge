@@ -758,3 +758,52 @@ def test_abs_still_refuses_an_unapproved_backward_write():
 
     assert result.skipped is True
     client._update_abs_progress_with_offset.assert_not_called()
+
+
+def test_idle_retry_survives_a_tie_with_the_follower_that_took_the_write():
+    """KoSync led and ABS took its write, but Grimmory's failed. Next idle cycle ABS
+    ties KoSync on the audio timeline and the deadband hands it the lead: the retry
+    must still reach Grimmory instead of being dropped as a different leader."""
+    from src.db.models import State
+    from src.sync_clients.sync_client_interface import LocatorResult
+
+    manager = _base_manager()
+    # Ebook clients also sync audiobook-mode books, as the real KoSync/Grimmory clients do.
+    abs_c = _StubClient({"audiobook"})
+    ko, bl = _StubClient({"audiobook", "ebook"}), _StubClient({"audiobook", "ebook"})
+    manager.sync_clients = {"ABS": abs_c, "KoSync": ko, "BookLore": bl}
+    manager._get_primary_audio_client_name = MagicMock(return_value="ABS")
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 600.0, "KoSync": 600.0, "BookLore": 100.0})
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(
+        return_value=(LocatorResult(percentage=0.60, match_index=6000), "anchor"))
+    manager._completion_propagation_enabled = MagicMock(return_value=False)
+    manager._mark_koreader_complete = MagicMock()
+    manager._mark_koreader_reading = MagicMock()
+    book = SimpleNamespace(abs_id="b1", abs_title="Book", status="active", duration=1000.0,
+                           transcript_file="DB_MANAGED", ebook_filename="b.epub",
+                           original_ebook_filename="b.epub", audio_source=None, sync_mode="audiobook")
+    _wire_database(manager, book)
+    manager._fetch_states_parallel = MagicMock(return_value={
+        "ABS": _state({"pct": 0.60, "ts": 600.0}, previous_pct=0.60, threshold=60.0),
+        "KoSync": _state({"pct": 0.60, "xpath": "/x", "_normalized_ts": 600.0,
+                          "_normalization_source": "xpath"}, previous_pct=0.60, threshold=0.005),
+        "BookLore": _state({"pct": 0.10, "_normalized_ts": 100.0,
+                            "_normalization_source": "cfi"}, previous_pct=0.10, threshold=0.005),
+    })
+    manager._write_retries = {(None, "b1"): {"spent": 0, "leader": "KoSync"}}
+    manager.database_service.get_books_by_status.return_value = [book]
+    manager.database_service.get_all_books.return_value = [book]
+    manager._filter_books_for_current_user = lambda books, *a, **k: books
+    states = [
+        State(abs_id="b1", client_name="abs", percentage=0.6, timestamp=600.0, last_updated=1),
+        State(abs_id="b1", client_name="kosync", percentage=0.6, last_updated=1),
+        State(abs_id="b1", client_name="booklore", percentage=0.1, last_updated=1),
+    ]
+    manager.database_service.get_states_for_book.return_value = states
+    manager.database_service.get_all_states.return_value = states
+
+    manager._sync_cycle_internal()
+
+    assert bl.update_progress.call_count == 1
+

@@ -7,7 +7,8 @@ from typing import Optional
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup, Tag
-from lxml import html
+from lxml import etree, html
+from urllib.parse import unquote, urlsplit
 import hashlib
 import json
 import logging
@@ -16,6 +17,7 @@ import re
 import glob
 import posixpath
 import threading
+import urllib.parse
 import rapidfuzz
 import zipfile
 import shutil
@@ -35,6 +37,9 @@ from src.utils.ebook_dom_map import (
 from src.utils.logging_utils import get_persistent_condition_logger
 
 logger = logging.getLogger(__name__)
+# bs4 warns once per spine item whose bytes need U+FFFD replacements; the text is still
+# extracted, so a dirty EPUB otherwise floods diagnostics with WARNINGs (finding 10446).
+logging.getLogger("bs4.dammit").setLevel(logging.ERROR)
 
 # Import epubcfi library for accurate CFI parsing
 import epubcfi
@@ -77,6 +82,17 @@ def is_linkable_ebook_filename(name: str | None) -> bool:
 def is_comic_ebook_filename(name: str | None) -> bool:
     """True for comic archive filenames (currently CBZ only)."""
     return str(name or '').strip().lower().endswith(tuple(COMIC_EBOOK_EXTENSIONS))
+
+
+def normalize_href(href: str | None) -> str:
+    """Percent-decode a locator/spine href so the two can be compared.
+
+    Readium-based readers (AudioBooth among them) store the chapter href
+    URL-encoded (``Some%20Chapter_split_016.htm``) while the EPUB's spine lists the
+    raw name (``Some Chapter_split_016.htm``). Compared as-is the two never match,
+    and the position drops to the whole-book percentage.
+    """
+    return urllib.parse.unquote(str(href or '')).strip()
 
 
 def is_in_hidden_folder(path, root) -> bool:
@@ -175,10 +191,14 @@ class EbookParser:
     # tests keep working.
     INLINE_TEXT_JOINER = INLINE_TEXT_JOINER
 
-    def __init__(self, books_dir, epub_cache_dir=None, ollama_client=None):
+    def __init__(self, books_dir, epub_cache_dir=None, ollama_client=None, calibre_file_ids=None):
         self.books_dir = Path(books_dir)
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir else Path("/data/epub_cache")
         self.ollama_client = ollama_client
+        # Records which Calibre book each library file name was found as
+        # (DatabaseService), so the parser can follow a name that Calibre has
+        # since renamed.
+        self.calibre_file_ids = calibre_file_ids
         # Additional library folders to search for ebook files (multi-library
         # setups where a user's library is not under BOOKS_DIR). Comma- or
         # newline-separated container paths from EXTRA_EBOOK_DIRS.
@@ -285,6 +305,7 @@ class EbookParser:
                 if d.exists():
                     result = next(d.glob(f"**/{safe_name}"))
                     self._remember_resolved_path(filename, result)
+                    self._note_calibre_book(filename, result)
                     return result
             except StopIteration:
                 continue
@@ -299,6 +320,7 @@ class EbookParser:
                 for f in d.rglob("*"):
                     if f.name == filename:
                         self._remember_resolved_path(filename, f)
+                        self._note_calibre_book(filename, f)
                         return f
             except OSError as e:
                 logger.debug("Could not scan ebook directory '%s' for '%s': %s", d, filename, e)
@@ -314,7 +336,43 @@ class EbookParser:
         except OSError as e:
             logger.debug("Could not check ebook cache path for '%s': %s", filename, e)
 
+        # 5. Calibre renames a book's file when its title or author changes.
+        renamed = self._follow_calibre_rename(filename)
+        if renamed is not None:
+            return renamed
+
         raise FileNotFoundError(f"Could not locate {filename}")
+
+    def _note_calibre_book(self, filename: str, path: Path) -> None:
+        """Record which Calibre book a library file name was found as."""
+        if self.calibre_file_ids is None:
+            return
+        from src.services.cwa_checksum_resolver import find_calibre_book_id_for_path
+
+        try:
+            calibre_book_id = find_calibre_book_id_for_path(path, self.search_dirs())
+            if calibre_book_id:
+                self.calibre_file_ids.remember_calibre_book_id(filename, calibre_book_id)
+        except Exception as e:
+            logger.debug("Could not record the Calibre book for '%s': %s", filename, e)
+
+    def _follow_calibre_rename(self, filename: str) -> Optional[Path]:
+        """Return the current file of the Calibre book a missing name was found as."""
+        if self.calibre_file_ids is None:
+            return None
+        from src.services.cwa_checksum_resolver import find_calibre_epub_path
+
+        try:
+            calibre_book_id = self.calibre_file_ids.get_calibre_book_id(filename)
+            path = find_calibre_epub_path(calibre_book_id, self.search_dirs()) if calibre_book_id else None
+        except Exception as e:
+            logger.debug("Could not follow '%s' through Calibre: %s", filename, e)
+            return None
+        if path is None:
+            return None
+        logger.info(f"📚 '{filename}' was renamed in Calibre (book {calibre_book_id}); using '{path}'")
+        self._remember_resolved_path(filename, path)
+        return path
 
     def _remember_resolved_path(self, filename: str, path: Path) -> None:
         """Store a resolved path and evict least-recently-used entries."""
@@ -360,13 +418,11 @@ class EbookParser:
                 ids.add(norm)
         return ids
 
-    def get_book_authors(self, filepath) -> list[str]:
-        """Return the authors among an EPUB's dc:creators in package order, or [] if unreadable.
+    def _read_package_document(self, filepath, purpose: str):
+        """Return an EPUB's parsed package document, or None if it can't be read.
 
-        A creator whose role (EPUB 2 ``opf:role`` or an EPUB 3 ``refines`` meta) is
-        not ``aut`` is skipped, unless no creator is an author. Reads only the
-        container and the package document, not the whole book, because filename
-        matching calls this for every library book.
+        Reads only the container and the package document, not the whole book,
+        because filename matching calls this for every library book.
         """
         import xml.etree.ElementTree as ElementTree
 
@@ -375,7 +431,7 @@ class EbookParser:
             try:
                 path = self.resolve_book_path(str(path))
             except FileNotFoundError:
-                return []
+                return None
         try:
             with zipfile.ZipFile(path) as archive:
                 container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
@@ -383,10 +439,30 @@ class EbookParser:
                     (el for el in container.iter() if el.tag.rsplit("}", 1)[-1] == "rootfile"), None
                 )
                 if rootfile is None or not rootfile.get("full-path"):
-                    return []
-                package = ElementTree.fromstring(archive.read(rootfile.get("full-path")))
+                    return None
+                return ElementTree.fromstring(archive.read(rootfile.get("full-path")))
         except Exception as e:
-            logger.debug(f"Could not read authors for '{path}': {e}")
+            logger.debug(f"Could not read {purpose} for '{path}': {e}")
+            return None
+
+    def get_book_title(self, filepath) -> str:
+        """Return an EPUB's first non-empty dc:title, or "" if unreadable."""
+        package = self._read_package_document(filepath, "title")
+        if package is None:
+            return ""
+        for el in package.iter():
+            if el.tag == "{http://purl.org/dc/elements/1.1/}title" and el.text and el.text.strip():
+                return el.text.strip()
+        return ""
+
+    def get_book_authors(self, filepath) -> list[str]:
+        """Return the authors among an EPUB's dc:creators in package order, or [] if unreadable.
+
+        A creator whose role (EPUB 2 ``opf:role`` or an EPUB 3 ``refines`` meta) is
+        not ``aut`` is skipped, unless no creator is an author.
+        """
+        package = self._read_package_document(filepath, "authors")
+        if package is None:
             return []
         refined_roles = {
             el.get("refines")[1:]: (el.text or "").strip().lower()
@@ -553,50 +629,69 @@ class EbookParser:
             return hashlib.md5(filename.encode('utf-8'), usedforsecurity=False).hexdigest()
         return self._compute_koreader_hash_from_bytes(content)
 
-    def extract_cover(self, filepath, output_path):
-        """
-        Extract cover image from EPUB to output_path.
-        Returns True if successful, False otherwise.
-        """
+    def extract_cover(self, filepath: str | Path, output_path: str | Path) -> bool:
+        """Extract only EPUB cover metadata and image, never embedded audio."""
+        temporary_path = None
         try:
             filepath = Path(filepath)
-            # 1. Try to get cover from metadata using ebooklib
-            try:
-                book = _read_epub(str(filepath))
-                # Check for cover item
-                cover_item = None
+            with zipfile.ZipFile(filepath) as archive:
+                def read_entry(name, limit):
+                    if archive.getinfo(name).file_size > limit:
+                        raise ValueError(f"Cover extraction entry exceeds {limit} bytes")
+                    with archive.open(name) as entry:
+                        data = entry.read(limit + 1)
+                    if len(data) > limit:
+                        raise ValueError("Cover extraction entry exceeds size limit")
+                    return data
 
-                # Method A: get_item_with_id('cover') or similar
-                # ebooklib doesn't have a standard 'get_cover' but often it's in the manifest
+                def parse_metadata(name):
+                    return etree.fromstring(
+                        read_entry(name, 2 * 1024 * 1024),
+                        parser=etree.XMLParser(resolve_entities=False, no_network=True),
+                    )
 
-                # Method B: Iterate items
-                for item in book.get_items():
-                    if item.get_type() == ebooklib.ITEM_IMAGE:
-                        # naive check: is it named "cover"?
-                        if 'cover' in item.get_name().lower():
-                            cover_item = item
-                            break
-                    if item.get_type() == ebooklib.ITEM_COVER:
-                        cover_item = item
-                        break
-
-                if cover_item:
-                    with open(output_path, 'wb') as f:
-                        f.write(cover_item.get_content())
+                container = parse_metadata('META-INF/container.xml')
+                roots = container.xpath('//*[local-name()="rootfile"]/@full-path')
+                if not roots:
+                    return False
+                opf_path = roots[0]
+                package = parse_metadata(opf_path)
+                images = package.xpath(
+                    '//*[local-name()="manifest"]/*[local-name()="item"]'
+                    '[starts-with(@media-type, "image/")]'
+                )
+                cover_ids = package.xpath(
+                    '//*[local-name()="metadata"]/*[local-name()="meta"]'
+                    '[@name="cover"]/@content'
+                )
+                candidates = [item for item in images if 'cover-image' in item.get('properties', '').split()]
+                candidates += [item for item in images if item.get('id') in cover_ids]
+                candidates += [item for item in images if 'cover' in item.get('href', '').lower()]
+                for item in candidates:
+                    href = urlsplit(item.get('href', ''))
+                    if href.scheme or href.netloc:
+                        continue
+                    name = posixpath.normpath(posixpath.join(posixpath.dirname(opf_path), unquote(href.path)))
+                    if name.startswith(('/', '../')) or name not in archive.namelist():
+                        continue
+                    data = read_entry(name, 32 * 1024 * 1024)
+                    if not data:
+                        continue
+                    output_path = Path(output_path)
+                    with tempfile.NamedTemporaryFile(dir=output_path.parent, delete=False) as output:
+                        temporary_path = output.name
+                        output.write(data)
+                    os.replace(temporary_path, output_path)
+                    temporary_path = None
                     logger.debug(f"Extracted cover for {filepath.name}")
                     return True
-            except Exception as e:
-                logger.debug(f"ebooklib cover extraction failed for {filepath.name}: {e}")
-
-            # 2. Fallback: ZipFile (if ebooklib fails or returns nothing)
-            # (ebooklib is basically a zip wrapper anyway, but sometimes direct zip access is easier if we just want the file)
-            # For now, let's stick to the attempt above. If valid EPUB, ebooklib should handle it.
-
-            return False
-
+                return False
         except Exception as e:
             logger.error(f"❌ Error extracting cover from '{filepath}': {e}", exc_info=True)
             return False
+        finally:
+            if temporary_path is not None:
+                os.unlink(temporary_path)
 
     def _build_href_resolver(self, str_path):
         """Return a fn mapping an ebooklib OPF-relative href to its full archive
@@ -722,8 +817,22 @@ class EbookParser:
         Uses BeautifulSoup.
         """
         filepath = Path(filepath)
+        # This is the common EPUB-text boundary for all callers, not just the
+        # sync-cycle resolver. PDFs, CBZs and other containers must never reach
+        # ebooklib's EPUB reader or its repair fallback.
+        if filepath.suffix.lower() != ".epub":
+            logger.debug("Skipping non-EPUB text extraction: %s", filepath.name)
+            if progress_callback:
+                progress_callback(1.0)
+            return "", []
         if not filepath.exists():
             filepath = self.resolve_book_path(filepath.name)
+            if filepath is None or Path(filepath).suffix.lower() != ".epub":
+                logger.warning(
+                    "Resolved ebook is missing or is not an EPUB; skipping text extraction: %s",
+                    filepath,
+                )
+                return "", []
         str_path = str(filepath)
         cache_key = self._file_cache_key(filepath)
 
@@ -904,9 +1013,11 @@ class EbookParser:
             book_path = self.resolve_book_path(filename)
             full_text, spine_map = self.extract_text_and_map(book_path)
 
+            href_norm = normalize_href(href)
             target_item = None
             for item in spine_map:
-                if href in item['href'] or item['href'] in href:
+                item_href = normalize_href(item['href'])
+                if href_norm in item_href or item_href in href_norm:
                     target_item = item
                     break
 
@@ -982,9 +1093,11 @@ class EbookParser:
             if not full_text or not spine_map:
                 return None
 
+            href_norm = normalize_href(href)
             target_item = None
             for item in spine_map:
-                if href in item['href'] or item['href'] in href:
+                item_href = normalize_href(item['href'])
+                if href_norm in item_href or item_href in href_norm:
                     target_item = item
                     break
 
@@ -1812,7 +1925,6 @@ class EbookParser:
             # Find the exact text element matching the character count
             current_char_count = 0
             target_string = None
-            target_offset = 0
             first_non_empty_string = None
             last_non_empty_string = None
 
@@ -1834,17 +1946,6 @@ class EbookParser:
                 
                 if current_char_count + text_len > local_pos:
                     target_string = string
-                    # Calculate offset within the CLEAN string
-                    clean_offset = local_pos - current_char_count
-                    
-                    # KOReader needs the offset within the RAW string (including leading whitespace etc)
-                    # Find where the clean text starts inside the raw string to determine true offset
-                    raw_text = str(string)
-                    raw_start = raw_text.find(clean_text)
-                    if raw_start == -1:
-                        raw_start = 0
-                    
-                    target_offset = raw_start + clean_offset
                     break
                 
                 current_char_count += text_len
@@ -1854,7 +1955,6 @@ class EbookParser:
 
             if target_string is None:
                 target_string = last_non_empty_string or first_non_empty_string
-                target_offset = 0
 
             if not target_string:
                 logger.warning(f"⚠️ No matching text element found in spine {target_item['spine_index']}")
@@ -3018,7 +3118,9 @@ def resolve_ebook_identifiers(
         return meta
 
     try:
-        content = client.download_book(source_id)
+        from src.utils.provider_ebook_files import mapped_ebook_selection
+        selection = mapped_ebook_selection(book) if source in {"bookorbit", "booklore", "grimmory"} else {}
+        content = client.download_book(source_id, **selection)
     except Exception as exc:
         logger.warning("Library download for ebook metadata failed (%s/%s): %s", source, source_id, exc, exc_info=True)
         return meta

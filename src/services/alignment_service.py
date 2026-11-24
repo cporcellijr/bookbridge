@@ -11,9 +11,10 @@ import math
 import os
 import re
 import shutil
+import uuid
 from pathlib import Path
 from statistics import median
-from typing import Any, List, Dict, Optional, Tuple
+from typing import Any, Callable, List, Dict, Optional, Tuple
 
 from src.utils.time_utils import utcnow
 
@@ -184,6 +185,9 @@ class AlignmentService:
         # missing DB row is deliberately never cached, here a dict is required
         # to tell "not yet loaded" apart from "loaded, and there are none".
         self._segments_cache: Dict[str, Optional[List[Dict]]] = {}
+        # Bumped on every invalidation; a reader that started before a save
+        # must not put the old map back into a cache the save just cleared.
+        self._cache_generation = 0
         # Lazily-built CTC forced aligner (holds a heavy cached model). Only ever
         # instantiated on the -ctc image when CTC alignment is requested.
         self._forced_aligner = None
@@ -327,9 +331,7 @@ class AlignmentService:
                 quality_detail=map_quality.quality_detail_json(quality),
             )
             if published:
-                self._alignment_cache.delete(abs_id)
-                self._total_chars_cache.pop(abs_id, None)
-                self._segments_cache.pop(abs_id, None)
+                self._invalidate_map_caches(abs_id)
                 return True
             raise TranscriptionCancelled(abs_id)
         published = self._publish_map(
@@ -400,10 +402,36 @@ class AlignmentService:
         from src.utils.quartznet_aligner import QuartzNetAligner
         return QuartzNetAligner
 
+    @staticmethod
+    def _audio_progress(progress_callback: Optional[Callable[[float], None]],
+                        audio_duration: Optional[float]) -> Optional[Callable[[float], None]]:
+        """Adapt the aligner's seconds-covered reports to a 0.0-1.0 fraction of
+        ``audio_duration``, passed on at most once per percent (plus the final 1.0).
+
+        ``None`` when there is no callback or no known duration to divide by.
+        """
+        if progress_callback is None or not audio_duration or audio_duration <= 0:
+            return None
+        last = None
+
+        def on_seconds(seconds: float) -> None:
+            nonlocal last
+            fraction = min(max(seconds / audio_duration, 0.0), 1.0)
+            if last is not None and fraction < 1.0 and fraction - last < 0.01:
+                return
+            if fraction == last:
+                return
+            last = fraction
+            progress_callback(fraction)
+
+        return on_seconds
+
     @time_execution
     def align_forced_and_store(self, abs_id: str, audio_path: str, ebook_text: str,
                                spine_chapters: Optional[List[Dict]] = None,
-                               audio_duration: Optional[float] = None) -> bool:
+                               audio_duration: Optional[float] = None,
+                               progress_callback: Optional[Callable[[float], None]] = None,
+                               source_check: Optional[Callable[[str], None]] = None) -> bool:
         """Build an alignment map by CTC forced alignment (issue #426, method 'ctc').
 
         Aligns the audio directly against ``ebook_text`` — no transcript — and stores
@@ -415,9 +443,18 @@ class AlignmentService:
         attempt is refused before the audio is ever decoded, rather than only after
         paying for a full decode inside `ForcedAligner.align`. Omit it (the default)
         to keep every existing caller's behaviour unchanged.
+
+        ``progress_callback``, when supplied with ``audio_duration``, receives the
+        model pass's progress as a 0.0-1.0 fraction of the audio, in steps of at
+        least 1%. The model pass is nearly all of a CTC run's time.
+
+        ``source_check``, when supplied, is called with a seam name before the model
+        pass and again before the map is published; it raises if a mounted source
+        track changed, so no map built from changed audio is stored.
         """
         if not ebook_text:
             return False
+        audio_progress = self._audio_progress(progress_callback, audio_duration)
 
         aligner_cls = self._ctc_aligner_class()
         if not aligner_cls.is_available():
@@ -501,6 +538,9 @@ class AlignmentService:
             logger.info("⚙️ CTC: excluding likely unnarrated interior text for %s: %s",
                         abs_id, exclude_spans)
 
+        if source_check:
+            source_check("the CTC model pass")
+
         # Chapter search (src/services/ctc_search.py): with no usable prior, run the
         # model once, locate each spine chapter in its greedy decode, and use that as
         # the prior, so a long book aligns without a Whisper transcript. The emissions
@@ -512,7 +552,7 @@ class AlignmentService:
                          and self._forced_aligner.can_single_pass(
                              audio_duration, ebook_text, text_range=text_range,
                              exclude_spans=exclude_spans))):
-            precomputed = self._forced_aligner.emissions_for(audio_path)
+            precomputed = self._forced_aligner.emissions_for(audio_path, progress_callback=audio_progress)
             if precomputed is None:
                 return False
             search_prior = self._search_prior(abs_id, precomputed, ebook_text, spine_chapters)
@@ -539,6 +579,8 @@ class AlignmentService:
                         "exclude_spans": exclude_spans}
         if precomputed is not None:
             align_kwargs["precomputed"] = precomputed
+        elif audio_progress is not None:
+            align_kwargs["progress_callback"] = audio_progress
         alignment_map = self._forced_aligner.align(audio_path, ebook_text, **align_kwargs)
         if not alignment_map or len(alignment_map) < 2:
             logger.warning(f"⚠️ CTC alignment produced no usable map for {abs_id}")
@@ -547,6 +589,8 @@ class AlignmentService:
         if not self._ctc_map_accepted(abs_id, alignment_map, exclude_spans):
             return False
 
+        if source_check:
+            source_check("publishing the CTC map")
         if not self._publish_map(abs_id, alignment_map, "ctc", total_chars=len(ebook_text),
                                  exclude_spans=exclude_spans):
             return False
@@ -597,8 +641,11 @@ class AlignmentService:
                                   chapters, int(emission.shape[1]),
                                   anchor_spacing=self._SEARCH_ANCHOR_SPACING)
 
+        # A match with no anchors places none of its text and cannot vouch for order: an
+        # unnarrated endnotes chapter was squeezed into a 50s gap between narrated ones (#604).
+        found = [r for r in results if r.found and r.anchors]
         total_chars = sum(r.end_char - r.start_char for r in results) or 1
-        found_chars = sum(r.end_char - r.start_char for r in results if r.found)
+        found_chars = sum(r.end_char - r.start_char for r in found)
         coverage = found_chars / total_chars
         for r in results:
             if r.found:
@@ -607,11 +654,16 @@ class AlignmentService:
                     abs_id, r.start_char, r.end_char, r.start_frame * seconds_per_frame,
                     r.end_frame * seconds_per_frame, r.confidence, len(r.anchors),
                 )
+                if not r.anchors:
+                    logger.info(
+                        "🔎 CTC search %s: chapter chars %s-%s matched with no anchors -- treating it as not found",
+                        abs_id, r.start_char, r.end_char,
+                    )
             else:
                 logger.info("🔎 CTC search %s: chapter chars %s-%s not found", abs_id, r.start_char, r.end_char)
         logger.info(
             "🔎 CTC search %s: found %s/%s chapters, %.1f%% of the text",
-            abs_id, sum(r.found for r in results), len(results), coverage * 100,
+            abs_id, len(found), len(results), coverage * 100,
         )
         if coverage < self._SEARCH_MIN_COVERAGE:
             logger.warning(
@@ -621,7 +673,6 @@ class AlignmentService:
             )
             return None
 
-        found = [r for r in results if r.found]
         substantial = [r for r in found if r.end_char - r.start_char >= self._SEARCH_ORDER_MIN_CHARS]
         if any(b.start_frame <= a.start_frame for a, b in zip(substantial, substantial[1:])):
             logger.info(
@@ -1411,7 +1462,15 @@ class AlignmentService:
         if self.segmented_maps_enabled() and spine_chapters:
             boundaries = [(c['start'], c['end']) for c in spine_chapters if c['end'] > c['start']]
             if boundaries:
-                placements = fit_segments(anchors, boundaries, total_chars=len(full_text))
+                try:
+                    placements = fit_segments(anchors, boundaries, total_chars=len(full_text))
+                except AssertionError:
+                    logger.warning(
+                        "🧩 Alignment: segmented placement for %s produced overlapping "
+                        "segments; keeping the global LIS",
+                        abs_id or "unknown", exc_info=True,
+                    )
+                    placements = []
                 if placements:
                     # fit_segments already returns its result sorted by ts_start;
                     # compare that order against the same segments sorted by
@@ -1908,9 +1967,9 @@ class AlignmentService:
         quality_score = quality.score if quality is not None else None
         quality_detail = map_quality.quality_detail_json(quality) if quality is not None else None
         segments_json = _segments_to_json(segments) if segments is not None else None
+        # Serialize large maps before checking out a pooled database connection.
+        json_blob = json.dumps(alignment_map)
         with self.database_service.get_session() as session:
-            json_blob = json.dumps(alignment_map)
-
             # Check exist
             existing = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
             if existing:
@@ -1951,6 +2010,11 @@ class AlignmentService:
 
             # Context manager handles commit
             logger.info(f"   💾 Saved alignment for {abs_id} to DB.")
+        self._invalidate_map_caches(abs_id)
+
+    def _invalidate_map_caches(self, abs_id: str) -> None:
+        """Drop a book's cached map, length and segments after its row changed."""
+        self._cache_generation += 1
         self._alignment_cache.delete(abs_id)
         self._total_chars_cache.pop(abs_id, None)
         self._segments_cache.pop(abs_id, None)
@@ -2008,9 +2072,7 @@ class AlignmentService:
                     total_chars=backup.total_chars,
                     segments_json=backup.segments_json,
                 ))
-        self._alignment_cache.delete(abs_id)
-        self._total_chars_cache.pop(abs_id, None)
-        self._segments_cache.pop(abs_id, None)
+        self._invalidate_map_caches(abs_id)
         logger.info(
             "↩️ Restored previous alignment for %s (method '%s')", abs_id, method or "unknown",
         )
@@ -2024,11 +2086,13 @@ class AlignmentService:
         """
         if abs_id in self._total_chars_cache:
             return self._total_chars_cache[abs_id]
+        generation = self._cache_generation
         try:
             total_chars = int(self.database_service.get_alignment_total_chars(abs_id))
         except (AttributeError, TypeError, ValueError):
             total_chars = None
-        self._total_chars_cache[abs_id] = total_chars
+        if generation == self._cache_generation:
+            self._total_chars_cache[abs_id] = total_chars
         return total_chars
 
     def get_map_terminal_char(self, abs_id: str) -> Optional[int]:
@@ -2113,13 +2177,18 @@ class AlignmentService:
         cached = self._alignment_cache.get(abs_id)
         if cached is not None:
             return cached
+        generation = self._cache_generation
         with self.database_service.get_session() as session:
             entry = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
-            if entry:
-                alignment = json.loads(entry.alignment_map_json)
-                self._alignment_cache.put(abs_id, alignment)
-                return alignment
+            raw_map = entry.alignment_map_json if entry else None
+        if raw_map is None:
             return None
+        # Parsing a 10-15MB CTC map while the session is still open can
+        # exhaust the default connection pool under concurrent read-along jobs.
+        alignment = json.loads(raw_map)
+        if generation == self._cache_generation:
+            self._alignment_cache.put(abs_id, alignment)
+        return alignment
 
     def _get_segments(self, abs_id: str) -> Optional[List[Dict]]:
         """Cached segment placement index for one book's map (issue #426
@@ -2146,14 +2215,16 @@ class AlignmentService:
         """
         if abs_id in self._segments_cache:
             return self._segments_cache[abs_id]
+        generation = self._cache_generation
         with self.database_service.get_session() as session:
             entry = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
             if entry is None:
                 return None
             raw = entry.segments_json
-            segments = json.loads(raw) if isinstance(raw, str) and raw else None
+        segments = json.loads(raw) if isinstance(raw, str) and raw else None
+        if generation == self._cache_generation:
             self._segments_cache[abs_id] = segments
-            return segments
+        return segments
 
     def get_book_duration(self, abs_id: str) -> Optional[float]:
         """Get the total duration of the book from its alignment map."""
@@ -2577,6 +2648,8 @@ def ingest_storyteller_transcripts(
     expected_files = probe["expected_files"]
     chapterless_mode = probe["chapterless_mode"]
     audio_aligned = probe.get("audio_aligned", False)
+    if audio_aligned:
+        expected_count = len(expected_files)
 
     if chapterless_mode:
         logger.info(
@@ -2594,41 +2667,54 @@ def ingest_storyteller_transcripts(
     target_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = target_dir / "manifest.json"
 
-    existing_json_files = [p.name for p in target_dir.glob("*.json") if re.match(r"^00000-\d{5}\.json$", p.name)]
+    # Published manifests are replaced atomically and refer to immutable chapter
+    # generations. A concurrent backfill cannot delete/overwrite a file another
+    # copy2 or already-open transcript reader is using.
+    published = None
+    try:
+        if manifest_path.exists():
+            published = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    published_files = (
+        [str(ch.get("file") or "") for ch in published.get("chapters", [])]
+        if isinstance(published, dict) and isinstance(published.get("chapters"), list)
+        else []
+    )
     existing_valid = (
-        manifest_path.exists()
-        and len(existing_json_files) == expected_count
-        and all((target_dir / name).exists() for name in expected_files)
+        len(published_files) == expected_count == len(expected_files)
+        and all(
+            Path(name).name == expected and (target_dir / name).is_file()
+            and not Path(name).is_absolute() and ".." not in Path(name).parts
+            for name, expected in zip(published_files, expected_files)
+        )
     )
     if existing_valid:
-        logger.info(f"Storyteller ingest reuse for '{abs_id}' from '{target_dir}' ({len(expected_files)} files)")
+        chapter_files = published_files
+        logger.info(f"Storyteller ingest reuse for '{abs_id}' from '{target_dir}' ({len(chapter_files)} files)")
     else:
-        # Ensure stale canonical files are not mixed with a newly copied set.
-        for stale_file in target_dir.glob("*.json"):
-            if re.match(r"^00000-\d{5}\.json$", stale_file.name):
-                try:
-                    stale_file.unlink()
-                except Exception as delete_err:
-                    logger.warning(
-                        "Storyteller ingest could not remove stale transcript '%s' for '%s': %s",
-                        stale_file,
-                        abs_id,
-                        delete_err,
-                        exc_info=True,
-                    )
-        copied_count = 0
-        for source_name, target_name in zip(source_files, expected_files):
-            shutil.copy2(transcriptions_dir / source_name, target_dir / target_name)
-            copied_count += 1
+        generation = uuid.uuid4().hex
+        stage_dir = target_dir / ".revisions" / generation
+        stage_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            for source_name, target_name in zip(source_files, expected_files):
+                shutil.copy2(transcriptions_dir / source_name, stage_dir / target_name)
+            chapter_files = [
+                (Path(".revisions") / generation / name).as_posix()
+                for name in expected_files
+            ]
+        except Exception:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            raise
         logger.info(
-            f"Storyteller ingest copied for '{abs_id}': {copied_count} files from "
-            f"'{transcriptions_dir}' to '{target_dir}'"
+            "Storyteller ingest copied for '%s': %d files from '%s' to '%s'",
+            abs_id, len(chapter_files), transcriptions_dir, stage_dir,
         )
 
     chapter_entries = []
     if chapterless_mode or audio_aligned:
         cumulative_start = 0.0
-        for idx, chapter_file_name in enumerate(expected_files):
+        for idx, chapter_file_name in enumerate(chapter_files):
             chapter_file_path = target_dir / chapter_file_name
             text_len, text_len_utf16, local_duration = _read_storyteller_chapter_metrics(chapter_file_path)
             start = cumulative_start
@@ -2646,7 +2732,7 @@ def ingest_storyteller_transcripts(
         for idx, chapter in enumerate(chapter_list):
             start = float(chapter.get("start", 0.0) or 0.0)
             end = float(chapter.get("end", 0.0) or 0.0)
-            chapter_file_name = _storyteller_filename_for_abs_chapter(idx)
+            chapter_file_name = chapter_files[idx]
             chapter_file_path = target_dir / chapter_file_name
             text_len, text_len_utf16, _local_duration = _read_storyteller_chapter_metrics(chapter_file_path)
             chapter_entries.append({
@@ -2671,7 +2757,12 @@ def ingest_storyteller_transcripts(
         "chapter_count": expected_count,
         "chapters": chapter_entries
     }
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False)
+    temporary_manifest = target_dir / f".manifest.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(temporary_manifest, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False)
+        os.replace(temporary_manifest, manifest_path)
+    finally:
+        temporary_manifest.unlink(missing_ok=True)
 
     return str(manifest_path)

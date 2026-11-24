@@ -37,6 +37,7 @@ from src.services.readest_annotation_sync import ReadestAnnotationSync
 from src.services.hardcover_annotation_sync import HardcoverAnnotationSync
 from src.services.bookfusion_annotation_sync import BookFusionAnnotationSync
 from src.utils.cache_paths import safe_cache_path
+from src.utils.provider_ebook_files import mapped_ebook_selection
 from src.utils.config_loader import DEFAULT_CONFIG, MERGED_SETTINGS
 from src.utils.grimmory_cfi import GrimmoryCFIResolver
 from src.utils.user_config import (
@@ -456,6 +457,7 @@ class AnnotationSyncService:
                         or f"booklore_{book_id}.epub"
                     ),
                     "title": str(getattr(book, "abs_title", "") or "").strip(),
+                    "selection": mapped_ebook_selection(book),
                 })
         except Exception as e:
             logger.debug("Grimmory annotation book enumeration failed for user %s: %s", user_id, e)
@@ -480,7 +482,7 @@ class AnnotationSyncService:
         if cache_path.exists() and cache_path.stat().st_size > 0:
             return cache_path
 
-        content = client.download_book(candidate["book_id"])
+        content = client.download_book(candidate["book_id"], **candidate.get("selection", {}))
         if not content:
             logger.warning(
                 "Grimmory annotation sync could not download EPUB for book %s",

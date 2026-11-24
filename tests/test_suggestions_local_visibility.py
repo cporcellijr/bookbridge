@@ -71,6 +71,79 @@ class TestLocalVisibility(SearchTabBase):
         self._as(self._admin())
         self.assertTrue(any(b.source == "Local File" for b in self.web.get_searchable_ebooks("Local")))
 
+    def test_local_search_keeps_healthy_results_when_file_disappears(self):
+        """6433: one vanished EPUB cannot discard other local results."""
+        self._as(self._admin())
+        _epub(self.books / "Gone.epub")
+        original_stat = Path.stat
+        gone_stats = 0
+
+        def disappearing_stat(path, *args, **kwargs):
+            nonlocal gone_stats
+            if path == self.books / "Gone.epub":
+                gone_stats += 1
+                if gone_stats >= 2:
+                    raise FileNotFoundError(2, "No such file or directory", str(path))
+            return original_stat(path, *args, **kwargs)
+
+        with patch.object(Path, "stat", autospec=True, side_effect=disappearing_stat):
+            found = self.web.get_searchable_ebooks("Local")
+        self.assertGreaterEqual(gone_stats, 2)
+        self.assertIn("Local Title.epub", [b.name for b in found if b.source == "Local File"])
+
+    def test_local_search_keeps_siblings_when_subdirectory_disappears(self):
+        """6433: failed scandir in one subtree does not abandon a whole search."""
+        self._as(self._admin())
+        disappearing = self.books / "disappearing"
+        disappearing.mkdir()
+        _epub(disappearing / "Gone.epub")
+        healthy = self.books / "healthy"
+        healthy.mkdir()
+        _epub(healthy / "Still Here.epub")
+        original_scandir = os.scandir
+        attempted = []
+
+        def race_scandir(path):
+            if Path(path) == disappearing:
+                attempted.append(str(path))
+                raise FileNotFoundError(2, "No such file or directory", str(path))
+            return original_scandir(path)
+
+        with patch("os.scandir", side_effect=race_scandir):
+            found, inventory, states = self._discover()
+        self.assertTrue(attempted, "the missing-subdirectory branch must be exercised")
+        self.assertIn("Still Here.epub", [
+            b.name for b in found + inventory if b.source == "Local File"
+        ])
+        local = states["Local File"]["roles"]["ebook"]
+        self.assertFalse(local["complete"])
+        self.assertEqual(local["error_type"], "FileNotFoundError")
+
+    def test_unavailable_local_mount_does_not_abort_remote_catalog(self):
+        """10193: /books host-down leaves Local File incomplete, BookOrbit healthy."""
+        self._as(self._admin())
+        clients = _no_clients()
+        clients.bookorbit_client = MagicMock(
+            is_configured=MagicMock(return_value=True), catalog_complete=True,
+            get_all_ebooks=MagicMock(return_value=[
+                {"id": 9, "title": "Remote Book", "fileName": "Remote Book.epub"}
+            ]),
+        )
+        original_exists = Path.exists
+
+        def host_down(path, *args, **kwargs):
+            if path == self.books:
+                raise OSError(112, "Host is down", str(path))
+            return original_exists(path, *args, **kwargs)
+
+        with patch.object(self.web, "uc", return_value=clients), \
+                patch.object(Path, "exists", autospec=True, side_effect=host_down):
+            found, inventory, states = self._discover()
+        self.assertTrue(any(b.source == "BookOrbit" for b in found + inventory))
+        local_state = states["Local File"]["roles"]["ebook"]
+        self.assertFalse(local_state["complete"])
+        self.assertEqual(local_state["error_type"], "OSError")
+
     def test_regular_user_scan_and_inventory_exclude_local_files(self):
         self._as(self.reg)
         found, inventory, _states = self._discover()
@@ -163,7 +236,7 @@ class TestLocalVisibility(SearchTabBase):
         self.assertIsNone(self.web._resolve_suggestions_redesign_ebook_create(entry))
 
     def test_regular_user_local_index_is_not_built(self):
-        with patch.object(self.web, "_build_local_ebook_title_index", return_value={}) as build:
+        with patch("src.web.suggestions_ebook_catalog._build_local_ebook_title_index", return_value={}) as build:
             self._as(self.reg)
             self._discover()
             self.web.get_searchable_ebooks("")
@@ -171,6 +244,22 @@ class TestLocalVisibility(SearchTabBase):
             self._as(self._admin())
             self._discover()
             build.assert_called()
+
+    def test_regular_user_scan_gets_bookorbit_ebooks_from_bookorbit_not_the_local_folder(self):
+        """#586: with no local index, a regular user's scan pool held no BookOrbit ebooks."""
+        clients = _no_clients()
+        clients.bookorbit_client = MagicMock(
+            is_configured=MagicMock(return_value=True), catalog_complete=True,
+            get_all_ebooks=MagicMock(return_value=[{"id": 9, "title": "Local Title", "fileName": None}]),
+            _enrich_ebook=MagicMock(return_value={"fileName": "Local Title.epub"}),
+        )
+        self._as(self.reg)
+        with patch.object(self.web, "uc", return_value=clients), \
+                patch("src.web.suggestions_ebook_catalog._build_local_ebook_title_index") as build:
+            found, _inventory, _states = self._discover()
+            build.assert_not_called()
+            self.assertEqual([(b.name, b.source, b.source_id) for b in found], [("Local Title.epub", "BookOrbit", 9)])
+            self.assertEqual(self.web.get_searchable_ebooks(""), [])
 
     def test_exclude_setting_still_applies_to_admin_scans_only(self):
         self._as(self._admin())
