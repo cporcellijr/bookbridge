@@ -130,6 +130,7 @@ def _candidate_record(candidate):
         "source_file_id": _string_or_none(_get(candidate, "source_file_id", "sourceFileId")),
         "ebook_file_id": _string_or_none(_get(candidate, "ebook_file_id", "ebookFileId")),
         "abs_identifier": _string_or_none(_get(candidate, "abs_identifier", "absIdentifier")),
+        "edition_audio_ids": [str(audio_id) for audio_id in _get(candidate, "edition_audio_ids", "editionAudioIds") or []],
         "abs_ebook_item_id": _string_or_none(_get(candidate, "abs_ebook_item_id", "absEbookItemId")),
         "kosync_doc_id": _string_or_none(_get(candidate, "kosync_doc_id", "kosyncDocId")),
         "document_id": _string_or_none(document_id),
@@ -200,6 +201,8 @@ def build_ebook_inventory(
             if not existing["series_name"] and record["series_name"]:
                 for field in ("series_name", "series_sequence", "series_source", "series_key"):
                     existing[field] = record[field]
+            if not existing.get("edition_audio_ids") and record["edition_audio_ids"]:
+                existing["edition_audio_ids"] = record["edition_audio_ids"]
             if not existing["path"] and record["path"]:
                 existing["path"] = record["path"]
                 existing["path_key"] = path_key
@@ -327,6 +330,7 @@ def _entry_fingerprint(record, exclude_local_files):
         "language", "series_name", "series_sequence", "series_source", "series_key",
         "aliases", "provenance", "source_file_id", "ebook_file_id", "abs_identifier",
         "abs_ebook_item_id", "kosync_doc_id", "document_id", "file_mtime_ns", "file_size",
+        "edition_audio_ids",
     )
     return _stable_fingerprint({
         "exclude_local_files": exclude_local_files,
@@ -371,11 +375,11 @@ def _audio_fingerprints_by_key(audio_candidates):
     }
 
 
-def _authoritative_abs_audio_index(audio_candidates):
-    """Index ABS audio anchors by ID for the existing authoritative ebook link."""
+def _authoritative_abs_audio_index(audio_candidates, source="ABS"):
+    """Index one source's audio anchors by ID for an authoritative ebook link."""
     by_id = defaultdict(list)
     for candidate in audio_candidates:
-        if normalize_ebook_source(candidate.get("audio_source")) != "ABS":
+        if normalize_ebook_source(candidate.get("audio_source")) != source:
             continue
         source_id = candidate.get("audio_source_id")
         bridge_key = candidate.get("bridge_key")
@@ -427,6 +431,7 @@ def build_discovery_snapshot(
     ignored_keys = _ignored_identity_index(ignored)
     previous_entries = (previous or {}).get("entries") or {}
     authoritative_audio_by_id = _authoritative_abs_audio_index(audio_candidates)
+    edition_audio_by_id = _authoritative_abs_audio_index(audio_candidates, "BookOrbit")
     can_reuse = (
         not force_refresh
         and (previous or {}).get("audio_fingerprint") == audio_fingerprint
@@ -480,6 +485,11 @@ def build_discovery_snapshot(
             if authoritative_id is not None and str(authoritative_id).strip()
             else []
         )
+        if not authoritative_keys and normalize_ebook_source(record.get("source")) == "BookOrbit":
+            authoritative_keys = sorted({
+                key for audio_id in record.get("edition_audio_ids") or []
+                for key in edition_audio_by_id.get(audio_id, [])
+            })
         if authoritative_keys:
             entry = dict(record)
             entry.update({

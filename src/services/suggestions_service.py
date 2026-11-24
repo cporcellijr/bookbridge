@@ -280,6 +280,7 @@ class SuggestionsService:
                 "name": getattr(candidate, 'name', ''),
                 "display_name": getattr(candidate, 'display_name', None) or getattr(candidate, 'name', ''),
                 "abs_identifier": abs_identifier,
+                "edition_audio_ids": list(getattr(candidate, 'edition_audio_ids', None) or []),
                 "path": path,
             })
 
@@ -466,6 +467,33 @@ class SuggestionsService:
                     "match_reason": "authoritative",
                 }
         return None
+
+    def _find_bookorbit_edition_match(self, candidate_pool: List[dict], ab: dict) -> Optional[dict]:
+        """A 100-score match when BookOrbit groups this audiobook with exactly one ebook as editions.
+
+        Two ebook editions (e.g. a translation) or a known language mismatch fall back to scoring.
+        """
+        if self._audio_source(ab).casefold() != "bookorbit":
+            return None
+        target = self._audio_source_id(ab)
+        if not target:
+            return None
+        partners = [
+            candidate_info for candidate_info in candidate_pool
+            if candidate_info.get("source") == "BookOrbit"
+            and target in (candidate_info.get("edition_audio_ids") or ())
+        ]
+        if len({str(candidate_info.get("source_id")) for candidate_info in partners}) != 1:
+            return None
+        partner = partners[0]
+        audio_language = self._audio_language(ab).casefold().split("-")[0]
+        ebook_language = str(partner.get("language") or "").casefold().split("-")[0]
+        if audio_language and ebook_language and audio_language != ebook_language:
+            return None
+        match = self._match_from_pool(partner, 100.0)
+        match["match_reason"] = "authoritative"
+        match["authority"] = "bookorbit_edition"
+        return match
 
     # Candidates with a combined fuzzy score below this floor OR a title score below
     # _SUGGEST_TITLE_STRONG are dropped from the fuzzy pass. The floor is intentionally
@@ -992,6 +1020,14 @@ class SuggestionsService:
                 f"-> {authoritative.get('display_name') or authoritative.get('name')}"
             )
             return self._suggestion_shell(ab, [authoritative])
+
+        edition = self._find_bookorbit_edition_match(per_book_pool, ab)
+        if edition is not None:
+            self.logger.info(
+                f"📌 Authoritative match via BookOrbit edition for '{audio_title}' "
+                f"-> {edition.get('display_name')}"
+            )
+            return self._suggestion_shell(ab, [edition])
 
         norm_audio_title = self._normalize_title_for_match(audio_title)
         subtitle = self._audio_subtitle(ab)

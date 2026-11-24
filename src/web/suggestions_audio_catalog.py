@@ -367,7 +367,7 @@ class EbookResult:
         self, name, title=None, subtitle=None, authors=None, booklore_id=None,
         path=None, source=None, source_id=None, abs_identifier=None, language=None,
         series_name=None, series_sequence=None, source_file_id=None,
-        ebook_file_id=None, file_mtime_ns=None, file_size=None,
+        ebook_file_id=None, file_mtime_ns=None, file_size=None, edition_audio_ids=None,
     ):
         web = _web_server()
         self.name = name
@@ -380,6 +380,7 @@ class EbookResult:
         self.source = source
         self.source_id = source_id if source_id is not None else booklore_id
         self.abs_identifier = abs_identifier
+        self.edition_audio_ids = list(edition_audio_ids or [])
         self.series_name = series_name
         self.series_sequence = series_sequence
         self.source_file_id = source_file_id

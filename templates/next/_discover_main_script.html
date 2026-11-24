@@ -94,6 +94,7 @@
     };
     const REASON_LABELS = {
         authoritative: {{ _('Calibre identifier')|tojson }},
+        bookorbit_edition: {{ _('BookOrbit edition')|tojson }},
         subtitle_only: {{ _('Title only partly matches')|tojson }},
         edition: {{ _('Different edition')|tojson }},
         author_missing: {{ _('Author missing, title only')|tojson }},
@@ -1424,7 +1425,8 @@
             chips.push(`<span class="source-badge manual" title="${esc(T.belowThreshold)}">${esc(T.review)}</span>`);
         }
         if (top) {
-            const reason = REASON_LABELS[top.match_reason] ? top.match_reason : (top.author_note || (top.edition_credit ? 'edition' : ''));
+            const reason = top.authority === 'bookorbit_edition' ? top.authority
+                : REASON_LABELS[top.match_reason] ? top.match_reason : (top.author_note || (top.edition_credit ? 'edition' : ''));
             if (REASON_LABELS[reason]) chips.push(`<span class="source-badge reason">${esc(REASON_LABELS[reason])}</span>`);
             if (top.match_reason === 'same_folder') chips.push(`<span class="source-badge samefolder">${esc({{ _('Same folder')|tojson }})}</span>`);
             if (top.match_reason === 'same_folder_ambiguous') chips.push(`<span class="source-badge samefolder">${esc({{ _('Same folder?')|tojson }})}</span>`);

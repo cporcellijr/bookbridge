@@ -358,6 +358,7 @@ def get_searchable_ebooks(
                             series_sequence=series_sequence,
                             source_file_id=book.get("sourceFileId"),
                             ebook_file_id=book.get("ebookFileId"),
+                            edition_audio_ids=book.get("editionAudioIds"),
                         ))
             for b in bo_books or []:
                 # The list response already contains all file names. Keep its
@@ -394,6 +395,7 @@ def get_searchable_ebooks(
                     series_sequence=series_sequence,
                     source_file_id=b.get('sourceFileId'),
                     ebook_file_id=b.get('ebookFileId'),
+                    edition_audio_ids=b.get('editionAudioIds'),
                 ))
         except Exception as e:
             if discovery:

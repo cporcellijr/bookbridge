@@ -371,6 +371,20 @@ class BookOrbitClient:
             return kind in kinds
         return info.get("kind") == kind
 
+    @staticmethod
+    def _edition_audio_ids(book: dict) -> list:
+        """Ids of audiobook editions BookOrbit groups with this card (v3.7+ `linked`); [] without it."""
+        linked = book.get("linked")
+        members = linked.get("books") if isinstance(linked, dict) else None
+        ids = []
+        for member in members if isinstance(members, list) else []:
+            if not isinstance(member, dict) or member.get("bookId") is None:
+                continue
+            formats = member.get("formats") if isinstance(member.get("formats"), list) else []
+            if member.get("mediaKind") == "audiobook" or any(str(f).lower() in _AUDIO_FORMATS for f in formats):
+                ids.append(str(member["bookId"]))
+        return ids
+
     def _build_light_info(self, book: dict) -> Optional[dict]:
         """Build a lightweight cache entry from a `/books/query` list row.
 
@@ -416,6 +430,7 @@ class BookOrbitClient:
             "primaryFileId": (primary or {}).get("id"),
             "primaryFormat": (primary_format or "").lower(),
             "kind": self._classify_format(primary_format),
+            "editionAudioIds": self._edition_audio_ids(book),
         }
 
     # ------------------------------------------------------------------
@@ -570,6 +585,8 @@ class BookOrbitClient:
         series_index = detail.get("seriesIndex")
         from src.utils.provider_ebook_files import ebook_files
 
+        with self._cache_lock:
+            cached = self._book_cache.get(book_id) or {}
         return {
             "id": book_id,
             "title": (light or {}).get("title") or detail.get("title") or "",
@@ -582,6 +599,7 @@ class BookOrbitClient:
             "subtitle": subtitle,
             "seriesName": series_name,
             "seriesIndex": series_index,
+            "editionAudioIds": cached.get("editionAudioIds") or [],
         }
 
     # BookOrbit's GET /books/search rejects limit > 20 with HTTP 400.
@@ -741,6 +759,7 @@ class BookOrbitClient:
                 "sourceFileId": info.get("ebookFileId"),
                 "fileName": None,
                 "ebookFilenames": info.get("ebookFilenames") or [],
+                "editionAudioIds": info.get("editionAudioIds") or [],
             })
         return out
 
