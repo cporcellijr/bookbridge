@@ -207,6 +207,28 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         ))
         self.assertEqual(len(fired), 3, "an ebook filename change must notify")
 
+    def test_update_book_if_exists_announces_a_manifest_change(self):
+        """The worker saves a book's pending -> active flip with update_book_if_exists.
+        Without a signal the device-sync manifest only listed the book at the
+        prebuilder's 30-minute backstop."""
+        self.db_service.save_book(self.Book(
+            abs_id="job-1", abs_title="Job", status="pending", original_ebook_filename="job.epub",
+        ))
+
+        fired = []
+        self.db_service.register_catalog_change_callback(lambda: fired.append(1))
+
+        self.db_service.update_book_if_exists(self.Book(
+            abs_id="job-1", abs_title="Job", status="pending", original_ebook_filename="job.epub",
+            duration=1234,
+        ))
+        self.assertEqual(fired, [], "a write-back touching no manifest column must not notify")
+
+        self.db_service.update_book_if_exists(self.Book(
+            abs_id="job-1", abs_title="Job", status="active", original_ebook_filename="job.epub",
+        ))
+        self.assertEqual(len(fired), 1, "the pending -> active flip must notify")
+
     def test_catalog_change_callbacks_stay_quiet_when_nothing_changed(self):
         """A no-op mutation must not trigger a manifest rebuild."""
         fired = []

@@ -662,6 +662,8 @@ class BooksMixin:
                 'abs_ebook_item_id', 'series_name', 'series_sequence',
             ]
             values = {attr: getattr(book, attr) for attr in attrs if hasattr(book, attr)}
+            before = session.query(Book).filter(Book.abs_id == book.abs_id).first()
+            before_signature = _manifest_signature(before) if before is not None else None
             updated = session.query(Book).filter(Book.abs_id == book.abs_id).update(
                 values,
                 synchronize_session=False,
@@ -672,8 +674,12 @@ class BooksMixin:
             if existing is None:
                 return None
             session.refresh(existing)
+            catalog_changed = _manifest_signature(existing) != before_signature
             session.expunge(existing)
-            return existing
+
+        if catalog_changed:
+            self._notify_catalog_change()
+        return existing
 
     def set_readalong_epub_requested(self, abs_id: str, requested: bool = True) -> bool:
         """Record (or clear) the read-along-EPUB-generation intent for one book.
