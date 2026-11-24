@@ -306,6 +306,10 @@ class TestHtmlIsGzipped(unittest.TestCase):
             hooks.index(self.web.gzip_html_response),
             hooks.index(self.web.inject_csrf_script),
         )
+        # Static URLs are stamped after the CSRF script and before compression.
+        self.assertLess(hooks.index(self.web.gzip_html_response), hooks.index(self.web.version_static_urls))
+        self.assertLess(hooks.index(self.web.version_static_urls), hooks.index(self.web.inject_csrf_script))
+        self.assertIn(self.web.static_asset_response, hooks)
 
 
 if __name__ == "__main__":

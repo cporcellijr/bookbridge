@@ -621,6 +621,8 @@ from src.web.request_context import (
     _request_wants_json,
     inject_csrf_script,
     gzip_html_response,
+    version_static_urls,
+    static_asset_response,
     _bind_request_user_context,
     _release_request_user_context,
     ui_template,
@@ -2098,6 +2100,8 @@ def create_app(test_container=None):
     app.before_request(csrf_protect_guard)
     app.teardown_request(_release_request_user_context)
     app.after_request(gzip_html_response)  # registered first, so it runs after the CSRF injection
+    app.after_request(version_static_urls)  # stamps the page before it is compressed
+    app.after_request(static_asset_response)
     app.after_request(inject_csrf_script)
 
     # Register context processors, jinja globals, etc.

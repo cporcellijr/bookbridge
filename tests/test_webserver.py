@@ -3418,6 +3418,118 @@ class TestForgeTextItemBuilder(unittest.TestCase):
         self.assertEqual(item["filename"], "Book.epub")
 
 
+class TestStaticAssetCaching(unittest.TestCase):
+    """Versioned /static/ URLs cache for a year; text assets are gzipped; other responses are untouched.
+
+    Measured 2026-11-24: every New UI navigation revalidated 21-22 static files (no-cache) and
+    a cold load sent 316 KB of uncompressed JS/CSS.
+    """
+
+    def setUp(self):
+        import gzip
+        import shutil
+        from flask import Flask
+        from src import web_server
+        from src.web.request_context import _static_version
+
+        self.gzip, self.web = gzip, web_server
+        _static_version.cache_clear()
+        self.addCleanup(_static_version.cache_clear)
+        self.static = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.static, ignore_errors=True)
+        (self.static / 'css').mkdir()
+        (self.static / 'css' / 'site.css').write_text(
+            "@font-face { src: url(/static/font.woff2) format('woff2'); }\n" + "body { color: red; }\n" * 200,
+            encoding='utf-8')
+        (self.static / 'font.woff2').write_bytes(b'wOF2' + bytes(range(256)) * 8)
+        (self.static / 'icons.svg').write_text('<svg>' + '<symbol id="a"></symbol>' * 100 + '</svg>', encoding='utf-8')
+        self.app = Flask(__name__, static_folder=str(self.static), static_url_path='/static')
+        self.app.secret_key = 'test'
+        self.page = ('<link href="/static/css/site.css"><svg><use href="/static/icons.svg#a"></use></svg>'
+                     '<img src="/static/missing.png"><a href="/static/css/site.css?x=1"><p>(see /static/css/site.css)</p>'
+                     + '<p>card</p>' * 300)
+
+        @self.app.route('/page')
+        def page():
+            return self.page
+
+        @self.app.route('/device')
+        def device():
+            return {'document': 'x' * 4000}
+
+        # Same order as create_app: the page is stamped before it is compressed.
+        for hook in (web_server.gzip_html_response, web_server.version_static_urls, web_server.static_asset_response):
+            self.app.after_request(hook)
+        self.client = self.app.test_client()
+
+    def _version(self, name):
+        stat = (self.static / name).stat()
+        return f"{stat.st_size:x}-{stat.st_mtime_ns:x}"
+
+    def test_page_static_urls_carry_their_file_version(self):
+        css, svg = self._version('css/site.css'), self._version('icons.svg')
+        for encoding in ('', 'gzip'):
+            with self.subTest(encoding=encoding):
+                response = self.client.get('/page', headers={'Accept-Encoding': encoding})
+                html = (self.gzip.decompress(response.data) if encoding else response.data).decode()
+                self.assertIn(f'href="/static/css/site.css?v={css}"', html)
+                self.assertIn(f'href="/static/icons.svg?v={svg}#a"', html)
+                self.assertIn('src="/static/missing.png"', html)
+                self.assertIn('href="/static/css/site.css?x=1"', html)
+                self.assertIn('(see /static/css/site.css)', html)
+
+    def test_only_a_current_versioned_url_is_cached_for_a_year(self):
+        current = self.client.get(f"/static/css/site.css?v={self._version('css/site.css')}")
+        self.assertEqual(current.headers['Cache-Control'], self.web._THUMB_IMMUTABLE_CACHE)
+        for url in ('/static/css/site.css', '/static/css/site.css?v=old'):
+            with self.subTest(url=url):
+                self.assertNotIn('immutable', self.client.get(url).headers.get('Cache-Control', ''))
+
+    def test_text_assets_are_gzipped_and_stylesheet_urls_stamped(self):
+        font = self._version('font.woff2')
+        response = self.client.get('/static/css/site.css', headers={'Accept-Encoding': 'gzip'})
+        self.assertEqual(response.headers['Content-Encoding'], 'gzip')
+        self.assertIn('Accept-Encoding', response.headers['Vary'])
+        self.assertEqual(int(response.headers['Content-Length']), len(response.data))
+        self.assertTrue(response.headers['ETag'].startswith('W/'))
+        self.assertIn(f'url(/static/font.woff2?v={font})', self.gzip.decompress(response.data).decode())
+        plain = self.client.get('/static/css/site.css')
+        self.assertNotIn('Content-Encoding', plain.headers)
+        self.assertIn(f'url(/static/font.woff2?v={font})', plain.get_data(as_text=True))
+        svg = self.client.get('/static/icons.svg', headers={'Accept-Encoding': 'gzip'})
+        self.assertEqual(svg.headers['Content-Encoding'], 'gzip')
+        woff = self.client.get('/static/font.woff2', headers={'Accept-Encoding': 'gzip'})
+        self.assertNotIn('Content-Encoding', woff.headers)
+        self.assertEqual(woff.data, (self.static / 'font.woff2').read_bytes())
+
+    def test_a_compressed_asset_still_revalidates_to_304(self):
+        first = self.client.get('/static/css/site.css', headers={'Accept-Encoding': 'gzip'})
+        again = self.client.get('/static/css/site.css',
+                                headers={'Accept-Encoding': 'gzip', 'If-None-Match': first.headers['ETag']})
+        self.assertEqual(again.status_code, 304)
+
+    def test_json_without_a_browser_session_is_untouched(self):
+        response = self.client.get('/device', headers={'Accept-Encoding': 'gzip'})
+        self.assertNotIn('Content-Encoding', response.headers)
+        self.assertNotIn('Cache-Control', response.headers)
+        self.assertEqual(response.get_json(), {'document': 'x' * 4000})
+
+
+class TestKosyncRoutesUntouchedByStaticHooks(unittest.TestCase):
+    setUp = CleanFlaskIntegrationTest.setUp
+    tearDown = CleanFlaskIntegrationTest.tearDown
+
+    def test_device_routes_are_not_compressed_rewritten_or_cached(self):
+        health = self.client.get('/healthcheck', headers={'Accept-Encoding': 'gzip'})
+        self.assertEqual(health.data, b'OK')
+        auth = self.client.get('/users/auth', headers={'Accept-Encoding': 'gzip'})
+        self.assertEqual(auth.status_code, 401)
+        self.assertEqual(auth.get_json(), {'message': 'Invalid credentials'})
+        for response in (health, auth):
+            self.assertNotIn('Content-Encoding', response.headers)
+            self.assertNotIn('Cache-Control', response.headers)
+
+
 if __name__ == '__main__':
     print("TEST Clean Flask Integration Testing with Dependency Injection")
     print("=" * 70)

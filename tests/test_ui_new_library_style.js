@@ -17,7 +17,7 @@ for (const [style, view] of [['cards', 'covers'], ['spines', 'spines'], ['list',
     const context = {
         libraryPage, selectModeButton, seriesGroupingToggle,
         setBookSelectMode(value) { events.push(['select', value]); },
-        paintSpines(value) { events.push(['paint', value]); },
+        paintSpines(...args) { events.push(['paint', ...args]); },
         applySeriesGrouping(value) { events.push(['group', value]); }
     };
     vm.runInNewContext(script, context);
@@ -28,6 +28,6 @@ for (const [style, view] of [['cards', 'covers'], ['spines', 'spines'], ['list',
     assert.equal(seriesGroupingToggle.disabled, view !== 'covers');
     assert.deepEqual(events.map(event => [...event]), [
         ...(thinSpines ? [['select', false]] : []),
-        ['group', view === 'covers'], ['paint', view === 'spines']
+        ['group', view === 'covers'], ['paint']
     ]);
 }

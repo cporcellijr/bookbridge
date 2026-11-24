@@ -696,7 +696,7 @@ class TestOpsPages(unittest.TestCase):
                         'id="linesCount"', 'id="autoRefresh"', 'id="liveMode"',
                         'id="loadMore"', 'toggleLiveMode();', 'id="scrollToTop"',
                         'id="scrollToBottom"', 'bbPlural(LINES_TOTAL,',
-                        'setInterval(fetchLiveLogs, 2000)',
+                        'setInterval(() => { if (!document.hidden) fetchLiveLogs(); }, 2000)',
                         'setInterval(() => fetchLogs(), 30000)',
                     ):
                         self.assertIn(expected, html)

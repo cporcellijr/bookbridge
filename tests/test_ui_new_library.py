@@ -557,7 +557,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn(':not(:focus-within) :is(.format-slot.is-last, .format-slot.is-oos) { background-color: rgba(11,13,18,.62); }', hover_block)
         self.assertNotIn(".format-strip { opacity: 0;", css)
 
-    def test_covers_paint_lazily_and_spines_force_covers_to_load(self):
+    def test_covers_and_spines_paint_lazily(self):
         import shutil
         import subprocess
 
@@ -569,8 +569,6 @@ class TestNewLibrary(unittest.TestCase):
             capture_output=True, text=True, timeout=15, cwd=_ROOT,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
-        self.assertIn("paintSpines(initialLibraryView === 'spines');", scripts)
 
     def test_library_batch_actions_execute_sequentially_and_prompt_once(self):
         import shutil

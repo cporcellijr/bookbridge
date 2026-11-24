@@ -1618,8 +1618,8 @@
         const ink = 0.299 * main[0] + 0.587 * main[1] + 0.114 * main[2] > 150 ? '#1c1a17' : '#f3eee4';
         return [hex(main), hex(mean(ranked[1] || ranked[0])), ink];
     }
-    /* Colour each card from its cover. `eager` (Spines) forces hidden lazy covers to load; Covers samples them as they arrive. */
-    function paintSpines(eager) {
+    /* Colour each card from its cover as its lazy image arrives; until then a spine keeps its shelf colour. */
+    function paintSpines() {
         document.querySelectorAll('.library-book-card:not([data-spine-painted])').forEach(card => {
             const img = card.querySelector('.cover-image');
             if (!img) { card.dataset.spinePainted = ''; return; }
@@ -1642,7 +1642,6 @@
                 card.dataset.spineWaiting = '';
                 img.addEventListener('load', sample, { once: true });
             }
-            if (eager) img.loading = 'eager';
         });
     }
     // The server chooses the view before paint; initialize its dependent controls once.
@@ -1654,7 +1653,7 @@
         if (selectModeButton) selectModeButton.hidden = !selectable;
         applySeriesGrouping(initialLibraryView === 'covers' && seriesGroupingToggle.checked);
         seriesGroupingToggle.disabled = initialLibraryView !== 'covers';
-        paintSpines(initialLibraryView === 'spines');
+        paintSpines();
     }
     function selectedBookIds() {
         return Array.from(new Set(Array.from(document.querySelectorAll('[data-select-book]:checked'), input => input.value)));

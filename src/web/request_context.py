@@ -1,9 +1,18 @@
 """C01 helpers extracted from web_server with no behavior change."""
 
+import functools
+import os
+import re
 from importlib import import_module
 from typing import Optional
 
+from werkzeug.security import safe_join
+
 _WEB_MODULE = None
+# A /static/ path with no query string yet; '#' keeps icons.svg#name. Starting on the literal
+# (the opening quote is checked in the callback) keeps a 500 KB Library page near 1 ms.
+_STATIC_URL = re.compile(r'''/static/([\w./-]+)(?=["'#)])''')
+_GZIP_STATIC_TYPES = ('text/css', 'text/javascript', 'application/javascript', 'image/svg+xml', 'application/json')
 
 def _web_server():
     if _WEB_MODULE is not None:
@@ -114,6 +123,82 @@ def gzip_html_response(response):
         response.vary.add('Accept-Encoding')
     except Exception as e:  # compression must never break a page
         web.logger.debug(f"Gzip skipped: {e}")
+    return response
+
+
+@functools.lru_cache(maxsize=1024)
+def _static_version(static_dir: str, path: str) -> Optional[str]:
+    """Size and mtime of a static file, read once per process (a deploy restarts it)."""
+    full = safe_join(static_dir, path)
+    try:
+        stat = os.stat(full) if full else None
+    except OSError:
+        return None
+    return f"{stat.st_size:x}-{stat.st_mtime_ns:x}" if stat else None
+
+
+def _stamp_static_urls(text: str, static_dir: str) -> str:
+    """Append ?v=<file version> to each quoted or url()-wrapped /static/ URL whose file exists."""
+    def stamp(match):
+        if match.string[match.start() - 1:match.start()] not in ('"', "'", '('):
+            return match.group(0)
+        version = _static_version(static_dir, match.group(1))
+        return f"{match.group(0)}?v={version}" if version else match.group(0)
+    return _STATIC_URL.sub(stamp, text)
+
+
+def version_static_urls(response):
+    """after_request hook: stamp each /static/ URL in an HTML page with its file version.
+
+    A versioned URL is cached for a year (see static_asset_response), so the browser
+    stops revalidating every stylesheet, script and icon on each navigation, and a
+    changed file gets a new URL after the restart that deploys it.
+    """
+    web = _web_server()
+    try:
+        if (
+            response.status_code != 200
+            or response.mimetype != 'text/html'
+            or response.direct_passthrough
+            or response.is_streamed
+            or 'Content-Encoding' in response.headers
+        ):
+            return response
+        response.set_data(_stamp_static_urls(response.get_data(as_text=True), web.current_app.static_folder))
+    except Exception as e:  # versioning must never break a page
+        web.logger.debug(f"Static versioning skipped: {e}")
+    return response
+
+
+def static_asset_response(response):
+    """after_request hook for /static/: cache a current versioned URL for a year, stamp
+    the URLs inside stylesheets (fonts) and gzip text assets."""
+    web = _web_server()
+    if not web.request.path.startswith('/static/'):
+        return response
+    try:
+        root = web.current_app.static_folder
+        version = web.request.args.get('v')
+        if version and response.status_code in (200, 304) and version == _static_version(root, web.request.path[len('/static/'):]):
+            response.headers['Cache-Control'] = web._THUMB_IMMUTABLE_CACHE
+        if response.status_code != 200 or response.mimetype not in _GZIP_STATIC_TYPES or 'Content-Encoding' in response.headers:
+            return response
+        response.direct_passthrough = False
+        body = response.get_data()
+        if response.mimetype == 'text/css':
+            # shortcut: a stylesheet's own version ignores the files it names; rename a changed font instead of editing it in place.
+            body = _stamp_static_urls(body.decode('utf-8'), root).encode('utf-8')
+        if len(body) >= 1024 and web.request.accept_encodings.quality('gzip') > 0:
+            body = web.gzip.compress(body, compresslevel=6)
+            response.headers['Content-Encoding'] = 'gzip'
+            response.headers.pop('Accept-Ranges', None)
+            response.vary.add('Accept-Encoding')
+        response.set_data(body)
+        etag, _weak = response.get_etag()
+        if etag:
+            response.set_etag(etag, weak=True)  # the body is no longer byte-identical to the file
+    except Exception as e:  # caching and compression must never break a static file
+        web.logger.debug(f"Static asset headers skipped: {e}")
     return response
 
 

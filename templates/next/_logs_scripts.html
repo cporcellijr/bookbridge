@@ -278,15 +278,19 @@
         };
     }
 
+    // Load full history so the user sees all lines, not just the last 50
+    function loadLiveHistory() {
+        fetchLogs().then(() => {
+            displayedLinesStats.textContent = bbPlural(LINES_SHOWN_LIVE, logContent.children.length);
+        });
+    }
+
     // Toggle live mode
     function toggleLiveMode() {
         if (liveMode.checked) {
-            // Load full history first so the user sees all lines, not just the last 50
-            fetchLogs().then(() => {
-                displayedLinesStats.textContent = bbPlural(LINES_SHOWN_LIVE, logContent.children.length);
-            });
-            // Start polling for new entries
-            liveRefreshInterval = setInterval(fetchLiveLogs, 2000); // Poll every 2 seconds
+            loadLiveHistory();
+            // Poll every 2 seconds for new entries while the tab is visible
+            liveRefreshInterval = setInterval(() => { if (!document.hidden) fetchLiveLogs(); }, 2000);
             loadMore.style.display = 'none';
 
             // Disable auto-refresh when live mode is on
@@ -378,6 +382,10 @@
     });
 
     liveMode.addEventListener('change', toggleLiveMode);
+    // A hidden tab skips live polls; reload the history on return so nothing logged meanwhile is missed.
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && liveRefreshInterval) loadLiveHistory();
+    });
 
     scrollToTop.addEventListener('click', () => {
         logContent.scrollTop = 0;
