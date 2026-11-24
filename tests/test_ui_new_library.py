@@ -172,6 +172,25 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('.library-page[data-background="cover"]::before {', css)
         self.assertIn("background: var(--library-wallpaper, none) center / cover no-repeat;", css)
 
+    def test_shelf_props_switch_reaches_library_and_only_shelves_show_props(self):
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertRegex(html, r'id="library-page"[^>]*data-shelf-props="false"')
+        self.assertLess(html.index('/static/js/next/shelf-props.js'), html.index("function placeShelfProps()"))
+        self.service.set_user_credential(self.reader.id, "UI_SHELF_PROPS", "on")
+        self.assertRegex(self.client.get("/").get_data(as_text=True), r'id="library-page"[^>]*data-shelf-props="true"')
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertIn(".shelf-prop { display: none; }", css)
+        self.assertIn('.library-page[data-view="spines"][data-shelf-props="true"] .shelf-prop {', css)
+        for kind in ("plant", "stack", "candle"):
+            self.assertIn(f'.shelf-prop[data-prop="{kind}"] {{ --prop-w:', css)
+        self.assertIn('.shelf-prop[data-prop^="bookend"] { --prop-w:', css)
+        scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
+        self.assertRegex(scripts, r"if \(shelfPropsOn\(\)\) window\.bbShelfProps\?\.clear\(libraryGrid\);\s+sortCards\(")
+        filter_body = scripts[scripts.index("function filterBooks() {"):scripts.index("window.toggleSeries = function")]
+        self.assertIn("placeShelfProps();", filter_body, "filtering re-places the props around the visible books")
+
     def test_reader_accent_reaches_the_page_and_every_accent_is_complete(self):
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
         self._login("ui-reader")

@@ -268,7 +268,7 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
         library = normalize(library)
         # Exact allowed changes: new paired/attention predicates; localized counts;
         # storage denial handling; duplicate-card/spine updates and live sort values.
-        changes = LIBRARY_HEADER_ALLOWED_CHANGES + LIBRARY_ALLOWED_CHANGES + P16C_LIBRARY_ALLOWED_CHANGES
+        changes = LIBRARY_HEADER_ALLOWED_CHANGES + LIBRARY_ALLOWED_CHANGES + P16C_LIBRARY_ALLOWED_CHANGES + SHELF_PROPS_LIBRARY_ALLOWED_CHANGES
         for new, original in changes:
             new = normalize(new)
             self.assertIn(new, library, 'Allowed change moved: review it explicitly')
@@ -316,6 +316,25 @@ P16C_LIBRARY_ALLOWED_CHANGES = (
     ("refreshHeroFromPoll(data.mappings, cardsById);", ""),
 )
 
+
+# Shelf props (UI_SHELF_PROPS): New-only decoration taken out around a sort and placed again after it.
+SHELF_PROPS_LIBRARY_ALLOWED_CHANGES = (
+    ("// Props are decoration: take them out so the sort only orders books, then put them back.\n"
+     "function shelfPropsOn() {\n"
+     "return !!libraryGrid?.closest('.library-page[data-view=\"spines\"][data-shelf-props=\"true\"]');\n"
+     "}\n"
+     "function placeShelfProps() {\n"
+     "if (shelfPropsOn()) window.bbShelfProps?.place(libraryGrid);\n"
+     "}\n"
+     "function sortBooks(sortBy, direction) {\n"
+     "if (shelfPropsOn()) window.bbShelfProps?.clear(libraryGrid);\n"
+     "dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));\n"
+     "placeShelfProps();\n"
+     "}",
+     "function sortBooks(sortBy, direction) {\n"
+     "dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));\n"
+     "}"),
+)
 
 # P16a's intentional New-only changes, reversed exactly for the copied-Classic check.
 P16A_LIBRARY_ALLOWED_CHANGES = (

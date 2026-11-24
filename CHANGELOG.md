@@ -18,6 +18,9 @@ All notable changes to BookBridge will be documented in this file.
   **shelf finishes** for the shelf styles (Walnut, Cherry, White, Glass and Pastel); and a **Library
   background** that shows a soft blur of the book you are reading behind your Library. Each reader picks their
   own; Classic is unchanged.
+- **Shelf props.** Turn on **Shelf props** in Account → Display and the shelf styles gain a plant, a candle or a
+  small stack of books every few books, with bookends holding up your Spine shelves. They move with your
+  sorting and filters. Off by default.
 
 ## [7.14.0] - 2026-11-24
 

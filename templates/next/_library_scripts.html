@@ -609,6 +609,7 @@
                 updateFilterButtonLabel();
                 updateFilteredCount();
                 updateSearchHandoff(dashboardSearch ? dashboardSearch.value.trim() : '');
+                placeShelfProps();
 
                 // The first grouping pass must not overwrite saved filters before restore.
                 if (filterInitialized) {
@@ -834,8 +835,18 @@
                 sorted.forEach(el => grid.appendChild(el));
             }
 
+            // Props are decoration: take them out so the sort only orders books, then put them back.
+            function shelfPropsOn() {
+                return !!libraryGrid?.closest('.library-page[data-view="spines"][data-shelf-props="true"]');
+            }
+            function placeShelfProps() {
+                if (shelfPropsOn()) window.bbShelfProps?.place(libraryGrid);
+            }
+
             function sortBooks(sortBy, direction) {
+                if (shelfPropsOn()) window.bbShelfProps?.clear(libraryGrid);
                 sortCards(libraryGrid, sortBy, direction);
+                placeShelfProps();
             }
 
             function applySorting(sortBy) {

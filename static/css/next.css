@@ -503,6 +503,25 @@ body.series-grouping-off .series-group { display: none !important; }
  filter: blur(48px) saturate(1.3); opacity: .34;
 }
 :root[data-theme="light"] .library-page[data-background="cover"]::before { opacity: .3; }
+/* Shelf props (UI_SHELF_PROPS), placed by shelf-props.js; they stand on the plank like the books. */
+.shelf-prop { display: none; }
+.library-page[data-view="spines"][data-shelf-props="true"] .shelf-prop {
+ --prop-scale: 1; display: block; flex: none; pointer-events: none;
+ width: calc(var(--prop-w) * var(--prop-scale)); height: calc(var(--prop-h) * var(--prop-scale));
+ margin-top: calc(224px - var(--prop-h) * var(--prop-scale));
+ background: var(--prop-art) center bottom / contain no-repeat;
+ filter: drop-shadow(6px -1px 6px var(--shelf-shadow));
+}
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-prop {
+ --prop-scale: 1.35; margin-top: calc(214px - var(--prop-h) * var(--prop-scale));
+}
+/* Face-out spaces items evenly, so a bookend would stand apart from the covers it should hold. */
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-prop[data-prop^="bookend"] { display: none; }
+.shelf-prop[data-prop="plant"] { --prop-w: 48px; --prop-h: 88px; --prop-art: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 88'><path d='M24 54C10 46 3 31 6 15c9 7 15 20 18 39z' fill='%234F8A5B'/><path d='M24 54c14-8 21-23 18-39-9 7-15 20-18 39z' fill='%235FA06A'/><path d='M24 56C19 37 21 16 24 3c3 13 5 34 0 53z' fill='%236DB477'/><path d='M10 56h28l-4 32H14z' fill='%23B8643F'/><path d='M8 53h32v7H8z' fill='%23C97650'/></svg>"); }
+.shelf-prop[data-prop="stack"] { --prop-w: 72px; --prop-h: 42px; --prop-art: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 72 42'><rect x='3' y='29' width='66' height='13' rx='2' fill='%234A6A8A'/><rect x='64' y='31' width='3' height='9' fill='%23E8E0CE'/><rect x='8' y='16' width='58' height='13' rx='2' fill='%238A4A3F'/><rect x='61' y='18' width='3' height='9' fill='%23E8E0CE'/><rect x='1' y='4' width='60' height='12' rx='2' fill='%236A7A4A'/><rect x='56' y='6' width='3' height='8' fill='%23E8E0CE'/></svg>"); }
+.shelf-prop[data-prop="candle"] { --prop-w: 26px; --prop-h: 64px; --prop-art: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 64'><path d='M13 2c5 6 6 11 0 17-6-6-5-11 0-17z' fill='%23F5A623'/><path d='M13 9c2 3 2 6 0 8-2-2-2-5 0-8z' fill='%23FFE08A'/><path d='M13 19v4' stroke='%23333' stroke-width='1.5'/><rect x='7' y='23' width='12' height='35' rx='2' fill='%23F1E7D2'/><rect x='1' y='57' width='24' height='7' rx='3' fill='%23A08C6A'/></svg>"); }
+.shelf-prop[data-prop^="bookend"] { --prop-w: 24px; --prop-h: 110px; --prop-art: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 110'><path d='M12 0h10v110H0v-10h12z' fill='%23A8834A'/><path d='M14 2h3v96h-3z' fill='%23D9B676'/><path d='M2 102h18v2H2z' fill='%23D9B676'/></svg>"); }
+.shelf-prop[data-prop="bookend-start"] { transform: scaleX(-1); }
 .library-page[data-view="spines"] .book-grid {
  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 58px 4px; padding: 14px 18px 50px;
  background-image: linear-gradient(to bottom,

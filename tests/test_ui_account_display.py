@@ -138,6 +138,26 @@ class TestAccountDisplayPage(unittest.TestCase):
         self.assertNotIn('UI_ACCENT', classic)
         self.assertNotIn('UI_LIBRARY_BACKGROUND', classic)
 
+    def test_shelf_props_switch_shows_only_for_shelf_styles_and_saves_per_reader(self):
+        self._real_templates()
+        self._series_books()
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        for style in ('faceout', 'spines', 'cards', 'list'):
+            with self.subTest(style=style):
+                self.service.set_user_credential(self.reader.id, 'UI_LIBRARY_STYLE', style)
+                html = self.client.get('/account/display').get_data(as_text=True)
+                form = re.search(r'<form class="account-shelf-props-form.*?</form>', html, re.S).group()
+                self.assertEqual(' hidden>' in form.split('>')[0] + '>', style in ('cards', 'list'))
+                self.assertIn('name="UI_SHELF_PROPS" value="true" role="switch" aria-checked="false"', form)
+        self.assertIn('/static/js/next/shelf-props.js', html)
+        self.client.post('/account/display?next=/account/display', data={'UI_SHELF_PROPS': 'on'})
+        self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_PROPS'), 'true')
+        self.assertIsNone(self.service.get_user_credential(self.admin.id, 'UI_SHELF_PROPS'))
+        html = self.client.get('/account/display').get_data(as_text=True)
+        self.assertIn('data-shelf-props="true"', html)
+        self.assertIn('name="UI_SHELF_PROPS" value="true" role="switch" aria-checked="true"', html)
+
     def test_classic_menu_display_link_opens_existing_card(self):
         self._real_templates()
         self.service.set_user_credential(self.reader.id, 'UI_MODE', 'classic')
@@ -451,6 +471,20 @@ class TestDisplayPageScript(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             [node, str(root / "tests/test_ui_new_display.js")],
+            cwd=root, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_shelf_props_node_regressions(self):
+        import shutil
+        import subprocess
+        from pathlib import Path
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js not available")
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [node, str(root / "tests/test_ui_shelf_props.js")],
             cwd=root, capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

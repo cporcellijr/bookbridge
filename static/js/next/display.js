@@ -7,12 +7,14 @@
     var statuses = new WeakMap();
     var sizeRow = document.querySelector('.display-size-row');
     var finishRow = document.querySelector('.display-finish-row');
+    var propsRow = document.querySelector('.display-props-row');
     var previewSwitches = {
         UI_SHOW_PROGRESS: 'showProgress',
         UI_SHOW_FINISHED: 'showFinished',
         UI_SHOW_FORMAT_STRIP: 'showFormatStrip',
         UI_SHOW_RATINGS: 'showRatings',
-        UI_SHOW_TITLES: 'showTitles'
+        UI_SHOW_TITLES: 'showTitles',
+        UI_SHELF_PROPS: 'shelfProps'
     };
     var sizeHelp = ['4 per row on a phone', '3 per row on a phone',
         '2 per row on a phone', '2 per row on a phone', '2 per row on a phone'];
@@ -39,10 +41,11 @@
     }
 
     function syncFinishRow() {
-        if (!finishRow) return;
         var styleForm = document.querySelector('[data-display-setting="UI_LIBRARY_STYLE"]');
         var style = styleForm ? selected(styleForm) : (stage && stage.dataset.libraryStyle);
-        finishRow.hidden = style !== 'spines' && style !== 'faceout';
+        [finishRow, propsRow].forEach(function (row) {
+            if (row) row.hidden = style !== 'spines' && style !== 'faceout';
+        });
     }
 
     function refreshSizeStepper(form, value) {
@@ -218,4 +221,5 @@
     syncSizeRow();
     syncFinishRow();
     if (stage && stage.dataset.view === 'spines') paintPreviewSpines();
+    if (stage && window.bbShelfProps) window.bbShelfProps.place(stage.querySelector('.display-preview-flat'));
 }());
