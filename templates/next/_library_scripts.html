@@ -1210,6 +1210,17 @@
                 cover.querySelector('.hero-cover-backdrop')?.remove();
                 cover.classList.remove('is-square');
                 const image = cover.querySelector('.cover-image');
+                const page = document.getElementById('library-page');
+                if (page?.dataset.background === 'cover' && !image) page.style.removeProperty('--library-wallpaper');
+                if (page?.dataset.background === 'cover' && image) {
+                    // Follow the hero to a new book; the server rendered the first one.
+                    const wallpaper = () => {
+                        const src = image.isConnected && !image.hidden && image.naturalWidth && (image.currentSrc || image.src);
+                        if (src) page.style.setProperty('--library-wallpaper', 'url(' + JSON.stringify(src) + ')');
+                    };
+                    image.addEventListener('load', wallpaper, {once: true});
+                    if (image.complete) wallpaper();
+                }
                 if (!image) return;
                 const fit = () => {
                     if (!image.isConnected || !image.naturalWidth || cover.querySelector('.hero-cover-backdrop')) return;

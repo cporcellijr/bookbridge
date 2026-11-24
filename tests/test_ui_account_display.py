@@ -91,7 +91,7 @@ class TestAccountDisplayPage(unittest.TestCase):
         self._login('ui-reader')
         for style in ('faceout', 'spines', 'cards', 'list'):
             self.service.set_user_credential(self.reader.id, 'UI_LIBRARY_STYLE', style)
-            for finish in ('theme', 'wood', 'dark', 'plain'):
+            for finish in ('theme', 'wood', 'dark', 'plain', 'walnut', 'cherry', 'white', 'glass', 'pastel'):
                 with self.subTest(style=style, finish=finish):
                     self.service.set_user_credential(self.reader.id, 'UI_SHELF_FINISH', finish)
                     html = self.client.get('/account/display').get_data(as_text=True)
@@ -110,6 +110,33 @@ class TestAccountDisplayPage(unittest.TestCase):
         self.assertEqual((response.status_code, response.location), (302, '/account/display'))
         self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_FINISH'), 'plain')
         self.assertIsNone(self.service.get_user_credential(self.admin.id, 'UI_SHELF_FINISH'))
+
+    def test_accent_and_library_background_render_save_and_stay_per_reader(self):
+        self._real_templates()
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        for key, form_class, values, default in (
+            ('UI_ACCENT', 'account-accent-form', ('amber', 'teal', 'rose', 'violet', 'blue'), 'amber'),
+            ('UI_LIBRARY_BACKGROUND', 'account-background-form', ('none', 'cover'), 'none'),
+        ):
+            with self.subTest(key=key):
+                html = self.client.get('/account/display').get_data(as_text=True)
+                form = re.search(rf'<form class="{form_class}.*?</form>', html, re.S).group()
+                self.assertIn(f'data-display-setting="{key}"', form)
+                self.assertRegex(form, rf'name="{key}" value="{default}"[^>]*aria-pressed="true"')
+                for value in values:
+                    self.assertIn(f'name="{key}" value="{value}"', form)
+                response = self.client.post('/account/display?next=/account/display', data={key: values[-1]})
+                self.assertEqual((response.status_code, response.location), (302, '/account/display'))
+                self.assertEqual(self.service.get_user_credential(self.reader.id, key), values[-1])
+                self.assertIsNone(self.service.get_user_credential(self.admin.id, key))
+                bogus = self.client.post('/account/display', json={key: 'neon'})
+                self.assertEqual(bogus.status_code, 400)
+        self.assertRegex(self.client.get('/account/display').get_data(as_text=True), r'<html[^>]*data-accent="blue"')
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'classic')
+        classic = self.client.get('/account').get_data(as_text=True)
+        self.assertNotIn('UI_ACCENT', classic)
+        self.assertNotIn('UI_LIBRARY_BACKGROUND', classic)
 
     def test_classic_menu_display_link_opens_existing_card(self):
         self._real_templates()

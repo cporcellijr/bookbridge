@@ -103,6 +103,7 @@
             if (previewSwitches[key]) stage.dataset[previewSwitches[key]] = value;
         }
         if (key === 'UI_THEME' && window.bbApplyThemePreference) window.bbApplyThemePreference(value);
+        if (key === 'UI_ACCENT') document.documentElement.dataset.accent = value;
     }
 
     function paintPreviewSpines() {

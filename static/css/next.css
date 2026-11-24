@@ -18,6 +18,17 @@
   --ok-bg: rgba(29,132,87,.10); --warn-bg: rgba(191,85,25,.10); --bad-bg: rgba(201,44,68,.09); --info-bg: rgba(44,97,198,.09);
   color-scheme: light;
 }
+/* Reader accent (UI_ACCENT). Amber is the :root default above; --amber stays fixed for the per-app audio colour. */
+:root { --amber: #F2B544; --ribbon-bright: #F7C766; }
+:root[data-theme="light"] { --amber: #D29A22; }
+:root[data-accent="teal"] { --ribbon: #3CC8B4; --ribbon-hover: #5ED6C5; --ribbon-strong: #5ED6C5; --ribbon-ink: #04211D; --ribbon-bright: #5ED6C5; }
+:root[data-accent="rose"] { --ribbon: #F27A9B; --ribbon-hover: #F598B1; --ribbon-strong: #F598B1; --ribbon-ink: #2A0A13; --ribbon-bright: #F598B1; }
+:root[data-accent="violet"] { --ribbon: #B49BFF; --ribbon-hover: #C8B6FF; --ribbon-strong: #C8B6FF; --ribbon-ink: #170D33; --ribbon-bright: #C8B6FF; }
+:root[data-accent="blue"] { --ribbon: #6FA8FF; --ribbon-hover: #92BEFF; --ribbon-strong: #92BEFF; --ribbon-ink: #06152E; --ribbon-bright: #92BEFF; }
+:root[data-theme="light"][data-accent="teal"] { --ribbon: #1FA392; --ribbon-hover: #34B8A6; --ribbon-strong: #0D6A5E; --ribbon-ink: #03201C; }
+:root[data-theme="light"][data-accent="rose"] { --ribbon: #E0577E; --ribbon-hover: #E86A8D; --ribbon-strong: #A3284E; --ribbon-ink: #2A0812; }
+:root[data-theme="light"][data-accent="violet"] { --ribbon: #9474F2; --ribbon-hover: #A085F5; --ribbon-strong: #5A3AC0; --ribbon-ink: #140A2E; }
+:root[data-theme="light"][data-accent="blue"] { --ribbon: #4C86E8; --ribbon-hover: #5E93EE; --ribbon-strong: #2355AE; --ribbon-ink: #06152E; }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { min-height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 var(--font-ui); -webkit-font-smoothing: antialiased; }
@@ -465,6 +476,33 @@ body.series-grouping-off .series-group { display: none !important; }
  --shelf-wall-shade: rgba(38,50,65,.06); --shelf-shadow: rgba(38,50,65,.25);
  --plank-back: #CCD1D7; --plank-top: #E6E9EC; --plank-lip: #F5F6F8; --plank-front: #B7BFC7; --plank-under: #9CA5AF;
 }
+:root .library-page[data-view="spines"][data-shelf-finish="walnut"] {
+ --shelf-wall-shade: rgba(20,10,4,.18); --shelf-shadow: rgba(20,10,4,.55);
+ --plank-back: #4A2F1E; --plank-top: #6B4630; --plank-lip: #8A5E40; --plank-front: #50331F; --plank-under: #2E1C11;
+}
+:root .library-page[data-view="spines"][data-shelf-finish="cherry"] {
+ --shelf-wall-shade: rgba(40,10,5,.14); --shelf-shadow: rgba(40,10,5,.5);
+ --plank-back: #7A3524; --plank-top: #9B4A33; --plank-lip: #B8644A; --plank-front: #803826; --plank-under: #4F2016;
+}
+:root .library-page[data-view="spines"][data-shelf-finish="white"] {
+ --shelf-wall-shade: rgba(40,40,40,.06); --shelf-shadow: rgba(40,40,40,.28);
+ --plank-back: #D9D9D4; --plank-top: #F2F2EE; --plank-lip: #FFFFFF; --plank-front: #DADAD5; --plank-under: #B5B5AF;
+}
+:root .library-page[data-view="spines"][data-shelf-finish="glass"] {
+ --shelf-wall-shade: rgba(0,0,0,.04); --shelf-shadow: rgba(0,0,0,.18);
+ --plank-back: rgba(170,210,230,.18); --plank-top: rgba(200,230,245,.38); --plank-lip: rgba(235,250,255,.75); --plank-front: rgba(160,200,220,.24); --plank-under: rgba(120,160,180,.12);
+}
+:root .library-page[data-view="spines"][data-shelf-finish="pastel"] {
+ --shelf-wall-shade: rgba(120,60,90,.06); --shelf-shadow: rgba(120,60,90,.3);
+ --plank-back: #E3A4BA; --plank-top: #F7C9D9; --plank-lip: #FFE4EE; --plank-front: #EDB0C5; --plank-under: #C98AA0;
+}
+/* Library background (UI_LIBRARY_BACKGROUND=cover): the current book's cover, blurred behind the page. */
+.library-page[data-background="cover"]::before {
+ content: ""; position: fixed; inset: -80px; z-index: -1; pointer-events: none;
+ background: var(--library-wallpaper, none) center / cover no-repeat;
+ filter: blur(48px) saturate(1.3); opacity: .34;
+}
+:root[data-theme="light"] .library-page[data-background="cover"]::before { opacity: .3; }
 .library-page[data-view="spines"] .book-grid {
  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 58px 4px; padding: 14px 18px 50px;
  background-image: linear-gradient(to bottom,
@@ -491,7 +529,7 @@ body.series-grouping-off .series-group { display: none !important; }
 .library-page[data-view="spines"] .book-copy h3 { display: block; min-height: 0; -webkit-line-clamp: none; -webkit-box-orient: initial; max-height: 168px; margin: 0; overflow: hidden; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; text-overflow: ellipsis; font: 600 var(--spine-font, 16px)/1.1 var(--font-book); color: inherit; }
 .library-page[data-view="spines"] .book-copy h3 small { display: none; }
 /* The foot of a spine carries a gold tick once the book is finished. */
-.library-page[data-view="spines"] .spine-progress { display: block; padding: 0 0 8px; text-align: center; line-height: 0; color: #F7C766; }
+.library-page[data-view="spines"] .spine-progress { display: block; padding: 0 0 8px; text-align: center; line-height: 0; color: var(--ribbon-bright); }
 .library-page[data-view="spines"] .spine-progress svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
 /* The cover's outer left edge, stretched across the spine like a wrap, is its artwork, darkened so the title reads; the sampled colour shows while it loads or when there is none. */
 .library-page[data-view="spines"] .book-card:not([data-reading]) .cover-wrap { display: block; position: absolute; inset: 0; z-index: 0; height: auto; border-radius: inherit; background: none; }
@@ -656,6 +694,10 @@ body.series-grouping-off .series-group { display: none !important; }
 .display-style-tiles svg { width: 100%; max-width: 76px; height: 34px; fill: var(--text-2); opacity: .75; }
 .display-style-tiles button[aria-pressed="true"] svg { fill: var(--text); opacity: 1; }
 .display-style-tiles button span { text-align: center; }
+.display-swatches { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.display-swatches button { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-2); border-radius: 99px; padding: 4px 11px 4px 5px; background: var(--bg-2); color: var(--text-2); font: 600 11px/1.2 var(--font-ui); cursor: pointer; }
+.display-swatches button[aria-pressed="true"] { background: var(--surface-2); border-color: var(--ribbon); box-shadow: inset 0 0 0 1px var(--ribbon); color: var(--text); }
+.display-swatch { width: 24px; height: 24px; flex: none; border-radius: 50%; border: 1px solid rgba(0,0,0,.25); background: var(--swatch); }
 .display-switch { appearance: none; -webkit-appearance: none; flex: none; width: 38px; height: 22px; margin: 0; border: 1px solid var(--line-2); background: var(--bg-2); border-radius: 99px; position: relative; cursor: pointer; transition: background .15s; }
 .display-switch::before { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-2); transition: transform .15s; }
 .display-switch:checked { background: var(--accent, #7599c9); }
@@ -892,7 +934,7 @@ body.series-grouping-off .series-group { display: none !important; }
 /* The hero: one card for the most recently moved book. Spacing separates its parts, never rules. */
 .library-hero[hidden], #library-grid > .book-card[data-hero-excluded="true"] { display: none !important; }
 .library-hero [hidden] { display: none !important; }
-.library-hero { --hero-cover-w: 216px; --hero-audio: var(--ribbon); --hero-ebook: var(--info); --hero-koreader: var(--ok); --hero-readalong: var(--warn); margin: 0 0 14px; min-width: 0; container-type: inline-size; }
+.library-hero { --hero-cover-w: 216px; --hero-audio: var(--amber); --hero-ebook: var(--info); --hero-koreader: var(--ok); --hero-readalong: var(--warn); margin: 0 0 14px; min-width: 0; container-type: inline-size; }
 .library-hero-link { display: flex; align-items: stretch; gap: 28px; box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid var(--line-2); border-radius: 16px; background: var(--surface); color: var(--text); text-decoration: none; overflow: hidden; }
 .library-hero-link:hover { border-color: var(--info); background: var(--surface-2); }
 .library-hero-link:focus-visible { outline: 3px solid var(--info); outline-offset: 3px; }

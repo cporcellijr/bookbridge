@@ -13,6 +13,11 @@ All notable changes to BookBridge will be documented in this file.
   Audiobookshelf copy of the same files** in your BookOrbit integration. A requested audiobook then pairs the
   Audiobookshelf item holding the same files instead of BookOrbit's copy, and falls back to BookOrbit's copy
   when no single item matches. Off by default; existing pairings are not moved (#585).
+- **More ways to make the New interface's Library your own.** Account → Display now has an **Accent colour**
+  (Amber, Teal, Rose, Violet or Blue) for progress bars, highlights and the current-page marker; five more
+  **shelf finishes** for the shelf styles (Walnut, Cherry, White, Glass and Pastel); and a **Library
+  background** that shows a soft blur of the book you are reading behind your Library. Each reader picks their
+  own; Classic is unchanged.
 
 ## [7.14.0] - 2026-11-24
 

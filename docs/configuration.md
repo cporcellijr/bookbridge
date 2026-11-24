@@ -1177,8 +1177,10 @@ settings read only at startup, which restart the app when saved in Settings.
 | --- | --- | --- | --- |
 | `UI_MODE` | `classic` | each reader |  |
 | `UI_THEME` | `auto` | server default; each reader can override |  |
+| `UI_ACCENT` | `amber` | server default; each reader can override |  |
 | `UI_LIBRARY_STYLE` | `cards` | server default; each reader can override |  |
 | `UI_SHELF_FINISH` | `theme` | server default; each reader can override |  |
+| `UI_LIBRARY_BACKGROUND` | `none` | server default; each reader can override |  |
 | `UI_COVER_SIZE` | `2` | server default; each reader can override |  |
 | `UI_SHOW_PROGRESS` | `true` | server default; each reader can override |  |
 | `UI_SHOW_FINISHED` | `true` | server default; each reader can override |  |

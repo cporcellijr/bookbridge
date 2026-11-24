@@ -34,8 +34,8 @@ Display holds every look-and-feel choice for your account, including switching b
 <div class="bb-callouts" markdown>
 1. **Live preview,** built from your own library.
 2. **Look:** Classic or New. See [Classic and New](../new-interface.md).
-3. **Theme:** Follow device (the default), Day or Night. The Day/Night button in the sidebar changes the same setting.
-4. **Library style:** Cards, Face-out shelves, Spine shelves or List. The two shelf styles also take a shelf finish.
+3. **Theme:** Follow device (the default), Day or Night. The Day/Night button in the sidebar changes the same setting. **Accent colour** (Amber, Teal, Rose, Violet or Blue) colours progress bars, highlights and the current-page marker.
+4. **Library style:** Cards, Face-out shelves, Spine shelves or List. The two shelf styles also take a shelf finish: Match theme, Wood, Walnut, Cherry, White, Dark, Plain, Glass or Pastel. **Library background** can show a soft blur of the book you are reading behind your Library.
 5. **Book covers:** cover size, and whether covers show progress, the finished tick, the format strip, rating stars, and the title and author.
 </div>
 

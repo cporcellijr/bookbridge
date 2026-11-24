@@ -118,13 +118,15 @@ class TestNewLibrary(unittest.TestCase):
         self._login("ui-reader")
         for style in ("spines", "faceout", "cards", "list"):
             self.service.set_user_credential(self.reader.id, "UI_LIBRARY_STYLE", style)
-            for finish in ("theme", "wood", "dark", "plain"):
+            for finish in ("theme", "wood", "dark", "plain", "walnut", "cherry", "white", "glass", "pastel"):
                 with self.subTest(style=style, finish=finish):
                     self.service.set_user_credential(self.reader.id, "UI_SHELF_FINISH", finish)
                     html = self.client.get("/").get_data(as_text=True)
                     self.assertRegex(html, rf'id="library-page"[^>]*data-shelf-finish="{finish}"')
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
-        for finish, plank in (("wood", "#B9955F"), ("dark", "#1E2430"), ("plain", "#2C333D")):
+        for finish, plank in (("wood", "#B9955F"), ("dark", "#1E2430"), ("plain", "#2C333D"),
+                              ("walnut", "#4A2F1E"), ("cherry", "#7A3524"), ("white", "#D9D9D4"),
+                              ("glass", "rgba(170,210,230,.18)"), ("pastel", "#E3A4BA")):
             with self.subTest(finish=finish):
                 rule = f':root .library-page[data-view="spines"][data-shelf-finish="{finish}"] {{'
                 self.assertIn(rule, css)
@@ -145,6 +147,45 @@ class TestNewLibrary(unittest.TestCase):
         self.assertNotIn('[data-shelf-finish="theme"]', css)
         self.assertNotIn('[data-view="covers"][data-shelf-finish=', css)
         self.assertNotIn('[data-view="list"][data-shelf-finish=', css)
+
+    def test_library_background_follows_the_current_book(self):
+        from src import web_server
+        self.service.save_state(State(abs_id="library-book", client_name="abs", percentage=.42,
+            timestamp=1512, last_updated=1793800300, user_id=self.reader.id))
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        page = lambda: re.search(r'<div id="library-page"[^>]*>', self.client.get("/").get_data(as_text=True)).group()
+        self.assertIn('data-background="none"', page())
+        self.assertNotIn("--library-wallpaper", page())
+        self.service.set_user_credential(self.reader.id, "UI_LIBRARY_BACKGROUND", "cover")
+        self.assertIn("data-background=\"cover\" style=\"--library-wallpaper: url('/api/cover-proxy/library-book')\"", page())
+        self.service.set_user_credential(self.reader.id, "UI_SHOW_HERO", "false")
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("url('/api/cover-proxy/library-book')", html, "the background does not need the hero card")
+        self.assertNotIn('data-hero-excluded="true"', html)
+        hostile = {"abs_id": "x", "cover_url": "/c'\");}body{background:red}\\"}
+        with patch.object(web_server, "_pick_hero_mapping", return_value=hostile):
+            self.assertIn("url('/c%27%22);}body{background:red}%5C')", page())
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "classic")
+        self.assertNotIn("--library-wallpaper", self.client.get("/").get_data(as_text=True))
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        self.assertIn('.library-page[data-background="cover"]::before {', css)
+        self.assertIn("background: var(--library-wallpaper, none) center / cover no-repeat;", css)
+
+    def test_reader_accent_reaches_the_page_and_every_accent_is_complete(self):
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        self.assertIn('data-accent="amber"', self.client.get("/").get_data(as_text=True))
+        self.service.set_user_credential(self.reader.id, "UI_ACCENT", "teal")
+        self.assertRegex(self.client.get("/").get_data(as_text=True), r'<html[^>]*data-accent="teal"')
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        for accent in ("teal", "rose", "violet", "blue"):
+            for rule in (f':root[data-accent="{accent}"] {{', f':root[data-theme="light"][data-accent="{accent}"] {{'):
+                with self.subTest(rule=rule):
+                    body = css[css.index(rule):css.index("}", css.index(rule))]
+                    for token in ("--ribbon:", "--ribbon-hover:", "--ribbon-strong:", "--ribbon-ink:"):
+                        self.assertIn(token, body)
+        self.assertIn("--hero-audio: var(--amber);", css, "the per-app audio colour stays amber")
 
     def test_cover_size_steps_and_visibility_rules_affect_only_new_library(self):
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
@@ -422,7 +463,8 @@ class TestNewLibrary(unittest.TestCase):
         # Cover art replaces the flat top band; a coverless spine keeps it.
         self.assertIn(spines + ".book-card:not([data-reading]):has(.cover-image:not([hidden]))::before { display: none; }", css)
         # The finished tick is gold and shadowed like the title when it sits on cover art.
-        self.assertIn(spines + ".spine-progress { display: block; padding: 0 0 8px; text-align: center; line-height: 0; color: #F7C766; }", css)
+        self.assertIn(spines + ".spine-progress { display: block; padding: 0 0 8px; text-align: center; line-height: 0; color: var(--ribbon-bright); }", css)
+        self.assertIn(":root { --amber: #F2B544; --ribbon-bright: #F7C766; }", css)
         self.assertIn(spines + ".book-card:has(.cover-image:not([hidden])) .spine-progress { filter: drop-shadow(", css)
         # A square cover fills the face-out card instead of leaving bands.
         self.assertIn(spines + ".book-card[data-reading] .cover-image { object-fit: cover; }", css)

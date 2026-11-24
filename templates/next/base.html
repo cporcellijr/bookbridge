@@ -1,6 +1,7 @@
 <!doctype html>
-{% set theme_pref = display_settings()['UI_THEME'] %}
-<html lang="{{ get_locale() }}" data-theme="{{ 'light' if theme_pref == 'day' else 'dark' }}" data-theme-pref="{{ theme_pref }}">
+{% set base_display = display_settings() %}
+{% set theme_pref = base_display['UI_THEME'] %}
+<html lang="{{ get_locale() }}" data-theme="{{ 'light' if theme_pref == 'day' else 'dark' }}" data-theme-pref="{{ theme_pref }}" data-accent="{{ base_display['UI_ACCENT'] }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">

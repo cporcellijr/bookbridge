@@ -21,8 +21,10 @@ _HERO_CHOICES = ("", "synopsis", "stats", "synopsis,stats", "stats,streak", "syn
 
 DISPLAY_SETTINGS: dict[str, tuple[str, ...]] = {
     "UI_THEME": ("auto", "day", "night"),
+    "UI_ACCENT": ("amber", "teal", "rose", "violet", "blue"),
     "UI_LIBRARY_STYLE": ("cards", "faceout", "spines", "list"),
-    "UI_SHELF_FINISH": ("theme", "wood", "dark", "plain"),
+    "UI_SHELF_FINISH": ("theme", "wood", "dark", "plain", "walnut", "cherry", "white", "glass", "pastel"),
+    "UI_LIBRARY_BACKGROUND": ("none", "cover"),
     "UI_COVER_SIZE": ("1", "2", "3", "4", "5"),
     "UI_SHOW_PROGRESS": _BOOL,
     "UI_SHOW_FINISHED": _BOOL,

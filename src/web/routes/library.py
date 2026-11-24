@@ -45,13 +45,18 @@ def index():
     grouped_mappings = web._group_dashboard_mappings_by_series(mappings)
     library_template = web.ui_template('index.html')
     hero_mapping = None
-    if library_template == 'next/index.html' and web._display_settings_for(user)["UI_SHOW_HERO"] == "true":
-        hero_mapping = web._pick_hero_mapping(mappings)
-        if hero_mapping:
-            hero_mapping["is_hero"] = True
-            leader = hero_mapping.get("last_sync_leader")
-            hero_mapping["hero_leader_service"] = web._hero_leader_service(leader)
-            hero_mapping["hero_leader_progress"] = web._hero_leader_percent(hero_mapping, leader)
+    wallpaper_mapping = None
+    if library_template == 'next/index.html':
+        display = web._display_settings_for(user)
+        if display["UI_SHOW_HERO"] == "true":
+            hero_mapping = web._pick_hero_mapping(mappings)
+            if hero_mapping:
+                hero_mapping["is_hero"] = True
+                leader = hero_mapping.get("last_sync_leader")
+                hero_mapping["hero_leader_service"] = web._hero_leader_service(leader)
+                hero_mapping["hero_leader_progress"] = web._hero_leader_percent(hero_mapping, leader)
+        if display["UI_LIBRARY_BACKGROUND"] == "cover":
+            wallpaper_mapping = hero_mapping or web._pick_hero_mapping(mappings)
 
     latest_version, update_available = web.get_update_status()
     whats_new_ctx = web._build_whats_new_context(user)
@@ -65,6 +70,7 @@ def index():
     return web.render_template(
         library_template,
         hero_mapping=hero_mapping,
+        wallpaper_mapping=wallpaper_mapping,
         mappings=mappings,
         grouped_mappings=grouped_mappings,
         integrations=integrations,

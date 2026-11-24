@@ -34,7 +34,9 @@ function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'sp
     };
     const stage = {dataset: {view: 'covers', libraryStyle: 'cards', shelfFinish: 'theme'}, querySelectorAll() { return []; }};
     const page = {classList: {add(name) { values.className = name; }}};
+    const root = {dataset: {accent: choices[0]}};
     const document = {
+        documentElement: root,
         querySelector(selector) {
             if (selector === '.display-page') return page;
             if (selector === '.display-size-row') return sizeRow;
@@ -62,7 +64,7 @@ function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'sp
         await new Promise(resolve => setImmediate(resolve));
         assert.equal(prevented, true);
     }
-    return {click, buttons, stage, attrs, values, requests, status};
+    return {click, buttons, stage, attrs, values, requests, status, root};
 }
 
 function verifyShellThemeBridge() {
@@ -215,19 +217,30 @@ function mountCoverSetting(key, {initial = 'true', fails = false} = {}) {
     const failedStyleFinish = mount({fails: true, finishRow: failedFinishRow});
     await failedStyleFinish.click('spines');
     assert.equal(failedFinishRow.hidden, true, 'failed style save restores finish visibility');
-    for (const finish of ['wood', 'dark', 'plain']) {
-        const control = mount({key: 'UI_SHELF_FINISH', choices: ['theme', 'wood', 'dark', 'plain']});
+    const finishes = ['theme', 'wood', 'dark', 'plain', 'walnut', 'cherry', 'white', 'glass', 'pastel'];
+    for (const finish of finishes.slice(1)) {
+        const control = mount({key: 'UI_SHELF_FINISH', choices: finishes});
         await control.click(finish);
         assert.equal(control.requests.length, 1, 'finish change makes exactly one POST');
         assert.equal(control.requests[0].url, '/account/display');
         assert.equal(JSON.parse(control.requests[0].options.body).UI_SHELF_FINISH, finish);
         assert.equal(control.stage.dataset.shelfFinish, finish, 'preview updates immediately');
         assert.equal(control.buttons.find(button => button.dataset.displayValue === finish).attrs['aria-pressed'], 'true');
-        const failed = mount({key: 'UI_SHELF_FINISH', choices: ['theme', 'wood', 'dark', 'plain'], fails: true});
+        const failed = mount({key: 'UI_SHELF_FINISH', choices: finishes, fails: true});
         await failed.click(finish);
         assert.equal(failed.stage.dataset.shelfFinish, 'theme', 'failed finish save rolls back preview');
         assert.equal(failed.buttons[0].attrs['aria-pressed'], 'true');
         assert.equal(failed.attrs['data-error'], true);
+    }
+    const accents = ['amber', 'teal', 'rose', 'violet', 'blue'];
+    for (const accent of accents.slice(1)) {
+        const control = mount({key: 'UI_ACCENT', choices: accents});
+        await control.click(accent);
+        assert.equal(JSON.parse(control.requests[0].options.body).UI_ACCENT, accent);
+        assert.equal(control.root.dataset.accent, accent, 'accent applies to the page immediately');
+        const failed = mount({key: 'UI_ACCENT', choices: accents, fails: true});
+        await failed.click(accent);
+        assert.equal(failed.root.dataset.accent, 'amber', 'failed accent save restores the accent');
     }
 
     for (const [key, dataset] of [

@@ -7,6 +7,11 @@
     {% for value, name in values %}<button type="submit" name="{{ key }}" value="{{ value }}" data-display-value="{{ value }}" aria-pressed="{{ 'true' if current == value else 'false' }}">{{ name }}</button>{% endfor %}
 </div>
 {% endmacro %}
+{% macro swatches(key, values, current, label) %}
+<div class="display-swatches" role="group" aria-label="{{ label }}">
+    {% for value, name, colour in values %}<button type="submit" name="{{ key }}" value="{{ value }}" data-display-value="{{ value }}" aria-pressed="{{ 'true' if current == value else 'false' }}"><span class="display-swatch" style="--swatch: {{ colour }}" aria-hidden="true"></span>{{ name }}</button>{% endfor %}
+</div>
+{% endmacro %}
 {% macro cover_switch(key, name, current, help_text='') %}
 <form class="account-cover-toggle-form display-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="{{ key }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -58,6 +63,13 @@
                     {{ segmented('UI_THEME', [('auto', _('Follow device')), ('day', _('Day')), ('night', _('Night'))], display.UI_THEME, _('Theme')) }}
                     <button class="display-fallback-save" type="submit">{{ _('Save theme') }}</button>
                 </form>
+                <form class="account-accent-form display-row display-row-stacked" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_ACCENT">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_ACCENT" value="{{ display.UI_ACCENT }}">
+                    <div class="display-label"><strong>{{ _('Accent colour') }}</strong><small>{{ _('Progress bars, highlights and the current page marker.') }}</small></div>
+                    {{ swatches('UI_ACCENT', [('amber', _('Amber'), '#F2B544'), ('teal', _('Teal'), '#3CC8B4'), ('rose', _('Rose'), '#F27A9B'), ('violet', _('Violet'), '#B49BFF'), ('blue', _('Blue'), '#6FA8FF')], display.UI_ACCENT, _('Accent colour')) }}
+                    <button class="display-fallback-save" type="submit">{{ _('Save accent colour') }}</button>
+                </form>
                 <form class="account-library-style-form display-row display-row-stacked" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_LIBRARY_STYLE">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="UI_LIBRARY_STYLE" value="{{ display.UI_LIBRARY_STYLE }}">
@@ -70,12 +82,28 @@
                     </div>
                     <button class="display-fallback-save" type="submit">{{ _('Save library style') }}</button>
                 </form>
-                <form class="account-shelf-finish-form display-row display-finish-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_SHELF_FINISH" {% if display.UI_LIBRARY_STYLE not in ('faceout', 'spines') %}hidden{% endif %}>
+                <form class="account-shelf-finish-form display-row display-row-stacked display-finish-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_SHELF_FINISH" {% if display.UI_LIBRARY_STYLE not in ('faceout', 'spines') %}hidden{% endif %}>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="UI_SHELF_FINISH" value="{{ display.UI_SHELF_FINISH }}">
                     <div class="display-label"><strong>{{ _('Shelf finish') }}</strong><small>{{ _('Shown only for the shelf styles.') }}</small></div>
-                    {{ segmented('UI_SHELF_FINISH', [('theme', _('Match theme')), ('wood', _('Wood')), ('dark', _('Dark')), ('plain', _('Plain'))], display.UI_SHELF_FINISH, _('Shelf finish')) }}
+                    {{ swatches('UI_SHELF_FINISH', [
+                        ('theme', _('Match theme'), 'linear-gradient(135deg, #D8BA8A 50%, #303949 50%)'),
+                        ('wood', _('Wood'), 'linear-gradient(#D8BA8A 50%, #B48E5A 50%)'),
+                        ('walnut', _('Walnut'), 'linear-gradient(#6B4630 50%, #50331F 50%)'),
+                        ('cherry', _('Cherry'), 'linear-gradient(#9B4A33 50%, #803826 50%)'),
+                        ('white', _('White'), 'linear-gradient(#F2F2EE 50%, #DADAD5 50%)'),
+                        ('dark', _('Dark'), 'linear-gradient(#303949 50%, #212835 50%)'),
+                        ('plain', _('Plain'), 'linear-gradient(#E6E9EC 50%, #353D48 50%)'),
+                        ('glass', _('Glass'), 'linear-gradient(rgba(200,230,245,.6) 50%, rgba(160,200,220,.35) 50%)'),
+                        ('pastel', _('Pastel'), 'linear-gradient(#F7C9D9 50%, #EDB0C5 50%)')], display.UI_SHELF_FINISH, _('Shelf finish')) }}
                     <button class="display-fallback-save" type="submit">{{ _('Save shelf finish') }}</button>
+                </form>
+                <form class="account-background-form display-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_LIBRARY_BACKGROUND">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_LIBRARY_BACKGROUND" value="{{ display.UI_LIBRARY_BACKGROUND }}">
+                    <div class="display-label"><strong>{{ _('Library background') }}</strong><small>{{ _('A soft blur of the book you are reading behind your Library.') }}</small></div>
+                    {{ segmented('UI_LIBRARY_BACKGROUND', [('none', _('None')), ('cover', _('Current book'))], display.UI_LIBRARY_BACKGROUND, _('Library background')) }}
+                    <button class="display-fallback-save" type="submit">{{ _('Save library background') }}</button>
                 </form>
             </section>
             <section class="display-group" data-display-group="covers" aria-labelledby="display-covers-title">
