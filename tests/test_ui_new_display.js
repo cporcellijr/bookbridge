@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync('static/js/next/display.js', 'utf8');
 assert.match(fs.readFileSync('static/js/next/cover-loader.js','utf8'), /getElementById\('library-page'\) \|\| document\.getElementById\('display-preview-stage'\)/, 'preview thumbnails must use the shared cover loader');
 
-function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'spines', 'faceout', 'list'], applyTheme = null, sizeRow = null, finishRow = null} = {}) {
+function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'spines', 'faceout', 'list'], applyTheme = null, sizeRow = null, finishRow = null, faceoutRow = null} = {}) {
     const values = {};
     const requests = [];
     const listeners = {};
@@ -32,7 +32,7 @@ function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'sp
         contains(button) { return buttons.includes(button); },
         closest(selector) { return selector === '[data-display-group]' ? group : null; }
     };
-    const stage = {dataset: {view: 'covers', libraryStyle: 'cards', shelfFinish: 'theme'}, querySelectorAll() { return []; }};
+    const stage = {dataset: {view: 'covers', libraryStyle: 'cards', shelfFinish: 'theme', coverFinish: choices[0]}, querySelectorAll() { return []; }};
     const page = {classList: {add(name) { values.className = name; }}};
     const root = {dataset: {accent: choices[0]}};
     const document = {
@@ -41,6 +41,7 @@ function mount({fails = false, key = 'UI_LIBRARY_STYLE', choices = ['cards', 'sp
             if (selector === '.display-page') return page;
             if (selector === '.display-size-row') return sizeRow;
             if (selector === '.display-finish-row') return finishRow;
+            if (selector === '.display-faceout-row') return faceoutRow;
             return selector === '[data-display-setting="' + key + '"]' ? form : null;
         },
         querySelectorAll(selector) { return selector === '.display-page form[data-display-setting]' ? [form] : []; },
@@ -213,6 +214,16 @@ function mountCoverSetting(key, {initial = 'true', fails = false} = {}) {
     await failedStyle.click('list');
     assert.equal(failedStyle.stage.dataset.libraryStyle, 'cards');
     assert.equal(failedStyle.stage.dataset.view, 'covers');
+    const faceoutRow = {hidden: true};
+    const faceoutStyles = mount({faceoutRow});
+    await faceoutStyles.click('faceout');
+    assert.equal(faceoutRow.hidden, false, 'face-out shows Cover finish');
+    await faceoutStyles.click('spines');
+    assert.equal(faceoutRow.hidden, true, 'spines hide Cover finish');
+    const coverFinish = mount({key: 'UI_COVER_FINISH', choices: ['standard', 'hardcover', 'paperback', 'flat']});
+    await coverFinish.click('paperback');
+    assert.equal(JSON.parse(coverFinish.requests[0].options.body).UI_COVER_FINISH, 'paperback');
+    assert.equal(coverFinish.stage.dataset.coverFinish, 'paperback', 'cover finish previews immediately');
     const failedFinishRow = {hidden: true};
     const failedStyleFinish = mount({fails: true, finishRow: failedFinishRow});
     await failedStyleFinish.click('spines');

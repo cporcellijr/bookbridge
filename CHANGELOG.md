@@ -21,6 +21,14 @@ All notable changes to BookBridge will be documented in this file.
 - **Shelf props.** Turn on **Shelf props** in Account → Display and the shelf styles gain a plant, a candle or a
   small stack of books every few books, with bookends holding up your Spine shelves. They move with your
   sorting and filters. Off by default.
+- **Cover finish for Face-out shelves.** Account → Display → **Cover finish** gives face-out books a Hardcover,
+  Paperback or Flat look; Standard keeps today's look.
+
+### Fixed
+
+- **Group series now works on Spine shelves, Face-out shelves and List.** These views showed **Group series**
+  ticked but ignored it. With it on, each series now sits together on the shelf in reading order; turn it off
+  to sort every book on its own.
 
 ## [7.14.0] - 2026-11-24
 

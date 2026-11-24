@@ -118,6 +118,7 @@ class TestAccountDisplayPage(unittest.TestCase):
         for key, form_class, values, default in (
             ('UI_ACCENT', 'account-accent-form', ('amber', 'teal', 'rose', 'violet', 'blue'), 'amber'),
             ('UI_LIBRARY_BACKGROUND', 'account-background-form', ('none', 'cover'), 'none'),
+            ('UI_COVER_FINISH', 'account-cover-finish-form', ('standard', 'hardcover', 'paperback', 'flat'), 'standard'),
         ):
             with self.subTest(key=key):
                 html = self.client.get('/account/display').get_data(as_text=True)
@@ -150,6 +151,8 @@ class TestAccountDisplayPage(unittest.TestCase):
                 form = re.search(r'<form class="account-shelf-props-form.*?</form>', html, re.S).group()
                 self.assertEqual(' hidden>' in form.split('>')[0] + '>', style in ('cards', 'list'))
                 self.assertIn('name="UI_SHELF_PROPS" value="true" role="switch" aria-checked="false"', form)
+                finish = re.search(r'<form class="account-cover-finish-form.*?</form>', html, re.S).group()
+                self.assertEqual(' hidden>' in finish.split('>')[0] + '>', style != 'faceout', 'cover finish is Face-out only')
         self.assertIn('/static/js/next/shelf-props.js', html)
         self.client.post('/account/display?next=/account/display', data={'UI_SHELF_PROPS': 'on'})
         self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_PROPS'), 'true')

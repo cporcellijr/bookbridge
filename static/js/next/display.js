@@ -8,6 +8,7 @@
     var sizeRow = document.querySelector('.display-size-row');
     var finishRow = document.querySelector('.display-finish-row');
     var propsRow = document.querySelector('.display-props-row');
+    var faceoutRow = document.querySelector('.display-faceout-row');
     var previewSwitches = {
         UI_SHOW_PROGRESS: 'showProgress',
         UI_SHOW_FINISHED: 'showFinished',
@@ -46,6 +47,7 @@
         [finishRow, propsRow].forEach(function (row) {
             if (row) row.hidden = style !== 'spines' && style !== 'faceout';
         });
+        if (faceoutRow) faceoutRow.hidden = style !== 'faceout';
     }
 
     function refreshSizeStepper(form, value) {
@@ -103,6 +105,7 @@
             if (key === 'SERIES_SHOW_CURRENT_BOOK_DETAIL') stage.dataset.seriesOn = value;
             if (key === 'UI_COVER_SIZE') stage.dataset.coverSize = value;
             if (key === 'UI_SHELF_FINISH') stage.dataset.shelfFinish = value;
+            if (key === 'UI_COVER_FINISH') stage.dataset.coverFinish = value;
             if (previewSwitches[key]) stage.dataset[previewSwitches[key]] = value;
         }
         if (key === 'UI_THEME' && window.bbApplyThemePreference) window.bbApplyThemePreference(value);

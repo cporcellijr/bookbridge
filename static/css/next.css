@@ -611,6 +611,22 @@ body.series-grouping-off .series-group { display: none !important; }
  box-shadow: 0 0 0 1px rgba(0,0,0,.55), inset 7px 0 7px -5px rgba(255,255,255,.25), 12px 0 16px -5px var(--shelf-shadow);
 }
 .library-page[data-library-style="faceout"][data-view="spines"] .book-card::before { display: none; content: none; }
+/* Cover finish (UI_COVER_FINISH) for Face-out books; Standard is the rules above. Kept before the selection ring so it still wins. */
+.library-page[data-library-style="faceout"][data-cover-finish="hardcover"][data-view="spines"] .book-card {
+ border-radius: 3px 4px 4px 3px;
+ box-shadow: 0 0 0 1px rgba(0,0,0,.65), inset 9px 0 8px -6px rgba(255,255,255,.3), 3px 0 0 -1px var(--book-paper), 4px 0 0 -1px var(--book-paper-line), 16px 2px 22px -4px var(--shelf-shadow);
+}
+.library-page[data-library-style="faceout"][data-cover-finish="hardcover"][data-view="spines"] .book-card .cover-wrap::before { height: 12px; left: 14px; }
+.library-page[data-library-style="faceout"][data-cover-finish="hardcover"][data-view="spines"] .book-card:not([data-reading]) .cover-wrap::after { width: 14px; background: linear-gradient(90deg, rgba(0,0,0,.55), rgba(255,255,255,.2) 40%, rgba(0,0,0,.4) 62%, transparent); }
+.library-page[data-library-style="faceout"][data-cover-finish="paperback"][data-view="spines"] .book-card {
+ border-radius: 2px 6px 6px 2px;
+ box-shadow: 0 0 0 1px rgba(0,0,0,.4), 8px 1px 12px -6px var(--shelf-shadow);
+}
+.library-page[data-library-style="faceout"][data-cover-finish="paperback"][data-view="spines"] .book-card .cover-wrap::before { height: 4px; left: 4px; }
+.library-page[data-library-style="faceout"][data-cover-finish="paperback"][data-view="spines"] .book-card:not([data-reading]) .cover-wrap::after { width: 5px; background: linear-gradient(90deg, rgba(0,0,0,.3), transparent); }
+.library-page[data-library-style="faceout"][data-cover-finish="flat"][data-view="spines"] .book-card { border-radius: 6px; box-shadow: 0 8px 16px -8px var(--shelf-shadow); }
+.library-page[data-library-style="faceout"][data-cover-finish="flat"][data-view="spines"] .book-card .cover-wrap { overflow: hidden; }
+.library-page[data-library-style="faceout"][data-cover-finish="flat"][data-view="spines"] .book-card .cover-wrap::before, .library-page[data-library-style="faceout"][data-cover-finish="flat"][data-view="spines"] .book-card .cover-wrap::after { display: none; }
 .library-page[data-library-style="faceout"][data-view="spines"][data-select-mode="on"] .book-card.is-selected { box-shadow: 0 0 0 3px var(--info), 12px 0 16px -5px var(--shelf-shadow); }
 /* Every face-out book shows the paper page block along its top edge, like reading books on Spine shelves. */
 .library-page[data-library-style="faceout"][data-view="spines"] .book-card .cover-wrap::before {
@@ -882,15 +898,15 @@ body.series-grouping-off .series-group { display: none !important; }
 .display-preview .library-page[data-library-style="faceout"][data-view="spines"] .book-card {
  width: min(var(--face-book-width), calc(100% - 4px)); height: auto; aspect-ratio: 2 / 3; margin: 0;
 }
-.display-preview .library-page[data-library-style="faceout"][data-cover-size="1"] > .display-preview-flat > :nth-child(n+9),
-.display-preview .library-page[data-library-style="faceout"][data-cover-size="2"] > .display-preview-flat > :nth-child(n+7),
-.display-preview .library-page[data-library-style="faceout"][data-cover-size="3"] > .display-preview-flat > :nth-child(n+5),
-.display-preview .library-page[data-library-style="faceout"][data-cover-size="4"] > .display-preview-flat > :nth-child(n+5),
-.display-preview .library-page[data-library-style="faceout"][data-cover-size="5"] > .display-preview-flat > :nth-child(n+5) { display: none; }
+.display-preview .library-page[data-library-style="faceout"][data-cover-size="1"] > .display-preview-flat > :nth-of-type(n+9),
+.display-preview .library-page[data-library-style="faceout"][data-cover-size="2"] > .display-preview-flat > :nth-of-type(n+7),
+.display-preview .library-page[data-library-style="faceout"][data-cover-size="3"] > .display-preview-flat > :nth-of-type(n+5),
+.display-preview .library-page[data-library-style="faceout"][data-cover-size="4"] > .display-preview-flat > :nth-of-type(n+5),
+.display-preview .library-page[data-library-style="faceout"][data-cover-size="5"] > .display-preview-flat > :nth-of-type(n+5) { display: none; }
 .display-preview .library-page[data-library-style="spines"][data-view="spines"] > .book-grid.display-preview-flat {
  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: 224px; gap: 58px 4px;
 }
-.display-preview .library-page[data-library-style="spines"] > .display-preview-flat > :nth-child(n+9) { display: none; }
+.display-preview .library-page[data-library-style="spines"] > .display-preview-flat > :nth-of-type(n+9) { display: none; }
 .display-preview .library-page[data-view="list"] > .book-grid.display-preview-flat > :nth-child(n+7) { display: none; }
 
 /* A clean wall has no empty card footer; warning captions still occupy their own space. */

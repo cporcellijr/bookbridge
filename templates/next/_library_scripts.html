@@ -843,9 +843,34 @@
                 if (shelfPropsOn()) window.bbShelfProps?.place(libraryGrid);
             }
 
+            function flatLibraryView() {
+                return !!libraryGrid?.closest('.library-page:not([data-view="covers"])');
+            }
+            // Shelves and List cannot show stacks, so a grouped series sits together, in reading
+            // order, where its (hidden) stack sorted.
+            function gatherSeries() {
+                const bySeries = new Map();
+                libraryGrid.querySelectorAll(':scope > .book-card[data-series-container-id]').forEach(card => {
+                    const group = document.getElementById(card.dataset.seriesContainerId)?.closest('.series-group');
+                    if (!group || group.parentNode !== libraryGrid) return;
+                    if (!bySeries.has(group)) bySeries.set(group, []);
+                    bySeries.get(group).push(card);
+                });
+                const sequence = card => {
+                    const number = parseFloat(card.dataset.seriesSequence);
+                    return Number.isFinite(number) ? number : Infinity;
+                };
+                bySeries.forEach((cards, group) => {
+                    cards.sort((a, b) => (sequence(a) - sequence(b))
+                        || (Number(a.dataset.seriesOrder || 0) - Number(b.dataset.seriesOrder || 0)));
+                    group.after(...cards);
+                });
+            }
+
             function sortBooks(sortBy, direction) {
                 if (shelfPropsOn()) window.bbShelfProps?.clear(libraryGrid);
                 sortCards(libraryGrid, sortBy, direction);
+                if (seriesGroupingToggle?.checked && flatLibraryView()) gatherSeries();
                 placeShelfProps();
             }
 
@@ -939,8 +964,10 @@
             }
 
             function applySeriesGrouping(enabled) {
-                document.body.classList.toggle('series-grouping-off', !enabled);
-                if (enabled) restoreSeriesGroups();
+                // Only Cards shows series stacks; the flat views keep each series together instead.
+                const stacks = enabled && !flatLibraryView();
+                document.body.classList.toggle('series-grouping-off', !stacks);
+                if (stacks) restoreSeriesGroups();
                 else flattenSeriesGroups();
 
                 if (sortSelect) sortBooks(sortSelect.value, sortState[sortSelect.value]);
@@ -1691,8 +1718,7 @@
         const selectable = initialLibraryView !== 'spines' || libraryPage.dataset.libraryStyle === 'faceout';
         if (!selectable) setBookSelectMode(false);
         if (selectModeButton) selectModeButton.hidden = !selectable;
-        applySeriesGrouping(initialLibraryView === 'covers' && seriesGroupingToggle.checked);
-        seriesGroupingToggle.disabled = initialLibraryView !== 'covers';
+        applySeriesGrouping(seriesGroupingToggle.checked);
         paintSpines();
     }
     function selectedBookIds() {

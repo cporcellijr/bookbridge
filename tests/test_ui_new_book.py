@@ -317,23 +317,53 @@ P16C_LIBRARY_ALLOWED_CHANGES = (
 )
 
 
-# Shelf props (UI_SHELF_PROPS): New-only decoration taken out around a sort and placed again after it.
+# Shelf props and series grouping on flat views: New-only code around the shared sort and grouping.
 SHELF_PROPS_LIBRARY_ALLOWED_CHANGES = (
-    ("// Props are decoration: take them out so the sort only orders books, then put them back.\n"
-     "function shelfPropsOn() {\n"
-     "return !!libraryGrid?.closest('.library-page[data-view=\"spines\"][data-shelf-props=\"true\"]');\n"
-     "}\n"
-     "function placeShelfProps() {\n"
-     "if (shelfPropsOn()) window.bbShelfProps?.place(libraryGrid);\n"
-     "}\n"
-     "function sortBooks(sortBy, direction) {\n"
-     "if (shelfPropsOn()) window.bbShelfProps?.clear(libraryGrid);\n"
-     "dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));\n"
-     "placeShelfProps();\n"
-     "}",
-     "function sortBooks(sortBy, direction) {\n"
-     "dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));\n"
-     "}"),
+    ('// Props are decoration: take them out so the sort only orders books, then put them back.\n'
+     'function shelfPropsOn() {\n'
+     'return !!libraryGrid?.closest(\'.library-page[data-view="spines"][data-shelf-props="true"]\');\n'
+     '}\n'
+     'function placeShelfProps() {\n'
+     'if (shelfPropsOn()) window.bbShelfProps?.place(libraryGrid);\n'
+     '}\n'
+     'function flatLibraryView() {\n'
+     'return !!libraryGrid?.closest(\'.library-page:not([data-view="covers"])\');\n'
+     '}\n'
+     '// Shelves and List cannot show stacks, so a grouped series sits together, in reading\n'
+     '// order, where its (hidden) stack sorted.\n'
+     'function gatherSeries() {\n'
+     'const bySeries = new Map();\n'
+     "libraryGrid.querySelectorAll(':scope > .book-card[data-series-container-id]').forEach(card => {\n"
+     "const group = document.getElementById(card.dataset.seriesContainerId)?.closest('.series-group');\n"
+     'if (!group || group.parentNode !== libraryGrid) return;\n'
+     'if (!bySeries.has(group)) bySeries.set(group, []);\n'
+     'bySeries.get(group).push(card);\n'
+     '});\n'
+     'const sequence = card => {\n'
+     'const number = parseFloat(card.dataset.seriesSequence);\n'
+     'return Number.isFinite(number) ? number : Infinity;\n'
+     '};\n'
+     'bySeries.forEach((cards, group) => {\n'
+     'cards.sort((a, b) => (sequence(a) - sequence(b))\n'
+     '|| (Number(a.dataset.seriesOrder || 0) - Number(b.dataset.seriesOrder || 0)));\n'
+     'group.after(...cards);\n'
+     '});\n'
+     '}\n'
+     'function sortBooks(sortBy, direction) {\n'
+     'if (shelfPropsOn()) window.bbShelfProps?.clear(libraryGrid);\n'
+     'dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));\n'
+     'if (seriesGroupingToggle?.checked && flatLibraryView()) gatherSeries();\n'
+     'placeShelfProps();\n'
+     '}',
+     'function sortBooks(sortBy, direction) {\n'
+     'dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));\n'
+     '}'),
+    ('// Only Cards shows series stacks; the flat views keep each series together instead.\n'
+     'const stacks = enabled && !flatLibraryView();\n'
+     "document.body.classList.toggle('series-grouping-off', !stacks);\n"
+     'if (stacks) restoreSeriesGroups();',
+     "document.body.classList.toggle('series-grouping-off', !enabled);\n"
+     'if (enabled) restoreSeriesGroups();'),
 )
 
 # P16a's intentional New-only changes, reversed exactly for the copied-Classic check.

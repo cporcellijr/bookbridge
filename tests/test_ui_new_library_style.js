@@ -25,9 +25,9 @@ for (const [style, view] of [['cards', 'covers'], ['spines', 'spines'], ['list',
     assert.equal(libraryPage.dataset.libraryStyle, style);
     const thinSpines = view === 'spines' && style !== 'faceout';
     assert.equal(selectModeButton.hidden, thinSpines, 'face-out covers keep Select; thin spines hide it');
-    assert.equal(seriesGroupingToggle.disabled, view !== 'covers');
+    assert.equal(seriesGroupingToggle.disabled, false, 'Group series works in every view');
     assert.deepEqual(events.map(event => [...event]), [
         ...(thinSpines ? [['select', false]] : []),
-        ['group', view === 'covers'], ['paint']
+        ['group', true], ['paint']
     ]);
 }

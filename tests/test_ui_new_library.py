@@ -218,7 +218,8 @@ class TestNewLibrary(unittest.TestCase):
                 self.assertIn(f'repeat({phone}, minmax(0, 1fr))', css)
                 self.assertIn(f'[data-library-style="faceout"][data-cover-size="{size}"] {{ --face-book-width: {face_width}px;', css)
                 self.assertIn(f'--face-cols: {face_cols};', css)
-                self.assertIn(f'[data-cover-size="{size}"] > .display-preview-flat > :nth-child(n+', css)
+                # Shelf props share the preview grid, so the book limit counts book elements only.
+                self.assertIn(f'[data-cover-size="{size}"] > .display-preview-flat > :nth-of-type(n+', css)
                 self.assertIn(f'[data-cover-size="{size}"] > .book-grid.display-preview-grouped > :nth-child(n+', css)
         self.assertIn('.library-page[data-view="covers"] .cover-wrap { height: auto; aspect-ratio: 2 / 3; }', css)
         for key, selector in (
@@ -304,6 +305,38 @@ class TestNewLibrary(unittest.TestCase):
             capture_output=True, text=True, timeout=15, cwd=_ROOT,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_group_series_keeps_each_series_together_on_flat_views(self):
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required to run the Library series grouping check")
+        result = subprocess.run(
+            [node, str(_ROOT / "tests/test_ui_library_flat_series.js")],
+            capture_output=True, text=True, timeout=15, cwd=_ROOT,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
+        self.assertIn("if (seriesGroupingToggle?.checked && flatLibraryView()) gatherSeries();", scripts)
+        self.assertIn("const stacks = enabled && !flatLibraryView();", scripts)
+        self.assertNotIn("seriesGroupingToggle.disabled =", scripts, "Group series works in every view")
+
+    def test_cover_finish_reaches_faceout_only(self):
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        self.assertRegex(self.client.get("/").get_data(as_text=True), r'id="library-page"[^>]*data-cover-finish="standard"')
+        self.service.set_user_credential(self.reader.id, "UI_COVER_FINISH", "flat")
+        self.assertRegex(self.client.get("/").get_data(as_text=True), r'id="library-page"[^>]*data-cover-finish="flat"')
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        for finish in ("hardcover", "paperback", "flat"):
+            with self.subTest(finish=finish):
+                self.assertIn(f'.library-page[data-library-style="faceout"][data-cover-finish="{finish}"][data-view="spines"] .book-card {{', css)
+        self.assertNotIn('[data-cover-finish="standard"]', css, "Standard is the existing face-out look")
+        ring = '.library-page[data-library-style="faceout"][data-view="spines"][data-select-mode="on"] .book-card.is-selected {'
+        self.assertLess(css.index('[data-cover-finish="flat"][data-view="spines"] .book-card {'), css.index(ring),
+                        "the selection ring must still win over a cover finish")
 
     def test_rendered_new_library_uses_thumbnails_with_original_proxy_fallback(self):
         from src import web_server

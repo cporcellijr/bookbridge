@@ -32,7 +32,7 @@
         <aside class="display-preview" aria-label="{{ _('Your library preview') }}">
             <div class="display-preview-head"><strong>{{ _('Your library') }}</strong><small>{{ _('Live preview') }}</small></div>
             {% if preview_mappings %}
-            <div id="display-preview-stage" class="library-page" data-view="{{ {'spines': 'spines', 'faceout': 'spines', 'list': 'list'}.get(display.UI_LIBRARY_STYLE, 'covers') }}" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-series-on="{{ display.SERIES_SHOW_CURRENT_BOOK_DETAIL }}" data-select-mode="off" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-shelf-props="{{ display.UI_SHELF_PROPS }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}">
+            <div id="display-preview-stage" class="library-page" data-view="{{ {'spines': 'spines', 'faceout': 'spines', 'list': 'list'}.get(display.UI_LIBRARY_STYLE, 'covers') }}" data-library-style="{{ display.UI_LIBRARY_STYLE }}" data-series-on="{{ display.SERIES_SHOW_CURRENT_BOOK_DETAIL }}" data-select-mode="off" data-cover-size="{{ display.UI_COVER_SIZE }}" data-shelf-finish="{{ display.UI_SHELF_FINISH }}" data-shelf-props="{{ display.UI_SHELF_PROPS }}" data-cover-finish="{{ display.UI_COVER_FINISH }}" data-show-progress="{{ display.UI_SHOW_PROGRESS }}" data-show-finished="{{ display.UI_SHOW_FINISHED }}" data-show-format-strip="{{ display.UI_SHOW_FORMAT_STRIP }}" data-show-ratings="{{ display.UI_SHOW_RATINGS }}" data-show-titles="{{ display.UI_SHOW_TITLES }}">
                 <div class="book-grid display-preview-flat">{% for mapping in preview_mappings %}{{ render_card(mapping, false) }}{% endfor %}</div>
                 <div class="book-grid display-preview-grouped">
                     {% for entry in preview_groups %}{% if entry.is_series_group %}
@@ -104,6 +104,13 @@
                     <label class="display-label" for="display-switch-ui_shelf_props"><strong>{{ _('Shelf props') }}</strong><small>{{ _('Bookends, plants, candles and book stacks between your books.') }}</small></label>
                     <input id="display-switch-ui_shelf_props" class="display-switch" type="checkbox" name="UI_SHELF_PROPS" value="true" role="switch" aria-checked="{{ 'true' if display.UI_SHELF_PROPS == 'true' else 'false' }}" {% if display.UI_SHELF_PROPS == 'true' %}checked{% endif %}>
                     <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
+                </form>
+                <form class="account-cover-finish-form display-row display-faceout-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_COVER_FINISH" {% if display.UI_LIBRARY_STYLE != 'faceout' %}hidden{% endif %}>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="UI_COVER_FINISH" value="{{ display.UI_COVER_FINISH }}">
+                    <div class="display-label"><strong>{{ _('Cover finish') }}</strong><small>{{ _('How books look on Face-out shelves.') }}</small></div>
+                    {{ segmented('UI_COVER_FINISH', [('standard', _('Standard')), ('hardcover', _('Hardcover')), ('paperback', _('Paperback')), ('flat', _('Flat'))], display.UI_COVER_FINISH, _('Cover finish')) }}
+                    <button class="display-fallback-save" type="submit">{{ _('Save cover finish') }}</button>
                 </form>
                 <form class="account-background-form display-row" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_LIBRARY_BACKGROUND">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
