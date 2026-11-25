@@ -936,6 +936,24 @@ class BookOrbitClient:
             body["seriesIndex"] = int(series_index)
         return body
 
+    def _request_destination(self, media_kind: str) -> dict:
+        """``{"targetLibraryId": n}`` from this account's request-library setting, else ``{}``.
+
+        Without one BookOrbit files the book in its instance default for that medium,
+        which on a shared server may be another reader's library.
+        """
+        key = {"ebook": "BOOKORBIT_REQUEST_LIBRARY_EBOOK",
+               "audiobook": "BOOKORBIT_REQUEST_LIBRARY_AUDIOBOOK"}.get(media_kind)
+        raw = str(resolve_setting(self._creds, key, "") or "").strip() if key else ""
+        if not raw:
+            return {}
+        try:
+            library_id = int(raw)
+        except ValueError:
+            logger.warning("BookOrbit: %s is not a library id; using BookOrbit's default library", key, exc_info=True)
+            return {}
+        return {"targetLibraryId": library_id} if library_id > 0 else {}
+
     def _request_json(self, method: str, endpoint: str, body=None, ok=(200, 201)) -> Optional[object]:
         """Call a book-requests route; the parsed JSON on success, None otherwise."""
         resp = self._make_request(method, endpoint, body)
@@ -971,6 +989,7 @@ class BookOrbitClient:
         """
         body = self._request_work_fields(title, authors, isbn13, series_name, series_index)
         body["mediaKind"] = media_kind
+        body.update(self._request_destination(media_kind))
         resp = self._make_request("POST", "/api/v1/book-requests", body)
         if resp is not None and resp.status_code in (400, 401, 403, 404, 422):
             logger.warning("BookOrbit: POST /api/v1/book-requests refused: status=%s", resp.status_code)
@@ -988,8 +1007,8 @@ class BookOrbitClient:
                             series_name: Optional[str] = None, series_index=None) -> Optional[dict]:
         """File the ebook and audiobook together; ``{ebook, audiobook}`` results or None."""
         body = self._request_work_fields(title, authors, isbn13, series_name, series_index)
-        body["ebook"] = {}
-        body["audiobook"] = {}
+        body["ebook"] = self._request_destination("ebook")
+        body["audiobook"] = self._request_destination("audiobook")
         data = self._request_json("POST", "/api/v1/book-requests/pairs", body)
         return data if isinstance(data, dict) else None
 

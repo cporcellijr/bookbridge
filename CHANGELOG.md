@@ -8,6 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Choose which BookOrbit library your requests go to.** On a shared BookOrbit server, a request that
+  names no library lands in BookOrbit's default library for that format, which may belong to someone else.
+  Your BookOrbit integration now has **Library ID for ebooks I request** and **Library ID for audiobooks I
+  request**. Leave them blank to keep BookOrbit's default.
+
 - **Requested audiobooks can pair with your Audiobookshelf copy.** If you listen in Audiobookshelf and it
   scans the folder BookOrbit imports requested audiobooks into, turn on **Pair requested audiobooks with my
   Audiobookshelf copy of the same files** in your BookOrbit integration. A requested audiobook then pairs the

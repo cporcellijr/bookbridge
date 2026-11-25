@@ -90,6 +90,40 @@ class TestBookOrbitRequestClient(unittest.TestCase):
         self.assertEqual((method, endpoint), ("POST", "/api/v1/book-requests/pairs"))
         self.assertEqual(body, {"title": "Example Book", "authors": ["A. Writer"], "ebook": {}, "audiobook": {}})
 
+    def _client_with(self, creds):
+        client = BookOrbitClient(credentials=creds)
+        mock = patch.object(client, "_make_request", return_value=_response(201, {"request": {"id": 1}})).start()
+        self.addCleanup(patch.stopall)
+        return client, mock
+
+    def test_create_names_the_readers_own_library_for_each_medium(self):
+        client, mock = self._client_with({
+            "BOOKORBIT_REQUEST_LIBRARY_EBOOK": "3", "BOOKORBIT_REQUEST_LIBRARY_AUDIOBOOK": " 7 "})
+        client.create_request("Example Book", "ebook")
+        self.assertEqual(mock.call_args.args[2]["targetLibraryId"], 3)
+        client.create_request("Example Book", "audiobook")
+        self.assertEqual(mock.call_args.args[2]["targetLibraryId"], 7)
+
+    def test_pair_names_a_library_per_half(self):
+        client, mock = self._client_with({
+            "BOOKORBIT_REQUEST_LIBRARY_EBOOK": "3", "BOOKORBIT_REQUEST_LIBRARY_AUDIOBOOK": "7"})
+        client.create_request_pair("Example Book")
+        body = mock.call_args.args[2]
+        self.assertEqual((body["ebook"], body["audiobook"]), ({"targetLibraryId": 3}, {"targetLibraryId": 7}))
+
+    def test_unusable_library_value_leaves_bookorbits_default(self):
+        for value in ("", "  ", "Ebooks", "0", "-2"):
+            client, mock = self._client_with({"BOOKORBIT_REQUEST_LIBRARY_EBOOK": value})
+            client.create_request("Example Book", "ebook")
+            self.assertNotIn("targetLibraryId", mock.call_args.args[2], value)
+
+    def test_regular_reader_never_inherits_the_admins_library(self):
+        from src.utils.user_config import _ALLOW_GLOBAL_FALLBACK_KEY
+        with patch.dict(os.environ, {"BOOKORBIT_REQUEST_LIBRARY_EBOOK": "3"}):
+            client, mock = self._client_with({"BOOKORBIT_API_KEY": "reader-key", _ALLOW_GLOBAL_FALLBACK_KEY: False})
+            client.create_request("Example Book", "ebook")
+        self.assertNotIn("targetLibraryId", mock.call_args.args[2])
+
     def test_sources_is_none_on_403(self):
         self.mock_request.return_value = _response(403)
         self.assertIsNone(self.client.request_sources())
