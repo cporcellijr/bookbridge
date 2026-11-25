@@ -1004,33 +1004,33 @@ class StorytellerAPIClient:
                 logger.info(f"Storyteller readaloud filepath not yet available for '{book_uuid}'")
                 return False
 
-            # 2. Map Path
-            # Mapping: /ebooks -> /storyteller/library
-            # This should ideally be configurable, but hardcoding for this fix based on known setup
-            local_path_str = source_path
+            # 2. Map Storyteller's /ebooks library onto our mount of it (setting first,
+            # then the legacy hardcoded mount), then try the path as given.
+            candidates = [source_path]
             if source_path.startswith("/ebooks"):
-                local_path_str = source_path.replace("/ebooks", "/storyteller/library", 1)
-            
-            local_path = Path(local_path_str)
-            
-            logger.info(f"🔄 Attempting local fallback from: '{local_path}'")
-            
-            if local_path.exists():
-                copy_file_to_path(local_path, output_path, validator=_validate_epub_zip)
-                logger.info(f"✅ Downloaded (via Local Copy) Storyteller artifact for '{book_uuid}'")
-                return True
-            else:
-                 if polling:
-                     logger.debug(f"Storyteller poll: local fallback file not ready yet: '{local_path}'")
-                     return False
-                 logger.error(f"❌ Local fallback file not found: '{local_path}'")
-                 # Try unmapped?
-                 if Path(source_path).exists():
-                     copy_file_to_path(source_path, output_path, validator=_validate_epub_zip)
-                     logger.info(f"✅ Downloaded (via Direct Path) Storyteller artifact")
-                     return True
-                 
-                 raise Exception(f"File not found at {local_path} or {source_path}")
+                rest = source_path[len("/ebooks"):]
+                library_dir = os.environ.get("STORYTELLER_LIBRARY_DIR", "").strip() or "/storyteller_library"
+                candidates = [library_dir.rstrip("/") + rest, "/storyteller/library" + rest, source_path]
+            candidates = list(dict.fromkeys(candidates))
+
+            logger.info(f"🔄 Attempting local fallback from: '{candidates[0]}'")
+
+            missing_key = f"storyteller-local-fallback:{book_uuid}"
+            for candidate in candidates:
+                if Path(candidate).exists():
+                    copy_file_to_path(candidate, output_path, validator=_validate_epub_zip)
+                    if candidate == source_path:
+                        logger.info(f"✅ Downloaded (via Direct Path) Storyteller artifact")
+                    else:
+                        logger.info(f"✅ Downloaded (via Local Copy) Storyteller artifact for '{book_uuid}'")
+                    get_persistent_condition_logger().resolve(
+                        logger, missing_key, f"Storyteller local fallback found '{candidate}'")
+                    return True
+
+            # Unmounted library or a book still processing: retried next cycle, so warn once.
+            get_persistent_condition_logger().warn(
+                logger, missing_key, f"❌ Local fallback file not found: '{' or '.join(candidates)}'")
+            return False
 
         except Exception as e:
             if polling:

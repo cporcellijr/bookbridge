@@ -687,3 +687,40 @@ class TestStorytellerArtifactPublication(unittest.TestCase):
 
             self.assertEqual(target.read_bytes(), b"a previously downloaded artifact")
             self.assertEqual(list(tmp_path.glob("*.part")), [])
+
+    def _api_times_out_and_details_name(self, filepath):
+        self.client.session.get.side_effect = TimeoutError("Read timed out. (read timeout=60)")
+        details = Mock(status_code=200)
+        details.json.return_value = {"readaloud": {"filepath": filepath}}
+        self.client._make_request = Mock(return_value=details)
+
+    def test_local_fallback_maps_ebooks_onto_the_storyteller_library_setting(self):
+        """Fleet 10492: the API read timed out while Storyteller was aligning, and the
+        fallback only looked under a hardcoded /storyteller/library."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "Author").mkdir()
+            (tmp_path / "Author" / "Book.epub").write_bytes(self._epub_bytes(tmp_path))
+            target = tmp_path / "artifact.epub"
+            self._api_times_out_and_details_name("/ebooks/Author/Book.epub")
+
+            with patch.dict(os.environ, {"STORYTELLER_LIBRARY_DIR": str(tmp_path)}):
+                self.assertTrue(self.client.download_book("uuid-1", target))
+            self.assertEqual(zipfile.ZipFile(target).read("mimetype"), b"application/epub+zip")
+
+    def test_missing_local_fallback_is_a_quiet_retryable_miss(self):
+        """Fleet 10492: every cycle logged two ERRORs and a traceback for a file that
+        is simply not mounted here. It is a miss the next cycle retries."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "artifact.epub"
+            self._api_times_out_and_details_name("/ebooks/Author/Missing.epub")
+
+            with patch.dict(os.environ, {"STORYTELLER_LIBRARY_DIR": tmp}),                     self.assertLogs("src.api.storyteller_api", level="DEBUG") as logs:
+                self.assertFalse(self.client.download_book("uuid-missing", target))
+                self.assertFalse(self.client.download_book("uuid-missing", target))
+
+            self.assertEqual([r for r in logs.records if r.levelname == "ERROR"], [])
+            not_found = [r for r in logs.records
+                         if "Local fallback file not found" in r.getMessage() and r.levelname == "WARNING"]
+            self.assertEqual(len(not_found), 1)
+            self.assertFalse(any(r.exc_info for r in logs.records))
