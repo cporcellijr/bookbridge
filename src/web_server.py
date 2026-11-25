@@ -2318,6 +2318,15 @@ if __name__ == '__main__':
     poller_thread = threading.Thread(target=client_poller.start, daemon=True)
     poller_thread.start()
 
+    # BookOrbit announces request changes; pair a finished request now, not at the next sync.
+    if instant_sync_enabled:
+        from src.services.bookorbit_request_watcher import BookOrbitRequestWatcher
+        BookOrbitRequestWatcher(
+            database_service=database_service,
+            user_client_registry=container.user_client_registry(),
+            on_change=lambda user_id: manager._refresh_acquisition_requests(user_id, force=True),
+        ).start()
+
     # Annotation hub — BookOrbit spoke: relay highlights between devices and
     # BookOrbit's web reader for users with BOOKORBIT_KOSYNC_* creds configured.
     try:

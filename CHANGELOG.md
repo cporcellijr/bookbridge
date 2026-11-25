@@ -8,6 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Requested books pair as soon as BookOrbit files them.** BookBridge now listens for BookOrbit's request
+  updates, so a finished request pairs within seconds instead of at the next sync. It pairs exactly the book
+  BookOrbit says it filed for the request: a same-titled copy already in your library is no longer picked while
+  the request is still downloading.
+
 - **Choose which BookOrbit library your requests go to.** On a shared BookOrbit server, a request that
   names no library lands in BookOrbit's default library for that format, which may belong to someone else.
   Your BookOrbit integration now has **Library ID for ebooks I request** and **Library ID for audiobooks I

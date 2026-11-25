@@ -488,8 +488,9 @@ class TestPhaseDArrivals(unittest.TestCase):
         self.assertEqual(job["audio_library_state"], "needs_review")
         self.assertEqual(job["linked_abs_id"], "aud-14")
 
-    def test_later_bookorbit_matched_book_id_records_provenance_of_same_owned_pair(self):
+    def test_open_bookorbit_request_waits_for_the_book_bookorbit_names(self):
         job = self.make_job()
+        # A same-title copy is already in the library (an older or broken edition).
         self.candidates["audiobook"] = [audio("BookOrbit", "42")]
         receipt = self.add_receipt(
             job, "audiobook", service="BookOrbit",
@@ -497,8 +498,11 @@ class TestPhaseDArrivals(unittest.TestCase):
         )
         self.bo.get_request.return_value = {"status": "downloading"}
         self.refresh()
-        self.assertEqual(self.db.get_acquisition_job(self.reader.id, job["id"])["linked_abs_id"],
-                         "bookorbit:42")
+        waiting = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertIsNone(waiting["linked_abs_id"])
+        self.assertIsNone(waiting["audio_source_id"])
+        self.assertEqual(waiting["audio_library_state"], "waiting_import")
+        self.assertEqual(self.pairer.calls, [])
         self.bo.get_request.return_value = {"status": "available", "matchedBookId": 42}
         self.bo.get_book_detail.return_value = {
             "id": 42, "title": "Title", "authors": [{"name": "Author"}],
@@ -518,12 +522,11 @@ class TestPhaseDArrivals(unittest.TestCase):
     def test_later_bookorbit_different_edition_is_recorded_for_review_without_takeover(self):
         job = self.make_job()
         self.candidates["audiobook"] = [audio("BookOrbit", "42")]
+        self.refresh()  # the reader's own copy pairs before any request is made
         receipt = self.add_receipt(
             job, "audiobook", service="BookOrbit",
             status="in_progress", remote_status="downloading",
         )
-        self.bo.get_request.return_value = {"status": "downloading"}
-        self.refresh()
         self.bo.get_request.return_value = {"status": "available", "matchedBookId": 99}
         self.bo.get_book_detail.return_value = {
             "id": 99, "title": "Title", "authors": [{"name": "Author"}],
@@ -775,6 +778,38 @@ class TestPhaseDArrivals(unittest.TestCase):
         self.service = AcquisitionService(self.db, self.pairer)
         self.refresh()
         self.assertEqual(self.db.get_acquisition_job(self.reader.id, job["id"])["linked_abs_id"], "aud-14")
+
+    def test_forced_refresh_checks_a_request_checked_moments_ago(self):
+        job = self.make_job(formats=("audiobook",))
+        receipt = self.add_receipt(
+            job, "audiobook", service="BookOrbit", status="in_progress", remote_status="downloading",
+        )
+        self.db.update_acquisition_request(self.reader.id, receipt["id"], last_checked_at=utcnow())
+        self.bo.get_request.return_value = {"status": "downloading"}
+        self.refresh()
+        self.bo.get_request.assert_not_called()
+        self.service.refresh_user(self.reader.id, None, None, library_clients=self.clients, force=True)
+        self.bo.get_request.assert_called_once_with(receipt["remote_id"])
+
+    def test_forced_refresh_pairs_an_arrival_seconds_after_the_last_check(self):
+        # BookOrbit's "importing" and "available" changes can land seconds apart.
+        self.service.job_reconcile_interval = timedelta(seconds=30)
+        job = self.make_job()
+        self.candidates["audiobook"] = [audio("BookOrbit", "42")]
+        receipt = self.add_receipt(
+            job, "audiobook", service="BookOrbit", status="in_progress", remote_status="importing",
+        )
+        self.bo.get_request.return_value = {"status": "importing"}
+        self.service.refresh_user(self.reader.id, None, None, library_clients=self.clients, force=True)
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": 42}
+        self.bo.get_book_detail.return_value = {
+            "id": 42, "title": "Title", "authors": [{"name": "Author"}],
+            "seriesName": "Series", "seriesIndex": 2,
+            "files": [{"id": 19, "format": "m4b", "role": "primary", "filename": "Title.m4b"}],
+        }
+        self.service.refresh_user(self.reader.id, None, None, library_clients=self.clients, force=True)
+        self.assertEqual(self.db.get_acquisition_job(self.reader.id, job["id"])["linked_abs_id"], "bookorbit:42")
+        self.assertEqual(self.db.get_acquisition_request(self.reader.id, receipt["id"])["arrived_source_id"], "42")
 
     def test_pending_provider_receipt_is_provenance_not_a_blocker_or_erased(self):
         job = self.make_job()

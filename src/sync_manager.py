@@ -5594,11 +5594,12 @@ class SyncManager:
             except Exception as e:
                 logger.error("Sync cycle failed for user %s: %s", getattr(user, "id", None), e, exc_info=True)
 
-    def _refresh_acquisition_requests(self, user_id: int) -> None:
+    def _refresh_acquisition_requests(self, user_id: int, force: bool = False) -> None:
         """Check one user's BookOrbit and Shelfmark book requests with their own clients; never raises.
 
         Makes no HTTP call unless the database shows a request that needs checking or
         the reader has opted in to adopting their BookOrbit requests and a scan is due.
+        ``force`` skips the per-request 30 s spacing (BookOrbit announced a change).
         """
         acquisition = getattr(self, 'acquisition_service', None)
         registry = getattr(self, 'user_client_registry', None)
@@ -5619,7 +5620,7 @@ class SyncManager:
                 return
             user_token = set_current_user_id(user_id)
             credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))
-            acquisition.refresh_user(user_id, client, shelfmark, library_clients=bundle)
+            acquisition.refresh_user(user_id, client, shelfmark, library_clients=bundle, force=force)
         except Exception:
             logger.warning("Acquisition check failed for user %s", user_id, exc_info=True)
         finally:

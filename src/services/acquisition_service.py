@@ -146,11 +146,12 @@ class AcquisitionService:
         return self.database_service.get_refreshable_acquisition_requests(user_id, utcnow() - GIVE_UP_AFTER)
 
     def refresh_user(self, user_id: int, client: Any, shelfmark: Any = None,
-                     library_clients: Any = None) -> list[dict]:
+                     library_clients: Any = None, force: bool = False) -> list[dict]:
         """Refresh the user's due requests (each at most once per 30 s) and return all their rows.
 
         ``library_clients`` is the same reader's authenticated client bundle used
         by Discover. No global fallback is used when the bundle is unavailable.
+        ``force`` checks every open request now: BookOrbit just said one changed.
         """
         # The caller may pass only the reader-scoped library bundle. Use that
         # bundle's own provider client for receipt polling too; never globalize.
@@ -169,7 +170,7 @@ class AcquisitionService:
                     logger.warning("📥 Acquisition: user %s BookOrbit requests could not be adopted", user_id, exc_info=True)
             due = [
                 row for row in self._refreshable(user_id)
-                if row["last_checked_at"] is None or now - row["last_checked_at"] >= (
+                if force or row["last_checked_at"] is None or now - row["last_checked_at"] >= (
                     ARRIVED_REFRESH_INTERVAL if row["remote_status"] in _ARRIVED_REMOTE else REFRESH_INTERVAL
                 )
             ]
@@ -191,7 +192,7 @@ class AcquisitionService:
             if library_clients is None and client is not None:
                 library_clients = SimpleNamespace(bookorbit_client=client)
             try:
-                self._reconcile_jobs(user_id, library_clients)
+                self._reconcile_jobs(user_id, library_clients, force=force)
             except Exception:
                 logger.warning("📥 Acquisition: user %s job reconciliation failed", user_id, exc_info=True)
             return self.database_service.get_acquisition_requests(user_id)
@@ -472,7 +473,7 @@ class AcquisitionService:
             return False
         return AcquisitionService._series_matches(job, candidate, explicit=True)
 
-    def _reconcile_jobs(self, user_id: int, clients: Any) -> None:
+    def _reconcile_jobs(self, user_id: int, clients: Any, force: bool = False) -> None:
         """Reconcile each saved half independent of receipt timing and page lifetime.
 
         The authenticated per-reader catalog is queried again before pairing;
@@ -487,7 +488,7 @@ class AcquisitionService:
             if requests and all(r["status"] in _DEAD_RECEIPT for r in requests) and not job.get("scan_state"):
                 continue  # every provider request ended without a delivery; nothing can arrive
             last = self._job_reconciled.get((user_id, job["id"]))
-            if last is not None and now - last < self.job_reconcile_interval:
+            if not force and last is not None and now - last < self.job_reconcile_interval:
                 continue
             self._job_reconciled[(user_id, job["id"])] = now
             try:
@@ -555,6 +556,16 @@ class AcquisitionService:
                 self.database_service.set_acquisition_library_state(
                     user_id, job["id"], kind, "needs_review", metadata_review["status_detail"],
                     candidates=[],
+                )
+                continue
+            if not (known_source or known_id or has_confirmed_handle) and any(
+                r["service"] == "BookOrbit" and r["status"] in OPEN_STATUSES
+                and r["remote_status"] not in _ARRIVED_REMOTE for r in receipts
+            ):
+                # BookOrbit names the book it files (matchedBookId), even one it already had;
+                # a same-title copy found before then may be an older or broken edition.
+                self.database_service.set_acquisition_library_state(
+                    user_id, job["id"], kind, "waiting_import", "Waiting for library import",
                 )
                 continue
             # A reader-selected half needs revalidation just like a provider arrival.
