@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from requests.cookies import cookiejar_from_dict
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.api.storygraph_client import StorygraphClient
@@ -428,6 +430,86 @@ class TestStorygraphAuthorGate(unittest.TestCase):
         result = self.client.resolve_book(title="Stuck On You", author="")
         self.assertIsNotNone(result)
         self.assertEqual(result["book_id"], "b1")
+
+
+class TestStorygraphRotatedSession(unittest.TestCase):
+    """StoryGraph re-issues _storygraph_session with every page, and the page's CSRF token
+    is only accepted with that new session. Writes must send it, not the saved cookie,
+    or StoryGraph redirects them to sign-in (reported as an expired session)."""
+
+    PAGE = '<meta name="csrf-token" content="csrf123">'
+
+    def setUp(self):
+        self.env_patcher = patch.dict(
+            os.environ,
+            {
+                "STORYGRAPH_ENABLED": "true",
+                "STORYGRAPH_SESSION_COOKIE": "saved-session",
+                "STORYGRAPH_REMEMBER_USER_TOKEN": "saved-remember",
+            },
+            clear=False,
+        )
+        self.env_patcher.start()
+        self.client = StorygraphClient()
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
+    def _page(self, **cookies):
+        return Mock(status_code=200, text=self.PAGE, headers={}, cookies=cookiejar_from_dict(cookies))
+
+    def _posted_cookie(self, mock_post, index=0):
+        return mock_post.call_args_list[index].kwargs["headers"]["Cookie"]
+
+    @patch("src.api.storygraph_client.requests.post")
+    @patch("src.api.storygraph_client.requests.get")
+    def test_update_progress_posts_with_rotated_session(self, mock_get, mock_post):
+        mock_get.return_value = self._page(_storygraph_session="rotated-session")
+        mock_post.return_value = Mock(status_code=200, headers={})
+
+        self.assertTrue(self.client.update_progress("book-1", 0.5))
+
+        cookie = self._posted_cookie(mock_post)
+        self.assertIn("_storygraph_session=rotated-session", cookie)
+        self.assertNotIn("saved-session", cookie)
+        self.assertIn("remember_user_token=saved-remember", cookie)
+        # The page itself is still requested with the saved cookie.
+        self.assertIn("_storygraph_session=saved-session", mock_get.call_args.kwargs["headers"]["Cookie"])
+
+    @patch("src.api.storygraph_client.requests.post")
+    @patch("src.api.storygraph_client.requests.get")
+    def test_update_status_posts_with_rotated_session(self, mock_get, mock_post):
+        mock_get.return_value = self._page(_storygraph_session="rotated-session",
+                                           remember_user_token="rotated-remember")
+        mock_post.return_value = Mock(status_code=200, headers={})
+
+        self.assertTrue(self.client.update_status("book-1", 3))
+
+        cookie = self._posted_cookie(mock_post)
+        self.assertIn("_storygraph_session=rotated-session", cookie)
+        self.assertIn("remember_user_token=rotated-remember", cookie)
+
+    @patch("src.api.storygraph_client.requests.post")
+    @patch("src.api.storygraph_client.requests.get")
+    def test_switch_edition_posts_with_rotated_session(self, mock_get, mock_post):
+        mock_get.return_value = self._page(_storygraph_session="rotated-session")
+        mock_post.return_value = Mock(status_code=200, headers={})
+
+        self.assertTrue(self.client.switch_edition("book-1", "book-2"))
+
+        self.assertIn("_storygraph_session=rotated-session", self._posted_cookie(mock_post))
+
+    @patch("src.api.storygraph_client.requests.post")
+    @patch("src.api.storygraph_client.requests.get")
+    def test_saved_cookie_used_when_page_sets_none(self, mock_get, mock_post):
+        mock_get.return_value = self._page()
+        mock_post.return_value = Mock(status_code=200, headers={})
+
+        self.assertTrue(self.client.update_progress("book-1", 0.5))
+
+        cookie = self._posted_cookie(mock_post)
+        self.assertIn("_storygraph_session=saved-session", cookie)
+        self.assertIn("remember_user_token=saved-remember", cookie)
 
 
 if __name__ == "__main__":
