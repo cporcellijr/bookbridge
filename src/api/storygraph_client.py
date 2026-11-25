@@ -102,20 +102,41 @@ class StorygraphClient:
             return False
         return bool(self._session_cookie() and self._remember_user_token())
 
-    def _cookie_header(self) -> str:
+    def _cookie_header(self, fresh_cookies: Optional[dict] = None) -> str:
+        fresh_cookies = fresh_cookies or {}
         return (
-            f"remember_user_token={self._remember_user_token()}; "
+            f"remember_user_token={fresh_cookies.get('remember_user_token') or self._remember_user_token()}; "
             "cookies_popup_seen=yes; plus_popup_seen=yes; "
-            f"_storygraph_session={self._session_cookie()}"
+            f"_storygraph_session={fresh_cookies.get('_storygraph_session') or self._session_cookie()}"
         )
 
-    def _headers(self, *, accept: str = "text/html,application/xhtml+xml") -> dict:
+    @staticmethod
+    def _rotated_cookies(resp) -> dict:
+        """Session cookies StoryGraph re-issued with a page response.
+
+        StoryGraph sends a new ``_storygraph_session`` with every page, and the page's
+        CSRF token is only accepted together with that new session. A form post that
+        sends the saved cookie instead is redirected to sign-in, which looks exactly
+        like an expired login. Callers pass these to the post that uses the page's token.
+        """
+        jar = getattr(resp, "cookies", None) if resp is not None else None
+        if jar is None or not hasattr(jar, "get"):
+            return {}
+        rotated = {}
+        for name in ("_storygraph_session", "remember_user_token"):
+            value = jar.get(name)
+            if isinstance(value, str) and value:
+                rotated[name] = value
+        return rotated
+
+    def _headers(self, *, accept: str = "text/html,application/xhtml+xml",
+                 fresh_cookies: Optional[dict] = None) -> dict:
         return {
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             ),
-            "Cookie": self._cookie_header(),
+            "Cookie": self._cookie_header(fresh_cookies),
             "Accept": accept,
             "Origin": self.base_url,
             "Referer": self.base_url,
@@ -255,12 +276,13 @@ class StorygraphClient:
         data: dict | None = None,
         headers: dict | None = None,
         allow_redirects: bool = True,
+        fresh_cookies: dict | None = None,
     ):
         if not self.is_configured():
             return None
 
         url = path if path.startswith("http") else f"{self.base_url}{path}"
-        req_headers = self._headers()
+        req_headers = self._headers(fresh_cookies=fresh_cookies)
         if headers:
             req_headers.update(headers)
 
@@ -448,7 +470,8 @@ class StorygraphClient:
                 "X-Requested-With": "XMLHttpRequest",
                 "Referer": f"{self.base_url}/books/{from_book_id}/editions",
             },
-            allow_redirects=False
+            allow_redirects=False,
+            fresh_cookies=self._rotated_cookies(page),
         )
 
         return bool(resp and resp.status_code in (200, 204, 302, 303))
@@ -661,6 +684,7 @@ class StorygraphClient:
             "Referer": f"{self.base_url}/books/{book_id}",
         }
         payload = {"authenticity_token": csrf}
+        fresh_cookies = self._rotated_cookies(page)
 
         def post_status(status_name: str):
             return self._request(
@@ -669,6 +693,7 @@ class StorygraphClient:
                 data=payload,
                 headers=headers,
                 allow_redirects=False,
+                fresh_cookies=fresh_cookies,
             )
 
         resp = post_status(status)
@@ -737,6 +762,7 @@ class StorygraphClient:
                 "Referer": f"{self.base_url}/books/{book_id}",
             },
             allow_redirects=False,
+            fresh_cookies=self._rotated_cookies(page),
         )
 
         ok = bool(resp and resp.status_code in (200, 204, 302, 303) and not self._is_sign_in_redirect(resp))
