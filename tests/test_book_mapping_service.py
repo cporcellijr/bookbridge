@@ -189,6 +189,53 @@ def test_kosync_compute_no_booklore_id_returns_none():
     assert svc._compute_kosync_id('x.epub', '') is None
 
 
+def _cwa_reader_service():
+    """A reader whose ebook lives in CWA while Grimmory is switched off."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    cwa = MagicMock()
+    cwa.is_configured.return_value = True
+    cwa.get_book_by_id.return_value = {'id': '476', 'download_url': 'http://cwa/opds/download/476/epub/'}
+    cwa.download_ebook.side_effect = lambda _url, path: Path(path).write_bytes(b'cwa-epub-bytes') or True
+    grimmory = MagicMock()
+    grimmory.is_configured.return_value = False
+    registry = MagicMock()
+    registry.get_clients.return_value = SimpleNamespace(
+        cwa_client=cwa, booklore_client=grimmory, bookorbit_client=None, kavita_client=None,
+        abs_client=None, sync_clients={},
+    )
+    svc, db, _bl, parser, _abs = _build_service(kosync_id='cwahash0123456789')
+    svc._user_client_registry = registry
+    return svc, db, cwa, parser
+
+
+def test_cwa_ebook_hashes_through_the_readers_cwa_client():
+    """Requested audiobook + CWA ebook pairing failed live (2026-11-25) with
+    "Shelf-watch: could not compute kosync id for 'cwa_476.epub' (source_id=476);
+    skipping mapping": every non-BookOrbit/Kavita source was hashed through the
+    Grimmory client, which is off, so a CWA ebook could never be paired."""
+    svc, _db, cwa, parser = _cwa_reader_service()
+
+    assert svc._compute_kosync_id('cwa_476.epub', '476', 'CWA', user_id=2) == 'cwahash0123456789'
+    cwa.get_book_by_id.assert_called_once_with('476')
+    parser.get_kosync_id_from_bytes.assert_called_once_with('cwa_476.epub', b'cwa-epub-bytes')
+
+
+def test_audio_mapping_pairs_an_abs_audiobook_with_a_cwa_ebook():
+    svc, db, _cwa, _parser = _cwa_reader_service()
+
+    saved = svc.create_audio_mapping_from_match(
+        audio_source='ABS', audio_source_id='3b230d40', audio_title='A Requested Book',
+        ebook_filename='cwa_476.epub', ebook_source='CWA', ebook_source_id='476', user_id=2,
+    )
+
+    assert saved is not None
+    assert saved.kosync_doc_id == 'cwahash0123456789'
+    assert saved.ebook_source == 'CWA'
+    db.save_book.assert_called()
+
+
 def test_audio_mapping_absorbs_an_existing_ebook_only_entry():
     """An ebook-only mapping upgraded to audiobook must be folded in, not doubled.
 

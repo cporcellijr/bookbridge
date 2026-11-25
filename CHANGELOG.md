@@ -30,6 +30,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **A requested book pairs with your Calibre (CWA) copy.** When the other half of a requested book was an
+  ebook in Calibre-Web Automated, the pairing failed with "The pairing could not be saved" once the new file
+  arrived, because BookBridge tried to fetch the ebook from Grimmory. It now fetches it from your CWA.
 - **Discover shows each reader only their own matches.** A reader who signed in on a browser another reader had
   used could see that reader's Discover pairs, and they were then saved as their own. A new scan replaces them.
 - **Discover recognises an audiobook whose title repeats its series.** An audiobook called "Title: Series,

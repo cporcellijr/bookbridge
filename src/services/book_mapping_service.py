@@ -9,9 +9,10 @@ side-effect-free.
 
 import logging
 import os
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Optional
 
 from src.db.models import Book
 from src.utils.ebook_utils import is_comic_ebook_filename
@@ -44,6 +45,9 @@ class BookMappingService:
             return self.bookorbit_client
         if source_name == 'Kavita':
             return self.kavita_client
+        if source_name == 'CWA':
+            # No unscoped CWA client is injected here; never hash CWA ids through Grimmory.
+            return None
         return self.booklore_client
 
     def _resolve_library_client_for_user(self, source_name: Optional[str],
@@ -60,6 +64,8 @@ class BookMappingService:
                 return getattr(bundle, 'bookorbit_client', None)
             if source_name == 'Kavita':
                 return getattr(bundle, 'kavita_client', None)
+            if source_name == 'CWA':
+                return getattr(bundle, 'cwa_client', None)
             return getattr(bundle, 'booklore_client', None)
         except Exception as exc:
             logger.warning("Shelf-watch: could not resolve %s client for user %s: %s", source_name, user_id, exc, exc_info=True)
@@ -87,6 +93,8 @@ class BookMappingService:
             if ebook_source_file_id and (source_name == 'BookOrbit' or is_grimmory_source(source_name)):
                 from src.utils.provider_ebook_files import hash_selected_ebook
                 return hash_selected_ebook(client, self.ebook_parser, source_ebook_id, ebook_filename, ebook_source_file_id)
+            elif source_name == 'CWA':
+                content = self._download_cwa_book(client, source_ebook_id)
             else:
                 content = client.download_book(source_ebook_id)
         except Exception as e:
@@ -99,6 +107,18 @@ class BookMappingService:
         except Exception as e:
             logger.warning(f"Shelf-watch: ebook parser failed to compute kosync hash: {e}", exc_info=True)
             return None
+
+    @staticmethod
+    def _download_cwa_book(client: Any, cwa_id: str) -> Optional[bytes]:
+        """CWA serves files by OPDS download URL into a path, not as bytes by id."""
+        target = client.get_book_by_id(cwa_id)
+        if not target or not target.get('download_url'):
+            return None
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'book.epub'
+            if not client.download_ebook(target['download_url'], str(path)):
+                return None
+            return path.read_bytes()
 
     def _resolve_series_metadata(self, book_like, user_id: Optional[int] = None) -> tuple:
         """Resolve (series_name, series_sequence) for a new mapping from its source library.
