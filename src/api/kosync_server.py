@@ -794,7 +794,6 @@ def _record_kosync_event(abs_id: str, title: str, user_id=None) -> None:
 
     `user_id` is the BookBridge user the device authenticated as; the debounced
     sync runs for that user only (a device PUT is one person's progress)."""
-    global _debounce_thread_started
     with _kosync_debounce_lock:
         # Key by (abs_id, user_id): two users reading the same shared book must
         # each get their own debounced sync — a bare abs_id key lets the second
@@ -806,9 +805,15 @@ def _record_kosync_event(abs_id: str, title: str, user_id=None) -> None:
             'user_id': user_id,
             'abs_id': abs_id,
         }
+    _start_kosync_debounce_thread()
+
+
+def _start_kosync_debounce_thread() -> None:
+    """Start the debounce loop once per process (the test suite turns this into a no-op)."""
+    global _debounce_thread_started
     if not _debounce_thread_started:
         _debounce_thread_started = True
-        threading.Thread(target=_kosync_debounce_loop, daemon=True).start()
+        threading.Thread(target=_kosync_debounce_loop, daemon=True, name="kosync-debounce").start()
 
 
 def _normalize_kosync_device_value(value: str | None) -> str:
@@ -1098,7 +1103,6 @@ def _update_grouped_kosync_session(book, doc_hash: str, device: str, device_id: 
     if not _database_service or not book or not _supports_estimated_kosync_sessions(device, device_id):
         return
 
-    global _debounce_thread_started
     current_progress = float(percentage or 0.0)
     session_key = _get_kosync_session_key(doc_hash, device, device_id)
     new_session = {
@@ -1156,9 +1160,7 @@ def _update_grouped_kosync_session(book, doc_hash: str, device: str, device_id: 
     if session_to_finalize:
         _persist_grouped_kosync_session(session_to_finalize)
 
-    if not _debounce_thread_started:
-        _debounce_thread_started = True
-        threading.Thread(target=_kosync_debounce_loop, daemon=True).start()
+    _start_kosync_debounce_thread()
 
 
 def _kosync_debounce_loop() -> None:

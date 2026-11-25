@@ -105,6 +105,16 @@ def clone_migrated_database(request, monkeypatch, migrated_database_template):
 
 
 @pytest.fixture(autouse=True)
+def no_kosync_debounce_thread(monkeypatch):
+    """Never start the real KoSync debounce loop: it outlives the test that starts it
+    and its 10 s ticks finalize later tests' open sessions (fixed timestamps)."""
+    from src.api import kosync_server
+
+    monkeypatch.setattr(kosync_server, "_start_kosync_debounce_thread", lambda: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def fast_password_hashing(request, monkeypatch):
     """Use a valid low-cost password hash except in the security contract test."""
     if request.node.get_closest_marker("production_password_hash"):
