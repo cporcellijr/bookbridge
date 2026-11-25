@@ -1736,10 +1736,11 @@
                         <div class="form-group">
                             <label for="whisper_language">{{ _('Whisper Language') }}</label>
                             <input type="text" id="whisper_language" name="WHISPER_LANGUAGE"
-                                value="{{ get_val('WHISPER_LANGUAGE', '') }}" placeholder="{{ _('Auto-detect (e.g. ru, en)') }}">
-                            <div class="help-text">{% trans trimmed %}Leave blank to detect each chunk's language, or enter a language
-                                code such as <code>ru</code> for Russian. Applies to new local transcriptions;
-                                saved transcripts are reused.{% endtrans %}</div>
+                                value="{{ get_val('WHISPER_LANGUAGE', '') }}" placeholder="{{ _('From the ebook (e.g. ru, en)') }}">
+                            <div class="help-text">{% trans trimmed %}Leave blank to use the language the ebook names, or to detect
+                                each chunk's language when it names none. Enter a language code such as <code>ru</code>
+                                to use it for every book. Applies to new local transcriptions; saved transcripts are
+                                reused.{% endtrans %}</div>
                         </div>
                         <div class="form-group" style="align-items: center;">
                             <label for="whisper_vad_filter">{{ _('Skip music and silence') }}</label>

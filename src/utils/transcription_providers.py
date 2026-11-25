@@ -21,13 +21,14 @@ class TranscriptionProvider(ABC):
     """Abstract base class for transcription providers."""
     
     @abstractmethod
-    def transcribe(self, audio_path: Path, progress_callback=None) -> list[dict]:
+    def transcribe(self, audio_path: Path, progress_callback=None, language: Optional[str] = None) -> list[dict]:
         """
         Transcribe an audio file and return segments.
         
         Args:
             audio_path: Path to the audio file
             progress_callback: Optional callback for progress updates (0.0 to 1.0)
+            language: The ebook's language code, a hint providers may ignore
         
         Returns:
             List of dicts with 'start', 'end', 'text' keys and optional
@@ -117,13 +118,22 @@ class LocalWhisperProvider(TranscriptionProvider):
             )
         return self._model
     
-    def transcribe(self, audio_path: Path, progress_callback=None) -> list[dict]:
-        """Transcribe using local Whisper model."""
+    def transcribe(self, audio_path: Path, progress_callback=None, language: Optional[str] = None) -> list[dict]:
+        """Transcribe using local Whisper model.
+
+        Language: the WHISPER_LANGUAGE setting, else the ebook's language when this
+        model supports it, else auto-detect. Auto-detect reads the first 30s, so a
+        music intro can pick English and Whisper then translates the narration (#617).
+        """
         model = self._get_model()
         segments_out = []
         
         logger.info(f"🧠 Transcribing with {self.get_name()}: {audio_path.name}")
+        hint = language
         language = os.environ.get('WHISPER_LANGUAGE', '').strip().lower() or None
+        language_source = 'setting' if language else 'auto'
+        if not language and hint and hint in model.supported_languages:
+            language, language_source = hint, 'ebook'
         vad_filter = env_truthy('WHISPER_VAD_FILTER', 'false')
         self.last_vad_filter = vad_filter
         segments, info = model.transcribe(
@@ -132,8 +142,8 @@ class LocalWhisperProvider(TranscriptionProvider):
         )
         detected_language = info.language if isinstance(info.language, str) else 'unknown'
         logger.info(
-            'Whisper language: requested=%s, detected=%s, confidence=%s, VAD=%s',
-            language or 'auto', detected_language, info.language_probability, vad_filter,
+            'Whisper language: requested=%s, detected=%s, confidence=%s, VAD=%s, source=%s',
+            language or 'auto', detected_language, info.language_probability, vad_filter, language_source,
         )
         check_cyrillic = (language or detected_language) in ('ru', 'uk', 'be', 'bg', 'mk')
         mismatches = []
@@ -177,7 +187,7 @@ class DeepgramProvider(TranscriptionProvider):
     def get_name(self) -> str:
         return f"Deepgram ({self.model})"
     
-    def transcribe(self, audio_path: Path, progress_callback=None) -> list[dict]:
+    def transcribe(self, audio_path: Path, progress_callback=None, language: Optional[str] = None) -> list[dict]:
         """Transcribe using Deepgram API."""
         if not self.api_key:
             raise ValueError("DEEPGRAM_API_KEY not configured")
@@ -280,7 +290,7 @@ class WhisperCppServerProvider(TranscriptionProvider):
     def get_name(self) -> str:
         return f"Whisper.cpp (server) - {self.model}"
 
-    def transcribe(self, audio_source, progress_callback=None) -> list[dict]:
+    def transcribe(self, audio_source, progress_callback=None, language: Optional[str] = None) -> list[dict]:
         import requests
 
         source_str = str(audio_source)
@@ -514,6 +524,15 @@ class WhisperCppServerProvider(TranscriptionProvider):
             result.append(seg_copy)
 
         return result
+
+
+def ebook_language_hint(epub_path: Optional[Path]) -> Optional[str]:
+    """The EPUB's ``dc:language`` as a two-letter code, or None when it has none."""
+    if not epub_path or Path(epub_path).suffix.lower() != '.epub':
+        return None
+    from src.api.bookfusion_upload_client import extract_epub_metadata
+    from src.utils.language_key import language_key
+    return language_key(extract_epub_metadata(str(epub_path)).get('language')) or None
 
 
 def get_transcription_provider() -> TranscriptionProvider:

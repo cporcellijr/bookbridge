@@ -482,7 +482,7 @@ def test_rejected_whisper_transcript_is_not_reused_by_the_retry(tmp_path, monkey
     manager, alignment_service, book, wavs, provider = _real_whisper_job(tmp_path, monkeypatch)
     calls = {"n": 0}
 
-    def transcribe(_path):
+    def transcribe(_path, **_kw):
         calls["n"] += 1
         label = f"old{calls['n']}" if calls["n"] <= 2 else f"new{calls['n']}"
         if calls["n"] == 1:   # same-size content rewrite, changed mtime, during attempt 1
@@ -532,7 +532,7 @@ def test_partial_progress_from_other_audio_is_discarded(tmp_path, monkeypatch):
     (progress_dir / "_progress.json").write_text(json.dumps({
         "chunks_completed": 1, "cumulative_duration": 6.0, "vad_filter": False, "done": False,
         "source_fingerprints": stale, "transcript": [{"start": 0.0, "end": 6.0, "text": "stale"}]}))
-    provider.transcribe.side_effect = lambda _p: [{"start": 0.0, "end": 6.0, "text": "fresh"}]
+    provider.transcribe.side_effect = lambda _p, **_kw: [{"start": 0.0, "end": 6.0, "text": "fresh"}]
     alignment_service.align_and_store.return_value = True
     manager._run_background_job(book)
     assert provider.transcribe.call_count == 2

@@ -51,7 +51,7 @@ class WhisperResumeTestCase(unittest.TestCase):
         provider.supports_raw_audio = False
         provider.get_name.return_value = "test"
         provider.last_vad_filter = False
-        provider.transcribe.side_effect = lambda path: [{
+        provider.transcribe.side_effect = lambda path, **_kw: [{
             "start": 0.0, "end": self.transcriber.get_audio_duration(path), "text": Path(path).name,
         }]
         return provider

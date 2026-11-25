@@ -16,6 +16,7 @@ from src.services.transcription_preflight import record_preflight
 from src.utils.cache_paths import safe_library_path
 from src.utils.file_transfers import copy_file_to_path, hardlink_file_to_path
 from src.utils.storyteller_transcript import StorytellerTranscript
+from src.utils.transcription_providers import ebook_language_hint
 
 logger = logging.getLogger(__name__)
 AUDIO_EXTENSIONS = {'.mp3', '.m4b', '.m4a', '.flac', '.ogg', '.opus', '.wma', '.wav', '.aac'}
@@ -1992,7 +1993,8 @@ class ForgeService:
                             f"Auto-Forge: no audio files available for Whisper fallback (source={source_name})."
                         )
                     raw_transcript = self.transcriber.process_audio(
-                        abs_id, whisper_audio, full_book_text=book_text
+                        abs_id, whisper_audio, full_book_text=book_text,
+                        language=ebook_language_hint(text_source_path),
                     )
                     if raw_transcript:
                         transcript_source = "whisper"

@@ -691,9 +691,11 @@ class AudioTranscriber:
         progress_callback=None,
         cancellation_token: Optional[CancellationToken] = None,
         expected_duration: Optional[float] = None,
+        language: Optional[str] = None,
     ) -> Optional[list]:
         """
         Main transcription pipeline.
+        ``language`` is the ebook's language code, passed to the provider as a hint.
         Returns: List of segment dicts [{'start': 0.0, 'end': 1.0, 'text': 'foo'}, ...]
         """
         # Note: We no longer check for 'output_file.exists()' here as the primary cache check.
@@ -989,7 +991,7 @@ class AudioTranscriber:
 
                 try:
                     # Use the transcription provider
-                    segments = provider.transcribe(local_path)
+                    segments = provider.transcribe(local_path, language=language)
                     vad_used = vad_used or getattr(provider, 'last_vad_filter', False) is True
                     raise_if_cancelled()
                     

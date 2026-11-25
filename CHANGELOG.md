@@ -28,6 +28,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Whisper transcribes in the ebook's language.** With **Whisper Language** blank, an audiobook that opens
+  with music could be detected as English, and Whisper then wrote an English translation of the narration that
+  the ebook could never match. When the setting is blank, BookBridge now asks Whisper for the language the
+  ebook names, and detects it only when the ebook names none. A transcript already saved is reused, so for a
+  book that failed this way, delete its saved transcript and retry (see Transcription problems) (#617).
 - **KoSync keeps the newest position across ebook copies.** With furthest-wins off, a newer device update
   received during a sync cycle survives the cycle's older write, including rewinds and updates on another
   copy. Contributed by [@jucor](https://github.com/jucor) in #618.

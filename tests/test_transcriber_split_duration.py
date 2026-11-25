@@ -84,7 +84,7 @@ class TestRawSourceFailureLogging(unittest.TestCase):
         provider.supports_raw_audio = True
         provider.get_name.return_value = "raw-provider"
 
-        def cancel_during_transcription(_source):
+        def cancel_during_transcription(_source, **_kw):
             token.cancel()
             shutil.rmtree(cache)
             return [{"start": 0, "end": 100, "text": "completed after deletion"}]

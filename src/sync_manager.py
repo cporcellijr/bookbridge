@@ -57,6 +57,7 @@ from src.utils.transcription_cancel import (
     unregister_worker,
 )
 from src.utils.transcriber import TranscriptionCancelled
+from src.utils.transcription_providers import ebook_language_hint
 from src.utils.source_fingerprint import AcquiredPaths, SourceAudioChanged, verify_unchanged
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger, redact_url_secrets
 from src.utils.progress_metadata import state_metadata_kwargs
@@ -4199,6 +4200,7 @@ class SyncManager:
                     expected_duration=(
                         getattr(book, "audio_duration", None) or getattr(book, "duration", None)
                     ),
+                    language=ebook_language_hint(epub_path),
                 )
                 if raw_transcript:
                     transcript_source = "whisper"

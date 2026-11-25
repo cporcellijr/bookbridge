@@ -714,7 +714,7 @@ audio ↔ text alignment; it runs locally by default and needs no external servi
 | --- | --- | --- | --- |
 | Provider | `TRANSCRIPTION_PROVIDER` | `local` | `local`, `deepgram`, or `whispercpp`. |
 | Whisper Model | `WHISPER_MODEL` | `tiny` | Local Whisper model size or a custom Whisper.cpp model name. |
-| Whisper Language | `WHISPER_LANGUAGE` | empty | Local Whisper only. Blank detects each chunk's language; a code such as `ru` or `en` fixes it. Applies to new transcriptions; saved transcripts are reused. |
+| Whisper Language | `WHISPER_LANGUAGE` | empty | Local Whisper only. Blank uses the ebook's language, or detects each chunk's language when the ebook names none; a code such as `ru` or `en` fixes it for every book. Applies to new transcriptions; saved transcripts are reused. |
 | Skip music and silence | `WHISPER_VAD_FILTER` | `false` | Local Whisper only. Uses voice activity detection to reduce transcription over music and silence while preserving audio timestamps. Check quiet narration before enabling broadly. Applies to new transcriptions. |
 | Whisper Device | `WHISPER_DEVICE` | `auto` | `auto`, `cpu`, or `cuda`. |
 | Whisper Compute Type | `WHISPER_COMPUTE_TYPE` | `auto` | Precision mode for local Whisper. |

@@ -793,16 +793,18 @@ class TestForgeService(unittest.TestCase):
 
     def test_auto_forge_falls_back_to_whisper_when_smil_rejected(self):
         """Auto-forge should run Whisper fallback if SMIL returns no transcript."""
-        self._run_auto_forge_pipeline(
-            text_item={"source": "Local File"},
-            ingest_manifest=None,
-            storyteller_alignment_ok=False,
-            smil_transcript=[],
-            whisper_transcript=[{"start": 0.0, "end": 1.0, "text": "hello"}],
-        )
+        with patch("src.services.forge_service.ebook_language_hint", return_value="ru"):
+            self._run_auto_forge_pipeline(
+                text_item={"source": "Local File"},
+                ingest_manifest=None,
+                storyteller_alignment_ok=False,
+                smil_transcript=[],
+                whisper_transcript=[{"start": 0.0, "end": 1.0, "text": "hello"}],
+            )
 
         self.mock_abs.get_audio_files.assert_not_called()
         self.mock_transcriber.process_audio.assert_called_once()
+        self.assertEqual(self.mock_transcriber.process_audio.call_args.kwargs["language"], "ru")  # #617
         self.mock_alignment.align_and_store.assert_called_once()
 
     def test_auto_forge_uses_smil_and_skips_whisper_when_smil_available(self):

@@ -12,7 +12,7 @@ Most books never need transcription: BookBridge lines the audio up with the eboo
 
 **Settings → Alignment → Transcription**
 
-- **Whisper Language:** leave it blank to detect the language of each part, or enter a code such as `ru` to ask for Russian. It does not translate.
+- **Whisper Language:** leave it blank to use the language the ebook names, which avoids a music intro being heard as English. When the ebook names none, each part's language is detected. Enter a code such as `ru` to ask for Russian for every book. It does not translate.
 - **Skip music and silence:** off by default. Turn it on when music or silence comes out as words, then check that quiet narration is still transcribed.
 
 Both apply to audio transcribed from now on; a transcript that is already saved is reused. The log shows the language asked for and the language detected for each part. For Russian and other Cyrillic languages, mostly Latin output logs a warning. Names and quotes can be Latin, so treat it as a hint, not proof.
