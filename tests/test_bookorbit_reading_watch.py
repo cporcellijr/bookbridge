@@ -55,7 +55,7 @@ class TestListContinueReadingBooks(unittest.TestCase):
 
         self.assertEqual(out, [{
             "id": 1, "title": "Book One", "author": "A. Author",
-            "fileName": "book-one.epub", "progress": 10.2, "editionAudioIds": [],
+            "fileName": "book-one.epub", "progress": 10.2, "language": "", "editionAudioIds": [],
         }])
 
     def test_filters_below_min_progress_and_null_progress(self):

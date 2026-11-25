@@ -327,6 +327,103 @@ def test_listening_watch_leaves_ambiguous_mapped_or_disabled_audiobooks_alone(eb
     mapping.create_audio_mapping_from_match.assert_not_called()
 
 
+SPANISH_AUDIO = ({**BOOKORBIT_AUDIO, "audio_language": "es"},)
+ENGLISH_READING = {"id": 2348, "title": "Different Ebook Title", "author": "Someone Else", "fileName": "a.epub",
+                   "progress": 5.0, "language": "en", "editionAudioIds": ["5114"]}
+
+
+def test_reading_watch_keeps_the_ebook_language_so_a_translation_is_not_auto_mapped():
+    # Review repro: an English ebook grouped with a Spanish audiobook was auto-mapped at 100 via reading-watch.
+    client = MagicMock()
+    client.list_continue_reading_books.return_value = [dict(ENGLISH_READING)]
+    client.list_continue_listening_books.return_value = []
+    watch, mapping = _watch(client, scanner=_edition_scanner(SPANISH_AUDIO))
+    with patch.dict(os.environ, WATCH_ON):
+        stats = watch._process_reading_watch(user_id=None)
+
+    assert stats["auto_matched"] == 0
+    mapping.create_audio_mapping_from_match.assert_not_called()
+
+
+def test_shelf_watch_keeps_the_ebook_language_so_a_translation_is_not_auto_mapped():
+    watch, mapping = _watch(MagicMock(), scanner=_edition_scanner(SPANISH_AUDIO))
+    with patch.dict(os.environ, WATCH_ON):
+        outcome = watch._process_one_book(dict(ENGLISH_READING), "a.epub", "2348", [dict(c) for c in SPANISH_AUDIO],
+                                          threshold=95.0, watch_shelf="Up Next", kobo_shelf="Kobo")
+
+    assert outcome != "auto_matched"
+    mapping.create_audio_mapping_from_match.assert_not_called()
+
+
+def test_continue_reading_and_shelf_books_carry_the_ebook_language(client):
+    client._book_cache = {2348: client._build_light_info({**LINKED_CARD, "language": "en-GB"})}
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"books": [{"id": 2348, "title": "Shared Book", "readingProgress": 5}]}
+    with patch.object(client, "_make_request", return_value=response), \
+            patch.object(client, "get_book_detail", return_value=None):
+        assert client.list_continue_reading_books()[0]["language"] == "en-GB"
+    response.json.return_value = {"items": [{"id": 2348, "title": "Shared Book"}]}
+    with patch.object(client, "_make_request", return_value=response), \
+            patch.object(client, "_get_collection_id", return_value=1), \
+            patch.object(client, "get_book_detail", return_value={"language": "es", "files": []}):
+        assert client.list_books_on_shelf("Up Next")[0]["language"] == "es"
+
+
+@pytest.fixture
+def two_readers(tmp_path):
+    """A real database where alice already mapped BookOrbit audio 5114, and the watch that runs for bob."""
+    from src.db.database_service import DatabaseService
+    from src.services.book_mapping_service import BookMappingService
+
+    db = DatabaseService(str(tmp_path / "pairs.db"))
+    alice = db.create_user("alice", "pw", role="user")
+    bob = db.create_user("bob", "pw", role="user")
+    orbit = MagicMock()
+    orbit.is_configured.return_value = True
+    orbit.download_book.side_effect = lambda ebook_id: f"epub-{ebook_id}".encode()
+    parser = MagicMock()
+    parser.get_kosync_id_from_bytes.side_effect = lambda _name, data: f"hash-{data.decode()}"
+    mapping = BookMappingService(database_service=db, booklore_client=MagicMock(), ebook_parser=parser,
+                                 abs_client=MagicMock(), sync_clients={}, bookorbit_client=orbit)
+    client = _listening_client()
+    client.is_configured.return_value = True
+    watch = ShelfWatchService(booklore_client=client, database_service=db, book_mapping_service=mapping,
+                              suggestions_service_factory=_edition_scanner,
+                              source_name="BookOrbit", env_prefix="BOOKORBIT")
+
+    def alice_maps(ebook_id, filename):
+        assert mapping.create_audio_mapping_from_match(
+            audio_source="BookOrbit", audio_source_id="5114", audio_title="Audio Title", ebook_filename=filename,
+            ebook_source="BookOrbit", ebook_source_id=ebook_id, user_id=alice.id) is not None
+
+    try:
+        yield SimpleNamespace(db=db, bob=bob, watch=watch, client=client, mapping=mapping, alice_maps=alice_maps)
+    finally:
+        db.db_manager.close()
+
+
+def test_listening_watch_adds_another_readers_identical_pairing_for_this_reader(two_readers):
+    # Review repro: any existing mapping of the audiobook made listening-watch skip, so bob was never linked.
+    two_readers.alice_maps("2348", "a.epub")
+    with patch.dict(os.environ, WATCH_ON):
+        assert two_readers.watch._process_listening_watch(user_id=two_readers.bob.id,
+                                                          active_client=two_readers.client) == 1
+        assert two_readers.db.is_user_linked(two_readers.bob.id, "bookorbit:5114")
+        assert two_readers.watch._process_listening_watch(user_id=two_readers.bob.id,
+                                                          active_client=two_readers.client) == 0
+
+
+def test_listening_watch_quietly_skips_another_readers_different_pairing(two_readers):
+    two_readers.alice_maps("9999", "other.epub")
+    with patch.dict(os.environ, WATCH_ON), \
+            patch.object(two_readers.mapping, "create_audio_mapping_from_match") as create:
+        assert two_readers.watch._process_listening_watch(user_id=two_readers.bob.id,
+                                                          active_client=two_readers.client) == 0
+
+    create.assert_not_called()
+    assert not two_readers.db.is_user_linked(two_readers.bob.id, "bookorbit:5114")
+
+
 def test_client_lists_continue_listening_with_ebook_editions(client):
     response = MagicMock(status_code=200)
     response.json.return_value = {"books": [

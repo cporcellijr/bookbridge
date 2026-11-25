@@ -320,9 +320,11 @@ class ShelfWatchService:
         for audio in client.list_continue_listening_books() or []:
             audio_id = str(audio.get('id') or '').strip()
             ebook_ids = audio.get('editionEbookIds') or []
-            if not audio_id or len(ebook_ids) != 1 or self.database_service.get_book(f"bookorbit:{audio_id}"):
+            if not audio_id or len(ebook_ids) != 1:
                 continue
             ebook_id = str(ebook_ids[0])
+            if self._audio_mapped_for_reader(audio_id, ebook_id, user_id):
+                continue
             ebook = client._enrich_ebook(ebook_id, {}) or {}
             filename = ebook.get('fileName') or ''
             if not filename or self._is_already_mapped(ebook_id, filename, user_id=user_id):
@@ -340,6 +342,20 @@ class ShelfWatchService:
             self._create_audio_mapping_and_move(ebook, filename, ebook_id, top, None, None, user_id=user_id)
             mapped += 1
         return mapped
+
+    def _audio_mapped_for_reader(self, audio_id: str, ebook_id: str, user_id: Optional[int]) -> bool:
+        """True when listening-watch should leave this BookOrbit audiobook alone.
+
+        This reader's own mapping counts. Another reader's mapping of the same ebook
+        does not: the mapping service adds that pairing to this reader's library. One
+        paired with a different ebook would be refused every pass, so it counts too.
+        """
+        existing = self.database_service.get_book(f"bookorbit:{audio_id}")
+        if not existing:
+            return False
+        if user_id is None or self.database_service.is_user_linked(user_id, existing.abs_id):
+            return True
+        return str(existing.ebook_source_id or '') != ebook_id
 
     def _process_watch_shelf(self, user_id: int = None, active_client=None) -> dict:
         """Scan the watch shelf and act on each book.
@@ -516,6 +532,7 @@ class ShelfWatchService:
             'authors': self._extract_author(grimmory_book),
             'grimmory_id': grimmory_id,
             'path': grimmory_book.get('filePath') or grimmory_book.get('filepath') or grimmory_book.get('path') or '',
+            'language': grimmory_book.get('language') or '',
             'edition_audio_ids': grimmory_book.get('editionAudioIds') or [],
         }
 
@@ -842,6 +859,7 @@ class ShelfWatchService:
             'authors': self._extract_author(book),
             'grimmory_id': source_id,
             'path': book.get('filePath') or book.get('filepath') or book.get('path') or '',
+            'language': book.get('language') or '',
             'edition_audio_ids': book.get('editionAudioIds') or [],
         }
 

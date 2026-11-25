@@ -391,6 +391,11 @@ class BookOrbitClient:
         return self._edition_ids(raw) or (
             self.get_book_by_id(raw.get("id"), allow_refresh=False) or {}).get("editionAudioIds") or []
 
+    def _card_language(self, raw: dict, detail: Optional[dict]) -> str:
+        """Language of a non-list card (shelf, scroller): the card, its detail, then the list cache."""
+        cached = self.get_book_by_id(raw.get("id"), allow_refresh=False) or {}
+        return str(raw.get("language") or (detail or {}).get("language") or cached.get("language") or "").strip()
+
     def _build_light_info(self, book: dict) -> Optional[dict]:
         """Build a lightweight cache entry from a `/books/query` list row.
 
@@ -2331,7 +2336,7 @@ class BookOrbitClient:
     def list_books_on_shelf(self, shelf_name: str) -> list:
         """List books on a collection, enriched with the primary ebook filename.
 
-        Returns dicts shaped for ShelfWatchService: ``{id, title, author, fileName}``.
+        Returns dicts shaped for ShelfWatchService: ``{id, title, author, fileName, language, editionAudioIds}``.
         Resolving the filename per book also seeds the filename→id index so a
         subsequent ``move_between_shelves(filename, ...)`` can map back to the id.
         """
@@ -2358,6 +2363,7 @@ class BookOrbitClient:
                 "title": (raw.get("title") or "").strip(),
                 "author": self._format_authors(raw.get("authors")),
                 "fileName": filename,
+                "language": self._card_language(raw, detail),
                 "editionAudioIds": self._cached_edition_audio_ids(raw),
             })
         return out
@@ -2373,7 +2379,7 @@ class BookOrbitClient:
         its detail — the same lookup ``list_books_on_shelf`` uses.
 
         Returns dicts shaped for ShelfWatchService's reading-watch pass:
-        ``{id, title, author, fileName, progress}``.
+        ``{id, title, author, fileName, progress, language, editionAudioIds}``.
         """
         resp = self._make_request(
             "GET", f"/api/v1/dashboard/scrollers/continue-reading?limit={limit}"
@@ -2404,6 +2410,7 @@ class BookOrbitClient:
                 "author": self._format_authors(raw.get("authors")),
                 "fileName": filename,
                 "progress": progress,
+                "language": self._card_language(raw, detail),
                 "editionAudioIds": self._cached_edition_audio_ids(raw),
             })
         return out
