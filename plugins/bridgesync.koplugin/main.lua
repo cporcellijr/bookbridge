@@ -163,7 +163,7 @@ function BridgeSync:init()
         return value
     end
 
-    self.server_url = get_setting("server_url") or ""
+    self.server_url = APIClient.normalizeServerUrl(get_setting("server_url"))
     self.username = get_setting("username") or ""
     self.key = get_setting("key") or ""
     self.download_dir = get_setting("download_dir") or self:_detectDefaultDownloadDir()
@@ -536,7 +536,7 @@ function BridgeSync:_preflightNetwork(allow_dns_retry)
 
     local host = self:_extractHost()
     if not host or host == "" then
-        return false, _("Server URL is invalid")
+        return false, T(_("Server URL is invalid: %1"), self.server_url ~= "" and self.server_url or _("Not set"))
     end
 
     if host:match("^%d+%.%d+%.%d+%.%d+$") then
@@ -4077,7 +4077,7 @@ function BridgeSync:addToMainMenu(menu_items)
                         self.server_url,
                         _("Enter bridge base URL"),
                         function(value)
-                            self.server_url = value
+                            self.server_url = APIClient.normalizeServerUrl(value)
                             self:_saveSettings()
                         end,
                         nil,

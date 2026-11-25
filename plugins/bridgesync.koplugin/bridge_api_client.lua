@@ -47,6 +47,19 @@ local APIClient = {
     request_runner = nil,
 }
 
+-- Trim a typed server URL, lowercase its scheme and default a bare host to http://.
+function APIClient.normalizeServerUrl(value)
+    local url = tostring(value or ""):match("^%s*(.-)%s*$")
+    if url == "" then
+        return url
+    end
+    local scheme, rest = url:match("^(%a[%w+.-]*)://(.*)$")
+    if scheme then
+        return scheme:lower() .. "://" .. rest
+    end
+    return "http://" .. url
+end
+
 function APIClient:new(o)
     o = o or {}
     setmetatable(o, self)

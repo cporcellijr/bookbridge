@@ -741,4 +741,17 @@ do
     assert(state:mark_sessions_uploaded({}) == false, "empty batch must be a no-op failure")
 end
 
+-- Fleet 9983: a padded, capitalised or scheme-less URL logged "Server URL is invalid".
+for input, expected in pairs({
+    ["  http://bridge:5758  "] = "http://bridge:5758",
+    ["HTTP://Bridge:5758"] = "http://Bridge:5758",
+    ["Https://bridge.example"] = "https://bridge.example",
+    ["192.168.1.5:5758"] = "http://192.168.1.5:5758",
+    ["   "] = "",
+}) do
+    local got = APIClient.normalizeServerUrl(input)
+    assert(got == expected, "normalizeServerUrl(" .. input .. ") = " .. got)
+end
+assert(APIClient.normalizeServerUrl(nil) == "", "nil server URL must stay empty")
+
 print("BridgeSync Lua core tests passed")

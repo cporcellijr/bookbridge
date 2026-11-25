@@ -171,6 +171,9 @@ preload("bridge_api_client", function()
     function APIClient:new()
         return setmetatable({}, { __index = self })
     end
+    function APIClient.normalizeServerUrl(value)
+        return tostring(value or "")
+    end
     function APIClient:init(server_url, username, key, log_callback)
         self.server_url = server_url
         self.username = username
