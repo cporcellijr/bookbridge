@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from src.utils import user_uploads
+
 
 _WEB_MODULE = None
 
@@ -25,6 +27,9 @@ def register(app: Any, web_module: Any) -> None:
         ('/account/interface', 'account_interface', account_interface, ['POST']),
         ('/account/display', 'account_display', account_display, ['POST']),
         ('/account/display', 'account_display_page', account_display_page, ['GET']),
+        ('/account/trinkets', 'account_trinket_upload', account_trinket_upload, ['POST']),
+        ('/account/trinkets/<name>', 'account_trinket_file', account_trinket_file, ['GET']),
+        ('/account/trinkets/<name>/delete', 'account_trinket_delete', account_trinket_delete, ['POST']),
         ('/account/integrations', 'account_integrations', account_integrations, ['GET', 'POST']),
         ('/api/account/test-connection/<service>', 'account_test_connection', account_test_connection, ['POST']),
         ('/api/account/abs-libraries', 'account_abs_libraries', account_abs_libraries, ['POST']),
@@ -151,7 +156,7 @@ def account_display():
     values = {}
     for key, raw in submitted.items():
         value = web.normalize_display_value(key, raw)
-        if value is None:
+        if value is None or (key == 'UI_SHELF_PROP_KINDS' and not _owns_trinkets(web, user, value)):
             return web.jsonify({"ok": False, "error": "Unsupported display setting"}), 400
         values[key] = value
     if not values:
@@ -160,6 +165,78 @@ def account_display():
     if web._request_wants_json():
         return web.jsonify({"ok": True, "settings": web._display_settings_for(user)})
     return web.redirect(web._safe_next_url())
+
+
+def _owns_trinkets(web: Any, user: Any, kinds: str) -> bool:
+    """True when every uploaded trinket named in ``kinds`` is one of this reader's files."""
+    owned = set(user_uploads.list_uploads(web.DATA_DIR, user.id, user_uploads.TRINKETS))
+    return all(piece[len('upload:'):] in owned for piece in kinds.split(',') if piece.startswith('upload:'))
+
+
+def _set_trinket_kinds(web: Any, user: Any, kinds: str) -> None:
+    """Save the reader's trinket list in its normal form."""
+    web.database_service.set_user_credential(
+        user.id, 'UI_SHELF_PROP_KINDS', web.normalize_display_value('UI_SHELF_PROP_KINDS', kinds))
+
+
+def _back_to_trinkets(web: Any, error: str = ''):
+    target = web.url_for('account_display_page', trinket_error=error) if error else web.url_for('account_display_page')
+    return web.redirect(target + '#display-trinkets')
+
+
+def account_trinket_upload():
+    """Store one SVG, PNG or WebP trinket for the signed-in reader and put it on their shelves."""
+    web = _web_server()
+    user = web.current_user()
+    if user is None:
+        return web.redirect(web.url_for('login'))
+    upload = web.request.files.get('trinket')
+    data = upload.read(user_uploads.TRINKET_MAX_BYTES + 1) if upload else b''
+    try:
+        name = user_uploads.save_upload(web.DATA_DIR, user.id, user_uploads.TRINKETS, data,
+                                        user_uploads.TRINKET_MAX_BYTES, user_uploads.TRINKET_MAX_COUNT)
+    except user_uploads.UploadRejected as rejected:
+        web.logger.info(f"🖼️ Trinket upload refused for user {user.id}: {rejected.reason}")
+        if web._request_wants_json():
+            return web.jsonify({"ok": False, "error": rejected.reason}), 413 if rejected.reason == 'too-big' else 400
+        return _back_to_trinkets(web, rejected.reason)
+    kinds = web._display_settings_for(user)['UI_SHELF_PROP_KINDS']
+    _set_trinket_kinds(web, user, f"{kinds},upload:{name}")
+    web.logger.info(f"🖼️ Trinket uploaded for user {user.id}: {name}")
+    if web._request_wants_json():
+        return web.jsonify({"ok": True, "name": name})
+    return _back_to_trinkets(web)
+
+
+def account_trinket_file(name: str):
+    """Serve one of the signed-in reader's own trinkets; anyone else's name is a 404."""
+    web = _web_server()
+    user = web.current_user()
+    path = user_uploads.upload_file(web.DATA_DIR, user.id, user_uploads.TRINKETS, name) if user else None
+    if path is None:
+        web.abort(404)
+    response = web.send_from_directory(path.parent, path.name, max_age=31536000,
+                                       mimetype=user_uploads.MEDIA_TYPES[path.suffix[1:]])
+    # Names are random and never reused; opened directly, an SVG still cannot run anything.
+    response.headers['Cache-Control'] = 'private, max-age=31536000, immutable'
+    response.headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+def account_trinket_delete(name: str):
+    """Remove one of the signed-in reader's trinkets and take it off their shelves."""
+    web = _web_server()
+    user = web.current_user()
+    if user is None:
+        return web.redirect(web.url_for('login'))
+    if user_uploads.delete_upload(web.DATA_DIR, user.id, user_uploads.TRINKETS, name):
+        web.logger.info(f"🖼️ Trinket removed for user {user.id}: {name}")
+    kinds = web._display_settings_for(user)['UI_SHELF_PROP_KINDS']
+    _set_trinket_kinds(web, user, ','.join(piece for piece in kinds.split(',') if piece != f'upload:{name}'))
+    if web._request_wants_json():
+        return web.jsonify({"ok": True})
+    return _back_to_trinkets(web)
 
 
 def account_display_page():
@@ -209,6 +286,9 @@ def account_display_page():
         'next/display.html',
         preview_mappings=preview,
         preview_groups=web._group_dashboard_mappings_by_series(preview),
+        trinket_uploads=user_uploads.list_uploads(web.DATA_DIR, user.id, user_uploads.TRINKETS),
+        trinket_limit=user_uploads.TRINKET_MAX_COUNT,
+        trinket_error=web.request.args.get('trinket_error', ''),
     )
 
 

@@ -552,6 +552,8 @@ body.series-grouping-off .series-group { display: none !important; }
 .shelf-prop[data-prop="candle"] { --prop-w: 26px; --prop-h: 64px; --prop-art: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 64'><path d='M13 2c5 6 6 11 0 17-6-6-5-11 0-17z' fill='%23F5A623'/><path d='M13 9c2 3 2 6 0 8-2-2-2-5 0-8z' fill='%23FFE08A'/><path d='M13 19v4' stroke='%23333' stroke-width='1.5'/><rect x='7' y='23' width='12' height='35' rx='2' fill='%23F1E7D2'/><rect x='1' y='57' width='24' height='7' rx='3' fill='%23A08C6A'/></svg>"); }
 .shelf-prop[data-prop^="bookend"] { --prop-w: 24px; --prop-h: 110px; --prop-art: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 110'><path d='M12 0h10v110H0v-10h12z' fill='%23A8834A'/><path d='M14 2h3v96h-3z' fill='%23D9B676'/><path d='M2 102h18v2H2z' fill='%23D9B676'/></svg>"); }
 .shelf-prop[data-prop="bookend-start"] { transform: scaleX(-1); }
+/* A reader's uploaded trinket: any shape, scaled into one box standing on the plank; its URL comes inline. */
+.shelf-prop[data-prop="upload"] { --prop-w: 64px; --prop-h: 88px; }
 .library-page[data-view="spines"] .book-grid {
  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 58px 4px; padding: 14px 18px 50px;
  background-image: linear-gradient(to bottom,
@@ -1048,6 +1050,15 @@ body.series-grouping-off .series-group { display: none !important; }
 .display-hero-checks label { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
 .display-hero-checks label:has(input:disabled) { opacity: .45; cursor: not-allowed; }
 .display-hero-checks input { accent-color: var(--ribbon); }
+.display-upload-chip img { width: 22px; height: 22px; object-fit: contain; }
+.display-upload-list { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.display-upload-item { position: relative; display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg-2); }
+.display-upload-item img { width: 34px; height: 34px; object-fit: contain; }
+.display-upload-item button { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; padding: 0; border: 1px solid var(--line-2); border-radius: 50%; background: var(--surface-2); color: var(--text); font-size: 13px; line-height: 1; cursor: pointer; }
+.display-upload-add { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border: 1px dashed var(--line-2); border-radius: 9px; color: var(--text); font-size: 12px; cursor: pointer; }
+.display-upload-add:focus-within { outline: 2px solid var(--ribbon); outline-offset: 2px; }
+.display-upload-add input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.display-label .display-upload-error { color: var(--danger, #cc7070); }
 @container (max-width: 940px) {
  .library-hero-link { gap: 20px; }
  .library-hero .hero-cover { flex-basis: 168px; width: 168px; min-height: 252px; }

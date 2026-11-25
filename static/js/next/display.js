@@ -238,6 +238,10 @@
         });
         form.addEventListener('submit', function (event) { event.preventDefault(); });
     });
+    // Picking a trinket picture uploads it straight away; the page comes back with it listed.
+    document.querySelectorAll('[data-trinket-file]').forEach(function (input) {
+        input.addEventListener('change', function () { if (input.files.length) input.form.submit(); });
+    });
     window.bbDisplaySaveTheme = function (value, previous) {
         var form = document.querySelector('[data-display-setting="UI_THEME"]');
         if (form) save(form, value, previous);

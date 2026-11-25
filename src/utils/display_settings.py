@@ -8,6 +8,7 @@ import os
 from typing import Mapping, Optional
 
 from src.utils.config_loader import DEFAULT_CONFIG
+from src.utils.user_uploads import UPLOAD_NAME
 
 _BOOL = ("true", "false")
 _TRUE_SPELLINGS = frozenset({"true", "on", "1", "yes"})
@@ -60,10 +61,13 @@ def normalize_display_value(key: str, raw: object) -> Optional[str]:
             choices.discard("streak")
         return ",".join(piece for piece in _HERO_ORDER if piece in choices)
     if key == "UI_SHELF_PROP_KINDS":
-        kinds = {part.strip() for part in value.split(",")} - {""}
-        if not kinds <= set(_PROP_KINDS):
+        # Built-in trinkets in a fixed order, then the reader's uploads ("upload:<file>") as given.
+        # Whether the reader owns an upload is checked by the save route, which knows the reader.
+        pieces = [part.strip() for part in value.split(",") if part.strip()]
+        uploads = [piece for piece in pieces if piece not in _PROP_KINDS]
+        if not all(piece.startswith("upload:") and UPLOAD_NAME.fullmatch(piece[7:]) for piece in uploads):
             return None
-        return ",".join(kind for kind in _PROP_KINDS if kind in kinds)
+        return ",".join([kind for kind in _PROP_KINDS if kind in pieces] + list(dict.fromkeys(uploads)))
     if allowed is _BOOL:
         if value in _TRUE_SPELLINGS:
             return "true"

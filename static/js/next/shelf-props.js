@@ -1,6 +1,6 @@
 /* Shelf props (UI_SHELF_PROPS): bookends around the visible books and a plant, candle or
    book stack every few books, as the reader chose (UI_SHELF_PROP_KINDS, UI_SHELF_PROP_AMOUNT).
-   Plants, candles and bookends are decoration; a book stack is the next few real books lying
+   Plants, candles, bookends and the reader's uploaded pictures are decoration; a book stack is the next few real books lying
    flat, wrapped in .shelf-stack, so they stay links in their sorted place. CSS shows props and
    piles only on shelves with props switched on; elsewhere the wrapper is display: contents. */
 (function () {
@@ -18,6 +18,7 @@
     var PILES = [3, 2];
     var SHIFTS = [0, 10, 4];
     var STACK_VARS = ['--stack-below', '--stack-shift'];
+    var UPLOAD = /^upload:([0-9a-f]{12}\.(?:svg|png|webp))$/;
 
     function clear(grid) {
         if (!grid) return;
@@ -32,10 +33,13 @@
         });
     }
 
+    // A reader's own picture ("upload:<file>") is drawn from its owner-only route.
     function prop(kind) {
         var element = document.createElement('span');
+        var upload = UPLOAD.exec(kind);
         element.className = 'shelf-prop';
-        element.dataset.prop = kind;
+        element.dataset.prop = upload ? 'upload' : kind;
+        if (upload) element.style.setProperty('--prop-art', 'url("/account/trinkets/' + upload[1] + '")');
         element.setAttribute('aria-hidden', 'true');
         return element;
     }
@@ -82,7 +86,8 @@
         var chosen = (data.shelfPropKinds ?? DEFAULT_KINDS).split(',');
         return {
             bookends: chosen.includes('bookends'),
-            kinds: KINDS.filter(function (kind) { return chosen.includes(kind); }),
+            kinds: KINDS.filter(function (kind) { return chosen.includes(kind); })
+                .concat(chosen.filter(function (kind) { return UPLOAD.test(kind); })),
             gaps: GAPS[data.shelfPropAmount] || GAPS[3]
         };
     }

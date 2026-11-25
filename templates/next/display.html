@@ -114,8 +114,25 @@
                         {% for key, label in [('bookends', _('Bookends')), ('plant', _('Plants')), ('candle', _('Candles')), ('stack', _('Book stacks'))] %}
                         <label><input type="checkbox" data-display-piece value="{{ key }}" {% if key in display.UI_SHELF_PROP_KINDS.split(',') %}checked{% endif %}><span>{{ label }}</span></label>
                         {% endfor %}
+                        {% for name in trinket_uploads %}
+                        <label class="display-upload-chip"><input type="checkbox" data-display-piece value="upload:{{ name }}" {% if ('upload:' ~ name) in display.UI_SHELF_PROP_KINDS.split(',') %}checked{% endif %}><img src="{{ url_for('account_trinket_file', name=name) }}" alt="{{ _('Your trinket %(number)s', number=loop.index) }}"></label>
+                        {% endfor %}
                     </div>
                     <button class="display-fallback-save" type="submit">{{ _('Save display') }}</button>
+                </form>
+                {% set trinket_errors = {'empty': _('Choose a picture first.'), 'too-big': _('That picture is over 512 KB.'), 'not-an-image': _('That file is not an SVG, PNG or WebP picture.'), 'full': _('You already have %(count)s trinkets. Remove one first.', count=trinket_limit)} %}
+                <form id="display-trinkets" class="account-trinket-upload-form display-row display-props-row display-props-detail" method="POST" action="{{ url_for('account_trinket_upload') }}" enctype="multipart/form-data" {% if props_detail_hidden and not trinket_error %}hidden{% endif %}>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="display-label"><strong>{{ _('Your trinkets') }}</strong><small>{{ _('Add your own SVG, PNG or WebP picture, up to 512 KB each, %(count)s in all.', count=trinket_limit) }}</small>{% if trinket_error in trinket_errors %}<small class="display-upload-error" role="alert">{{ trinket_errors[trinket_error] }}</small>{% endif %}</div>
+                    <div class="display-upload-list">
+                        {% for name in trinket_uploads %}
+                        <span class="display-upload-item"><img src="{{ url_for('account_trinket_file', name=name) }}" alt=""><button type="submit" formaction="{{ url_for('account_trinket_delete', name=name) }}" aria-label="{{ _('Remove trinket %(number)s', number=loop.index) }}">×</button></span>
+                        {% endfor %}
+                        {% if trinket_uploads|length < trinket_limit %}
+                        <label class="display-upload-add"><span>{{ _('Add') }}</span><input type="file" name="trinket" accept=".svg,.png,.webp,image/svg+xml,image/png,image/webp" data-trinket-file></label>
+                        <button class="display-fallback-save" type="submit">{{ _('Upload') }}</button>
+                        {% endif %}
+                    </div>
                 </form>
                 {% set amount = display.UI_SHELF_PROP_AMOUNT|int %}
                 <form class="account-shelf-prop-amount-form display-row display-props-row display-props-detail" method="POST" action="{{ url_for('account_display', next=url_for('account_display_page')) }}" data-display-setting="UI_SHELF_PROP_AMOUNT" {% if props_detail_hidden %}hidden{% endif %}>

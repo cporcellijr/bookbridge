@@ -105,6 +105,16 @@ window.bbShelfProps.clear(grid);
 assert.deepEqual(layout(), Array.from({length: 20}, (_, i) => String(i)));
 assert.deepEqual(grid.children[5].style.vars, {'--spine-w': '50px'}, 'clear drops the pile offsets');
 delete grid.children[9].dataset.reading;
+
+// The reader's own pictures join the cycle after the built-ins; anything not an upload name is ignored.
+page.dataset = {shelfPropKinds: 'plant,upload:0123456789ab.svg,upload:../x.svg,upload:fedcba987654.png', shelfPropAmount: '5'};
+window.bbShelfProps.place(grid);
+const decorProps = grid.children.filter(node => node.classList.contains('shelf-prop'));
+assert.deepEqual(decorProps.slice(0, 4).map(node => node.dataset.prop), ['plant', 'upload', 'upload', 'plant']);
+assert.deepEqual(decorProps.slice(1, 3).map(node => node.style.vars['--prop-art']),
+    ['url("/account/trinkets/0123456789ab.svg")', 'url("/account/trinkets/fedcba987654.png")']);
+assert.equal(decorProps[1].attrs['aria-hidden'], 'true', 'uploaded pictures are decoration too');
+window.bbShelfProps.clear(grid);
 delete grid.closest;
 
 grid.children.forEach(card => { card.hidden = true; });

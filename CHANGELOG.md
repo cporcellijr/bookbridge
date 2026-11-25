@@ -21,7 +21,8 @@ All notable changes to BookBridge will be documented in this file.
 - **Shelf props.** Turn on **Shelf props** in Account → Display and the shelf styles gain plants, candles and
   stacks of your own books lying flat every few books, with bookends holding up your Spine shelves. Pick which
   trinkets you want and use **How many trinkets** for fewer or more. Stacked books are still your books: tap one
-  to open it. Everything moves with your sorting and filters. Off by default.
+  to open it. **Your trinkets** lets you add your own pictures to the shelf (SVG, PNG or WebP, up to 512 KB each,
+  12 per reader); only you can see them. Everything moves with your sorting and filters. Off by default.
 - **Cover finish for Face-out shelves.** Account → Display → **Cover finish** gives face-out books a Hardcover,
   Paperback or Flat look; Standard keeps today's look.
 

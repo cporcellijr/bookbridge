@@ -31,6 +31,10 @@ class TestDisplayValues(unittest.TestCase):
             ("UI_COVER_SIZE", 3, "3"), ("UI_COVER_SIZE", "6", None),
             ("UI_LIBRARY_STYLE", "faceout", "faceout"), ("UI_MODE", "new", None),
             ("NOT_A_SETTING", "true", None), ("UI_THEME", None, None),
+            ("UI_SHELF_PROP_KINDS", "candle,upload:0123456789ab.svg,plant", "plant,candle,upload:0123456789ab.svg"),
+            ("UI_SHELF_PROP_KINDS", "upload:0123456789ab.svg,upload:0123456789ab.svg", "upload:0123456789ab.svg"),
+            ("UI_SHELF_PROP_KINDS", "upload:../secret.svg", None), ("UI_SHELF_PROP_KINDS", "upload:0123456789ab.gif", None),
+            ("UI_SHELF_PROP_KINDS", "plant,dragon", None), ("UI_SHELF_PROP_KINDS", "", ""),
         ]
         for key, raw, expected in cases:
             with self.subTest(key=key, raw=raw):

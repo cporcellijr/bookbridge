@@ -204,6 +204,73 @@ class TestAccountDisplayPage(unittest.TestCase):
         self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_PROP_KINDS'), '')
         self.assertIn('data-shelf-prop-kinds=""', forms()[0], 'no trinkets is a real choice, not the default')
 
+    def test_trinket_uploads_save_serve_owner_only_and_reach_the_shelves(self):
+        import io
+        import src.web_server as ws
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
+        self._real_templates()
+        self._series_books()
+        for key, value in (('UI_MODE', 'new'), ('UI_LIBRARY_STYLE', 'spines'), ('UI_SHELF_PROPS', 'true'),
+                           ('UI_SHELF_PROP_KINDS', 'plant')):
+            self.service.set_user_credential(self.reader.id, key, value)
+        self._login('ui-reader')
+
+        def upload(data, filename='mine.svg'):
+            return self.client.post('/account/trinkets', data={'trinket': (io.BytesIO(data), filename)},
+                                    content_type='multipart/form-data')
+
+        response = upload(svg)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers['Location'].endswith('/account/display#display-trinkets'))
+        folder = ws.DATA_DIR / 'uploads' / str(self.reader.id) / 'trinkets'
+        [name] = [path.name for path in folder.iterdir()]
+        self.assertRegex(name, r'^[0-9a-f]{12}\.svg$')
+        kinds = self.service.get_user_credential(self.reader.id, 'UI_SHELF_PROP_KINDS')
+        self.assertEqual(kinds, f'plant,upload:{name}', 'a new trinket goes straight onto the shelves')
+
+        served = self.client.get(f'/account/trinkets/{name}')
+        self.assertEqual(served.status_code, 200)
+        self.assertEqual(served.data, svg)
+        self.assertEqual(served.mimetype, 'image/svg+xml')
+        self.assertIn('sandbox', served.headers['Content-Security-Policy'])
+        self.assertIn("default-src 'none'", served.headers['Content-Security-Policy'])
+        self.assertEqual(served.headers['X-Content-Type-Options'], 'nosniff')
+        served.close()
+
+        html = self.client.get('/account/display').get_data(as_text=True)
+        self.assertIn(f'data-display-piece value="upload:{name}" checked', html)
+        self.assertIn(f'formaction="/account/trinkets/{name}/delete"', html)
+        self.assertIn(f'data-shelf-prop-kinds="plant,upload:{name}"', html)
+
+        for data, filename, reason in ((b'<html>no</html>', 'x.svg', 'not-an-image'), (b'', 'x.png', 'empty'),
+                                       (b'\x89PNG\r\n\x1a\n' + b'0' * (512 * 1024), 'big.png', 'too-big')):
+            with self.subTest(reason=reason):
+                response = upload(data, filename)
+                self.assertIn(f'trinket_error={reason}', response.headers['Location'])
+                page = self.client.get(response.headers['Location']).get_data(as_text=True)
+                self.assertIn('class="display-upload-error" role="alert"', page)
+        refused = self.client.post('/account/trinkets', data={'trinket': (io.BytesIO(b'nope'), 'x.svg')},
+                                   content_type='multipart/form-data', headers={'Accept': 'application/json'})
+        self.assertEqual((refused.status_code, refused.get_json()['error']), (400, 'not-an-image'))
+        self.assertEqual(len(list(folder.iterdir())), 1, 'refused files are never written')
+
+        # Someone else's picture: not served, and it cannot be chosen.
+        self.client.post('/logout')
+        self._login('ui-admin')
+        self.assertEqual(self.client.get(f'/account/trinkets/{name}').status_code, 404)
+        stolen = self.client.post('/account/display', json={'UI_SHELF_PROP_KINDS': f'plant,upload:{name}'})
+        self.assertEqual(stolen.status_code, 400)
+        self.assertIsNone(self.service.get_user_credential(self.admin.id, 'UI_SHELF_PROP_KINDS'))
+        self.assertEqual(self.client.post(f'/account/trinkets/{name}/delete').status_code, 302)
+        self.assertTrue((folder / name).exists(), "another reader's delete does nothing")
+
+        self.client.post('/logout')
+        self._login('ui-reader')
+        self.client.post(f'/account/trinkets/{name}/delete')
+        self.assertFalse((folder / name).exists())
+        self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_SHELF_PROP_KINDS'), 'plant')
+        self.assertEqual(self.client.get(f'/account/trinkets/{name}').status_code, 404)
+
     def test_classic_menu_display_link_opens_existing_card(self):
         self._real_templates()
         self.service.set_user_credential(self.reader.id, 'UI_MODE', 'classic')
