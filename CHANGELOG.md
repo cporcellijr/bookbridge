@@ -51,6 +51,17 @@ All notable changes to BookBridge will be documented in this file.
 - **KoSync keeps the newest position across ebook copies.** With furthest-wins off, a newer device update
   received during a sync cycle survives the cycle's older write, including rewinds and updates on another
   copy. Contributed by [@jucor](https://github.com/jucor) in #618.
+- **A KOReader device going to sleep no longer undoes a newer position.** With furthest-wins off, KOReader
+  re-sends its last position on every sleep, disconnect and close; BookBridge now treats a repeat of the same
+  position from the same device as a re-send, so it no longer outranks a place you reached since on another
+  copy or in another app. A **Push progress** without turning a page counts as a re-send too.
+  Contributed by [@jucor](https://github.com/jucor) in #619.
+- **StoryGraph updates no longer fail as "session expired" while Test passes.** Status, progress and
+  edition changes now send the session StoryGraph re-issues with each page, which its form check requires.
+  Contributed by [@jeffhammett](https://github.com/jeffhammett) in #620.
+- **StoryGraph accepts cookies pasted decoded or URL-encoded.** Cookie-export extensions show the values in
+  different forms; BookBridge now sends them in the encoded form StoryGraph set them in.
+  Contributed by [@jeffhammett](https://github.com/jeffhammett) in #622.
 - **Bridge Sync accepts the server address as you type it.** A server address with a space around it, a
   capital `HTTP://`, or no `http://` at all made Bridge Sync report "Server URL is invalid". It now tidies the
   address and defaults to `http://`, and the message shows the address it tried. Update the Bridge Sync plugin
