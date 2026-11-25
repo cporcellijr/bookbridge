@@ -28,6 +28,19 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Bridge Sync accepts the server address as you type it.** A server address with a space around it, a
+  capital `HTTP://`, or no `http://` at all made Bridge Sync report "Server URL is invalid". It now tidies the
+  address and defaults to `http://`, and the message shows the address it tried. Update the Bridge Sync plugin
+  on each device (0.9.13) to get this.
+- **Storyteller read-along files are found in your Storyteller library folder.** When Storyteller was too busy
+  to send a read-along book, BookBridge looked for the file only in a fixed folder and ignored your
+  **Storyteller Library Path** setting. It now looks there first. When the file isn't there either, it says
+  so once and tries again next sync, instead of logging two errors every few minutes.
+- **No second download of a BookOrbit book that has no ebook file.** BookBridge tried the same BookOrbit book
+  twice in each sync and logged an error for the second try; it now tries once.
+- **Fewer repeated warnings for a book whose ebook can't be found.** The "Failed to load ebook text for
+  normalization" warning now appears once per book and app instead of on every change, and BookBridge no
+  longer claims Grimmory isn't configured when Grimmory simply doesn't have the book.
 - **Group series now works on Spine shelves, Face-out shelves and List.** These views showed **Group series**
   ticked but ignored it. With it on, each series now sits together on the shelf in reading order; turn it off
   to sort every book on its own.
