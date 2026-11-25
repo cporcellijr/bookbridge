@@ -41,6 +41,14 @@ All notable changes to BookBridge will be documented in this file.
 - **No more phantom jumps from a KOReader update that lands mid-sync.** If KOReader sent a position while a
   sync was saving the same book, the next sync could measure a far bigger move than you made, or treat a
   position behind the synced one as reading forward. Contributed by [@jucor](https://github.com/jucor) in #613.
+- **Opening an unstarted book no longer jumps it to the middle.** For a book whose audiobook narrates parts in
+  a different order from the ebook, a KoSync update at 0%, **Sync Now** or Bridge Sync's sync-now on a book
+  nobody had started could move the ebook to mid-book. A book that is at the start everywhere now stays there.
+- **On/off settings accept every spelling.** Settings set in `docker-compose.yml` as `1`, `yes` or `on` now
+  count as on everywhere, and `INSTANT_SYNC_ENABLED` / `ABS_SOCKET_ENABLED` set to `0`, `off` or `no` now turn
+  those features off (only `false` did before).
+- **A book recognised as your Calibre (CWA) copy updates Bridge Sync's book list right away**, instead of up to
+  30 minutes later.
 
 ## [7.14.0] - 2026-11-24
 
