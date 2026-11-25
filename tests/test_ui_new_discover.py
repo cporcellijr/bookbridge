@@ -190,6 +190,19 @@ class TestReadalongAskedOnceAtMatchAll(unittest.TestCase):
                 self.assertIn('id="queueReadalongCheckbox"', (root / panel).read_text(encoding='utf-8'))
 
 
+class TestDiscoverViewPersists(unittest.TestCase):
+    """Sort and series grouping are remembered across browser sessions, as on Library."""
+
+    def test_both_pages_save_and_restore_sort_and_grouping_in_local_storage(self):
+        for page in ('suggestions.html', 'next/_discover_scripts.html'):
+            with self.subTest(page=page):
+                source = discover_template_source(page)
+                self.assertIn("writeJson(localStore, 'suggestions_view'", source)
+                self.assertIn("readJson(localStore, 'suggestions_view')", source)
+                # A link without sort/group keeps the remembered view instead of the defaults.
+                self.assertIn("params.get('sort') || tabState[activeTab].sort", source)
+
+
 class TestNewDialogStyling(unittest.TestCase):
     """The New view supplies its own dialog visuals without overriding visibility."""
 

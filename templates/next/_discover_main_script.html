@@ -980,7 +980,9 @@
         const params = new URLSearchParams(window.location.search);
         const urlTab = params.get('tab');
         activeTab = TABS.includes(urlTab) ? urlTab : (TABS.includes(saved.active) ? saved.active : TABS[0]);
-        TABS.forEach((tab) => { tabState[tab] = cleanState(tab, (saved.tabs || {})[tab]); });
+        // Sort and series grouping outlive the browser session, as Library's do.
+        const view = readJson(localStore, 'suggestions_view') || {};
+        TABS.forEach((tab) => { tabState[tab] = cleanState(tab, { ...(view[tab] || {}), ...((saved.tabs || {})[tab] || {}) }); });
         if (activeTab === 'search') {
             if (params.has('q')) tabState.search.q = params.get('q') || '';
             const handoff = {};
@@ -993,8 +995,8 @@
                 series_key: params.get('series') || '',
                 status: params.get('status') || 'all',
                 ignored: params.get('ignored') || 'exclude',
-                sort: params.get('sort') || 'series',
-                group: params.get('group') !== 'flat',
+                sort: params.get('sort') || tabState[activeTab].sort,
+                group: params.has('group') ? params.get('group') !== 'flat' : tabState[activeTab].group,
             });
         }
         // Back from Match All: the matched books are already queued, so don't re-run the old search.
@@ -1009,6 +1011,8 @@
 
     function saveState() {
         writeJson(sessionStore, 'suggestions_tab_state', { active: activeTab, tabs: tabState });
+        writeJson(localStore, 'suggestions_view', Object.fromEntries(['pairs', 'ebook_only'].map(
+            (tab) => [tab, { sort: tabState[tab].sort, group: tabState[tab].group }])));
         const st = tabState[activeTab];
         const params = new URLSearchParams({ tab: activeTab });
         if (st.q) params.set('q', st.q);

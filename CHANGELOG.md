@@ -25,6 +25,8 @@ All notable changes to BookBridge will be documented in this file.
   12 per reader); only you can see them. Everything moves with your sorting and filters. Off by default.
 - **Cover finish for Face-out shelves.** Account → Display → **Cover finish** gives face-out books a Hardcover,
   Paperback or Flat look; Standard keeps today's look.
+- **Discover remembers your sort and series grouping.** The sort order and **Group by series** on the Pairs and
+  Ebook Only tabs now stay as you left them after closing the browser, as Library's already do.
 
 ### Fixed
 
