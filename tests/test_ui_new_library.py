@@ -198,6 +198,12 @@ class TestNewLibrary(unittest.TestCase):
         self.assertRegex(css, re.escape(faceout_pile + " .cover-image {") + r"[^}]*width: calc\(var\(--spine-w, 42px\) \* 8\)")
         self.assertRegex(css, re.escape(faceout_pile + " .cover-wrap {") + r"[^}]*transform: rotate\(90deg\)")
         self.assertIn(faceout_pile + " .book-open::after {", css)
+        # Each piled book keeps its own spine length and thickness; the pile scales as a whole to fit a cover cell.
+        self.assertRegex(css, re.escape(faceout_pile + " {") + r"[^}]*width: var\(--spine-h, 214px\); height: var\(--spine-w, 42px\)")
+        self.assertRegex(css, re.escape(faceout_pile[:-len(" > .book-card")] + " {") + r"[^}]*zoom: var\(--face-pile-scale")
+        self.assertIn(faceout_pile + "[data-page-top]:not([data-reading]) .book-open::before {", css)
+        for size in "12345":
+            self.assertRegex(css, rf'\[data-library-style="faceout"\]\[data-cover-size="{size}"\] {{[^}}]*--face-pile-scale:', size)
         self.assertNotRegex(css, re.escape(faceout_pile) + r" \.cover-wrap,\s*\n[^{]*\{ display: none !important; \}")
         self.assertIn('.shelf-prop[data-prop^="bookend"] { --prop-w:', css)
         scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")

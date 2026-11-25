@@ -532,14 +532,16 @@ body.series-grouping-off .series-group { display: none !important; }
 }
 .library-page[data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card:is(:hover, :focus-within) { transform: rotate(90deg) translateY(-6px); }
 .library-page[data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card::after { display: none; }
-/* On Face-out shelves each piled book is a cover-wide spine lying flat, dressed like a Spine-shelf pile:
-   the cover's outer edge turned a quarter as artwork, the same curve shading and band, the title across it. */
+/* On Face-out shelves each piled book is drawn like a Spine-shelf pile: its own spine (length and thickness)
+   lying flat, left-aligned, the cover's outer edge turned a quarter as artwork, curve shading, band, page block. */
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack {
- display: flex; flex-direction: column; align-items: center; width: auto; height: auto; margin: 0;
+ display: flex; flex-direction: column; align-items: flex-start; width: auto; height: auto; margin: 0 6px;
+ /* A grid cell is one cover wide; the whole pile scales so its longest book fits the cell and its gap. */
+ zoom: var(--face-pile-scale, .71);
 }
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card {
  position: relative; top: auto; left: var(--stack-shift, 0px); transform: none;
- width: var(--face-book-width); height: var(--spine-w, 42px); aspect-ratio: auto; margin: 0;
+ width: var(--spine-h, 214px); height: var(--spine-w, 42px); aspect-ratio: auto; margin: 0;
  border-radius: 1px 3px 3px 1px; background: var(--spine, #41546b);
  box-shadow: 0 0 0 1px rgba(0,0,0,.5), 0 7px 12px -4px var(--shelf-shadow);
 }
@@ -549,7 +551,7 @@ body.series-grouping-off .series-group { display: none !important; }
  background: var(--spine-band, rgba(255,255,255,.22));
 }
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .cover-wrap {
- display: block; position: absolute; z-index: 0; top: 0; left: 100%; width: var(--spine-w, 42px); height: var(--face-book-width);
+ display: block; position: absolute; z-index: 0; top: 0; left: 100%; width: var(--spine-w, 42px); height: var(--spine-h, 214px);
  border-radius: 0; background: none; transform-origin: 0 0; transform: rotate(90deg);
 }
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .cover-wrap > :not(.cover-image) { display: none; }
@@ -565,9 +567,16 @@ body.series-grouping-off .series-group { display: none !important; }
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-byline,
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-copy > :not(.book-heading) { display: none !important; }
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-copy {
- top: 50%; width: calc(100% - 28px); transform: translate(-50%, -50%); color: var(--spine-ink, #f3eee4);
+ top: 50%; left: calc(50% - 6px); width: calc(100% - 24px); transform: translate(-50%, -50%); color: var(--spine-ink, #f3eee4);
 }
-.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-copy h3 { font: 600 min(var(--spine-font, 16px), 15px)/1.1 var(--font-book); }
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-copy h3 { font: 600 var(--spine-font, 16px)/1.1 var(--font-book); }
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card[data-page-top] .book-copy { left: calc(50% - 12px); width: calc(100% - 36px); }
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card[data-page-top]:not([data-reading]) .book-open::before {
+ content: ""; display: block; position: absolute; z-index: 3; top: 5px; bottom: 5px; left: auto; right: 0; width: 20px; height: auto;
+ background: linear-gradient(to left, rgba(255,255,255,.35), transparent 22%, transparent 55%, rgba(0,0,0,.5)),
+  repeating-linear-gradient(0deg, var(--book-paper) 0 2px, var(--book-paper-line) 2px 3px);
+ box-shadow: inset 1px 0 0 rgba(0,0,0,.4); pointer-events: none;
+}
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card:has(.cover-image:not([hidden])) .book-copy { color: #f6f1e7; text-shadow: 0 1px 3px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6); }
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card:has(.cover-image:not([hidden]))::before { display: none; }
 .shelf-prop[data-prop="candle"] { --prop-w: 26px; --prop-h: 64px; --prop-art: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 64'><path d='M13 2c5 6 6 11 0 17-6-6-5-11 0-17z' fill='%23F5A623'/><path d='M13 9c2 3 2 6 0 8-2-2-2-5 0-8z' fill='%23FFE08A'/><path d='M13 19v4' stroke='%23333' stroke-width='1.5'/><rect x='7' y='23' width='12' height='35' rx='2' fill='%23F1E7D2'/><rect x='1' y='57' width='24' height='7' rx='3' fill='%23A08C6A'/></svg>"); }
@@ -855,11 +864,11 @@ body.series-grouping-off .series-group { display: none !important; }
  --face-shelf-top: calc(var(--face-book-height) + 10px);
  --shelf-pitch: calc(var(--face-shelf-top) + 94px);
 }
-.library-page[data-library-style="faceout"][data-cover-size="1"] { --face-book-width: 104px; }
-.library-page[data-library-style="faceout"][data-cover-size="2"] { --face-book-width: 136px; }
-.library-page[data-library-style="faceout"][data-cover-size="3"] { --face-book-width: 160px; }
-.library-page[data-library-style="faceout"][data-cover-size="4"] { --face-book-width: 188px; }
-.library-page[data-library-style="faceout"][data-cover-size="5"] { --face-book-width: 220px; }
+.library-page[data-library-style="faceout"][data-cover-size="1"] { --face-book-width: 104px; --face-pile-scale: .58; }
+.library-page[data-library-style="faceout"][data-cover-size="2"] { --face-book-width: 136px; --face-pile-scale: .71; }
+.library-page[data-library-style="faceout"][data-cover-size="3"] { --face-book-width: 160px; --face-pile-scale: .81; }
+.library-page[data-library-style="faceout"][data-cover-size="4"] { --face-book-width: 188px; --face-pile-scale: .93; }
+.library-page[data-library-style="faceout"][data-cover-size="5"] { --face-book-width: 220px; --face-pile-scale: 1; }
 .library-page[data-library-style="faceout"][data-view="spines"] .book-grid {
  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(var(--face-book-width) + 16px)), 1fr));
  grid-auto-rows: var(--face-shelf-top); justify-items: center; align-items: end;
@@ -882,11 +891,11 @@ body.series-grouping-off .series-group { display: none !important; }
 
 @media (max-width: 760px) {
  .library-page[data-library-style="faceout"][data-view="spines"] { --shelf-pitch: calc(var(--face-shelf-top) + 90px); }
- .library-page[data-library-style="faceout"][data-cover-size="1"] { --face-book-width: 72px; --face-cols: 4; }
- .library-page[data-library-style="faceout"][data-cover-size="2"] { --face-book-width: 100px; --face-cols: 3; }
- .library-page[data-library-style="faceout"][data-cover-size="3"] { --face-book-width: 128px; --face-cols: 2; }
- .library-page[data-library-style="faceout"][data-cover-size="4"] { --face-book-width: 150px; --face-cols: 2; }
- .library-page[data-library-style="faceout"][data-cover-size="5"] { --face-book-width: 168px; --face-cols: 2; }
+ .library-page[data-library-style="faceout"][data-cover-size="1"] { --face-book-width: 72px; --face-cols: 4; --face-pile-scale: .36; }
+ .library-page[data-library-style="faceout"][data-cover-size="2"] { --face-book-width: 100px; --face-cols: 3; --face-pile-scale: .48; }
+ .library-page[data-library-style="faceout"][data-cover-size="3"] { --face-book-width: 128px; --face-cols: 2; --face-pile-scale: .72; }
+ .library-page[data-library-style="faceout"][data-cover-size="4"] { --face-book-width: 150px; --face-cols: 2; --face-pile-scale: .72; }
+ .library-page[data-library-style="faceout"][data-cover-size="5"] { --face-book-width: 168px; --face-cols: 2; --face-pile-scale: .72; }
  .library-page[data-library-style="faceout"][data-view="spines"] .book-grid {
   grid-template-columns: repeat(var(--face-cols), minmax(0, 1fr));
   grid-auto-rows: var(--face-shelf-top); gap: 90px 0;
