@@ -1584,6 +1584,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             session_data["suggestions_state_id"] = "state-bulk"
         with web_server.SUGGESTIONS_STATE_LOCK:
             web_server.SUGGESTIONS_STATE_STORE["state-bulk"] = {
+                "owner": web_server._suggestions_cache_scope_key(),
                 "scan_results": [],
                 "scan_cache_by_abs": {
                     "ab-1": {
@@ -1651,6 +1652,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             session_data["suggestions_state_id"] = "state-guard"
         with web_server.SUGGESTIONS_STATE_LOCK:
             web_server.SUGGESTIONS_STATE_STORE["state-guard"] = {
+                "owner": web_server._suggestions_cache_scope_key(),
                 "scan_results": [],
                 "scan_cache_by_abs": {
                     "ok": suggestion("ok", dict(evidence, ebook_filename="ok.epub", display_name="Ok",
@@ -1780,6 +1782,32 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(item2["ebook_source"], "Grimmory")
         self.assertEqual(item2["ebook_source_path"], "/books/cached_exact_two.epub")
 
+    def test_suggestions_state_is_not_handed_to_the_next_reader_on_the_same_session(self):
+        # A reader opening Discover for the first time saw the admin's pairs: login
+        # keeps the browser session, so its state id still pointed at the admin's
+        # newer scan, which the page then saved into the reader's own cache file.
+        def as_user(user_id, fn):
+            token = web_server.set_current_user_id(user_id)
+            try:
+                return fn()
+            finally:
+                web_server.reset_current_user_id(token)
+
+        with self.app.test_request_context("/suggestions"):
+            web_server.session["suggestions_state_id"] = "shared-browser"
+            _, admin_state = as_user(1, web_server._get_suggestions_state)
+            admin_state["scan_cache_by_abs"] = {"bookorbit:5111": {"bridge_key": "bookorbit:5111"}}
+            admin_state["scanned_at"] = time.time()
+
+            _, reader_state = as_user(2, web_server._get_suggestions_state)
+            as_user(2, lambda: web_server._persist_suggestions_state(reader_state))
+            reader_cache = as_user(2, web_server._load_persisted_suggestions_cache)
+            _, admin_again = as_user(1, web_server._get_suggestions_state)
+
+        self.assertEqual(reader_state["scan_cache_by_abs"], {})
+        self.assertEqual(reader_cache["scan_cache_by_abs"], {})
+        self.assertEqual(admin_again["scan_cache_by_abs"], {})
+
     def test_suggestions_add_many_to_queue_prefers_live_state_over_persisted_cache(self):
         # #351 fix: rehydrate must never clobber a fresh in-memory scan. Seed both
         # an in-memory state and a persisted cache for the same bridge key with
@@ -1790,6 +1818,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         # In-memory state has ab-1 pointing at ebook A.
         with web_server.SUGGESTIONS_STATE_LOCK:
             web_server.SUGGESTIONS_STATE_STORE["state-live-wins"] = {
+                "owner": web_server._suggestions_cache_scope_key(),
                 "scan_results": [],
                 "scan_cache_by_abs": {
                     "ab-1": {
@@ -1886,6 +1915,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             session_data["suggestions_state_id"] = "state-open"
         with web_server.SUGGESTIONS_STATE_LOCK:
             web_server.SUGGESTIONS_STATE_STORE["state-open"] = {
+                "owner": web_server._suggestions_cache_scope_key(),
                 "scan_results": [live],
                 "scan_cache_by_abs": {"ab-live": live},
                 "scan_cache_no_match_abs_ids": [],
@@ -2162,6 +2192,7 @@ class TestMatchPathsRegression(unittest.TestCase):
 
         with web_server.SUGGESTIONS_STATE_LOCK:
             web_server.SUGGESTIONS_STATE_STORE["state-dedupe"] = {
+                "owner": web_server._suggestions_cache_scope_key(),
                 "scan_results": [
                     {
                         "bridge_key": "ab-duplicate-1",
@@ -2228,6 +2259,7 @@ class TestMatchPathsRegression(unittest.TestCase):
 
         with web_server.SUGGESTIONS_STATE_LOCK:
             web_server.SUGGESTIONS_STATE_STORE["state-legacy"] = {
+                "owner": web_server._suggestions_cache_scope_key(),
                 "scan_results": [
                     {
                         "bridge_key": "booklore:8655",

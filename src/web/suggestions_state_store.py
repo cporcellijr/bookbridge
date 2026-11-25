@@ -70,10 +70,16 @@ def _get_suggestions_state(create=True):
     if not state_id:
         return None, None
 
+    owner = _suggestions_cache_scope_key()
     with web.SUGGESTIONS_STATE_LOCK:
         state = web.SUGGESTIONS_STATE_STORE.get(state_id)
+        # Login keeps the browser session, so a state id can outlive the reader who made it.
+        if state and state.get('owner') != owner:
+            web.SUGGESTIONS_STATE_STORE.pop(state_id, None)
+            state = None
         if not state and create:
             state = _default_suggestions_state()
+            state['owner'] = owner
             web.SUGGESTIONS_STATE_STORE[state_id] = state
 
         if state:

@@ -28,6 +28,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Discover shows each reader only their own matches.** A reader who signed in on a browser another reader had
+  used could see that reader's Discover pairs, and they were then saved as their own. A new scan replaces them.
 - **Discover recognises an audiobook whose title repeats its series.** An audiobook called "Title: Series,
   Book 2 (Unabridged)" now counts as the same title as the ebook "Title" when both are Series #2, instead of
   waiting for review.
