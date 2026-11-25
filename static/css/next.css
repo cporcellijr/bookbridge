@@ -532,23 +532,44 @@ body.series-grouping-off .series-group { display: none !important; }
 }
 .library-page[data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card:is(:hover, :focus-within) { transform: rotate(90deg) translateY(-6px); }
 .library-page[data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card::after { display: none; }
-/* Face-out books have no spine art: each lies as a slab in its sampled spine colour, title across it. */
+/* On Face-out shelves each piled book is a cover-wide spine lying flat, dressed like a Spine-shelf pile:
+   the cover's outer edge turned a quarter as artwork, the same curve shading and band, the title across it. */
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack {
  display: flex; flex-direction: column; align-items: center; width: auto; height: auto; margin: 0;
 }
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card {
  position: relative; top: auto; left: var(--stack-shift, 0px); transform: none;
  width: var(--face-book-width); height: var(--spine-w, 42px); aspect-ratio: auto; margin: 0;
- border-radius: 2px; background: var(--spine, #41546b);
+ border-radius: 1px 3px 3px 1px; background: var(--spine, #41546b);
+ box-shadow: 0 0 0 1px rgba(0,0,0,.5), 0 7px 12px -4px var(--shelf-shadow);
 }
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card:is(:hover, :focus-within) { transform: translateX(6px); }
-.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .cover-wrap,
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card::before {
+ content: ""; display: block; position: absolute; z-index: 2; top: 0; bottom: 0; left: auto; right: 9px; width: 3px; height: auto;
+ background: var(--spine-band, rgba(255,255,255,.22));
+}
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .cover-wrap {
+ display: block; position: absolute; z-index: 0; top: 0; left: 100%; width: var(--spine-w, 42px); height: var(--face-book-width);
+ border-radius: 0; background: none; transform-origin: 0 0; transform: rotate(90deg);
+}
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .cover-wrap > :not(.cover-image) { display: none; }
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .cover-wrap::before,
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .cover-wrap::after { display: none; }
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .cover-image {
+ inset: 0 auto 0 0; width: calc(var(--spine-w, 42px) * 8); height: 100%; object-fit: fill; filter: brightness(.8) saturate(1.2);
+}
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-open::after {
+ content: ""; display: block; position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: inherit;
+ background: linear-gradient(180deg, rgba(0,0,0,.42), rgba(0,0,0,.08) 16%, rgba(255,255,255,.17) 40%, rgba(255,255,255,.05) 60%, rgba(0,0,0,.1) 80%, rgba(0,0,0,.46));
+}
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-byline,
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-copy > :not(.book-heading) { display: none !important; }
 .library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-copy {
- top: 50%; width: calc(100% - 14px); transform: translate(-50%, -50%); color: var(--spine-ink, #f3eee4);
+ top: 50%; width: calc(100% - 28px); transform: translate(-50%, -50%); color: var(--spine-ink, #f3eee4);
 }
-.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-copy h3 { font-size: 12px; }
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card .book-copy h3 { font: 600 min(var(--spine-font, 16px), 15px)/1.1 var(--font-book); }
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card:has(.cover-image:not([hidden])) .book-copy { color: #f6f1e7; text-shadow: 0 1px 3px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6); }
+.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card:has(.cover-image:not([hidden]))::before { display: none; }
 .shelf-prop[data-prop="candle"] { --prop-w: 26px; --prop-h: 64px; --prop-art: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 64'><path d='M13 2c5 6 6 11 0 17-6-6-5-11 0-17z' fill='%23F5A623'/><path d='M13 9c2 3 2 6 0 8-2-2-2-5 0-8z' fill='%23FFE08A'/><path d='M13 19v4' stroke='%23333' stroke-width='1.5'/><rect x='7' y='23' width='12' height='35' rx='2' fill='%23F1E7D2'/><rect x='1' y='57' width='24' height='7' rx='3' fill='%23A08C6A'/></svg>"); }
 .shelf-prop[data-prop^="bookend"] { --prop-w: 24px; --prop-h: 110px; --prop-art: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 110'><path d='M12 0h10v110H0v-10h12z' fill='%23A8834A'/><path d='M14 2h3v96h-3z' fill='%23D9B676'/><path d='M2 102h18v2H2z' fill='%23D9B676'/></svg>"); }
 .shelf-prop[data-prop="bookend-start"] { transform: scaleX(-1); }

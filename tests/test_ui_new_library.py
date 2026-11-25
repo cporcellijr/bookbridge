@@ -193,6 +193,12 @@ class TestNewLibrary(unittest.TestCase):
         self.assertNotIn('.shelf-prop[data-prop="stack"]', css)
         self.assertIn(".shelf-stack { display: contents; }", css)
         self.assertIn('.library-page[data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card {', css)
+        # Face-out piles wear the same cover-edge art and curve shading as Spine piles, not a plain colour slab.
+        faceout_pile = '.library-page[data-library-style="faceout"][data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card'
+        self.assertRegex(css, re.escape(faceout_pile + " .cover-image {") + r"[^}]*width: calc\(var\(--spine-w, 42px\) \* 8\)")
+        self.assertRegex(css, re.escape(faceout_pile + " .cover-wrap {") + r"[^}]*transform: rotate\(90deg\)")
+        self.assertIn(faceout_pile + " .book-open::after {", css)
+        self.assertNotRegex(css, re.escape(faceout_pile) + r" \.cover-wrap,\s*\n[^{]*\{ display: none !important; \}")
         self.assertIn('.shelf-prop[data-prop^="bookend"] { --prop-w:', css)
         scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
         self.assertRegex(scripts, r"if \(shelfPropsOn\(\)\) window\.bbShelfProps\?\.clear\(libraryGrid\);\s+sortCards\(")
