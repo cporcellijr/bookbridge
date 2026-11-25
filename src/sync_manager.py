@@ -2056,12 +2056,17 @@ class SyncManager:
                     )
                     continue
             except Exception as e:
-                logger.warning(
+                # A missing EPUB stays missing every change event; warn once per book+client.
+                get_persistent_condition_logger().warn(
+                    logger, f"normalization-text:{book.abs_id}:{client_name}",
                     f"⚠️ '{book.abs_id}' Failed to load ebook text for normalization "
                     f"client '{client_name}' epub='{sanitize_log_data(client_epub)}': {e}",
                     exc_info=True
                 )
                 continue
+            get_persistent_condition_logger().resolve(
+                logger, f"normalization-text:{book.abs_id}:{client_name}",
+                f"'{book.abs_id}' Ebook text for normalization client '{client_name}' loaded again")
 
             client_state = config[client_name]
             client_pct = client_state.current.get('pct', 0)
@@ -2438,8 +2443,6 @@ class SyncManager:
                         logger.error(f"❌ Failed to download EPUB content from Grimmory")
             else:
                 logger.error(f"❌ EPUB not found in Grimmory: {sanitize_log_data(ebook_filename)}")
-            if not filesystem_matches:
-                logger.error(f"❌ EPUB not found on filesystem and Grimmory not configured")
 
         # Try to download from BookOrbit API (library-hosted; mirrors Grimmory).
         # Lets a BookOrbit-sourced book hydrate when the shared /books volume
@@ -2448,7 +2451,13 @@ class SyncManager:
         if hasattr(bookorbit_client, 'is_configured') and bookorbit_client.is_configured():
             try:
                 bo_book = bookorbit_client.find_book_by_filename(ebook_filename)
-                if bo_book:
+                mapped_bookorbit_id = (getattr(mapped_book, "ebook_source_id", None)
+                                       if mapped_book and normalize_ebook_source(getattr(mapped_book, "ebook_source", None)) == "BookOrbit"
+                                       else None)
+                if bo_book and mapped_bookorbit_id is not None and str(bo_book.get('id')) == str(mapped_bookorbit_id):
+                    # The by-id download of this same book just failed; a second try only repeats it.
+                    logger.debug("BookOrbit filename match is the mapped id '%s' that already failed", mapped_bookorbit_id)
+                elif bo_book:
                     logger.info(f"⚡ Downloading EPUB from BookOrbit: {sanitize_log_data(ebook_filename)}")
                     content = bookorbit_client.download_book(bo_book.get('id'))
                     if content:

@@ -380,6 +380,28 @@ def test_unstarted_audiobook_timestamp_is_coerced_during_normalization():
     assert normalized["ABS"] is not None
 
 
+def test_missing_normalization_epub_warns_once_per_book_and_client(caplog):
+    """Fleet 9925 (95k reports, 6 instances): every change event on a book whose EPUB
+    is in no source logged this WARNING and a traceback again:
+        ⚠️ '...' Failed to load ebook text for normalization client 'ABSEbook' epub='...': Could not locate or download: ...
+    """
+    manager = _manager_for_normalization()
+    manager._get_cached_ebook_text = MagicMock(side_effect=FileNotFoundError("Could not locate or download: gone.epub"))
+    book = SimpleNamespace(abs_id="abs-missing-epub-9925", transcript_file="DB_MANAGED", ebook_filename="gone.epub")
+    config = {
+        "ABS": _audio_peer_state({"pct": 0.1, "ts": 100.0}),
+        "KoSync": _audio_peer_state({"pct": 0.5, "xpath": "/body/DocFragment[1]/body/p[1]/text().0"}),
+    }
+
+    with caplog.at_level("DEBUG", logger="src.sync_manager"):
+        for _ in range(3):
+            manager._normalize_for_cross_format_comparison(book, config)
+
+    warnings = [r for r in caplog.records
+                if r.levelname == "WARNING" and "Failed to load ebook text for normalization" in r.getMessage()]
+    assert len(warnings) == 1
+
+
 def test_determine_leader_survives_unstarted_audiobook_peer():
     """Reproduces the reported crash: 'unsupported operand type(s) for -:
     NoneType and float' in _determine_leader when the only audio peer is an

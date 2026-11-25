@@ -326,6 +326,46 @@ class TestBookOrbitApiOnlyAcquisition(unittest.TestCase):
         self.assertEqual(result, cached_path)
         self.assertTrue(cached_path.exists())
 
+    def test_filename_fallback_skips_the_mapped_id_that_just_failed(self):
+        """Fleet 9725: a BookOrbit entry with no ebook file was downloaded twice per
+        cycle, by mapped id and again via the filename search that found the same id:
+            ⚠️ BookOrbit by-id download returned empty content for '...'
+            ⚡ Downloading EPUB from BookOrbit: ...
+            ❌ Failed to download EPUB content from BookOrbit
+        """
+        manager = self._setup_manager_for_resolution(_build_manager(self.tmp_path))
+        ebook_filename = "No File.epub"
+        manager.database_service.get_book_by_ebook_filename.return_value = _make_book_row(
+            ebook_filename, "BookOrbit", "2506")
+        bookorbit_client = manager.bookorbit_client
+        bookorbit_client.is_configured.return_value = True
+        bookorbit_client.download_book.return_value = None
+        bookorbit_client.find_book_by_filename = MagicMock(return_value={"id": 2506})
+        manager.booklore_client.is_configured.return_value = False
+
+        with self.assertLogs("src.sync_manager", level="DEBUG") as logs:
+            self.assertIsNone(manager._resolve_local_epub_uncached(ebook_filename))
+
+        self.assertEqual(bookorbit_client.download_book.call_args_list, [call("2506")])
+        self.assertFalse(any("Failed to download EPUB content from BookOrbit" in r.getMessage()
+                             for r in logs.records))
+
+    def test_grimmory_miss_does_not_claim_grimmory_is_unconfigured(self):
+        """Fleet 9925: a configured Grimmory that lacks the book also logged
+        "EPUB not found on filesystem and Grimmory not configured"."""
+        manager = self._setup_manager_for_resolution(_build_manager(self.tmp_path))
+        manager.database_service.get_book_by_ebook_filename.return_value = None
+        manager.booklore_client.is_configured.return_value = True
+        manager.booklore_client.find_book_by_filename = MagicMock(return_value=None)
+        manager.bookorbit_client.is_configured.return_value = False
+
+        with self.assertLogs("src.sync_manager", level="DEBUG") as logs:
+            self.assertIsNone(manager._resolve_local_epub_uncached("Absent.epub"))
+
+        messages = [r.getMessage() for r in logs.records]
+        self.assertTrue(any("EPUB not found in Grimmory" in m for m in messages))
+        self.assertFalse(any("Grimmory not configured" in m for m in messages))
+
     def test_failure_falls_through_without_raising_download_raises(self):
         """
         E2 — Failure falls through without raising: download_book raises.
