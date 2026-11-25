@@ -228,6 +228,67 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         self.assertEqual(responses, [200])
         self.assertAlmostEqual(self._get(DOC_A), 0.60, places=4)
 
+    def _bot_put_status(self, pct, read_started_at):
+        return self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": pct,
+            "progress": "/body/DocFragment[%d]/body/p[1].0" % int(pct * 100),
+            **BOT, "_bridge_observed_at": read_started_at,
+        }).status_code
+
+    def _cycle_read(self, seen):
+        """The cycle's KoSync read: its clock first, then the GET, from another thread."""
+        def read():
+            seen["read_started_at"] = time.time()
+            with self.app.test_client() as client:
+                seen["pct"] = client.get("/syncs/progress/" + DOC_A, headers=self._h()).get_json()["percentage"]
+        worker = threading.Thread(target=read)
+        worker.start()
+        return worker
+
+    def test_device_arriving_before_the_read_but_committing_after_it_still_wins(self):
+        """The phone's PUT has started when the cycle reads, but has not saved yet, so
+        the cycle reads the old 40%; the phone then saves 60% and the cycle pushes 40%."""
+        self._put(DOC_A, 0.40, KOBO)
+        seen = {}
+        original = kosync_server._book_for_put_baseline
+
+        def cycle_reads_mid_put(doc, *args, **kwargs):
+            if doc == DOC_B and not seen:
+                time.sleep(0.02)
+                self._cycle_read(seen).join(5)
+            return original(doc, *args, **kwargs)
+
+        with patch.object(kosync_server, "_book_for_put_baseline", side_effect=cycle_reads_mid_put):
+            self._put(DOC_B, 0.60, PHONE)
+        self.assertAlmostEqual(seen["pct"], 0.40, places=4)
+        status = self._bot_put_status(0.40, seen["read_started_at"])
+        self.assertEqual(status, 409 if self.snapshot_guard_enabled else 200)
+        self.assertAlmostEqual(self._get(DOC_A), 0.60, places=4)
+
+    def test_a_read_during_the_device_save_cannot_miss_it_and_then_overwrite_it(self):
+        """The cycle reads while the phone's save is in progress. Either the read sees
+        the phone's 60%, or the cycle's push of what it read is refused."""
+        self._put(DOC_A, 0.40, KOBO)
+        seen = {}
+        readers = []
+        original = self.db.upsert_user_kosync_progress
+
+        def cycle_reads_mid_save(doc, *args, **kwargs):
+            if doc == DOC_B and not readers:
+                time.sleep(0.02)
+                readers.append(self._cycle_read(seen))
+                time.sleep(0.2)
+            return original(doc, *args, **kwargs)
+
+        with patch.object(self.db, "upsert_user_kosync_progress", side_effect=cycle_reads_mid_save):
+            self._put(DOC_B, 0.60, PHONE)
+        readers[0].join(5)
+        status = self._bot_put_status(0.40, seen["read_started_at"])
+        if self.snapshot_guard_enabled:
+            self.assertTrue(abs(seen["pct"] - 0.60) < 1e-4 or status == 409, (seen, status))
+        else:
+            self.assertAlmostEqual(self._get(DOC_A), 0.60, places=4)
+
     def test_fresh_zero_reset_supersedes_an_older_cycle_snapshot(self):
         self._put(DOC_A, 0.40, KOBO)
         read_started_at = time.time()

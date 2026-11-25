@@ -465,6 +465,9 @@ class KoSyncSyncClient(SyncClient):
         if synced_pct is not None:
             current["synced_pct"] = synced_pct
         if request.current_state:
+            rewind_at = request.current_state.current.get("kosync_approved_rewind_at")
+            if rewind_at is not None:
+                current["kosync_approved_rewind_at"] = rewind_at
             prior_page = request.current_state.current.get("_previous_page")
             if "_previous_page" in request.current_state.current:
                 if prior_page is None:

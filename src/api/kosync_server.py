@@ -2374,6 +2374,9 @@ def kosync_put_progress():
     # Serialize accepted progress persistence with the snapshot check. A device update that
     # arrives after the cycle read must not be overwritten by that cycle's push.
     with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+        if not is_internal:
+            # Dated when it becomes readable: a cycle read that missed it started earlier.
+            progress_timestamp = kosync_doc.timestamp = utcnow()
         if is_internal and read_started_at is not None and put_book and not furthest_wins:
             rows = _database_service.get_user_kosync_progress_for_book(
                 put_book.abs_id, user_id=request_user_id,
@@ -4113,7 +4116,12 @@ def _book_states_response(doc_id, book):
     """The GET response for a book's state data, as (response, status_code)."""
     # get_states_for_book resolves the authenticated user from the ambient context
     # (set by kosync_auth_required), so states are already user-scoped.
-    states = _database_service.get_states_for_book(book.abs_id)
+    user_id = getattr(g, "kosync_user_id", None)
+    # Read under the lock PUTs save under, so a cycle's read cannot miss a save in progress.
+    with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+        states = _database_service.get_states_for_book(book.abs_id)
+        progress_rows = _database_service.get_user_kosync_progress_for_book(book.abs_id, user_id)
+        sibling_docs = None if progress_rows else _database_service.get_kosync_documents_for_book(book.abs_id)
 
     # The bridge-synced KoSync position for this book — where ABS/Storyteller/etc.
     # have placed it. A device's own reported position is only honored when it is
@@ -4129,12 +4137,9 @@ def _book_states_response(doc_id, book):
     # device position that advanced past the synced State (e.g. a different EPUB
     # build of the same title) is honored, without leaking another user's
     # position on the same shared title.
-    user_id = getattr(g, "kosync_user_id", None)
-    progress_rows = _database_service.get_user_kosync_progress_for_book(book.abs_id, user_id)
     if not progress_rows:
         # Fallback: shared sibling docs (legacy / pre-migration), scoped to this
         # user's own or unstamped (legacy) rows so no cross-user position leaks.
-        sibling_docs = _database_service.get_kosync_documents_for_book(book.abs_id)
         if user_id is not None:
             sibling_docs = [d for d in sibling_docs if getattr(d, "user_id", None) in (None, user_id)]
         progress_rows = sibling_docs

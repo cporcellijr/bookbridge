@@ -271,6 +271,24 @@ class KoSyncSyncClientCanonicalTests(unittest.TestCase):
         self.assertEqual(result.updated_state["pct"], 0.60)
         self.assertEqual(result.updated_state["synced_pct"], 0.4)
 
+    def test_stale_snapshot_skip_keeps_the_approved_rewind_cutoff(self):
+        transport = FakeKoSync(success=None)
+        transport.get_progress_with_metadata = lambda _doc_id: (
+            0.60, "/body/DocFragment[1]/body/p[2].0", {},
+        )
+        client = self._client(transport, FakeParser(self.path))
+        current_state = SimpleNamespace(
+            kosync_read_started_at=1700000001.5,
+            previous_pct=0.4,
+            current={"pct": 0.4, "xpath": "/body/DocFragment[1]/body/p[1].0",
+                     "kosync_approved_rewind_at": 1699999000.0},
+        )
+        request = self._request(0.42)
+        request.current_state = current_state
+        result = client.update_progress(self._book(), request)
+        self.assertTrue(result.success and result.skipped)
+        self.assertEqual(result.updated_state["kosync_approved_rewind_at"], 1699999000.0)
+
     def test_stale_snapshot_reread_failure_does_not_return_old_state(self):
         transport = FakeKoSync(success=None)
         transport.get_progress_with_metadata = lambda _doc_id: (None, None, {"_http_status": 500})
