@@ -1,7 +1,7 @@
 import os
 import re
 import unicodedata
-from typing import Callable, List, Set, Any, Dict, Optional
+from typing import Callable, Iterable, List, Set, Any, Dict, Optional
 
 from src.services.ebook_discovery import AudioCandidateIndex, ebook_key
 from src.utils.language_key import language_key
@@ -1078,6 +1078,11 @@ class SuggestionsService:
                 # A filename reading with no author can't hide the metadata's credit.
                 scored.append((title_score, subtitle_stripped, names or trusted_names,
                                edition_stripped, exact_title, folded))
+            # Titles that differ only by noise ("(Unabridged)", a restated series) are the same book.
+            if any(self.same_book_title(form, candidate_info.get("title") or "",
+                                        series=(audio_series, candidate_info.get("series")))
+                   for form in (audio_title, f"{audio_title}: {subtitle}" if subtitle else "")):
+                scored.append((100.0, False, scored[0][2], False, True, scored[0][5]))
 
             if self._paths_share_parent(audio_path, candidate_info.get("path")):
                 title_score, _, names, _, _, folded = max(scored, key=lambda s: s[0])
@@ -1877,6 +1882,49 @@ class SuggestionsService:
             {word.lower() for word in re.findall(r"[^\W\d_]+", group)} & cls._EDITION_CREDIT_WORDS
             for group in re.findall(r"[\(\[]([^\)\]]*)[\)\]]", title or "")
         )
+
+    _LISTENING_CREDIT_RE = re.compile(
+        r"\s*[\(\[]\s*(?:unabridged|audiobook)(?:\s*,\s*(?:unabridged|audiobook))*\s*[\)\]]", re.IGNORECASE)
+
+    @classmethod
+    def _book_title_key(cls, title: str) -> tuple[str, Optional[float]]:
+        """(letters and digits of the title, the volume it names) for ``same_book_title``."""
+        plain = cls._LISTENING_CREDIT_RE.sub("", title)
+        # Any other parenthetical ("(Part 2)", "(Movie Tie-In)") stays part of the title.
+        plain = re.sub(r"[\(\[]([^\)\]]*)[\)\]]", r" \1", plain)
+        plain = cls._comparable_title(cls._normalize_title_for_match(plain, strip_volume=False))
+        return re.sub(r"[\W_]+", "", plain.casefold()), cls._title_number(title, plain.casefold())
+
+    @classmethod
+    def same_book_title(cls, title: str, other: str, series: Iterable[Optional[tuple]] = ()) -> bool:
+        """Whether two titles name the same book. Case, punctuation, "(Unabridged)", a
+        form-only subtitle (": A Novel") and a subtitle restating a known series and part
+        ("Title: Series, Book 2") don't count; an edition credit, any other parenthetical
+        or a different volume number does. ``series`` holds (name, index) pairs known
+        for either book."""
+        if not title or not other:
+            return False
+        if re.sub(r"[\W_]+", "", title.casefold()) == re.sub(r"[\W_]+", "", other.casefold()):
+            return True
+        if cls._has_edition_credit(title) or cls._has_edition_credit(other):
+            return False
+        keys = cls._book_title_key(title), cls._book_title_key(other)
+        if keys[0] == keys[1]:
+            return bool(keys[0][0])
+        for name, index in (pair for pair in series if pair):
+            name_key = re.sub(r"[\W_]+", "", str(name or "").casefold())
+            try:
+                number = float(index) if index not in (None, "") and not isinstance(index, bool) else None
+            except (TypeError, ValueError):
+                number = None
+            digits = re.sub(r"\W+", "", f"{number:g}") if number is not None else ""
+            parts = {"", *((digits, f"book{digits}", f"volume{digits}", f"vol{digits}") if digits else ())}
+            for (short, short_number), (long, long_number) in (keys, keys[::-1]):
+                if (name_key and short and long.startswith(short + name_key)
+                        and long[len(short + name_key):] in parts
+                        and {short_number, long_number} <= {None, number}):
+                    return True
+        return False
 
     @classmethod
     def _ebook_audio_pair_score(cls, ebook_title: str, ebook_names: List[str],

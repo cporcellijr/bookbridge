@@ -262,3 +262,29 @@ def test_the_ebook_card_marks_a_generated_readalong_copy():
         template = discover_template_source(page)
         assert f"ebookFilename.toLowerCase().endsWith('{_READALONG_SUFFIX}')" in template, page
         assert "_('Read-along')" in template, page
+
+
+def test_an_audiobook_title_restating_its_series_is_a_full_match(library):
+    # Live library shape (2026-11-25): the audiobook title adds the series and part.
+    scores = _scan("Title: Series, Book 2 (Unabridged)", "Series #2", library("Title", 2, series="Series"))
+    assert scores == {"Title": 100.0}
+
+
+@pytest.mark.parametrize("title, other, series, expected", [
+    ("Title", "Title: Series, Book 3 (Unabridged)", [("Series", "3")], True),
+    ("Title: Series, Book 3 (Unabridged)", "Title", [("Series", 3.0)], True),
+    ("Title (Series)", "Title", [("Series", 6)], True),
+    ("Title", "Title: The Series, Book 2", [None, ("The Series", 2)], True),
+    ("Title", "Title (Unabridged)", [], True),
+    ("Title", "Title: A Novel (Unabridged)", [], True),
+    ("Title", "Title: A Novel of Monster Horror (Unabridged)", [], False),
+    ("Title 2", "Title", [("Title Chronicles", 2)], False),
+    ("Title 2", "Title", [("Title", 1)], False),
+    ("Title", "Title: Series, Book 3", [("Series", 2)], False),
+    ("Title", "Title: Other, Book 2", [("Series", 2)], False),
+    ("Title", "Title (Abridged)", [], False),
+    ("Title", "Title (Part 2)", [], False),
+    ("", "", [], False),
+])
+def test_same_book_title(title, other, series, expected):
+    assert SuggestionsService.same_book_title(title, other, series=series) is expected

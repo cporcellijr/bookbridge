@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePath, PurePosixPath
@@ -208,40 +207,24 @@ class AcquisitionService:
         return bool(group_key and hasattr(self.database_service, "get_acquisition_job")
                     and self.database_service.get_acquisition_job(user_id, group_key))
 
-    @staticmethod
-    def _candidate_title_matches(
-        job: dict, candidate: dict, *, provider_confirmed: bool = False,
-        shelfmark_delivered: bool = False,
-    ) -> bool:
-        norm = BookOrbitClient._normalize_string
-        title = str(job.get("title") or "")
-        candidate_title = str(candidate.get("title") or "")
-        return norm(candidate_title) == norm(title) or bool(
-            (provider_confirmed and candidate.get("source") == "BookOrbit" or shelfmark_delivered)
-            and AcquisitionService._delivered_title_matches(job, candidate)
-        )
+    @classmethod
+    def _with_title_series(cls, job: dict, hit: dict, name: str, index: Any) -> dict:
+        """Give a copy without series metadata the job's (or verified ebook's) series
+        when its own title names that series and part."""
+        if hit.get("series_name") or cls._delivered_title_matches(job, hit):
+            return hit
+        named = {**hit, "series_name": name, "series_index": index}
+        return named if cls._delivered_title_matches(job, named) else hit
 
     @staticmethod
     def _delivered_title_matches(job: dict, candidate: dict) -> bool:
-        """Match titles the way Discover does: case, punctuation, "(Unabridged)" and a bare
-        ": A Novel" don't count; an edition credit or a different volume number does."""
-        title = str(job.get("title") or "")
-        candidate_title = str(candidate.get("title") or "")
-        norm = BookOrbitClient._normalize_string
-        if not title or norm(candidate_title) == norm(title):
-            return bool(title)
-        if any(SuggestionsService._has_edition_credit(text) for text in (title, candidate_title)):
-            return False
-
-        def fold(text: str) -> tuple:
-            plain = re.sub(r"\s*(?:[\(\[]\s*(?:unabridged|audiobook)(?:\s*,\s*(?:unabridged|audiobook))*\s*[\)\]]"
-                           r"|:\s*a novel(?=\s*(?:[\(\[]|$)))", "", text, flags=re.I)
-            # Any other parenthetical ("(Part 2)", "(Movie Tie-In)") stays part of the title.
-            plain = re.sub(r"[\(\[]([^\)\]]*)[\)\]]", r" \1", plain)
-            plain = SuggestionsService._normalize_title_for_match(plain, strip_volume=False)
-            return norm(plain), SuggestionsService._title_number(text, plain.casefold())
-
-        return fold(candidate_title) == fold(title)
+        """Whether the copy's title names the requested book (``SuggestionsService.same_book_title``),
+        knowing the copy's and the request's series."""
+        return SuggestionsService.same_book_title(
+            str(job.get("title") or ""), str(candidate.get("title") or ""),
+            series=[(item.get("series_name") or item.get("seriesName"),
+                     item.get("series_index", item.get("seriesIndex"))) for item in (candidate, job)],
+        )
 
     @staticmethod
     def _shelfmark_delivered(job: dict, media_kind: str) -> bool:
@@ -257,17 +240,11 @@ class AcquisitionService:
         )
 
     @staticmethod
-    def _candidate_matches(
-        job: dict, candidate: dict, *, explicit: bool = False, provider_confirmed: bool = False,
-        shelfmark_delivered: bool = False,
-    ) -> bool:
+    def _candidate_matches(job: dict, candidate: dict, *, explicit: bool = False) -> bool:
         """Require positive edition identity, not just a filename or similar title."""
         if not candidate.get("source_id") or not candidate.get("source"):
             return False
-        if not AcquisitionService._candidate_title_matches(
-            job, candidate, provider_confirmed=provider_confirmed,
-            shelfmark_delivered=shelfmark_delivered,
-        ):
+        if not AcquisitionService._delivered_title_matches(job, candidate):
             return False
         authors = _author_set(job.get("authors"))
         found = _author_set(candidate.get("authors"))
@@ -365,10 +342,7 @@ class AcquisitionService:
         if len(matches) != 1:
             return None, "candidate_not_current"
         selected = matches[0]
-        if not self._candidate_matches(
-            job, selected, explicit=True,
-            shelfmark_delivered=self._shelfmark_delivered(job, media_kind),
-        ):
+        if not self._candidate_matches(job, selected, explicit=True):
             return None, "candidate_metadata_conflict"
 
         identity = {"source": selected["source"], "source_id": str(selected["source_id"])}
@@ -484,14 +458,10 @@ class AcquisitionService:
         return updated, (None if result.get("state") == "accepted" else result.get("reason") or result.get("state"))
 
     @staticmethod
-    def _candidate_reviewable(
-        job: dict, candidate: dict, *, shelfmark_delivered: bool = False,
-    ) -> bool:
+    def _candidate_reviewable(job: dict, candidate: dict) -> bool:
         """Keep plausible same-title editions for reader review when proof is incomplete."""
         if (not candidate.get("source") or not candidate.get("source_id")
-                or not AcquisitionService._candidate_title_matches(
-                    job, candidate, shelfmark_delivered=shelfmark_delivered,
-                )):
+                or not AcquisitionService._delivered_title_matches(job, candidate)):
             return False
         expected_authors, found_authors = _author_set(job.get("authors")), _author_set(candidate.get("authors"))
         if expected_authors and found_authors and expected_authors != found_authors:
@@ -554,12 +524,7 @@ class AcquisitionService:
                 # don't rescan all catalogs on every background tick.
                 continue
             candidates, _errors = search_reader_library(clients, kind, job["title"])
-            shelfmark_delivered = self._shelfmark_delivered(job, kind)
-            eligible = [
-                hit for hit in candidates
-                if self._candidate_matches(job, hit, explicit=True,
-                                           shelfmark_delivered=shelfmark_delivered)
-            ]
+            eligible = [hit for hit in candidates if self._candidate_matches(job, hit, explicit=True)]
             self.database_service.set_acquisition_library_state(
                 user_id, job["id"], kind, "needs_review",
                 review_reason,
@@ -601,13 +566,17 @@ class AcquisitionService:
             corroborated_job = None
             other = verified.get("ebook")
             other_authors = _author_set(other.get("authors")) if other else frozenset()
+            series_hint = next(((source.get("series_name"), source.get("series_index"))
+                                for source in (job, other or {}) if source.get("series_name")), None)
+            if series_hint:
+                candidates = [self._with_title_series(job, hit, *series_hint) for hit in candidates]
             if (shelfmark_delivered and not _author_set(job.get("authors")) and other_authors):
                 candidate_job = {**job, "authors": other["authors"]}
                 # Only a suffixed delivered copy may borrow the verified ebook's author.
                 if any(
-                    not self._candidate_title_matches(job, hit)
-                    and self._delivered_title_matches(job, hit)
-                    and self._candidate_matches(candidate_job, hit, shelfmark_delivered=True)
+                    BookOrbitClient._normalize_string(hit.get("title") or "")
+                    != BookOrbitClient._normalize_string(job.get("title") or "")
+                    and self._candidate_matches(candidate_job, hit)
                     for hit in candidates
                 ):
                     corroborated_job = candidate_job
@@ -622,10 +591,7 @@ class AcquisitionService:
                     for receipt in confirmed
                 )
                 match_job = corroborated_job if corroborated_job and not (exact_saved or exact_receipt) else job
-                matches = self._candidate_matches(
-                    match_job, hit, explicit=exact_saved or exact_receipt,
-                    provider_confirmed=exact_receipt, shelfmark_delivered=shelfmark_delivered,
-                )
+                matches = self._candidate_matches(match_job, hit, explicit=exact_saved or exact_receipt)
                 if exact_saved and not matches:
                     saved_conflict = True
                 if exact_receipt and not matches and (not (known_source or known_id) or exact_saved):
@@ -634,9 +600,7 @@ class AcquisitionService:
                     eligible.append(hit)
                     if exact_receipt:
                         receipt_eligible.append(hit)
-            reviewable = [hit for hit in candidates if self._candidate_reviewable(
-                job, hit, shelfmark_delivered=shelfmark_delivered,
-            )]
+            reviewable = [hit for hit in candidates if self._candidate_reviewable(job, hit)]
             if has_confirmed_handle and not (known_source or known_id):
                 eligible = receipt_eligible
             if receipt_conflict:
@@ -1193,7 +1157,7 @@ class AcquisitionService:
             "series_index": series_index,
             "isbn13": detail.get("isbn13") or detail.get("isbn"),
         }
-        if not self._candidate_matches(job, candidate, explicit=True, provider_confirmed=True):
+        if not self._candidate_matches(job, candidate, explicit=True):
             reason = f"{_BOOKORBIT_REVIEW_PREFIX}its metadata conflicts with the request"
             self.database_service.update_acquisition_request(
                 user_id, receipt["id"], status="needs_look", status_detail=reason,

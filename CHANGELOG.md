@@ -28,6 +28,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Discover recognises an audiobook whose title repeats its series.** An audiobook called "Title: Series,
+  Book 2 (Unabridged)" now counts as the same title as the ebook "Title" when both are Series #2, instead of
+  waiting for review.
 - **Whisper transcribes in the ebook's language.** With **Whisper Language** blank, an audiobook that opens
   with music could be detected as English, and Whisper then wrote an English translation of the narration that
   the ebook could never match. When the setting is blank, BookBridge now asks Whisper for the language the

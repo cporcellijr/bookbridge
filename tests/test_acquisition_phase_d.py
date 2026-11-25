@@ -296,12 +296,66 @@ class TestPhaseDArrivals(unittest.TestCase):
         ):
             with self.subTest(title=title):
                 candidate = {**audio("BookLore", "31"), "title": title}
-                self.assertEqual(AcquisitionService._candidate_matches(
-                    job, candidate, shelfmark_delivered=True,
-                ), expected)
-                self.assertEqual(AcquisitionService._candidate_matches(job, candidate), title == "Title")
+                # One rule for every flow (owner 2026-11-25): no provider confirmation needed.
+                self.assertEqual(AcquisitionService._candidate_matches(job, candidate), expected)
 
-    def test_shelfmark_suffix_requires_completed_download_and_exact_unabridged_suffix(self):
+    def test_audio_title_restating_its_own_series_pairs_with_the_requested_ebook(self):
+        # Live 2026-11-25: BookOrbit marked the audio request available with no matchedBookId,
+        # and the copy was titled "<Title>: <Series>, Book 2"; the job sat at "Waiting for library import".
+        job = self.db.create_acquisition_job(
+            self.reader.id, "Title", ["ebook", "audiobook"], authors="Author",
+            ebook={"source": "BookOrbit", "source_id": "13", "filename": "Title.epub"},
+        )
+        self.add_receipt(job, "audiobook", service="BookOrbit", remote_status="available", remote_id="37")
+        self.bo.get_request.return_value = {
+            "id": 37, "status": "available", "mediaKind": "audiobook", "matchedBookId": None,
+        }
+        # The audio copy has no series metadata; the verified ebook says Series #2.
+        delivered = {**audio("BookOrbit", "31"), "title": "Title: Series, Book 2",
+                     "series_name": None, "series_index": None}
+        self.candidates["audiobook"] = [delivered]
+
+        self.refresh()
+
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        self.assertEqual((saved["audio_source"], saved["audio_source_id"]), ("BookOrbit", "31"))
+        self.assertEqual(saved["linked_abs_id"], "bookorbit:31")
+
+    def test_audio_title_naming_another_series_does_not_borrow_the_ebook_series(self):
+        job = self.db.create_acquisition_job(
+            self.reader.id, "Title", ["ebook", "audiobook"], authors="Author",
+            ebook={"source": "BookOrbit", "source_id": "13", "filename": "Title.epub"},
+        )
+        for title in ("Title: Other Series, Book 2", "Title: Series, Book 3"):
+            with self.subTest(title=title):
+                self.candidates["audiobook"] = [{**audio("BookOrbit", "31"), "title": title,
+                                                 "series_name": None, "series_index": None}]
+                self.service._reconcile_job(self.reader.id, self.db.get_acquisition_job(self.reader.id, job["id"]),
+                                            self.clients)
+                saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+                self.assertIsNone(saved["audio_source_id"])
+                self.assertEqual(saved["audio_library_state"], "waiting_import")
+
+    def test_series_subtitle_matches_only_the_copys_own_series(self):
+        job = self.db.create_acquisition_job(self.reader.id, "Title", ["audiobook"], authors="Author")
+        for title, series_name, series_index, expected in (
+            ("Title: Series, Book 2", "Series", 2, True),
+            ("Title: Series Book 2", "Series", "2", True),
+            ("Title (Series #2)", "Series", 2.0, True),
+            ("Title: Series", "Series", None, True),
+            ("Title: Series, Book 3", "Series", 2, False),
+            ("Title: Other Series, Book 2", "Series", 2, False),
+            ("Title: Series, Book 2", None, None, False),
+            ("Title Two: Series, Book 2", "Series", 2, False),
+        ):
+            with self.subTest(title=title, series=series_name, index=series_index):
+                candidate = {**audio("BookOrbit", "31"), "title": title,
+                             "series_name": series_name, "series_index": series_index}
+                self.assertEqual(AcquisitionService._candidate_matches(job, candidate), expected)
+                self.assertEqual(AcquisitionService._delivered_title_matches(job, candidate), expected)
+
+    def test_unabridged_copy_counts_as_the_same_title_without_a_finished_delivery(self):
+        # Before 2026-11-25 only a completed Shelfmark download let the suffix match.
         job = self.make_job(formats=("audiobook",))
         self.add_receipt(job, "audiobook", status="in_progress", remote_status="downloading")
         candidate = audio("BookLore", "31")
@@ -310,9 +364,9 @@ class TestPhaseDArrivals(unittest.TestCase):
 
         self.refresh()
         saved = self.db.get_acquisition_job(self.reader.id, job["id"])
-        self.assertIsNone(saved["audio_source_id"])
+        self.assertEqual((saved["audio_source"], saved["audio_source_id"]), ("BookLore", "31"))
         self.assertFalse(AcquisitionService._candidate_matches(
-            job, {**candidate, "title": "Title: Abridged"}, shelfmark_delivered=True,
+            job, {**candidate, "title": "Title: Abridged"},
         ))
 
     def test_current_bookorbit_audio_detail_confirms_requested_isbn(self):
@@ -594,11 +648,11 @@ class TestPhaseDArrivals(unittest.TestCase):
         }
         self.assertFalse(AcquisitionService._candidate_matches(job, candidate))
         self.assertTrue(AcquisitionService._candidate_matches(
-            job, candidate, explicit=True, provider_confirmed=True,
+            job, candidate, explicit=True,
         ))
         self.assertFalse(AcquisitionService._candidate_matches(
             job, {**candidate, "title": f"{job['title']}: Abridged"},
-            explicit=True, provider_confirmed=True,
+            explicit=True,
         ))
 
     def test_bookorbit_arrival_rejects_contradictory_request_and_detail_ids(self):
