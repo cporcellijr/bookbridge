@@ -103,7 +103,7 @@ const filtering = scope(predicates + statusSort +
   seriesFilter: select(choices.series.options.map(o => [o.value, o.textContent])),
   attentionOnlyFilter: {checked: false}, dashboardSearch: {value: ''},
   updateFacetOptions() {}, renderFilterOptions() {}, updateFilterButtonLabel() {},
-  updateFilteredCount() {}, updateSearchHandoff() {}, placeShelfProps() {},
+  updateFilteredCount() {}, updateSearchHandoff() {}, placeShelfProps() {}, clearShelfProps() {},
   filterInitialized: true,
   localStorage: {setItem: (key, value) => savedWrites.push([key, JSON.parse(value)])},
   console,

@@ -18,9 +18,10 @@ All notable changes to BookBridge will be documented in this file.
   **shelf finishes** for the shelf styles (Walnut, Cherry, White, Glass and Pastel); and a **Library
   background** that shows a soft blur of the book you are reading behind your Library. Each reader picks their
   own; Classic is unchanged.
-- **Shelf props.** Turn on **Shelf props** in Account → Display and the shelf styles gain a plant, a candle or a
-  small stack of books every few books, with bookends holding up your Spine shelves. They move with your
-  sorting and filters. Off by default.
+- **Shelf props.** Turn on **Shelf props** in Account → Display and the shelf styles gain plants, candles and
+  stacks of your own books lying flat every few books, with bookends holding up your Spine shelves. Pick which
+  trinkets you want and use **How many trinkets** for fewer or more. Stacked books are still your books: tap one
+  to open it. Everything moves with your sorting and filters. Off by default.
 - **Cover finish for Face-out shelves.** Account → Display → **Cover finish** gives face-out books a Hardcover,
   Paperback or Flat look; Standard keeps today's look.
 

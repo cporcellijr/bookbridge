@@ -523,6 +523,8 @@
             }
 
             function filterBooks() {
+                // Unpile stacked books first, so every visible book is a direct grid child while counting.
+                clearShelfProps();
                 const filterValues = groupValues(filterSelect);
                 const statusValues = groupValues(statusFilter);
                 const groupedStatus = new Map();
@@ -841,6 +843,9 @@
             }
             function placeShelfProps() {
                 if (shelfPropsOn()) window.bbShelfProps?.place(libraryGrid);
+            }
+            function clearShelfProps() {
+                if (shelfPropsOn()) window.bbShelfProps?.clear(libraryGrid);
             }
 
             function flatLibraryView() {

@@ -187,13 +187,19 @@ class TestNewLibrary(unittest.TestCase):
         css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
         self.assertIn(".shelf-prop { display: none; }", css)
         self.assertIn('.library-page[data-view="spines"][data-shelf-props="true"] .shelf-prop {', css)
-        for kind in ("plant", "stack", "candle"):
+        for kind in ("plant", "candle"):
             self.assertIn(f'.shelf-prop[data-prop="{kind}"] {{ --prop-w:', css)
+        # Book stacks are the reader's own books lying flat, not drawn art; off the shelves they stand as usual.
+        self.assertNotIn('.shelf-prop[data-prop="stack"]', css)
+        self.assertIn(".shelf-stack { display: contents; }", css)
+        self.assertIn('.library-page[data-view="spines"][data-shelf-props="true"] .shelf-stack > .book-card {', css)
         self.assertIn('.shelf-prop[data-prop^="bookend"] { --prop-w:', css)
         scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
         self.assertRegex(scripts, r"if \(shelfPropsOn\(\)\) window\.bbShelfProps\?\.clear\(libraryGrid\);\s+sortCards\(")
         filter_body = scripts[scripts.index("function filterBooks() {"):scripts.index("window.toggleSeries = function")]
         self.assertIn("placeShelfProps();", filter_body, "filtering re-places the props around the visible books")
+        self.assertRegex(filter_body, r"^function filterBooks\(\) \{\s+//[^\n]*\n\s+clearShelfProps\(\);",
+                         "piles are unwrapped before filtering counts the grid's visible books")
 
     def test_reader_accent_reaches_the_page_and_every_accent_is_complete(self):
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
