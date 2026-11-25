@@ -4124,6 +4124,21 @@ def _book_states_response(doc_id, book):
             else:
                 eligible_docs.append(device_doc)
         docs_with_progress = eligible_docs
+    # With furthest-wins off the latest position wins, so only the reader's most
+    # recently written row may answer for the book: a higher row on another copy
+    # is older, and no longer where they are. A cycle's own push dates the row of
+    # the book's hash, so a position BookBridge wrote counts as well. Every row's
+    # time is this server's clock at its PUT; the State's times are not (a cycle
+    # saves a position some time after it read or wrote it). The newest is taken
+    # among all rows: when it holds no usable position (a push at 0% carries no
+    # locator), no row answers and the State does.
+    if progress_rows and not user_preference_enabled(
+        'KOSYNC_FURTHEST_WINS', 'true', _database_service
+    ):
+        newest = max(progress_rows, key=lambda d: (
+            parse_service_timestamp(getattr(d, "timestamp", None)) or 0.0, float(d.percentage or 0),
+        ))
+        docs_with_progress = [d for d in docs_with_progress if d is newest]
     if docs_with_progress:
         best_doc = max(docs_with_progress, key=lambda d: float(d.percentage))
         # Furthest-wins is the default answer, but a second device the reader is
