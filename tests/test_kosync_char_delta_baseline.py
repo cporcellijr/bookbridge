@@ -2,6 +2,7 @@
 measure KoSync movement from the position it last saw, not from that write.
 Otherwise the 2,000-character fallback never fires for long books."""
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -137,3 +138,37 @@ def test_put_keeps_the_approved_rewind_cutoff(env):
     _put(env, START + _chars(500))
     saved = env.db.get_state('book-1', 'kosync', user_id=env.users[0].id)
     assert get_kosync_approved_rewind_at(saved) == rewind_at
+
+
+def test_a_cycle_save_cannot_land_between_a_puts_read_and_write(env, monkeypatch):
+    # The PUT reads the State for its baseline, then writes. A cycle that saves KoSync
+    # at 70% in between must not be answered with the baseline from before that save.
+    user_id = env.users[0].id
+    real_get_state = env.db.get_state
+    cycle_saved = threading.Event()
+
+    def cycle_saves():
+        env.db.save_state(State(abs_id='book-1', client_name='kosync', user_id=user_id,
+                                percentage=0.70, xpath='/body/p[7]'))
+        cycle_saved.set()
+
+    def read_then_let_the_cycle_in(*args, **kwargs):
+        row = real_get_state(*args, **kwargs)
+        threading.Thread(target=cycle_saves, daemon=True).start()
+        cycle_saved.wait(0.5)
+        return row
+
+    real_save_state = env.db.save_state
+    saves = []
+
+    def recording_save_state(state):
+        saved = real_save_state(state)
+        saves.append(state.percentage)  # in the order the saves completed
+        return saved
+
+    monkeypatch.setattr(env.db, 'get_state', read_then_let_the_cycle_in)
+    monkeypatch.setattr(env.db, 'save_state', recording_save_state)
+    _put(env, 0.71)
+    assert cycle_saved.wait(5)
+    # The PUT's read-modify-write completes first; the cycle's save comes after it.
+    assert saves == [pytest.approx(0.71), pytest.approx(0.70)]

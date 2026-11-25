@@ -1,3 +1,4 @@
+import threading
 from typing import List, Optional
 from ..models import State
 import logging
@@ -6,6 +7,11 @@ logger = logging.getLogger('src.db.database_service')
 
 class StateMixin:
     """Database operations for state."""
+
+    # Taken by every save of a KoSync State and held by a KoSync PUT across its read
+    # and write of it (kosync_server._record_user_kosync_state), so a sync cycle's save
+    # cannot land in between. Re-entrant: the PUT's own save_state takes it again.
+    kosync_state_lock = threading.RLock()
 
     def get_state(self, abs_id: str, client_name: str, user_id: int = None) -> Optional[State]:
         """Get a specific state by book + client (+ user)."""
@@ -62,6 +68,12 @@ class StateMixin:
         """Save or update a state model, keyed by (abs_id, client_name, user_id)."""
         if state.user_id is None:
             state.user_id = self._resolve_uid(None)
+        if state.client_name == "kosync":
+            with self.kosync_state_lock:
+                return self._save_state(state)
+        return self._save_state(state)
+
+    def _save_state(self, state: State) -> State:
         with self.get_session() as session:
             existing = session.query(State).filter(
                 State.abs_id == state.abs_id,
