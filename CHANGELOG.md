@@ -31,6 +31,16 @@ All notable changes to BookBridge will be documented in this file.
 - **Group series now works on Spine shelves, Face-out shelves and List.** These views showed **Group series**
   ticked but ignored it. With it on, each series now sits together on the shelf in reading order; turn it off
   to sort every book on its own.
+- **A newly matched book reaches Bridge Sync right away.** Once a new book finished processing, KOReader's
+  Bridge Sync could take up to 30 minutes to see it, so it didn't download until then. The book list now
+  refreshes as soon as the book is ready. Contributed by [@jucor](https://github.com/jucor) in #615.
+- **KOReader positions near the start of a book sync again.** A KOReader position in the first few percent of
+  a book, such as an Introduction after image-only front matter, was mistaken for a reset to the start and
+  never sent to your other apps. It is now synced; a position further into the book that lands back at the
+  start is still blocked. Contributed by [@jucor](https://github.com/jucor) in #614.
+- **No more phantom jumps from a KOReader update that lands mid-sync.** If KOReader sent a position while a
+  sync was saving the same book, the next sync could measure a far bigger move than you made, or treat a
+  position behind the synced one as reading forward. Contributed by [@jucor](https://github.com/jucor) in #613.
 
 ## [7.14.0] - 2026-11-24
 
