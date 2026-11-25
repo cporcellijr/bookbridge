@@ -501,8 +501,13 @@ def _test_shelfmark(user: str, pwd: str) -> dict:
 
 
 def _test_storygraph(enabled: bool, session_cookie: str, remember_user_token: str) -> dict:
+    from src.api.storygraph_client import normalize_cookie_value
+
     if not enabled:
         return {"ok": False, "message": "StoryGraph is disabled"}
+    # Test what the sync client will send: a URL-encoded paste is decoded there too.
+    session_cookie = normalize_cookie_value(session_cookie)
+    remember_user_token = normalize_cookie_value(remember_user_token)
     if not session_cookie or not remember_user_token:
         return {"ok": False, "message": "Missing StoryGraph session cookies"}
 
