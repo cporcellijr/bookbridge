@@ -1935,12 +1935,13 @@ def _bookorbit_edition_audio_candidate(epub_filename, doc_hash=None):
             "title": audio.get("title") or ebook.get("title") or Path(epub_filename).stem}
 
 
-def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
+def _record_user_kosync_state(book, percentage, progress, timestamp, user_id, only_if_missing=False):
     """Persist a KoSync PUT into the per-user State table.
 
     The kosync_documents row is keyed only by document hash, so two users reading
     the same EPUB share that transient row. State is keyed by user and is the
-    durable isolation boundary for subsequent GETs and sync cycles.
+    durable isolation boundary for subsequent GETs and sync cycles. With
+    `only_if_missing` (a re-sent position), it writes only for a reader who has none.
     """
     if not book or user_id is None:
         return
@@ -1949,6 +1950,8 @@ def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
         # land between this read and write and be answered with a stale baseline.
         with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
             previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
+            if only_if_missing and previous is not None:
+                return
             # Keep the percentage the cycle last saw, across several PUTs, so the cycle
             # measures (and accumulates) movement from it instead of seeing a delta of 0.
             # Keep an approved rewind's cutoff too, as the cycle's own writes do.
@@ -2005,6 +2008,23 @@ def _reader_progress_row(doc_hash: str, kosync_doc, user_id):
         if user_id is None or doc_user_id in (None, user_id):
             progress_row = kosync_doc
     return progress_row
+
+
+def _resent_position_time(doc_hash: str, user_id, device_id, progress, percentage):
+    """The time a device's position was first reported, when the device re-sends it.
+
+    KOReader pushes on every suspend, network disconnect and close, moved or not. Dated
+    on arrival, a re-sent position would outrank one the reader reached since on another
+    copy. Rows keep 6 decimals of the percentage, so it is compared within that."""
+    row = _reader_progress_row(doc_hash, _database_service.get_kosync_document(doc_hash), user_id)
+    if (
+        row is not None and device_id and getattr(row, "device_id", None) == device_id
+        and (getattr(row, "progress", None) or "") == (progress or "")
+        and getattr(row, "percentage", None) is not None
+        and abs(float(row.percentage) - float(percentage)) < 1e-6
+    ):
+        return getattr(row, "timestamp", None)
+    return None
 
 
 def _forward_reading_threshold() -> float:
@@ -2373,10 +2393,14 @@ def kosync_put_progress():
 
     # Serialize accepted progress persistence with the snapshot check. A device update that
     # arrives after the cycle read must not be overwritten by that cycle's push.
+    resent_at = None
     with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
         if not is_internal:
             # Dated when it becomes readable: a cycle read that missed it started earlier.
-            progress_timestamp = kosync_doc.timestamp = utcnow()
+            # With latest-wins, a position the device re-sends keeps the time it was first reported.
+            if not furthest_wins:
+                resent_at = _resent_position_time(doc_hash, request_user_id, device_id, progress, percentage)
+            progress_timestamp = kosync_doc.timestamp = resent_at or utcnow()
         if is_internal and read_started_at is not None and put_book and not furthest_wins:
             rows = _database_service.get_user_kosync_progress_for_book(
                 put_book.abs_id, user_id=request_user_id,
@@ -2403,7 +2427,7 @@ def kosync_put_progress():
             doc_hash, percentage, progress=progress, device=device,
             device_id=device_id, timestamp=progress_timestamp, user_id=request_user_id,
         )
-    if not is_internal:
+    if not is_internal and not resent_at:
         _record_recent_external_kosync_put(doc_hash, device, device_id, percentage, now_ts, request_user_id)
 
     # Update linked book if exists
@@ -2435,8 +2459,12 @@ def kosync_put_progress():
             return _defer_kosync_book_access(doc_hash, linked_book, source="put", discover=may_match)
         # A match route may have linked this hash itself, skipping _register_hash_for_book.
         _adopt_cwa_identity(doc_hash, linked_book)
-        _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
-        if linked_book.kosync_doc_id and linked_book.kosync_doc_id != doc_hash:
+        # A re-send is no new position: the State and the sync cycle keep theirs (a State
+        # is written only for a reader who has none).
+        _record_user_kosync_state(
+            linked_book, percentage, progress, now, request_user_id, only_if_missing=bool(resent_at),
+        )
+        if not resent_at and linked_book.kosync_doc_id and linked_book.kosync_doc_id != doc_hash:
             # The sync cycle reads that State back with a GET on the book's own hash.
             _record_recent_external_kosync_put(
                 linked_book.kosync_doc_id, device, device_id, percentage, now_ts, request_user_id,
@@ -2465,8 +2493,9 @@ def kosync_put_progress():
                 )
 
     if linked_book:
-        # _record_user_kosync_state already wrote the per-user State; it keeps the
-        # cycle's last-seen position as the baseline so delta detection still works.
+        # _record_user_kosync_state already wrote the per-user State (a re-send only when
+        # there was none); it keeps the cycle's last-seen position as the baseline so
+        # delta detection still works.
         logger.debug(f"KOSync: Updated linked book '{linked_book.abs_title}' to {percentage:.2%}")
 
         # Debounce sync trigger — wait until the reader stops turning pages
