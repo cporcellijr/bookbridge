@@ -51,18 +51,18 @@ def test_storyteller_backfill_handles_missing_transcriptions(tmp_path, monkeypat
     data_dir.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setenv("STORYTELLER_ASSETS_DIR", str(assets_root))
-    web_server.DATA_DIR = data_dir
+    monkeypatch.setattr(web_server, "DATA_DIR", data_dir)
 
     book = Book(abs_id="abs-1", abs_title="Missing Book", storyteller_uuid="uuid-1", status="active")
 
     db = MagicMock()
     db.get_all_books.return_value = [book]
-    web_server.database_service = db
+    monkeypatch.setattr(web_server, "database_service", db)
 
     abs_client = MagicMock()
     abs_client.get_item_details.return_value = {"media": {"chapters": [{"start": 0.0, "end": 10.0}]}}
-    web_server.container = SimpleNamespace(abs_client=lambda: abs_client, ebook_parser=lambda: MagicMock())
-    web_server.manager = SimpleNamespace(alignment_service=MagicMock())
+    monkeypatch.setattr(web_server, "container", SimpleNamespace(abs_client=lambda: abs_client, ebook_parser=lambda: MagicMock()))
+    monkeypatch.setattr(web_server, "manager", SimpleNamespace(alignment_service=MagicMock()))
 
     summary, status_code = web_server._run_storyteller_backfill()
     assert status_code == 200
@@ -82,13 +82,13 @@ def test_storyteller_backfill_ingests_and_flips_source(tmp_path, monkeypatch):
     _write_chapter_first_storyteller_set(title_dir, 2)
 
     monkeypatch.setenv("STORYTELLER_ASSETS_DIR", str(assets_root))
-    web_server.DATA_DIR = data_dir
+    monkeypatch.setattr(web_server, "DATA_DIR", data_dir)
 
     book = Book(abs_id="abs-2", abs_title="Book One", storyteller_uuid="uuid-2", status="active")
 
     db = MagicMock()
     db.get_all_books.return_value = [book]
-    web_server.database_service = db
+    monkeypatch.setattr(web_server, "database_service", db)
 
     abs_client = MagicMock()
     abs_client.get_item_details.return_value = {
@@ -102,8 +102,8 @@ def test_storyteller_backfill_ingests_and_flips_source(tmp_path, monkeypatch):
     alignment_service = MagicMock()
     alignment_service.align_storyteller_and_store.return_value = True
 
-    web_server.container = SimpleNamespace(abs_client=lambda: abs_client, ebook_parser=lambda: MagicMock())
-    web_server.manager = SimpleNamespace(alignment_service=alignment_service)
+    monkeypatch.setattr(web_server, "container", SimpleNamespace(abs_client=lambda: abs_client, ebook_parser=lambda: MagicMock()))
+    monkeypatch.setattr(web_server, "manager", SimpleNamespace(alignment_service=alignment_service))
 
     summary, status_code = web_server._run_storyteller_backfill()
     assert status_code == 200
@@ -133,21 +133,21 @@ def test_storyteller_backfill_skips_invalid_chapter_format(tmp_path, monkeypatch
     )
 
     monkeypatch.setenv("STORYTELLER_ASSETS_DIR", str(assets_root))
-    web_server.DATA_DIR = data_dir
+    monkeypatch.setattr(web_server, "DATA_DIR", data_dir)
 
     book = Book(abs_id="abs-3", abs_title="Bad Format", storyteller_uuid="uuid-3", status="active")
 
     db = MagicMock()
     db.get_all_books.return_value = [book]
-    web_server.database_service = db
+    monkeypatch.setattr(web_server, "database_service", db)
 
     abs_client = MagicMock()
     abs_client.get_item_details.return_value = {"media": {"chapters": [{"start": 0.0, "end": 10.0}]}}
     alignment_service = MagicMock()
     alignment_service.align_storyteller_and_store.return_value = True
 
-    web_server.container = SimpleNamespace(abs_client=lambda: abs_client, ebook_parser=lambda: MagicMock())
-    web_server.manager = SimpleNamespace(alignment_service=alignment_service)
+    monkeypatch.setattr(web_server, "container", SimpleNamespace(abs_client=lambda: abs_client, ebook_parser=lambda: MagicMock()))
+    monkeypatch.setattr(web_server, "manager", SimpleNamespace(alignment_service=alignment_service))
 
     summary, status_code = web_server._run_storyteller_backfill()
     assert status_code == 200

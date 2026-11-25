@@ -124,8 +124,8 @@ class TestAudioBridgeKeys(unittest.TestCase):
 class TestSpawnUserBackground(unittest.TestCase):
     """Batch processing runs on a daemon thread (real run) but inline under tests."""
 
-    def tearDown(self):
-        ws._BACKGROUND_TASKS_SYNCHRONOUS = False
+    def setUp(self):
+        self.addCleanup(setattr, ws, "_BACKGROUND_TASKS_SYNCHRONOUS", ws._BACKGROUND_TASKS_SYNCHRONOUS)
 
     def test_inline_when_synchronous_flag_set(self):
         ws._BACKGROUND_TASKS_SYNCHRONOUS = True

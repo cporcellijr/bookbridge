@@ -258,6 +258,7 @@ class TestKosyncEndpoints(unittest.TestCase):
         # Ensure DB service is initialized in web_server logic
         # We need to monkeypatch the global database_service in web_server
         from src import web_server
+        cls.addClassCleanup(setattr, web_server, 'database_service', web_server.database_service)
         web_server.database_service = DatabaseService(cls.db_path)
         if not hasattr(web_server, 'app'):
             web_server.app, _ = web_server.create_app()
@@ -3618,6 +3619,7 @@ class TestKosyncAuthStubs(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from src import web_server
+        cls.addClassCleanup(setattr, web_server, 'database_service', web_server.database_service)
         web_server.database_service = DatabaseService(os.path.join(TEST_DIR, 'test.db'))
         if not hasattr(web_server, 'app'):
             web_server.app, _ = web_server.create_app()
@@ -4062,8 +4064,10 @@ class TestAnnotationExchangeEndpoints(unittest.TestCase):
         import hashlib
         cls.db_path = os.path.join(TEST_DIR, 'test_annotations.db')
         from src import web_server
+        cls.addClassCleanup(setattr, web_server, 'database_service', web_server.database_service)
         web_server.database_service = DatabaseService(cls.db_path)
         from src.api import kosync_server
+        cls.addClassCleanup(setattr, kosync_server, '_database_service', kosync_server._database_service)
         kosync_server._database_service = web_server.database_service
         if not hasattr(web_server, 'app'):
             web_server.app, _ = web_server.create_app()

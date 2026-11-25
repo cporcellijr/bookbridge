@@ -107,11 +107,20 @@ def clone_migrated_database(request, monkeypatch, migrated_database_template):
 @pytest.fixture(autouse=True)
 def no_kosync_debounce_thread(monkeypatch):
     """Never start the real KoSync debounce loop: it outlives the test that starts it
-    and its 10 s ticks finalize later tests' open sessions (fixed timestamps)."""
+    and its 10 s ticks finalize later tests' open sessions (fixed timestamps). Every
+    PUT also finalizes stale sessions inline, so no test inherits another's either."""
     from src.api import kosync_server
 
+    def clear_kosync_queues():
+        with kosync_server._kosync_open_sessions_lock:
+            kosync_server._kosync_open_sessions.clear()
+        with kosync_server._kosync_debounce_lock:
+            kosync_server._kosync_debounce.clear()
+
     monkeypatch.setattr(kosync_server, "_start_kosync_debounce_thread", lambda: None)
+    clear_kosync_queues()
     yield
+    clear_kosync_queues()
 
 
 @pytest.fixture(autouse=True)

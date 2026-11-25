@@ -13,6 +13,7 @@ class _StopLoop(Exception):
 def test_kosync_debounce_worker_uses_updated_setting_without_restart():
     manager = Mock()
     manager.run_sync_for_all_users = Mock()
+    original_manager = kosync_server._manager
     kosync_server._manager = manager
     kosync_server._kosync_debounce.clear()
     kosync_server._kosync_debounce[("book-1", None)] = {
@@ -48,4 +49,4 @@ def test_kosync_debounce_worker_uses_updated_setting_without_restart():
         assert kwargs["kwargs"] == {"target_abs_id": "book-1"}
     finally:
         kosync_server._kosync_debounce.clear()
-        kosync_server._manager = None
+        kosync_server._manager = original_manager
