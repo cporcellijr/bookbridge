@@ -238,7 +238,6 @@ def test_library_reconcile_refreshes_only_external_filename(old_filename, new_fi
         "book-1",
         expected_ebook_source_id="4",
         expected_grimmory_source=True,
-        notify_catalog_change=True,
         ebook_filename=new_filename,
     )
     assert book.ebook_filename == old_filename

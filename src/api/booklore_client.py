@@ -1497,7 +1497,6 @@ class BookloreClient:
                     mapping.abs_id,
                     expected_ebook_source_id=source_id,
                     expected_grimmory_source=True,
-                    notify_catalog_change=True,
                     **fields,
                 )
             except Exception:

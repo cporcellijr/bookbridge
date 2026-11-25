@@ -229,6 +229,27 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         ))
         self.assertEqual(len(fired), 1, "the pending -> active flip must notify")
 
+    def test_update_book_fields_announces_a_manifest_change(self):
+        """A KoSync PUT adopting the CWA identity sets ebook_source/ebook_source_id with
+        update_book_fields; the device-sync manifest must hear about it right away."""
+        self.db_service.save_book(self.Book(
+            abs_id="cwa-1", abs_title="Cwa", status="active", original_ebook_filename="cwa.epub",
+        ))
+        fired = []
+        self.db_service.register_catalog_change_callback(lambda: fired.append(1))
+
+        self.assertTrue(self.db_service.update_book_fields("cwa-1", audio_title="Narrated"))
+        self.assertEqual(fired, [], "a column outside the manifest must not notify")
+
+        self.assertTrue(self.db_service.update_book_fields("cwa-1", ebook_source="CWA", ebook_source_id="257"))
+        self.assertEqual(len(fired), 1, "an ebook source change must notify")
+
+        self.assertTrue(self.db_service.update_book_fields("cwa-1", ebook_source="CWA"))
+        self.assertEqual(len(fired), 1, "rewriting the same value must not notify")
+
+        self.assertFalse(self.db_service.update_book_fields("missing", ebook_source="CWA"))
+        self.assertEqual(len(fired), 1)
+
     def test_catalog_change_callbacks_stay_quiet_when_nothing_changed(self):
         """A no-op mutation must not trigger a manifest rebuild."""
         fired = []

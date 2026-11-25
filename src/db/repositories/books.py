@@ -25,7 +25,7 @@ from ..models import (
 )
 from src.services.map_quality import ALIGNMENT_QUALITY_REALIGN_THRESHOLD, quality_detail_json, score_map
 from src.utils.time_utils import utcnow
-from ._common import _SQL_IN_CHUNK, _manifest_signature
+from ._common import MANIFEST_RELEVANT_BOOK_FIELDS, _SQL_IN_CHUNK, _manifest_signature
 import logging
 
 logger = logging.getLogger('src.db.database_service')
@@ -103,7 +103,6 @@ class BooksMixin:
         *,
         expected_ebook_source_id: Optional[str] = None,
         expected_grimmory_source: bool = False,
-        notify_catalog_change: bool = False,
         **fields,
     ) -> bool:
         """Update named columns on one book row, leaving `abs_id` alone.
@@ -111,7 +110,8 @@ class BooksMixin:
         Used by the audio repoint, which changes a book's audio provider in place:
         keeping the primary key keeps every State row, alignment map, KOSync link
         and annotation attached to the book. Unknown column names are ignored so a
-        caller cannot inject arbitrary attributes.
+        caller cannot inject arbitrary attributes. Announces a catalog change when
+        a device-sync manifest column changes, as save_book does.
         """
         if not abs_id or not fields:
             return False
@@ -131,11 +131,19 @@ class BooksMixin:
                 query = query.filter(
                     func.lower(Book.ebook_source).in_(("booklore", "grimmory"))
                 )
+            before = query.first()
+            if before is None:
+                return False
+            before_signature = _manifest_signature(before)
             updated = query.update(
                 {getattr(Book, key): value for key, value in allowed.items()},
                 synchronize_session=False,
             )
-        if updated and notify_catalog_change:
+        after_signature = tuple(
+            allowed.get(field, value)
+            for field, value in zip(MANIFEST_RELEVANT_BOOK_FIELDS, before_signature)
+        )
+        if updated and after_signature != before_signature:
             self._notify_catalog_change()
         return bool(updated)
 
