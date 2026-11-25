@@ -3,7 +3,7 @@ import os
 import re
 from datetime import date
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -34,6 +34,20 @@ _PRINT_FORMAT_MAP = (
     ("e-book", "Ebook"),
     ("digital", "Ebook"),
 )
+
+
+_URL_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
+
+
+def normalize_cookie_value(value) -> str:
+    """A pasted StoryGraph cookie value in the form StoryGraph accepts.
+
+    StoryGraph's cookie values never contain ``%``, but cookie-export tools often
+    URL-encode them (``+`` as ``%2B``, ``/`` as ``%2F``, ``=`` as ``%3D``), and StoryGraph
+    rejects the encoded form. Decode only when an escape is present; ``+`` stays ``+``.
+    """
+    value = (value or "").strip()
+    return unquote(value) if _URL_ESCAPE.search(value) else value
 
 
 def _parse_audio_seconds(text: str) -> Optional[int]:
@@ -88,10 +102,10 @@ class StorygraphClient:
         self._auth_expired_cookie: Optional[str] = None
 
     def _session_cookie(self) -> str:
-        return (resolve_setting(self._creds, "STORYGRAPH_SESSION_COOKIE") or "").strip()
+        return normalize_cookie_value(resolve_setting(self._creds, "STORYGRAPH_SESSION_COOKIE"))
 
     def _remember_user_token(self) -> str:
-        return (resolve_setting(self._creds, "STORYGRAPH_REMEMBER_USER_TOKEN") or "").strip()
+        return normalize_cookie_value(resolve_setting(self._creds, "STORYGRAPH_REMEMBER_USER_TOKEN"))
 
     def is_configured(self) -> bool:
         # Hardcover and StoryGraph are independent now — each is gated solely by its
