@@ -28,6 +28,10 @@ class ServiceState:
     # cycle can write the leader's position there; its `current` values are a
     # placeholder and must never feed change detection or leader selection.
     follower_only: bool = False
+    # When this ServiceState was read from a KoSync server. Captured before the
+    # GET so the write path can report how long the bridge observed the position
+    # before writing it back. Non-persisted; not part of the fingerprint.
+    kosync_read_started_at: Optional[float] = None
 
 @dataclass
 class LocatorResult:
@@ -76,6 +80,12 @@ class UpdateProgressRequest:
     # client that can tell (the built-in KoSync server) must not replace a
     # position it already holds.
     fill_if_absent: bool = False
+    # The KoSync observation time even when `current_state` is omitted for a
+    # follower-only placeholder, whose position is not a real prior read.
+    kosync_read_started_at: Optional[float] = None
+    # Last synced KoSync baseline carried separately when that placeholder state
+    # is omitted from `current_state`.
+    kosync_synced_pct: Optional[float] = None
 
 @dataclass
 class SyncResult:

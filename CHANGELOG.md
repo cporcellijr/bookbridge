@@ -28,6 +28,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **KoSync keeps the newest position across ebook copies.** With furthest-wins off, a newer device update
+  received during a sync cycle survives the cycle's older write, including rewinds and updates on another
+  copy. Contributed by [@jucor](https://github.com/jucor) in #618.
 - **Bridge Sync accepts the server address as you type it.** A server address with a space around it, a
   capital `HTTP://`, or no `http://` at all made Bridge Sync report "Server URL is invalid". It now tidies the
   address and defaults to `http://`, and the message shows the address it tried. Update the Bridge Sync plugin

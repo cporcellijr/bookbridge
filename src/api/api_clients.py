@@ -15,6 +15,7 @@ from src.utils.kosync_headers import (
     hash_kosync_key,
     kosync_request_kwargs,
 )
+from src.utils.kosync_url import is_builtin_kosync_url
 from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.user_config import resolve_setting
 
@@ -1526,7 +1527,7 @@ class KoSyncClient:
             logger.error(f"❌ Error fetching KoSync progress for doc '{doc_id}': {e}", exc_info=True)
         return None, None, {}
 
-    def update_progress(self, doc_id, percentage, xpath=None, fill_if_absent=False):
+    def update_progress(self, doc_id, percentage, xpath=None, fill_if_absent=False, read_started_at: float | None = None):
         if not self.is_configured(): return False
 
         request_kwargs = self._request_kwargs()
@@ -1546,16 +1547,25 @@ class KoSyncClient:
             "device": "abs-sync-bot",
             "device_id": "abs-sync-bot",
         }
+        sent_snapshot = False
         if self._is_local_server():
             payload["timestamp"] = int(time.time())
             payload["force"] = True
             if fill_if_absent:
                 payload["fill_if_absent"] = True
+        if read_started_at is not None and is_builtin_kosync_url(self.base_url):
+            payload["_bridge_observed_at"] = read_started_at
+            sent_snapshot = True
         try:
             r = self.session.put(url, json=payload, timeout=10, **request_kwargs)
             if r.status_code in (200, 202, 201, 204):
                 logger.debug(f"   📡 KoSync Updated: {percentage:.1%} with progress '{progress_val}' for doc {doc_id}")
                 return True
+            elif r.status_code == 409 and sent_snapshot and (
+                (r.json() or {}).get("message") == "Newer device progress was received"
+            ):
+                logger.info("KoSync write skipped for doc %s; newer device progress was received during the sync", doc_id)
+                return None
             elif fill_if_absent and r.status_code == 409:
                 logger.info(f"KoSync already holds a position for doc {doc_id}; starting-position fill not applied")
                 return False

@@ -656,9 +656,10 @@ class KavitaKoSyncClient(KoSyncClient):
         return None, None, {}
 
     def update_progress(
-        self, doc_id: str, percentage: float, xpath: Optional[str] = None
-    ) -> bool:
-        """Write Kavita KoSync progress without logging its key-bearing URL."""
+        self, doc_id: str, percentage: float, xpath: Optional[str] = None,
+        fill_if_absent: bool = False, read_started_at: float | None = None,
+    ) -> bool | None:
+        """Write Kavita progress; accept bridge metadata without changing its wire contract."""
         if not self.is_configured():
             return False
         request_kwargs = self._request_kwargs()

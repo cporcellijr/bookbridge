@@ -221,9 +221,10 @@ def test_kavita_kosync_read_and_write_match_the_wire_contract():
     assert xpath == "/body/DocFragment[2]/body/p[1].0"
     assert metadata["timestamp"] == 1_700_000_000
 
-    assert client.update_progress("deadbeef", 0.72, xpath) is True
+    assert client.update_progress("deadbeef", 0.72, xpath, read_started_at=1_700_000_000.5) is True
     call = client.session.put.call_args
     assert call.args[0].endswith("/api/koreader/secret-key/syncs/progress")
     assert call.kwargs["json"]["document"] == "deadbeef"
     assert call.kwargs["json"]["percentage"] == 0.72
     assert call.kwargs["json"]["progress"] == xpath
+    assert "_bridge_observed_at" not in call.kwargs["json"]

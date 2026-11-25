@@ -8,6 +8,7 @@ today's answer: the higher row.
 
 import hashlib
 import os
+import threading
 import time
 import unittest
 from datetime import timedelta
@@ -33,6 +34,7 @@ PHONE = {"device": "Phone", "device_id": "phone-1"}
 
 
 class TestLatestWinsSiblingRows(unittest.TestCase):
+    snapshot_guard_enabled = True
 
     @classmethod
     def setUpClass(cls):
@@ -74,10 +76,14 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
     def _h(self):
         return {"x-auth-user": "ju", "x-auth-key": hash_kosync_key("key")}
 
-    def _put(self, doc, pct, device):
-        r = self.client.put("/syncs/progress", headers=self._h(), json={
+    def _put(self, doc, pct, device, read_started_at=None):
+        payload = {
             "document": doc, "percentage": pct,
-            "progress": "/body/DocFragment[%d]/body/p[1].0" % int(pct * 100), **device})
+            "progress": "/body/DocFragment[%d]/body/p[1].0" % int(pct * 100), **device,
+        }
+        if read_started_at is not None:
+            payload["_bridge_observed_at"] = read_started_at
+        r = self.client.put("/syncs/progress", headers=self._h(), json=payload)
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
 
     def _get(self, doc):
@@ -141,6 +147,152 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         self._cycle_saves_state(0.40)
         self.assertAlmostEqual(self._get(DOC_A), self.expected["before_save"], places=4)
 
+    def test_cycle_snapshot_rejects_later_sibling_forward_update_overwrite(self):
+        self._put(DOC_A, 0.40, KOBO)
+        read_started_at = time.time()
+        self._put(DOC_B, 0.60, PHONE)
+        response = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.40, "progress": "/body/DocFragment[40]/body/p[1].0",
+            **BOT, "_bridge_observed_at": read_started_at,
+        })
+        self.assertEqual(response.status_code, 409 if self.snapshot_guard_enabled else 200, response.get_data(as_text=True))
+        if self.snapshot_guard_enabled:
+            self._cycle_saves_state(0.40)
+        self.assertAlmostEqual(self._get(DOC_A), 0.60, places=4)
+
+    def test_cycle_snapshot_rejects_later_sibling_rewind_overwrite(self):
+        self._put(DOC_A, 0.60, KOBO)
+        read_started_at = time.time()
+        self._put(DOC_B, 0.40, PHONE)
+        response = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.60, "progress": "/body/DocFragment[60]/body/p[1].0",
+            **BOT, "_bridge_observed_at": read_started_at,
+        })
+        self.assertEqual(response.status_code, 409 if self.snapshot_guard_enabled else 200, response.get_data(as_text=True))
+        if self.snapshot_guard_enabled:
+            self._cycle_saves_state(0.60)
+            self.assertAlmostEqual(self._get(DOC_A), 0.40, places=4)
+        else:
+            self.assertAlmostEqual(self._get(DOC_A), 0.60, places=4)
+
+    def test_cycle_snapshot_rejects_later_same_hash_device_update(self):
+        self._put(DOC_A, 0.40, KOBO)
+        read_started_at = time.time()
+        self._put(DOC_A, 0.60, PHONE)
+        response = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.40, "progress": "/body/DocFragment[40]/body/p[1].0",
+            **BOT, "_bridge_observed_at": read_started_at,
+        })
+        self.assertEqual(response.status_code, 409 if self.snapshot_guard_enabled else 200, response.get_data(as_text=True))
+        if self.snapshot_guard_enabled:
+            self._cycle_saves_state(0.40)
+        self.assertAlmostEqual(self._get(DOC_A), 0.60, places=4)
+
+    def test_device_arrival_before_bot_but_commit_after_bot_keeps_arrival_order(self):
+        self._put(DOC_A, 0.40, KOBO)
+        read_started_at = time.time()
+        arrived = threading.Event()
+        release = threading.Event()
+        responses = []
+        original = kosync_server._book_for_put_baseline
+
+        def delay_device_baseline(doc, *args, **kwargs):
+            if doc == DOC_B:
+                arrived.set()
+                if not release.wait(5):
+                    raise RuntimeError("Test device PUT was not released")
+            return original(doc, *args, **kwargs)
+
+        def delayed_device_put():
+            with self.app.test_client() as client:
+                responses.append(client.put("/syncs/progress", headers=self._h(), json={
+                    "document": DOC_B, "percentage": 0.60,
+                    "progress": "/body/DocFragment[60]/body/p[1].0", **PHONE,
+                }).status_code)
+
+        with patch.object(kosync_server, "_book_for_put_baseline", side_effect=delay_device_baseline):
+            worker = threading.Thread(target=delayed_device_put)
+            worker.start()
+            try:
+                self.assertTrue(arrived.wait(5))
+                response = self.client.put("/syncs/progress", headers=self._h(), json={
+                    "document": DOC_A, "percentage": 0.40,
+                    "progress": "/body/DocFragment[40]/body/p[1].0",
+                    **BOT, "_bridge_observed_at": read_started_at,
+                })
+                self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            finally:
+                release.set()
+                worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(responses, [200])
+        self.assertAlmostEqual(self._get(DOC_A), 0.60, places=4)
+
+    def test_fresh_zero_reset_supersedes_an_older_cycle_snapshot(self):
+        self._put(DOC_A, 0.40, KOBO)
+        read_started_at = time.time()
+        self._put(DOC_A, 0.0, BOT)
+        self._cycle_saves_state(0.0)
+        response = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.40,
+            "progress": "/body/DocFragment[40]/body/p[1].0",
+            **BOT, "_bridge_observed_at": read_started_at,
+        })
+        self.assertEqual(response.status_code, 409 if self.snapshot_guard_enabled else 200,
+                         response.get_data(as_text=True))
+        if self.snapshot_guard_enabled:
+            self.assertEqual(float(self.db.get_user_kosync_progress(DOC_A, self.user.id).percentage), 0)
+
+    def test_snapshot_guard_uses_owned_legacy_shared_progress_when_needed(self):
+        self._put(DOC_A, 0.40, KOBO)
+        read_started_at = time.time()
+        self._put(DOC_A, 0.60, PHONE)
+        with self.db.get_session() as session:
+            session.query(KosyncUserProgress).delete()
+        response = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.40,
+            "progress": "/body/DocFragment[40]/body/p[1].0",
+            **BOT, "_bridge_observed_at": read_started_at,
+        })
+        self.assertEqual(response.status_code, 409 if self.snapshot_guard_enabled else 200,
+                         response.get_data(as_text=True))
+
+    def test_snapshot_rejection_is_scoped_to_the_authenticated_user(self):
+        read_started_at = time.time() - 5
+        other = self.db.create_user(f"other-reader-{time.time_ns()}", "pw", role="user")
+        self.db.set_user_credential(other.id, "KOSYNC_USER", "other")
+        self.db.set_user_credential(other.id, "KOSYNC_KEY", "other-key")
+        self.db.link_user_book(other.id, ABS_ID)
+        other_headers = {"x-auth-user": "other", "x-auth-key": hash_kosync_key("other-key")}
+        response = self.client.put("/syncs/progress", headers=other_headers, json={
+            "document": DOC_B, "percentage": 0.60, "progress": "/body/DocFragment[60]/body/p[1].0", **PHONE,
+        })
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        response = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.40, "progress": "/body/DocFragment[40]/body/p[1].0",
+            **BOT, "_bridge_observed_at": read_started_at,
+        })
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+
+    def test_internal_snapshot_must_be_a_sane_epoch_number(self):
+        for value in (True, "1700000000", float("inf"), float("nan"), 1, time.time() + 3600):
+            with self.subTest(value=value):
+                response = self.client.put("/syncs/progress", headers=self._h(), json={
+                    "document": DOC_A, "percentage": 0.40, "progress": "/body/DocFragment[40]/body/p[1].0",
+                    **BOT, "_bridge_observed_at": value,
+                })
+                self.assertEqual(response.status_code, 400)
+
+    def test_valid_snapshot_applies_when_no_newer_progress_arrived(self):
+        self._put(DOC_A, 0.40, KOBO)
+        read_started_at = time.time()
+        response = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.42, "progress": "/body/DocFragment[42]/body/p[1].0",
+            **BOT, "_bridge_observed_at": read_started_at,
+        })
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertAlmostEqual(self._get(DOC_A), 0.42, places=4)
+
 
     def test_a_restart_at_zero_is_not_undone_by_an_older_higher_row(self):
         # ABS restarted the book: the cycle pushes 0% to A (with no locator, as the KoSync
@@ -160,6 +312,7 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
 
 class TestFurthestWinsSiblingRows(TestLatestWinsSiblingRows):
     """Furthest-wins readers keep today's answers: the highest row wins."""
+    snapshot_guard_enabled = False
 
     expected = {"bridge_write": 0.60, "own_hash": 0.60, "during_cycle": 0.45, "before_save": 0.45,
                 "restart": 0.60}
@@ -167,3 +320,13 @@ class TestFurthestWinsSiblingRows(TestLatestWinsSiblingRows):
     def setUp(self):
         super().setUp()
         self.db.set_user_credential(self.user.id, "KOSYNC_FURTHEST_WINS", "true")
+
+    def test_snapshot_parameter_keeps_default_furthest_wins_behavior(self):
+        read_started_at = time.time() - 5
+        self._put(DOC_B, 0.60, PHONE)
+        response = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.40, "progress": "/body/DocFragment[40]/body/p[1].0",
+            **BOT, "_bridge_observed_at": read_started_at,
+        })
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertAlmostEqual(self._get(DOC_A), 0.60, places=4)

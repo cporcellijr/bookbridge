@@ -13,6 +13,7 @@ from src.db.database_service import DatabaseService
 from src.db.models import Book, State
 from src.services import write_tracker
 from src.sync_clients.kosync_sync_client import KoSyncSyncClient
+from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.utils.progress_metadata import get_kosync_approved_rewind_at, get_kosync_synced_pct, state_metadata_kwargs
 from src.utils.time_utils import utcnow
 from tests.test_cbz_fixed_page_progress import build_manager, configure_cycle, cycle_client, cycle_state
@@ -80,6 +81,36 @@ def test_2000_chars_at_a_tenth_of_a_percent_syncs_after_put(env, caplog):
     follower = _run_cycle(env, pct, caplog)
     assert 'Significant character change detected' in caplog.text
     follower.update_progress.assert_called_once()
+
+
+def test_stale_snapshot_skip_preserves_unsynced_delta_for_next_cycle(env):
+    transport = MagicMock()
+    transport.is_configured.return_value = True
+    transport.update_progress.return_value = None
+    transport.get_progress_with_metadata.side_effect = [
+        (0.50, "/body/p[1]", {}),
+        (0.60, "/body/p[2]", {}),
+        (0.60, "/body/p[2]", {}),
+    ]
+    adapter = KoSyncSyncClient(transport, MagicMock())
+    previous = env.db.get_state(env.book.abs_id, "kosync", user_id=env.users[0].id)
+    observed = adapter.get_service_state(env.book, previous)
+    result = adapter.update_progress(env.book, UpdateProgressRequest(
+        LocatorResult(percentage=0.0), current_state=observed,
+    ))
+
+    assert result.success and result.skipped
+    assert result.updated_state["pct"] == 0.60
+    assert result.updated_state["synced_pct"] == START
+    saved = State(
+        abs_id=env.book.abs_id, client_name="kosync", user_id=env.users[0].id,
+        percentage=result.updated_state["pct"], xpath=result.updated_state["xpath"],
+        **state_metadata_kwargs(result.updated_state),
+    )
+    env.db.save_state(saved)
+    next_state = adapter.get_service_state(env.book, saved)
+    assert next_state.previous_pct == START
+    assert next_state.delta == pytest.approx(0.10)
 
 
 def test_page_turns_accumulate_across_puts(env, caplog):

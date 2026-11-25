@@ -45,7 +45,7 @@ def test_kosync_payload_contract_keys_and_degraded_progress_only():
 def test_kosync_payload_contract_keeps_internal_force_fields_for_local_server():
     with patch.dict(
         os.environ,
-        {"KOSYNC_SERVER": "http://127.0.0.1:5758", "KOSYNC_USER": "user", "KOSYNC_KEY": "secret"},
+        {"KOSYNC_SERVER": "http://127.0.0.1:5758", "KOSYNC_PORT": "5758", "KOSYNC_USER": "user", "KOSYNC_KEY": "secret"},
         clear=False,
     ):
         client = KoSyncClient()
@@ -64,6 +64,128 @@ def test_kosync_payload_contract_keeps_internal_force_fields_for_local_server():
         assert set(payloads[0].keys()) == expected_keys
         assert payloads[0]["timestamp"] == 1700000000
         assert payloads[0]["force"] is True
+
+
+def test_kosync_payload_contract_adds_bridge_observed_at_for_local_server_with_read_started_at():
+    with patch.dict(
+        os.environ,
+        {"KOSYNC_SERVER": "http://127.0.0.1:5758", "KOSYNC_PORT": "5758", "KOSYNC_USER": "user", "KOSYNC_KEY": "secret"},
+        clear=False,
+    ):
+        client = KoSyncClient()
+        payloads = []
+
+        def _fake_put(url, headers=None, json=None, timeout=None):
+            payloads.append(dict(json))
+            return SimpleNamespace(status_code=202, text="accepted")
+
+        client.session.put = MagicMock(side_effect=_fake_put)
+
+        with patch("src.api.api_clients.time.time", return_value=1700000000):
+            assert client.update_progress("doc-1", 0.42, "/body/DocFragment[1]/body/p[1]/text().0", read_started_at=1699999000.5)
+
+        expected_keys = {"document", "percentage", "progress", "device", "device_id", "timestamp", "force", "_bridge_observed_at"}
+        assert set(payloads[0].keys()) == expected_keys
+        assert payloads[0]["_bridge_observed_at"] == 1699999000.5
+        assert payloads[0]["timestamp"] == 1700000000
+        assert payloads[0]["force"] is True
+
+
+def test_kosync_snapshot_reaches_all_builtin_loopback_addresses():
+    for host in ("0.0.0.0", "[::1]"):
+        with patch.dict(os.environ, {
+            "KOSYNC_SERVER": f"http://{host}:5757", "KOSYNC_PORT": "5757",
+            "KOSYNC_USER": "user", "KOSYNC_KEY": "secret",
+        }, clear=False):
+            client = KoSyncClient()
+            client.session.put = MagicMock(return_value=SimpleNamespace(status_code=202, text="accepted"))
+            assert client.update_progress("doc-1", 0.42, "/body/p[1].0", read_started_at=1700000000.5)
+            assert client.session.put.call_args.kwargs["json"]["_bridge_observed_at"] == 1700000000.5
+
+
+def test_kosync_payload_contract_excludes_bridge_observed_at_for_external_server():
+    with patch.dict(
+        os.environ,
+        {"KOSYNC_SERVER": "http://kosync.external", "KOSYNC_USER": "user", "KOSYNC_KEY": "secret"},
+        clear=False,
+    ):
+        client = KoSyncClient()
+        payloads = []
+
+        def _fake_put(url, headers=None, json=None, timeout=None):
+            payloads.append(dict(json))
+            return SimpleNamespace(status_code=200, text="ok")
+
+        client.session.put = MagicMock(side_effect=_fake_put)
+
+        with patch("src.api.api_clients.time.time", return_value=1700000000):
+            assert client.update_progress("doc-1", 0.42, "/body/DocFragment[1]/body/p[1]/text().0", read_started_at=1699999000.5)
+
+        expected_keys = {"document", "percentage", "progress", "device", "device_id"}
+        assert set(payloads[0].keys()) == expected_keys
+        assert "_bridge_observed_at" not in payloads[0]
+        assert "timestamp" not in payloads[0]
+        assert "force" not in payloads[0]
+
+
+def test_kosync_payload_contract_excludes_bridge_observed_at_when_read_started_at_none():
+    with patch.dict(
+        os.environ,
+        {"KOSYNC_SERVER": "http://127.0.0.1:5758", "KOSYNC_USER": "user", "KOSYNC_KEY": "secret"},
+        clear=False,
+    ):
+        client = KoSyncClient()
+        payloads = []
+
+        def _fake_put(url, headers=None, json=None, timeout=None):
+            payloads.append(dict(json))
+            return SimpleNamespace(status_code=202, text="accepted")
+
+        client.session.put = MagicMock(side_effect=_fake_put)
+
+        with patch("src.api.api_clients.time.time", return_value=1700000000):
+            assert client.update_progress("doc-1", 0.42, "/body/DocFragment[1]/body/p[1]/text().0", read_started_at=None)
+
+        expected_keys = {"document", "percentage", "progress", "device", "device_id", "timestamp", "force"}
+        assert set(payloads[0].keys()) == expected_keys
+        assert "_bridge_observed_at" not in payloads[0]
+
+
+def test_kosync_snapshot_conflict_is_an_info_level_skip():
+    with patch.dict(
+        os.environ,
+        {"KOSYNC_SERVER": "http://127.0.0.1:5758", "KOSYNC_PORT": "5758", "KOSYNC_USER": "user", "KOSYNC_KEY": "secret"},
+        clear=False,
+    ):
+        client = KoSyncClient()
+        client.session.put = MagicMock(return_value=SimpleNamespace(
+            status_code=409,
+            text='{"message":"Newer device progress was received"}',
+            json=lambda: {"message": "Newer device progress was received"},
+        ))
+        with patch("src.api.api_clients.time.time", return_value=1700000000):
+            with patch("src.api.api_clients.logger.info") as info, patch("src.api.api_clients.logger.error") as error:
+                assert client.update_progress("doc-1", 0.42, "/body/p[1].0", read_started_at=1699999000.5) is None
+        info.assert_called_once()
+        error.assert_not_called()
+
+
+def test_external_kosync_409_is_not_treated_as_a_local_snapshot_conflict():
+    with patch.dict(
+        os.environ,
+        {"KOSYNC_SERVER": "http://kosync.external", "KOSYNC_USER": "user", "KOSYNC_KEY": "secret"},
+        clear=False,
+    ):
+        client = KoSyncClient()
+        client.session.put = MagicMock(return_value=SimpleNamespace(
+            status_code=409,
+            text='{"message":"Newer device progress was received"}',
+            json=lambda: {"message": "Newer device progress was received"},
+        ))
+        with patch("src.api.api_clients.time.time", return_value=1700000000):
+            with patch("src.api.api_clients.logger.error") as error:
+                assert not client.update_progress("doc-1", 0.42, "/body/p[1].0", read_started_at=1699999000.5)
+        error.assert_called_once()
 
 
 def test_booklore_payload_contract_epub_percentage_and_optional_cfi():

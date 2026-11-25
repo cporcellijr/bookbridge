@@ -228,7 +228,9 @@ class TestSyncCycleFillsKoSyncWithoutAPosition(unittest.TestCase):
         self.assertEqual(doc_id, KOSYNC_DOC)
         self.assertAlmostEqual(pct, 0.11, places=2)
         self.assertEqual(xpath, "/body/DocFragment[3]/body/p[2].0")
-        self.assertEqual(kwargs, {"fill_if_absent": True})
+        self.assertEqual(kwargs["fill_if_absent"], True)
+        self.assertIsInstance(kwargs["read_started_at"], float)
+        self.assertEqual(set(kwargs), {"fill_if_absent", "read_started_at"})
         self.abs_client.update_progress.assert_not_called()
         if use_bulk_shortcut:
             self.kosync_api.get_progress_with_metadata.assert_not_called()
@@ -238,6 +240,24 @@ class TestSyncCycleFillsKoSyncWithoutAPosition(unittest.TestCase):
 
     def test_bulk_shortcut_still_initializes_the_missing_kosync_position(self):
         self._assert_abs_position_is_pushed(use_bulk_shortcut=True)
+
+    def test_follower_fill_keeps_read_metadata_separate_from_placeholder_state(self):
+        manager = self._build(use_bulk_shortcut=True)
+        client = manager.sync_clients["KoSync"]
+        original_update = client.update_progress
+        requests = []
+
+        def capture_request(book, request):
+            requests.append(request)
+            return original_update(book, request)
+
+        client.update_progress = capture_request
+        manager.sync_cycle()
+
+        self.assertEqual(len(requests), 1)
+        self.assertIsNone(requests[0].current_state)
+        self.assertIsInstance(requests[0].kosync_read_started_at, float)
+        self.assertEqual(requests[0].kosync_synced_pct, 0)
 
     def test_original_server_empty_200_joins_as_a_follower(self):
         self.kosync_response = (None, None, {"_http_status": 200})

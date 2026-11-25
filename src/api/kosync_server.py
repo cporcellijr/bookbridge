@@ -6,6 +6,7 @@ import io
 import ipaddress
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -16,7 +17,7 @@ import zipfile
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
@@ -2145,6 +2146,21 @@ def kosync_put_progress():
     kosync_doc = _database_service.get_kosync_document(doc_hash)
     request_user_id = getattr(g, 'kosync_user_id', None)
     is_internal = _is_internal_kosync_device(device, device_id)
+    read_started_at = data.get("_bridge_observed_at")
+    if read_started_at is not None and (
+        not is_internal
+        or isinstance(read_started_at, bool)
+        or not isinstance(read_started_at, (int, float))
+        or read_started_at < 946684800
+        or read_started_at > now_ts + 300
+        or not math.isfinite(float(read_started_at))
+    ):
+        logger.warning("KOSync: PUT progress with invalid bridge observation time for doc %s", doc_hash)
+        return jsonify({"error": "Invalid bridge observation time"}), 400
+    progress_timestamp = (
+        datetime.fromtimestamp(read_started_at, timezone.utc).replace(tzinfo=None)
+        if is_internal and read_started_at is not None else now
+    )
     device_key = _get_kosync_device_key(device, device_id)
     may_match = is_internal or _discovery_anchor_may_match(
         request_user_id, doc_hash, device_key, percentage,
@@ -2327,7 +2343,7 @@ def kosync_put_progress():
             percentage=percentage,
             device=device,
             device_id=device_id,
-            timestamp=now,
+            timestamp=progress_timestamp,
             user_id=request_user_id,
         )
         logger.info(f"KOSync: New document tracked: {doc_hash} from device '{device}'")
@@ -2351,23 +2367,41 @@ def kosync_put_progress():
         else:
             kosync_doc.device = device
             kosync_doc.device_id = device_id
-        kosync_doc.timestamp = now
+        kosync_doc.timestamp = progress_timestamp
         if request_user_id is not None and not is_internal:
             kosync_doc.user_id = request_user_id
 
-    if not foreign_row:
-        _database_service.save_kosync_document(kosync_doc)
+    # Serialize accepted progress persistence with the snapshot check. A device update that
+    # arrives after the cycle read must not be overwritten by that cycle's push.
+    with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+        if is_internal and read_started_at is not None and put_book and not furthest_wins:
+            rows = _database_service.get_user_kosync_progress_for_book(
+                put_book.abs_id, user_id=request_user_id,
+            )
+            if not rows:
+                rows = _database_service.get_kosync_documents_for_book(put_book.abs_id)
+                if request_user_id is not None:
+                    rows = [row for row in rows if getattr(row, "user_id", None) in (None, request_user_id)]
+            newer_device_row = any(
+                (parse_service_timestamp(row.timestamp) or 0) > read_started_at
+                for row in rows
+            )
+            if newer_device_row:
+                logger.info(
+                    "KOSync: Ignored stale bridge write for doc %s; device progress arrived after the cycle read",
+                    doc_hash,
+                )
+                return jsonify({"document": doc_hash, "message": "Newer device progress was received"}), 409
+        if not foreign_row:
+            _database_service.save_kosync_document(kosync_doc)
+        # Every accepted write is recorded for the user who made it, including
+        # bridge pushes; the per-user row is the GET isolation boundary.
+        _database_service.upsert_user_kosync_progress(
+            doc_hash, percentage, progress=progress, device=device,
+            device_id=device_id, timestamp=progress_timestamp, user_id=request_user_id,
+        )
     if not is_internal:
         _record_recent_external_kosync_put(doc_hash, device, device_id, percentage, now_ts, request_user_id)
-    # Every accepted write is recorded for the user who made it, the bridge's own
-    # pushes included: the shared row is one slot that changes owner whenever another
-    # user's device writes to it, so a position kept only there is lost the moment
-    # that happens. The per-user row is what a GET reads first. No-op for a
-    # no-accounts install, which keeps using the shared row.
-    _database_service.upsert_user_kosync_progress(
-        doc_hash, percentage, progress=progress, device=device,
-        device_id=device_id, timestamp=now, user_id=request_user_id,
-    )
 
     # Update linked book if exists
     linked_book = None
@@ -4124,17 +4158,13 @@ def _book_states_response(doc_id, book):
             else:
                 eligible_docs.append(device_doc)
         docs_with_progress = eligible_docs
-    # With furthest-wins off the latest position wins, so only the reader's most
-    # recently written row may answer for the book: a higher row on another copy
-    # is older, and no longer where they are. A cycle's own push dates the row of
-    # the book's hash, so a position BookBridge wrote counts as well. Every row's
-    # time is this server's clock at its PUT; the State's times are not (a cycle
-    # saves a position some time after it read or wrote it). The newest is taken
-    # among all rows: when it holds no usable position (a push at 0% carries no
-    # locator), no row answers and the State does.
-    if progress_rows and not user_preference_enabled(
-        'KOSYNC_FURTHEST_WINS', 'true', _database_service
-    ):
+    # Latest-wins uses only the reader's newest row across copies. Internal
+    # snapshots retain the cycle's read time; other PUTs use their arrival time,
+    # so a device that persists late still outranks an older cycle snapshot.
+    # State.last_updated is its save time, not the position's observation time.
+    # An unusable newest row (such as a 0% push without a locator) falls back to State.
+    latest_wins = not user_preference_enabled('KOSYNC_FURTHEST_WINS', 'true', _database_service)
+    if progress_rows and latest_wins:
         newest = max(progress_rows, key=lambda d: (
             parse_service_timestamp(getattr(d, "timestamp", None)) or 0.0, float(d.percentage or 0),
         ))
@@ -4325,7 +4355,7 @@ def _book_states_response(doc_id, book):
             abs(sibling_pct - synced_pct) <= 0.0001
             and not synced_has_locator
         )
-        if sibling_is_ahead or sibling_is_equal_fallback:
+        if sibling_is_ahead or sibling_is_equal_fallback or latest_wins:
             logger.info(f"KOSync: Resolved {doc_id} to '{book.abs_title}' via sibling hash {best_doc.document_hash} ({float(best_doc.percentage):.2%})")
             poison_pill = _suppress_empty_progress_response(doc_id, float(best_doc.percentage), best_doc.progress)
             if poison_pill is not None:

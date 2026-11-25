@@ -547,6 +547,7 @@ class SyncManager:
         leader: str,
         abs_id: str,
         title_snip: str,
+        current_states: dict | None = None,
     ) -> dict[str, SyncResult]:
         """Mark a book finished on non-leader clients once the leader crosses
         the configured completion threshold.
@@ -561,7 +562,7 @@ class SyncManager:
         """
         current_time = time.time()
         failed: dict[str, SyncResult] = {}
-        request = UpdateProgressRequest(LocatorResult(percentage=1.0), "Book finished", previous_location=None)
+        current_states = current_states or {}
         for client_name, client in self._iter_update_targets(active_clients, leader):
             if client_name in _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS:
                 continue
@@ -578,6 +579,10 @@ class SyncManager:
                     else:
                         logger.warning(f"⚠️ Completion propagation failed for '{client_name}': mark_finished returned False")
                 else:
+                    request = UpdateProgressRequest(
+                        LocatorResult(percentage=1.0), "Book finished", previous_location=None,
+                        current_state=current_states.get(client_name),
+                    )
                     result = client.update_progress(book, request)
                     self._record_bridge_write(client_name, abs_id, result)
                     if self._sync_result_was_applied(result):
@@ -6455,6 +6460,11 @@ class SyncManager:
                             continue
                         client_state = config.get(client_name)
                         is_follower = bool(client_state and client_state.follower_only)
+                        kosync_read_started_at = getattr(client_state, "kosync_read_started_at", None)
+                        kosync_synced_pct = (
+                            getattr(client_state, "previous_pct", None)
+                            if client_name == "KoSync" else None
+                        )
                         if init_followers_only and not is_follower:
                             continue
                         if is_follower:
@@ -6524,6 +6534,8 @@ class SyncManager:
                             # This cycle already read this client; handing the read back
                             # lets it skip re-fetching state it just had.
                             current_state=client_state,
+                            kosync_read_started_at=kosync_read_started_at,
+                            kosync_synced_pct=kosync_synced_pct,
                             target_audio_ts=target_audio_ts,
                             # Set by `_determine_leader` only on the corroborated
                             # rewind paths. Without it an audio client drops the
@@ -6593,7 +6605,9 @@ class SyncManager:
 
                 if propagating_completion:
                     # A failed 100% write replaced the follower's ordinary write, so it retries like one.
-                    results.update(self._propagate_completion(book, active_clients, leader, abs_id, title_snip))
+                    results.update(self._propagate_completion(
+                        book, active_clients, leader, abs_id, title_snip, config,
+                    ))
 
                 # Genuine failures only: a policy no-write is success=True, skipped=True.
                 retry_key = (get_current_user_id(), abs_id)

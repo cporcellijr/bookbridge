@@ -114,6 +114,22 @@ class TestPropagateCompletion(unittest.TestCase):
             state_dict = args[2]
             self.assertEqual(state_dict.get("pct"), 1.0)
 
+    def test_completion_propagation_forwards_service_read_snapshot(self):
+        mgr = _make_minimal_manager()
+        book = _make_book()
+        current_state = types.SimpleNamespace(kosync_read_started_at=1700000001.5)
+        mock_client = MagicMock()
+        mock_client.update_progress.return_value = SyncResult(success=True, location=1.0)
+
+        with patch.object(mgr, "_persist_state_snapshot"):
+            mgr._propagate_completion(
+                book, {"KoSync": mock_client}, "ABS", "test-book", "Test Book",
+                {"KoSync": current_state},
+            )
+
+        request = mock_client.update_progress.call_args.args[1]
+        self.assertIs(request.current_state, current_state)
+
     def test_non_abs_failure_persists_nothing(self):
         """Non-ABS failure persists nothing and logs a warning."""
         mgr = _make_minimal_manager()

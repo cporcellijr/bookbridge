@@ -84,11 +84,15 @@ class KoSyncSyncClient(SyncClient):
                 return None
             # HTTP Basic sends no x-auth-* headers, which the built-in server rejects.
             headers = self.kosync_client._request_kwargs().get("headers") or {}
+            read_started_at = time.time()
             from src.api import kosync_server
             unstarted = kosync_server.linked_documents_without_progress(
                 headers.get("x-auth-user"), headers.get("x-auth-key")
             )
-            return None if unstarted is None else {"documents_without_progress": unstarted}
+            return None if unstarted is None else {
+                "documents_without_progress": unstarted,
+                "read_started_at": read_started_at,
+            }
         except Exception as e:
             logger.debug(f"KoSync: built-in progress lookup skipped: {e}")
             return None
@@ -101,9 +105,18 @@ class KoSyncSyncClient(SyncClient):
         return status == 404 or (status == 200 and ko_xpath is None and not ko_metadata.get("progress"))
 
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
+        # Capture read-start time before any I/O so the write path can report how
+        # long the bridge observed this position before writing it back.
         ko_id = book.kosync_doc_id
+        bulk_no_record = bool(
+            bulk_context
+            and bulk_context.get("documents_without_progress", {}).get(ko_id) == book.abs_id
+        )
+        read_started_at = bulk_context.get("read_started_at") if bulk_no_record else None
+        if read_started_at is None:
+            read_started_at = time.time()
         ko_metadata = {}
-        if bulk_context and bulk_context.get("documents_without_progress", {}).get(ko_id) == book.abs_id:
+        if bulk_no_record:
             # Built-in server with no progress for this book: the GET's 404 result.
             ko_pct, ko_xpath = None, None
             ko_metadata = {"_http_status": 404}
@@ -176,6 +189,7 @@ class KoSyncSyncClient(SyncClient):
                 display=("KoSync", "{prev:.4%} -> {curr:.4%}"),
                 value_formatter=lambda v: f"{v*100:.4f}%",
                 follower_only=True,
+                kosync_read_started_at=read_started_at,
             )
         if ko_pct is None:
             if ko_xpath is None:
@@ -220,7 +234,8 @@ class KoSyncSyncClient(SyncClient):
             threshold=self.delta_kosync_thresh,
             is_configured=self.kosync_client.is_configured(),
             display=("KoSync", "{prev:.4%} -> {curr:.4%}"),
-            value_formatter=lambda v: f"{v*100:.4f}%"
+            value_formatter=lambda v: f"{v*100:.4f}%",
+            kosync_read_started_at=read_started_at,
         )
 
     @staticmethod
@@ -438,6 +453,26 @@ class KoSyncSyncClient(SyncClient):
         """Return the service-specific locator used when clearing progress."""
         return ""
 
+    def _stale_snapshot_result(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
+        """Return the fresh server position after it rejected an obsolete cycle write."""
+        fresh_state = self.get_service_state(book, None)
+        if fresh_state is None:
+            return SyncResult(None, False, {})
+        current = dict(fresh_state.current)
+        synced_pct = getattr(request, "kosync_synced_pct", None)
+        if request.current_state and request.current_state.previous_pct is not None:
+            synced_pct = request.current_state.previous_pct
+        if synced_pct is not None:
+            current["synced_pct"] = synced_pct
+        if request.current_state:
+            prior_page = request.current_state.current.get("_previous_page")
+            if "_previous_page" in request.current_state.current:
+                if prior_page is None:
+                    current.pop("page", None)
+                else:
+                    current["page"] = prior_page
+        return SyncResult(current.get("pct"), True, current, skipped=True)
+
     def update_progress(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
         pct = request.locator_result.percentage
         ko_id = book.kosync_doc_id if book else None
@@ -448,6 +483,13 @@ class KoSyncSyncClient(SyncClient):
             request.current_state.current.get("kosync_approved_rewind_at")
             if request.current_state else None
         )
+        # Forward the KoSync read-start time captured by get_service_state so the
+        # transport layer can report how long the bridge observed the position
+        # before writing it back. Only forwarded for EPUB and CBZ writes.
+        read_started_at = getattr(request, "kosync_read_started_at", None)
+        if read_started_at is None and request.current_state:
+            read_started_at = getattr(request.current_state, "kosync_read_started_at", None)
+        snapshot = {"read_started_at": read_started_at} if read_started_at is not None else {}
 
         epub = (
             (getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None))
@@ -505,7 +547,9 @@ class KoSyncSyncClient(SyncClient):
                 current = request.current_state.current if request.current_state else {}
                 return SyncResult(current.get('pct'), True, dict(current), skipped=True)
 
-            success = self.kosync_client.update_progress(ko_id, pct, page_progress, **fill)
+            success = self.kosync_client.update_progress(ko_id, pct, page_progress, **snapshot, **fill)
+            if success is None:
+                return self._stale_snapshot_result(book, request)
             updated_state = {'pct': pct, 'xpath': page_progress, 'page': coerce_page(page_progress)}
             if success and rewind_at is not None:
                 updated_state["kosync_approved_rewind_at"] = rewind_at
@@ -573,7 +617,9 @@ class KoSyncSyncClient(SyncClient):
                     exc_info=True,
                 )
 
-        success = self.kosync_client.update_progress(ko_id, pct, safe_xpath, **fill)
+        success = self.kosync_client.update_progress(ko_id, pct, safe_xpath, **snapshot, **fill)
+        if success is None:
+            return self._stale_snapshot_result(book, request)
         updated_state = {
             'pct': pct,
             'xpath': safe_xpath
