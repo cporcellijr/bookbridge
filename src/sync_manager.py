@@ -2801,7 +2801,7 @@ class SyncManager:
                 logger.warning("Suggestion discovery could not scope clients for user %s: %s", user_id, exc, exc_info=True)
                 return
 
-        if os.environ.get("SUGGESTIONS_ENABLED", "true").lower() != "true":
+        if not env_truthy("SUGGESTIONS_ENABLED", "true"):
             if library_token is not None:
                 _library_service_override.reset(library_token)
             if bundle_token is not None:
@@ -2848,7 +2848,7 @@ class SyncManager:
         suggestions_enabled_val = os.environ.get("SUGGESTIONS_ENABLED", "true")
         logger.debug(f"SUGGESTIONS_ENABLED env var is: '{suggestions_enabled_val}'")
         
-        if suggestions_enabled_val.lower() != "true":
+        if not env_truthy("SUGGESTIONS_ENABLED", "true"):
             return
 
         try:
@@ -7167,7 +7167,7 @@ class SyncManager:
                 }
 
                 # [CHANGED LOGIC] Handle book status update based on alignment presence and user setting
-                smart_reset = os.getenv('REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT', 'true').lower() == 'true'
+                smart_reset = env_truthy('REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT', 'true')
 
                 if getattr(book, 'sync_mode', 'audiobook') == 'audiobook_only':
                     # Audio-only mappings never need alignment or EPUB recovery.

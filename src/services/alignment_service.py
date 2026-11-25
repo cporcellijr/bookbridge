@@ -201,7 +201,7 @@ class AlignmentService:
         if key.startswith("OLLAMA_"):
             from src.api.llm_settings import llm_setting_truthy
             return llm_setting_truthy(key, default)
-        return os.environ.get(key, default).lower() == "true"
+        return env_truthy(key, default)
 
     @staticmethod
     def _env_float(key: str, default: float) -> float:

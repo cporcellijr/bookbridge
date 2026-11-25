@@ -1018,7 +1018,7 @@ def _persist_grouped_kosync_session(session_data: dict) -> None:
     )
 
     if (
-        os.environ.get("GRIMMORY_READING_SESSIONS", "true").lower() == "true"
+        env_truthy("GRIMMORY_READING_SESSIONS", "true")
         and _manager
         and hasattr(_manager, "booklore_client")
         and _manager.booklore_client
@@ -2448,7 +2448,7 @@ def kosync_put_progress():
             except Exception as e:
                 logger.warning(f"KOSync session grouping failed for '{linked_book.abs_id}': {e}", exc_info=True)
 
-        instant_sync_enabled = os.environ.get('INSTANT_SYNC_ENABLED', 'true').lower() != 'false'
+        instant_sync_enabled = env_truthy('INSTANT_SYNC_ENABLED', 'true')
         if is_internal:
             # Internal writes (sync/reset flows) should cancel any pending user debounce
             # event for this book so we don't replay stale progress right after a reset.
@@ -3393,7 +3393,7 @@ def kosync_upload_sessions():
         # Forward to Grimmory if configured
         if (
             book
-            and os.environ.get("GRIMMORY_READING_SESSIONS", "true").lower() == "true"
+            and env_truthy("GRIMMORY_READING_SESSIONS", "true")
             and _manager
             and hasattr(_manager, 'booklore_client')
             and _manager.booklore_client

@@ -437,14 +437,22 @@ class TestKosyncPutInstantSync(unittest.TestCase):
             ks._manager = original_manager
 
     def test_instant_sync_disabled_skips_debounce(self):
-        """PUT should NOT record a debounce event when INSTANT_SYNC_ENABLED=false."""
+        """PUT should NOT record a debounce event when INSTANT_SYNC_ENABLED is off, in any spelling."""
+        for value in ('false', '0', 'off', 'no'):
+            with self.subTest(value=value):
+                self._assert_put_skips_debounce_with_instant_sync(value)
+
+    def _assert_put_skips_debounce_with_instant_sync(self, value):
         import os
         import src.api.kosync_server as ks
         from src.db.models import KosyncDocument
 
-        os.environ['INSTANT_SYNC_ENABLED'] = 'false'
+        os.environ['INSTANT_SYNC_ENABLED'] = value
         mock_db = MagicMock()
         mock_db.get_user_kosync_progress.return_value = None
+        # As in the enabled test: a bare MagicMock State reads as 100% and holds the
+        # push before the instant-sync check, which made this test pass vacuously.
+        mock_db.get_state.return_value = None
         original_db = ks._database_service
         ks._database_service = mock_db
         original_manager = ks._manager

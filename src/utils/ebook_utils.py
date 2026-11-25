@@ -18,6 +18,8 @@ import glob
 import posixpath
 import threading
 import urllib.parse
+
+from src.utils.config_loader import env_truthy
 import rapidfuzz
 import zipfile
 import shutil
@@ -209,7 +211,7 @@ class EbookParser:
         self._media_overlay_ids_cache = LRUCache(capacity=cache_size)
         self.fuzzy_threshold = int(os.getenv("FUZZY_MATCH_THRESHOLD", 80))
         self.hash_method = os.getenv("KOSYNC_HASH_METHOD", "content").lower()
-        self.useXpathSegmentFallback = os.getenv("XPATH_FALLBACK_TO_PREVIOUS_SEGMENT", "false").lower() == "true"
+        self.useXpathSegmentFallback = env_truthy("XPATH_FALLBACK_TO_PREVIOUS_SEGMENT", "false")
         self.locator_roundtrip_tolerance = int(os.getenv("LOCATOR_ROUNDTRIP_TOLERANCE_CHARS", 2))
 
         # Path-resolution cache: filename -> resolved Path. Avoids repeated 6-7s

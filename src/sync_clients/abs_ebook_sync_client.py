@@ -6,6 +6,7 @@ from src.api.api_clients import ABSClient
 from src.db.models import Book, State
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState, ABS_ITEM_NOT_FOUND
 from src.utils.ebook_utils import EbookParser, build_readium_locator, parse_readium_locator
+from src.utils.config_loader import env_truthy
 from src.utils.logging_utils import sanitize_log_data
 
 logger = logging.getLogger(__name__)
@@ -22,13 +23,13 @@ class ABSEbookSyncClient(SyncClient):
         self.delta_abs_thresh = float(os.getenv("SYNC_DELTA_ABS_EBOOK_PERCENT", 1)) / 100.0
 
     def is_configured(self) -> bool:
-        return os.getenv("SYNC_ABS_EBOOK", "false").lower() == "true" and self.abs_client.is_configured()
+        return env_truthy("SYNC_ABS_EBOOK", "false") and self.abs_client.is_configured()
 
     def check_connection(self):
         return self.abs_client.check_connection()
 
     def can_be_leader(self) -> bool:
-        return os.getenv("SYNC_ABS_EBOOK_CAN_BE_LEADER", "true").lower() == "true"
+        return env_truthy("SYNC_ABS_EBOOK_CAN_BE_LEADER", "true")
 
     def get_supported_sync_types(self) -> set:
         """ABS ebook participates in both audiobook (cross-format) and ebook-only modes.

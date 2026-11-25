@@ -1193,7 +1193,7 @@ class SuggestionsService:
     @staticmethod
     def _env_true(key: str) -> bool:
         from src.api.llm_settings import llm_setting_truthy
-        return llm_setting_truthy(key, "false") if key.startswith("OLLAMA_") else os.environ.get(key, "false").lower() == "true"
+        return llm_setting_truthy(key, "false") if key.startswith("OLLAMA_") else env_truthy(key, "false")
 
     @staticmethod
     def _env_float(key: str, default: float) -> float:

@@ -2290,8 +2290,8 @@ if __name__ == '__main__':
     logger.info("🚀 Sync daemon thread started")
 
     # Start ABS Socket.IO listener for real-time / instant sync
-    instant_sync_enabled = os.environ.get('INSTANT_SYNC_ENABLED', 'true').lower() != 'false'
-    abs_socket_enabled = os.environ.get('ABS_SOCKET_ENABLED', 'true').lower() != 'false'
+    instant_sync_enabled = env_truthy('INSTANT_SYNC_ENABLED', 'true')
+    abs_socket_enabled = env_truthy('ABS_SOCKET_ENABLED', 'true')
     if instant_sync_enabled and abs_socket_enabled and container.abs_client().is_configured():
         from src.services.abs_socket_manager import ABSSocketManager
         abs_socket_manager = ABSSocketManager(

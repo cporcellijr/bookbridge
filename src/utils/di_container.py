@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 import os
 
+from src.utils.config_loader import env_truthy
+
 from dependency_injector import containers, providers
 
 # Import all the classes we'll be using
@@ -90,7 +92,7 @@ class Container(containers.DeclarativeContainer):
     # Lazy load specific config values
     delta_abs_thresh = providers.Factory(lambda: float(os.getenv("SYNC_DELTA_ABS_SECONDS", 60)))
     delta_kosync_thresh = providers.Factory(lambda: float(os.getenv("SYNC_DELTA_KOSYNC_PERCENT", 1)) / 100.0)
-    kosync_use_percentage_from_server = providers.Factory(lambda: os.getenv("KOSYNC_USE_PERCENTAGE_FROM_SERVER", "false").lower() == "true")
+    kosync_use_percentage_from_server = providers.Factory(lambda: env_truthy("KOSYNC_USE_PERCENTAGE_FROM_SERVER", "false"))
 
     # API Clients
     abs_client = providers.Singleton(ABSClient)
