@@ -146,5 +146,60 @@ class TestKoSyncCollapseGuardSync(BaseSyncCycleTestCase):
         self.assertAlmostEqual(float(saved_kosync[-1].percentage), 0.5314, places=4)
 
 
+class TestExactLocatorNearStartIsNotACollapse(BaseSyncCycleTestCase):
+    """KOReader reports a share of rendered pages, a locator a share of the text, and
+    image-only front matter fills pages without text: the first page of an
+    Introduction can be 1.8% to KOReader and 0.4% of the text. An exact locator
+    (#523) is the leader's own XPath resolved in its own file, not a failed one."""
+
+    get_test_mapping = TestKoSyncCollapseGuardSync.get_test_mapping
+    get_expected_leader = TestKoSyncCollapseGuardSync.get_expected_leader
+
+    def get_test_state_data(self):
+        return {
+            'abs': {'pct': 0.001, 'ts': 1.0, 'last_updated': 1234567890},
+            'kosync': {'pct': 0.0, 'last_updated': 1234567890},
+        }
+
+    def get_expected_final_percentage(self):
+        return 0.0182
+
+    def get_progress_mock_returns(self):
+        returns = TestKoSyncCollapseGuardSync.get_progress_mock_returns(self)
+        returns['abs_progress'] = {'currentTime': 1.0, 'duration': 1000}
+        returns['abs_in_progress'] = [{'id': 'test-abs-id-collapse', 'progress': 0.001, 'duration': 1000}]
+        returns['kosync_progress'] = (0.0182, "/body/DocFragment[4]/body/div/h2/span/text().0")
+        return returns
+
+    def test_an_exact_locator_near_the_start_is_written(self):
+        manager, mocks = TestKoSyncCollapseGuardSync._build_manager(self)
+        manager.sync_clients['KoSync'].get_exact_locator = Mock(return_value=LocatorResult(
+            percentage=0.0038, xpath="/body/DocFragment[4]/body/div/h2/span/text().0", match_index=2817,
+        ))
+
+        manager.sync_cycle()
+
+        self.assertTrue(
+            manager.sync_clients['ABS']._update_abs_progress_with_offset.called,
+            "the exact position was taken for a collapsed locator and not written to ABS",
+        )
+
+    def test_an_exact_locator_at_the_start_is_still_guarded_when_the_leader_is_far_on(self):
+        # get_exact_locator can land at a chapter start through its resolver's fallbacks
+        # (an XPath from another build of the EPUB); with the leader at 53% that is #290.
+        manager, mocks = TestKoSyncCollapseGuardSync._build_manager(self)
+        manager.sync_clients['KoSync'].get_exact_locator = Mock(return_value=LocatorResult(
+            percentage=0.0008, xpath="/body/DocFragment[2]/body/p[1].0", match_index=11,
+        ))
+        mocks['kosync_client'].get_progress.return_value = (0.5314, "/body/DocFragment[2]/body/p[500].0")
+
+        manager.sync_cycle()
+
+        self.assertFalse(
+            manager.sync_clients['ABS']._update_abs_progress_with_offset.called,
+            "an exact locator at the start overwrote a leader at 53%",
+        )
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
