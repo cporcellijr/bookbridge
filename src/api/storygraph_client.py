@@ -3,7 +3,7 @@ import os
 import re
 from datetime import date
 from typing import Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -36,18 +36,20 @@ _PRINT_FORMAT_MAP = (
 )
 
 
-_URL_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
-
-
 def normalize_cookie_value(value) -> str:
-    """A pasted StoryGraph cookie value in the form StoryGraph accepts.
+    """A pasted StoryGraph cookie value in the form StoryGraph's own Set-Cookie uses.
 
-    StoryGraph's cookie values never contain ``%``, but cookie-export tools often
-    URL-encode them (``+`` as ``%2B``, ``/`` as ``%2F``, ``=`` as ``%3D``), and StoryGraph
-    rejects the encoded form. Decode only when an escape is present; ``+`` stays ``+``.
+    StoryGraph sends its cookies URL-encoded (``+`` as ``%2B``, ``/`` as ``%2F``, ``=`` as
+    ``%3D``) and reads them back as sent: a decoded session cookie is not a session.
+    Copies arrive encoded, decoded or encoded twice, so decode fully and encode once.
     """
     value = (value or "").strip()
-    return unquote(value) if _URL_ESCAPE.search(value) else value
+    for _ in range(3):
+        decoded = unquote(value)
+        if decoded == value:
+            break
+        value = decoded
+    return quote(value, safe="*-._")  # the characters Rack leaves unescaped
 
 
 def _parse_audio_seconds(text: str) -> Optional[int]:

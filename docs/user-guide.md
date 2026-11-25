@@ -467,8 +467,8 @@ StoryGraph does not have an official public API for third-party apps, so the bri
    - `remember_user_token`
 6. Paste these into **Account → My Integrations → StoryGraph**, then **Save integrations**.
 
-Values copied with a cookie-export extension are often URL-encoded (`%2B`, `%2F`, `%3D`). Paste them as they are:
-BookBridge decodes them.
+Paste the values as you copied them. Some cookie-export extensions show them decoded (`+`, `/`, `=`) and others
+URL-encoded (`%2B`, `%2F`, `%3D`); BookBridge sends them in the encoded form StoryGraph expects.
 
 > [!WARNING]
 > If you log out of StoryGraph in your browser, your session cookie might expire. If the bridge fails to sync to StoryGraph, you may need to refresh these cookies.
