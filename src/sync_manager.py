@@ -6055,7 +6055,7 @@ class SyncManager:
                         quiet = not any(self._has_significant_delta(k, decision_config, book) for k in decision_config)
                         # Every client at its own start is one unstarted book, however the
                         # alignment places ebook 0% (out-of-order narration maps it mid-audio).
-                        at_start = max_progress < self.sync_delta_between_clients
+                        at_start = all(pct == 0 for pct in progress_values)
                         if target_abs_id and duration and quiet and at_start:
                             logger.info(f"'{abs_id}' '{title_snip}' Skipping the audio-timeline comparison: every client is at its start")
                         normalized = (self._normalize_for_cross_format_comparison(book, decision_config)

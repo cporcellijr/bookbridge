@@ -3,8 +3,9 @@
 Unit test for the "no changes detected" scenario using unittest.TestCase.
 """
 
-import unittest
+import os
 import sys
+import unittest
 from pathlib import Path
 from unittest.mock import patch
 # Add the project root to the path to resolve module imports
@@ -141,6 +142,28 @@ class TestNoChangesDetectedSync(BaseSyncCycleTestCase):
         self.assertNotIn('Positions differ by', log_output)
         self.assertNotIn('Change detected', log_output)
         self.assertIn('every client is at its start', log_output)
+
+    def test_instant_sync_compares_early_nonzero_progress_on_the_audio_timeline(self):
+        """The 0.5% gap tolerance must not hide a timeline gap at 0.4% progress."""
+        for state in self.test_states:
+            state.percentage = 0.004
+            if state.client_name == 'abs':
+                state.timestamp = 4.0
+        progress = self.get_progress_mock_returns()
+        progress['abs_progress'].update(ebookProgress=0.004, currentTime=4.0)
+        progress['abs_in_progress'][0]['progress'] = 0.004
+        progress['kosync_progress'] = (0.004, '/html/body/div[1]/p[6]')
+        progress['storyteller_progress'] = (0.004, 0.0, None, None)
+        progress['booklore_progress'] = (0.004, None)
+
+        with patch.dict(os.environ, {'SYNC_DELTA_BETWEEN_CLIENTS_PERCENT': '0.5'}), \
+                patch.object(self, 'get_progress_mock_returns', return_value=progress), \
+                patch('src.sync_manager.SyncManager._normalize_for_cross_format_comparison',
+                      return_value={'ABS': 4.0, 'KoSync': 400.0}):
+            log_output = super().run_test(None, None, target_abs_id='test-abs-id-nochange')
+
+        self.assertIn('Positions differ by 396.0s', log_output)
+        self.assertIn('KoSync leads', log_output)
 
     def test_instant_sync_audio_ahead_never_rewinds_to_ebook(self):
         """Equal raw percentages cannot make a quiet ebook rewind audio ahead of it."""

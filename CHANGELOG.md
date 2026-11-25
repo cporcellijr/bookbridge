@@ -56,7 +56,8 @@ All notable changes to BookBridge will be documented in this file.
   position behind the synced one as reading forward. Contributed by [@jucor](https://github.com/jucor) in #613.
 - **Opening an unstarted book no longer jumps it to the middle.** For a book whose audiobook narrates parts in
   a different order from the ebook, a KoSync update at 0%, **Sync Now** or Bridge Sync's sync-now on a book
-  nobody had started could move the ebook to mid-book. A book that is at the start everywhere now stays there.
+  nobody had started could move the ebook to mid-book. Zero progress across apps stays put, and early
+  reading progress can still sync when the audiobook and ebook are at different places.
 - **On/off settings accept every spelling.** Settings set in `docker-compose.yml` as `1`, `yes` or `on` now
   count as on everywhere, and `INSTANT_SYNC_ENABLED` / `ABS_SOCKET_ENABLED` set to `0`, `off` or `no` now turn
   those features off (only `false` did before).
