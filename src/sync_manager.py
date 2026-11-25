@@ -6044,8 +6044,13 @@ class SyncManager:
                         # only while no client moved by its own measure (a mover is handled as before).
                         duration = getattr(book, 'duration', None)
                         quiet = not any(self._has_significant_delta(k, decision_config, book) for k in decision_config)
+                        # Every client at its own start is one unstarted book, however the
+                        # alignment places ebook 0% (out-of-order narration maps it mid-audio).
+                        at_start = max_progress < self.sync_delta_between_clients
+                        if target_abs_id and duration and quiet and at_start:
+                            logger.info(f"'{abs_id}' '{title_snip}' Skipping the audio-timeline comparison: every client is at its start")
                         normalized = (self._normalize_for_cross_format_comparison(book, decision_config)
-                                      if target_abs_id and duration and quiet else None)
+                                      if target_abs_id and duration and quiet and not at_start else None)
                         positions = [ts for k, ts in (normalized or {}).items()
                                      if not decision_config[k].current.get('_readalong_mirror')]
                         if len(positions) >= 2:

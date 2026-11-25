@@ -112,6 +112,36 @@ class TestNoChangesDetectedSync(BaseSyncCycleTestCase):
         self.assertIn('Positions differ by 1287.2s', log_output)
         self.assertIn('KoSync leads', log_output)
 
+    def test_instant_sync_of_an_unstarted_out_of_order_book_writes_nothing(self):
+        """Out-of-order narration: ebook 0% is narrated mid-audio, so on the audio timeline
+        an unstarted ebook sits ~690s from audio at 0s. A KoSync PUT at 0% (or Sync Now)
+        must not read that as a gap and push a mid-book position to the ebook clients."""
+        states = self.get_test_state_data()
+        for name in states:
+            states[name]['pct'] = 0.0
+        states['abs']['ts'] = 0.0
+        progress = self.get_progress_mock_returns()
+        progress['abs_progress'] = {'ebookProgress': 0.0, 'currentTime': 0.0}
+        progress['abs_in_progress'] = [{'id': 'test-abs-id-nochange', 'progress': 0.0, 'duration': 1000}]
+        progress['kosync_progress'] = (0.0, None)
+        progress['storyteller_progress'] = (0.0, 0.0, None, None)
+        progress['booklore_progress'] = (0.0, None)
+        normalized = {'ABS': 0.0, 'KoSync': 690.0}
+        with patch.object(self, 'get_progress_mock_returns', return_value=progress), \
+                patch('src.sync_manager.SyncManager._normalize_for_cross_format_comparison',
+                      return_value=normalized):
+            self.test_states = [
+                type(state)(abs_id=state.abs_id, client_name=state.client_name,
+                            last_updated=state.last_updated,
+                            percentage=states[state.client_name]['pct'],
+                            timestamp=states[state.client_name].get('ts'))
+                for state in self.test_states
+            ]
+            log_output = super().run_test(None, None, target_abs_id='test-abs-id-nochange')
+        self.assertNotIn('Positions differ by', log_output)
+        self.assertNotIn('Change detected', log_output)
+        self.assertIn('every client is at its start', log_output)
+
     def test_instant_sync_audio_ahead_never_rewinds_to_ebook(self):
         """Equal raw percentages cannot make a quiet ebook rewind audio ahead of it."""
         # An earlier test's push to ABS would mark ABS as our own write-back (Guard 3).
