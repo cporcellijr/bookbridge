@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from src.db.models import PendingSuggestion
+from src.utils.language_key import language_key
 from src.services.aligned_shelf import defer_shelf_add
 from src.utils.config_loader import env_truthy
 from src.utils.logging_utils import get_persistent_condition_logger
@@ -329,8 +330,8 @@ class ShelfWatchService:
             filename = ebook.get('fileName') or ''
             if not filename or self._is_already_mapped(ebook_id, filename, user_id=user_id):
                 continue
-            audio_language = str(audio.get('language') or '').casefold().split('-')[0]
-            ebook_language = str(ebook.get('language') or '').casefold().split('-')[0]
+            audio_language = language_key(audio.get('language'))
+            ebook_language = language_key(ebook.get('language'))
             if audio_language and ebook_language and audio_language != ebook_language:
                 continue
             logger.info(

@@ -345,6 +345,16 @@ def test_reading_watch_keeps_the_ebook_language_so_a_translation_is_not_auto_map
     mapping.create_audio_mapping_from_match.assert_not_called()
 
 
+@pytest.mark.parametrize("ebook_language, audio_language", [("English", "en"), ("eng", "en-US"), ("en", "")])
+def test_same_language_written_differently_keeps_the_edition_match(ebook_language, audio_language):
+    # Live BookOrbit writes English as en, eng and English; those are one language, not a translation.
+    svc = _edition_scanner(({**BOOKORBIT_AUDIO, "audio_language": audio_language},))
+    result = svc._scan_single_ebook(_ebook_anchor(language=ebook_language), svc._build_audiobook_candidate_pool())
+
+    assert [(m["bridge_key"], m["score"], m.get("authority")) for m in result["matches"]] == [
+        ("bookorbit:5114", 100.0, "bookorbit_edition")]
+
+
 def test_shelf_watch_keeps_the_ebook_language_so_a_translation_is_not_auto_mapped():
     watch, mapping = _watch(MagicMock(), scanner=_edition_scanner(SPANISH_AUDIO))
     with patch.dict(os.environ, WATCH_ON):

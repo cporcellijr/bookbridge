@@ -4,6 +4,7 @@ import unicodedata
 from typing import Callable, List, Set, Any, Dict, Optional
 
 from src.services.ebook_discovery import AudioCandidateIndex, ebook_key
+from src.utils.language_key import language_key
 from src.services.llm_matching import craft_search_terms
 from src.utils.ebook_sources import normalize_ebook_source
 from src.utils.config_loader import env_truthy
@@ -486,8 +487,8 @@ class SuggestionsService:
         if len({str(candidate_info.get("source_id")) for candidate_info in partners}) != 1:
             return None
         partner = partners[0]
-        audio_language = self._audio_language(ab).casefold().split("-")[0]
-        ebook_language = str(partner.get("language") or "").casefold().split("-")[0]
+        audio_language = language_key(self._audio_language(ab))
+        ebook_language = language_key(partner.get("language"))
         if audio_language and ebook_language and audio_language != ebook_language:
             return None
         match = self._match_from_pool(partner, 100.0)
@@ -2054,8 +2055,8 @@ class SuggestionsService:
         if len(partners) != 1:
             return None
         cand = next(iter(partners.values()))
-        ebook_language = str(ebook.get("language") or "").casefold().split("-")[0]
-        audio_language = str(cand.get("audio_language") or "").casefold().split("-")[0]
+        ebook_language = language_key(ebook.get("language"))
+        audio_language = language_key(cand.get("audio_language"))
         if ebook_language and audio_language and ebook_language != audio_language:
             return None
         if cand.get("bridge_key") and self.database_service.get_book(cand["bridge_key"]):

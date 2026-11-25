@@ -25,6 +25,7 @@ from flask import Blueprint, jsonify, request, send_file, g
 from flask.typing import ResponseReturnValue
 
 from src.api.booklore_client import BookloreClient
+from src.utils.language_key import language_key
 from src.api.hardcover_client import HardcoverClient
 from src.utils.cache_paths import safe_cache_path
 from src.utils.config_loader import env_truthy
@@ -1923,7 +1924,7 @@ def _bookorbit_edition_audio_candidate(epub_filename, doc_hash=None):
     if len(audio_ids) != 1 or _database_service.get_book(f"bookorbit:{audio_ids[0]}"):
         return None
     audio = client.get_book_by_id(int(audio_ids[0]), allow_refresh=False) or {}
-    languages = {str(info.get("language") or "").casefold().split("-")[0] for info in (ebook, audio)} - {""}
+    languages = {language_key(info.get("language")) for info in (ebook, audio)} - {""}
     if len(languages) > 1:
         return None
     return {"audio_source": "BookOrbit", "abs_id": audio_ids[0],
