@@ -53,6 +53,13 @@ Then **Save integrations**.
           SE_NODE_SESSION_TIMEOUT: "86400"  # Selenium ends an idle session after 300 seconds by default
         volumes:
           - chrome-profile:/home/seluser/Downloads
+        # The profile outlives the container, but Chrome's lock files name the old container,
+        # so after an image update Chrome refuses the profile. Clear them, then start as usual.
+        entrypoint: ["/bin/bash", "-c"]
+        command:
+          - |
+            find /home/seluser/Downloads -mindepth 2 -maxdepth 2 \( -name SingletonLock -o -name SingletonSocket -o -name SingletonCookie -o -name DevToolsActivePort \) -delete
+            exec /opt/bin/entry_point.sh
       refresher:
         image: ghcr.io/lyfts/goodreads-cookie-refresher:latest
         depends_on:
