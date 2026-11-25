@@ -7,6 +7,7 @@ today's answer: the higher row.
 """
 
 import hashlib
+import json
 import os
 import threading
 import time
@@ -105,7 +106,9 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
 
     # What each scenario answers for a latest-wins reader.
     expected = {"bridge_write": 0.40, "own_hash": 0.40, "during_cycle": 0.45, "before_save": 0.45,
-                "restart": 0.0}
+                "restart": 0.0, "resend": 0.40, "restart_resend": 0.0, "rewind_resend": 0.40,
+                "resend_markers_kept": True, "resend_during_cycle": (200, 0.40),
+                "resend_keeps_row_time": True}
 
     def test_an_older_higher_row_does_not_undo_a_newer_bridge_write(self):
         """The phone read hash B to 60%. An hour later ABS moved back to 40% and the
@@ -370,13 +373,192 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         answered = (r.get_json() or {}).get("percentage") if r.status_code == 200 else 0.0
         self.assertAlmostEqual(float(answered or 0.0), self.expected["restart"], places=4)
 
+    # KOReader pushes its position on every suspend, network disconnect and close,
+    # moved or not. KOReader floors the percentage to 4 decimals; another client may
+    # send more digits than the rows keep (6).
+    RESENT = 0.6012345678
+
+    def test_a_device_re_sending_its_position_does_not_undo_a_newer_bridge_write(self):
+        """The phone read hash B to 60%; an hour later ABS moved back to 40% and the
+        cycle wrote that to hash A. The phone then sleeps and re-sends its 60%."""
+        self._put(DOC_B, self.RESENT, PHONE)
+        self._aged(DOC_B, hours=1)
+        self._put(DOC_A, 0.40, BOT)
+        self._cycle_saves_state(0.40)
+        self._put(DOC_B, self.RESENT, PHONE)
+        self.assertAlmostEqual(self._get(DOC_A), self.expected["resend"], places=4)
+
+    def test_a_device_re_sending_its_position_does_not_outrank_a_newer_put(self):
+        """The Kobo read hash A to 60%; later the phone, on hash B, moved back to 40%.
+        The Kobo then sleeps and re-sends its 60%."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_B, 0.40, PHONE)
+        self._aged(DOC_B, minutes=30)
+        self._put(DOC_A, self.RESENT, KOBO)
+        self.assertAlmostEqual(self._get(DOC_B), self.expected["resend"], places=4)
+        self.assertAlmostEqual(self._get(DOC_A), self.expected["resend"], places=4)
+
+    def test_a_device_that_moved_is_newer_again(self):
+        """Same as above, but the Kobo turned a page: that is a new position."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_B, 0.40, PHONE)
+        self._aged(DOC_B, minutes=30)
+        self._put(DOC_A, 0.61, KOBO)
+        self.assertAlmostEqual(self._get(DOC_A), 0.61, places=4)
+
+    def test_a_re_send_does_not_undo_a_restart_answered_by_the_state(self):
+        """ABS restarted the book: the cycle pushed 0% to A (no locator) and saved the
+        State at 0%, which then answers. The phone sleeps and re-sends its old 60%."""
+        self._put(DOC_B, self.RESENT, PHONE)
+        self._aged(DOC_B, hours=1)
+        r = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.0, "progress": "", **BOT})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.db.save_state(State(abs_id=ABS_ID, client_name="kosync", percentage=0.0, xpath="",
+                                 last_updated=time.time(), user_id=self.user.id))
+        self._put(DOC_B, self.RESENT, PHONE)
+        r = self.client.get("/syncs/progress/" + DOC_A, headers=self._h())
+        answered = (r.get_json() or {}).get("percentage") if r.status_code == 200 else 0.0
+        self.assertAlmostEqual(float(answered or 0.0), self.expected["restart_resend"], places=4)
+
+    def test_a_re_send_does_not_undo_an_approved_rewind(self):
+        """The Kobo read A to 60% two hours ago, the phone B to 40% five minutes ago,
+        and the cycle saved an approved rewind to 40% four minutes ago: the State
+        answers. The Kobo then sleeps and re-sends its 60%."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=2)
+        self._put(DOC_B, 0.40, PHONE)
+        self._aged(DOC_B, minutes=5)
+        self._cycle_saves_state(0.40, locator_json=json.dumps(
+            {"kosync_approved_rewind_at": time.time() - 240}))
+        self.assertAlmostEqual(self._get(DOC_A), 0.40, places=4)
+        self._put(DOC_A, self.RESENT, KOBO)
+        self.assertAlmostEqual(self._get(DOC_A), self.expected["rewind_resend"], places=4)
+
+    def test_a_re_send_leaves_the_recent_device_put_markers_alone(self):
+        """The Kobo's move on A is the recent device PUT the sync cycle should see; the
+        phone's re-send on B must not replace it (on A, the book's own hash) or refresh B's."""
+        kosync_server._kosync_recent_external_puts.clear()
+        self._put(DOC_B, self.RESENT, PHONE)
+        self._aged(DOC_B, hours=1)
+        self._put(DOC_A, 0.40, KOBO)
+        before = {k: dict(v) for k, v in kosync_server._kosync_recent_external_puts.items()}
+        self._put(DOC_B, self.RESENT, PHONE)
+        after = {k: dict(v) for k, v in kosync_server._kosync_recent_external_puts.items()}
+        self.assertEqual(after == before, self.expected["resend_markers_kept"], (before, after))
+
+    def test_a_re_send_during_a_cycle_does_not_refuse_its_push(self):
+        """The cycle read, then the phone re-sent its old 60% on B, then the cycle pushed
+        40% to A: the re-send is no newer device progress, so the push lands."""
+        self._put(DOC_B, self.RESENT, PHONE)
+        self._aged(DOC_B, hours=1)
+        read_started_at = time.time()
+        self._put(DOC_B, self.RESENT, PHONE)
+        status = self._bot_put_status(0.40, read_started_at)
+        self._cycle_saves_state(0.40)
+        expected_status, expected_pct = self.expected["resend_during_cycle"]
+        self.assertEqual(status, expected_status)
+        self.assertAlmostEqual(self._get(DOC_A), expected_pct, places=4)
+
+    def test_a_re_send_still_writes_a_missing_state(self):
+        """With no KoSync State for the book (as for a first report), a re-send writes
+        it, so the cycle measures from the device's position, not from 0."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        with self.db.get_session() as s:
+            s.query(State).filter_by(abs_id=ABS_ID, client_name="kosync").delete()
+        self._put(DOC_A, self.RESENT, KOBO)
+        row_age = utcnow() - self.db.get_user_kosync_progress(DOC_A, self.user.id).timestamp
+        self.assertEqual(row_age > timedelta(minutes=50), self.expected["resend_keeps_row_time"])
+        state = self.db.get_state(ABS_ID, "kosync", user_id=self.user.id)
+        self.assertIsNotNone(state)
+        self.assertAlmostEqual(float(state.percentage), self.RESENT, places=4)
+
+    def test_a_cycle_saving_the_first_state_during_a_re_send_keeps_it(self):
+        """The reader has no KoSync State. A re-send comes in, and the sync cycle saves
+        its first State (40%) from its own thread just as the PUT looks for one: the
+        cycle's save lands after the re-send's, not before it to be written over."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        with self.db.get_session() as s:
+            s.query(State).filter_by(abs_id=ABS_ID, client_name="kosync").delete()
+        real_upsert, real_get_state = self.db.upsert_user_kosync_progress, self.db.get_state
+        rows_written, cycle = [], []
+
+        def upsert(*args, **kwargs):
+            rows_written.append(True)
+            return real_upsert(*args, **kwargs)
+
+        def get_state(abs_id, client_name, user_id=None):
+            state = real_get_state(abs_id, client_name, user_id=user_id)
+            if rows_written and client_name == "kosync" and state is None and not cycle:
+                cycle.append(threading.Thread(target=self._cycle_saves_state, args=(0.40,)))
+                cycle[0].start()
+                self.addCleanup(cycle[0].join, 5)
+                cycle[0].join(0.3)  # Lands now, unless the PUT holds the State lock.
+            return state
+
+        with patch.object(self.db, "upsert_user_kosync_progress", side_effect=upsert), \
+                patch.object(self.db, "get_state", side_effect=get_state):
+            self._put(DOC_A, self.RESENT, KOBO)
+        self.assertTrue(cycle)
+        cycle[0].join(5)
+        state = self.db.get_state(ABS_ID, "kosync", user_id=self.user.id)
+        self.assertAlmostEqual(float(state.percentage), 0.40, places=4)
+
+    def test_another_device_at_the_same_place_is_newer(self):
+        """A second Kobo opens copy A at exactly the first one's place: a new report."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_B, 0.40, PHONE)
+        self._aged(DOC_B, minutes=30)
+        self._put(DOC_A, self.RESENT, {"device": "Kobo 2", "device_id": "kobo-2"})
+        self.assertAlmostEqual(self._get(DOC_A), self.RESENT, places=4)
+
+    def test_the_same_place_at_another_percentage_is_newer(self):
+        """The Kobo reports its locator again with another percentage (a reflow)."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_B, 0.40, PHONE)
+        self._aged(DOC_B, minutes=30)
+        r = self.client.put("/syncs/progress", headers=self._h(), json={
+            "document": DOC_A, "percentage": 0.62,
+            "progress": "/body/DocFragment[60]/body/p[1].0", **KOBO})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertAlmostEqual(self._get(DOC_A), 0.62, places=4)
+
+    def test_a_re_send_keeps_the_shared_rows_time_without_accounts(self):
+        """An install without accounts keeps no per-user rows; the GET reads the shared
+        row of each hash, so a re-send keeps that row's time too."""
+        for name, value in (("get_user_kosync_progress", None),
+                            ("get_user_kosync_progress_for_book", []),
+                            ("upsert_user_kosync_progress", None)):
+            p = patch.object(self.db, name, return_value=value)
+            p.start()
+            self.addCleanup(p.stop)
+
+        def aged(doc, **ago):
+            with self.db.get_session() as s:
+                s.query(KosyncDocument).filter_by(document_hash=doc).update(
+                    {"timestamp": utcnow() - timedelta(**ago)})
+
+        self._put(DOC_A, self.RESENT, KOBO)
+        aged(DOC_A, hours=1)
+        self._put(DOC_B, 0.40, PHONE)
+        aged(DOC_B, minutes=30)
+        self._put(DOC_A, self.RESENT, KOBO)
+        self.assertAlmostEqual(self._get(DOC_A), self.expected["resend"], places=4)
+
 
 class TestFurthestWinsSiblingRows(TestLatestWinsSiblingRows):
     """Furthest-wins readers keep today's answers: the highest row wins."""
     snapshot_guard_enabled = False
 
     expected = {"bridge_write": 0.60, "own_hash": 0.60, "during_cycle": 0.45, "before_save": 0.45,
-                "restart": 0.60}
+                "restart": 0.60, "resend": 0.6012345678, "restart_resend": 0.6012345678,
+                "rewind_resend": 0.6012345678, "resend_markers_kept": False,
+                "resend_during_cycle": (200, 0.6012345678), "resend_keeps_row_time": False}
 
     def setUp(self):
         super().setUp()
