@@ -77,7 +77,8 @@ class SmilExtractor:
             logger.debug(f"Error checking media overlays: {e}")
             return False
 
-    def extract_transcript(self, epub_path: str, abs_chapters: List[Dict] = None, audio_offset: float = 0.0) -> List[Dict]:
+    def extract_transcript(self, epub_path: str, abs_chapters: List[Dict] = None, audio_offset: float = 0.0,
+                           *, verified_single_track: bool = False) -> List[Dict]:
         """
         Extract transcript from EPUB SMIL files.
         
@@ -116,8 +117,8 @@ class SmilExtractor:
                 self._register_all_overlay_ids(zf, smil_files)
 
                 # Detect timestamp mode
-                file_offsets = self._audio_file_offsets(zf, smil_files, abs_chapters)
-                timestamp_mode = 'per_audio_file' if file_offsets else self._detect_timestamp_mode(zf, smil_files)
+                file_offsets = None if verified_single_track else self._audio_file_offsets(zf, smil_files, abs_chapters)
+                timestamp_mode = 'absolute' if verified_single_track else 'per_audio_file' if file_offsets else self._detect_timestamp_mode(zf, smil_files)
                 logger.info(f"⚙️ Detected timestamp mode: {timestamp_mode}")
                 
                 if timestamp_mode == 'per_audio_file':

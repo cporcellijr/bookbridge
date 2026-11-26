@@ -335,7 +335,8 @@ class AudioTranscriber:
 
         return True, match_ratio
 
-    def transcribe_from_smil(self, abs_id: str, epub_path: Path, abs_chapters: list, full_book_text: str = None, progress_callback=None) -> Optional[list]:
+    def transcribe_from_smil(self, abs_id: str, epub_path: Path, abs_chapters: list, full_book_text: str = None,
+                             progress_callback=None, *, verified_single_track: bool = False) -> Optional[list]:
         """
         Attempts to extract a transcript directly from the EPUB's SMIL overlay data.
         Returns RAW SEGMENTS (list of dicts) if successful, None otherwise.
@@ -348,7 +349,8 @@ class AudioTranscriber:
         logger.info(f"⚡ Fast-Path: Extracting transcript from SMIL for {abs_id}...")
 
         try:
-            transcript = self.smil_extractor.extract_transcript(str(epub_path), abs_chapters)
+            kwargs = {"verified_single_track": True} if verified_single_track else {}
+            transcript = self.smil_extractor.extract_transcript(str(epub_path), abs_chapters, **kwargs)
             if not transcript:
                 return None
 
@@ -1439,4 +1441,3 @@ class AudioTranscriber:
         except Exception as e:
             logger.error(f"❌ {title_prefix}Error searching transcript '{transcript_path}': {e}", exc_info=True)
         return None
-
