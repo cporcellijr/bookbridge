@@ -275,6 +275,10 @@ def _process_batch_queue(queue_items):
             web._claim_book_for_user_id(web.get_current_user_id(), item['abs_id'])
             continue
 
+        if web._conflicting_audio_mapping(web.database_service.get_book_by_kosync_id(kosync_doc_id), item['abs_id']):
+            web.logger.warning("Batch Match skipped '%s': %s", web.sanitize_log_data(item['abs_id']), web._AUDIO_MATCH_CONFLICT)
+            continue
+
         item_details = clients.abs_client.get_item_details(item['abs_id'])
         chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
         storyteller_manifest = web.ingest_storyteller_transcripts(

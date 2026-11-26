@@ -1150,6 +1150,16 @@ from src.web.audio_source_adapters import (
 )
 
 
+_AUDIO_MATCH_CONFLICT = "This ebook is already linked to another audiobook. The existing link was not changed."
+
+
+def _conflicting_audio_mapping(candidate, target_id):
+    return bool(
+        isinstance(getattr(candidate, 'abs_id', None), str)
+        and candidate.abs_id != target_id and getattr(candidate, 'sync_mode', None) != 'ebook_only'
+    )
+
+
 from src.web import mapping_creation as _mapping_creation
 _mapping_creation._WEB_MODULE = sys.modules[__name__]
 from src.web.mapping_creation import (

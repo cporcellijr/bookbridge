@@ -134,10 +134,12 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.db_service.save_book(self.Book(
             abs_id="uuid-north", abs_title="Northern Reach", status="active",
             sync_mode="audiobook", ebook_source="BookOrbit", ebook_source_id="2182",
+            kosync_doc_id="c" * 32,
         ))
         self.db_service.save_book(self.Book(
             abs_id="uuid-salt", abs_title="Salt Marsh", status="active",
             sync_mode="audiobook", ebook_source="BookOrbit", ebook_source_id="2182",
+            kosync_doc_id="c" * 32,
         ))
 
         absorbed = self.db_service.absorb_duplicate_mapping(
