@@ -224,11 +224,15 @@ class AcquisitionService:
     @staticmethod
     def _delivered_title_matches(job: dict, candidate: dict) -> bool:
         """Whether the copy's title names the requested book (``SuggestionsService.same_book_title``),
-        knowing the copy's and the request's series."""
-        return SuggestionsService.same_book_title(
-            str(job.get("title") or ""), str(candidate.get("title") or ""),
-            series=[(item.get("series_name") or item.get("seriesName"),
-                     item.get("series_index", item.get("seriesIndex"))) for item in (candidate, job)],
+        knowing the copy's and the request's series. A copy whose subtitle is kept apart
+        (BookOrbit) also matches under its full "Title: Subtitle"."""
+        title = str(candidate.get("title") or "")
+        subtitle = str(candidate.get("subtitle") or "").strip()
+        series = [(item.get("series_name") or item.get("seriesName"),
+                   item.get("series_index", item.get("seriesIndex"))) for item in (candidate, job)]
+        return any(
+            SuggestionsService.same_book_title(str(job.get("title") or ""), name, series=series)
+            for name in ([title, f"{title}: {subtitle}"] if title and subtitle else [title])
         )
 
     @staticmethod
@@ -1167,6 +1171,7 @@ class AcquisitionService:
         candidate = {
             **identity,
             "title": detail.get("title") or "",
+            "subtitle": detail.get("subtitle") or "",
             "authors": BookOrbitClient._format_authors(detail.get("authors")),
             "series_name": series_name,
             "series_index": series_index,

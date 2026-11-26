@@ -658,6 +658,36 @@ class TestPhaseDArrivals(unittest.TestCase):
             explicit=True,
         ))
 
+    def test_bookorbit_arrival_reads_its_subtitle_as_part_of_the_title(self):
+        # Live 2026-11-26: BookOrbit filed the request title as "Title: Subtitle" but keeps the
+        # book's subtitle in its own field, so the bare title looked like a metadata conflict.
+        job = self.db.create_acquisition_job(
+            self.reader.id, "Short Title: The True Story of Someone", ["audiobook"],
+        )
+        receipt = self.add_receipt(
+            job, "audiobook", service="BookOrbit", status="in_progress",
+            remote_status="downloading", remote_id="request44",
+        )
+        self.bo.get_request.return_value = {"status": "available", "matchedBookId": 7264}
+        self.bo.get_book_detail.return_value = {
+            "id": 7264, "title": "Short Title", "subtitle": "The True Story of Someone",
+            "authors": [], "isbn13": "9780399584022",
+            "files": [{"id": "track-1", "format": "m4b", "role": "primary"}],
+        }
+
+        self.refresh()
+        saved = self.db.get_acquisition_job(self.reader.id, job["id"])
+        receipt = self.db.get_acquisition_request(self.reader.id, receipt["id"])
+        self.assertNotEqual(receipt["status"], "needs_look")
+        self.assertNotEqual(saved["audio_library_state"], "needs_review")
+        self.assertEqual((receipt["arrived_source"], receipt["arrived_source_id"]), ("BookOrbit", "7264"))
+
+    def test_bookorbit_subtitle_does_not_excuse_a_different_title(self):
+        job = {"title": "Short Title: The True Story of Someone"}
+        candidate = {"source": "BookOrbit", "source_id": "1", "title": "Short Title",
+                     "subtitle": "A Different Story"}
+        self.assertFalse(AcquisitionService._candidate_matches(job, candidate, explicit=True))
+
     def test_bookorbit_arrival_rejects_contradictory_request_and_detail_ids(self):
         job = self.db.create_acquisition_job(self.reader.id, "Title", ["audiobook"])
         receipt = self.add_receipt(job, "audiobook", service="BookOrbit", remote_id="request-1")
