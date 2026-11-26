@@ -657,10 +657,12 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         the PUT answers 200 and the State takes the position all the same."""
         self._put(DOC_A, 0.40, KOBO)
         locked = OperationalError("INSERT", {}, Exception("database is locked"))
-        with patch.object(self.db, "upsert_kosync_device_report", side_effect=locked):
+        with patch.object(self.db, "upsert_kosync_device_report", side_effect=locked),                 patch.object(kosync_server.logger, "warning") as warn:
             self._put(DOC_A, 0.62, KOBO)
         state = self.db.get_state(ABS_ID, "kosync", user_id=self.user.id)
         self.assertAlmostEqual(float(state.percentage), 0.62, places=4)
+        (kept,) = [c for c in warn.call_args_list if "Could not keep the last report" in c.args[0]]
+        self.assertIs(kept.kwargs.get("exc_info"), True)
 
     def test_a_device_back_where_it_was_after_a_report_it_could_not_keep_is_newer(self):
         """The Kobo reported 40%, then 95%, whose report could not be kept (locked): the
@@ -681,9 +683,13 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         self._put(DOC_A, 0.40, {"device": "Kobo 2", "device_id": "kobo-2"})
         self._aged(DOC_A, minutes=30)
         locked = OperationalError("SELECT", {}, Exception("database is locked"))
-        with patch.object(self.db, "get_kosync_device_report", side_effect=locked):
+        with patch.object(self.db, "get_kosync_device_report", side_effect=locked),                 patch.object(kosync_server.logger, "warning") as warn:
             self._put(DOC_A, self.RESENT, KOBO)
         self.assertAlmostEqual(self._get(DOC_A), self.RESENT, places=4)
+        read = [c for c in warn.call_args_list if "Could not read the last report" in c.args[0]]
+        # Furthest-wins never looks for a re-send, so only latest-wins reads the report.
+        self.assertEqual(len(read), 1 if type(self) is TestLatestWinsSiblingRows else 0)
+        self.assertTrue(all(c.kwargs.get("exc_info") is True for c in read))
 
     def test_deleting_a_books_kosync_data_forgets_the_devices_last_reports(self):
         """KoSync progress must not outlive a mapping (#358): nor may the last reports. The

@@ -2035,7 +2035,8 @@ def _resent_over_newer_report(user_id, doc_hash: str, device_id, progress, perce
     try:
         last = _database_service.get_kosync_device_report(doc_hash, device_id, user_id)
     except Exception as e:
-        logger.warning("KOSync: Could not read the last report of '%s' for doc %s: %s", device_id, doc_hash, e)
+        logger.warning("KOSync: Could not read the last report of '%s' for doc %s: %s", device_id, doc_hash, e,
+                       exc_info=True)
         return False
     if last is None or last[0] != str(progress or "") or abs(last[1] - float(percentage)) >= 1e-6:
         return False
@@ -2058,7 +2059,8 @@ def _record_device_report(user_id, doc_hash: str, device_id, progress, percentag
             _database_service.upsert_kosync_device_report(doc_hash, device_id, str(progress or ""),
                                                           float(percentage), user_id)
         except Exception as e:
-            logger.warning("KOSync: Could not keep the last report of '%s' for doc %s: %s", device_id, doc_hash, e)
+            logger.warning("KOSync: Could not keep the last report of '%s' for doc %s: %s", device_id, doc_hash, e,
+                           exc_info=True)
 
 
 def _forward_reading_threshold() -> float:
