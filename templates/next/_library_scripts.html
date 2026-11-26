@@ -1444,13 +1444,24 @@
                     .map(selector => cover?.querySelector(selector)).filter(Boolean)
                     .map(node => node.cloneNode(true));
                 heroCover.replaceChildren(...coverNodes);
-                // The Hero is already visible. If this grid cover is still
-                // waiting for a thumbnail, use the EPUB cover immediately.
+                // The cover loader observes grid images only once at page load.
+                // A new hero clone has not been observed, so resolve its pending
+                // thumb without ever loading the full original unnecessarily.
                 const pendingThumb = heroCover.querySelector?.('img[data-thumb-url]');
                 if (pendingThumb && !pendingThumb.getAttribute('src')) {
-                    pendingThumb.loading = 'eager';
-                    pendingThumb.addEventListener('load', () => { pendingThumb.hidden = false; }, {once: true});
-                    pendingThumb.src = pendingThumb.dataset.thumbUrl.replace('/covers/thumb/', '/covers/');
+                    const url = pendingThumb.dataset.thumbUrl;
+                    fetch(url, {method: 'HEAD', credentials: 'same-origin', cache: 'no-store'})
+                        .then(response => {
+                            if (!pendingThumb.isConnected) return;
+                            pendingThumb.loading = 'eager';
+                            pendingThumb.addEventListener('load', () => { pendingThumb.hidden = false; }, {once: true});
+                            if (response.status === 200) pendingThumb.src = url;
+                            else if (response.status === 404) pendingThumb.dispatchEvent(new Event('error'));
+                            else pendingThumb.src = url.replace('/covers/thumb/', '/covers/');
+                        })
+                        .catch(() => {
+                            if (pendingThumb.isConnected) pendingThumb.src = url.replace('/covers/thumb/', '/covers/');
+                        });
                 }
                 heroFitCover();
                 heroRoot.dataset.absId = String(row.abs_id);
