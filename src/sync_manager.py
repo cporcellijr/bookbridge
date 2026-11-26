@@ -62,6 +62,7 @@ from src.utils.source_fingerprint import AcquiredPaths, SourceAudioChanged, veri
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger, redact_url_secrets
 from src.utils.progress_metadata import state_metadata_kwargs
 from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename, normalize_href
+from src.utils.verified_smil_audio import audio_matches_single_embedded_track, embedded_audio
 from src.utils.fixed_page_progress import coerce_page, is_cbz_book, is_cbz_filename
 from src.utils.ebook_sources import (
     is_grimmory_source,
@@ -4111,13 +4112,44 @@ class SyncManager:
                 else:
                     logger.info(f"Storyteller manifest unavailable for '{abs_id}', falling back to SMIL/Whisper")
 
+            # A single byte-identical embedded track already gives us the
+            # selected audiobook's clock. Do not re-align the recording with CTC
+            # or infer chapter offsets in this case. Still validate the overlays
+            # and build the character map used by the sync clients.
+            verified_smil_clock = False
+            if not direct_aligned and self.alignment_service and len(embedded_audio(epub_path)) == 1:
+                try:
+                    ensure_active()
+                    ctc_local_paths = self._ctc_local_audio_paths(audio_adapter, audio_source_id, abs_id)
+                    verified_smil_clock = bool(
+                        ctc_local_paths and len(ctc_local_paths) == 1
+                        and audio_matches_single_embedded_track(epub_path, ctc_local_paths[0])
+                    )
+                    if verified_smil_clock:
+                        overlay_segments = self.transcriber.transcribe_from_smil(
+                            abs_id, epub_path, chapters, full_book_text=book_text,
+                            verified_single_track=True,
+                        )
+                        ensure_active()
+                        verify_unchanged(abs_id, getattr(ctc_local_paths, "fingerprints", None), "using embedded audio clock")
+                        if overlay_segments and self.alignment_service.align_and_store(
+                            abs_id, overlay_segments, book_text, spine_chapters
+                        ):
+                            direct_aligned = True
+                            transcript_source = "smil"
+                            update_progress(1.0, 2)
+                except (TranscriptionCancelled, SourceAudioChanged):
+                    raise
+                except Exception:
+                    logger.debug("Could not use verified EPUB audio clock for '%s'", abs_id, exc_info=True)
+
             # A read-along EPUB (Storyteller, storyalign) already carries SMIL timings for
             # this text. With SMIL_SKIP_CTC on, timings with no slips are the map, so
             # neither CTC pass runs; CTC would spend hours of CPU deriving the same timings.
             # It only chooses between the SMIL timings and CTC, so without CTC it changes nothing.
             smil_first = AlignmentService.ctc_enabled() and AlignmentService.smil_skip_ctc_enabled()
             smil_trusted = False
-            if smil_first and not direct_aligned and hasattr(self.transcriber, 'transcribe_from_smil'):
+            if smil_first and not verified_smil_clock and not direct_aligned and hasattr(self.transcriber, 'transcribe_from_smil'):
                 raw_transcript = self.transcriber.transcribe_from_smil(
                     abs_id, epub_path, chapters,
                     full_book_text=book_text,
@@ -4134,7 +4166,7 @@ class SyncManager:
             # needs local files to decode).
             if not direct_aligned and not smil_trusted and AlignmentService.ctc_enabled():
                 try:
-                    ctc_local_paths = self._ctc_local_audio_paths(audio_adapter, audio_source_id, abs_id)
+                    ctc_local_paths = ctc_local_paths or self._ctc_local_audio_paths(audio_adapter, audio_source_id, abs_id)
                     if ctc_local_paths:
                         # First pass: succeeds directly for short books, and for a Remap
                         # (existing map -> chunk boundaries). A new long book has no prior
@@ -4159,7 +4191,7 @@ class SyncManager:
                     logger.warning(f"CTC alignment failed for '{abs_id}': {ctc_err}", exc_info=True)
 
             # Attempt SMIL extraction
-            if not smil_first and not direct_aligned and hasattr(self.transcriber, 'transcribe_from_smil'):
+            if not verified_smil_clock and not smil_first and not direct_aligned and hasattr(self.transcriber, 'transcribe_from_smil'):
                   raw_transcript = self.transcriber.transcribe_from_smil(
                       abs_id, epub_path, chapters,
                       full_book_text=book_text,
