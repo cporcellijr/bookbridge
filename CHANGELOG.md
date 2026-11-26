@@ -59,8 +59,12 @@ All notable changes to BookBridge will be documented in this file.
 - **A KOReader device going to sleep no longer undoes a newer position.** With furthest-wins off, KOReader
   re-sends its last position on every sleep, disconnect and close; BookBridge now treats a repeat of the same
   position from the same device as a re-send, so it no longer outranks a place you reached since on another
-  copy or in another app. A **Push progress** without turning a page counts as a re-send too.
-  Contributed by [@jucor](https://github.com/jucor) in #619.
+  copy or in another app. A **Push progress** without turning a page counts as a re-send too, unless the
+  device runs Bridge Sync 0.9.14 (see below). Contributed by [@jucor](https://github.com/jucor) in #619.
+- **A re-sent position no longer undoes a more recent one on the same copy.** With furthest-wins off, a
+  KOReader device re-sending its last position no longer overrides a more recent write to that copy by the
+  sync cycle, another device or **Clear position**. A **Push progress** still counts: update the Bridge Sync
+  plugin on each device (0.9.14) to get this. Contributed by [@jucor](https://github.com/jucor) in #630.
 - **StoryGraph updates no longer fail as "session expired" while Test passes.** Status, progress and
   edition changes now send the session StoryGraph re-issues with each page, which its form check requires.
   Contributed by [@jeffhammett](https://github.com/jeffhammett) in #620.
