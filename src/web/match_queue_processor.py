@@ -284,6 +284,23 @@ def _process_batch_queue(queue_items):
         )
         transcript_source = web._storyteller_transcript_source(storyteller_uuid, storyteller_manifest)
 
+        resolved_status = "pending"
+        if current_book_entry is not None:
+            web._preserve_or_reset_mapping_status(
+                current_book_entry,
+                kosync_doc_id=kosync_doc_id,
+                ebook_filename=ebook_filename,
+                audio_source_id=item['abs_id'],
+                storyteller_uuid=storyteller_uuid or None,
+                ebook_source=item.get('ebook_source'),
+                ebook_source_id=item.get('ebook_source_id'),
+            )
+            resolved_status = current_book_entry.status or "pending"
+            if resolved_status == "active":
+                storyteller_manifest = storyteller_manifest or current_book_entry.transcript_file
+                transcript_source = transcript_source or current_book_entry.transcript_source
+                storyteller_uuid = storyteller_uuid or current_book_entry.storyteller_uuid
+
         # Create Book object and save to database service
         book = Book(
             abs_id=item['abs_id'],
@@ -297,7 +314,7 @@ def _process_batch_queue(queue_items):
             ebook_filename=ebook_filename,
             kosync_doc_id=kosync_doc_id,
             transcript_file=storyteller_manifest,
-            status="pending",
+            status=resolved_status,
             duration=duration,
             transcript_source=transcript_source,
             storyteller_uuid=storyteller_uuid or None,
