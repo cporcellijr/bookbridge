@@ -152,6 +152,23 @@ def test_concurrent_requests_extract_once(tmp_path, monkeypatch):
     assert parser.extract_cover.call_count == 1
 
 
+def test_cover_falls_back_to_original_epub_filename_after_rename(tmp_path, monkeypatch):
+    import src.web_server as web
+
+    source, target = tmp_path / 'original.epub', tmp_path / 'abc.jpg'
+    make_epub(source, '<item id="art" href="images/art.jpg" media-type="image/jpeg" properties="cover-image"/>')
+    parser = EbookParser(str(tmp_path))
+    monkeypatch.setattr(web, 'COVERS_DIR', tmp_path, raising=False)
+    monkeypatch.setattr(web, 'database_service', SimpleNamespace(
+        get_book_by_kosync_id=lambda _: SimpleNamespace(
+            ebook_filename='renamed.epub', original_ebook_filename='original.epub')), raising=False)
+    monkeypatch.setattr(web, 'container', SimpleNamespace(ebook_parser=lambda: parser), raising=False)
+    monkeypatch.setattr(web, '_cover_fresh_until', {})
+    monkeypatch.setattr(web, '_send_cover_cached', lambda _: target.read_bytes())
+
+    assert web.serve_cover('abc.jpg') == b'cover bytes'
+
+
 def test_cached_cover_does_not_wait_for_colliding_cold_request(tmp_path, monkeypatch):
     from src.web.routes import covers
 
