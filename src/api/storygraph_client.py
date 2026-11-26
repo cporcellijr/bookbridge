@@ -86,6 +86,10 @@ def _classify_format(text: str) -> tuple[str, bool]:
 logger = logging.getLogger(__name__)
 
 
+# Editions pages searched for the one on your lists before automatch falls back to its own pick.
+SHELVED_EDITION_MAX_PAGES = 5
+
+
 class StorygraphClient:
     """StoryGraph client using unofficial web endpoints + session cookies."""
 
@@ -381,10 +385,12 @@ class StorygraphClient:
     def book_url(self, book_id: str) -> str:
         return f"{self.base_url}/books/{book_id}"
 
-    def get_book_editions(self, book_id: str) -> list[dict]:
+    def get_book_editions(self, book_id: str, page: int = 1) -> list[dict]:
         """
-        Fetches all editions for a book.
-        Returns a list of dicts with: id, book_id, title, format, pages, audio_seconds, is_audio, language.
+        Fetches one page of a book's editions (StoryGraph lists them a page at a time).
+        Returns a list of dicts with: id, book_id, title, format, pages, audio_seconds, is_audio, language,
+        and status_id: your reading status for that edition (see _parse_status_id), or None when it isn't
+        on your lists.
 
         Mirrors the Lua plugin's findEditions: format from .edition-info p "Format: X" labels,
         pages/duration from p.text-xs.font-light.
@@ -392,7 +398,8 @@ class StorygraphClient:
         if not book_id:
             return []
 
-        resp = self._request(f"/books/{book_id}/editions")
+        path = f"/books/{book_id}/editions" + (f"?page={int(page)}" if page and int(page) > 1 else "")
+        resp = self._request(path)
         if not resp or resp.status_code != 200:
             return []
 
@@ -440,6 +447,10 @@ class StorygraphClient:
                 if is_audio:
                     audio_seconds = _parse_audio_seconds(detail_text)
 
+            # An edition on your lists shows its status label; others show the "add" buttons.
+            status_label = pane.select_one(".read-status-label")
+            status_id = self._parse_status_id(status_label.get_text(" ", strip=True)) if status_label else None
+
             editions.append({
                 "id": ed_id,
                 "book_id": ed_id,
@@ -449,15 +460,74 @@ class StorygraphClient:
                 "audio_seconds": audio_seconds,
                 "is_audio": is_audio,
                 "language": language,
+                "status_id": status_id,
             })
 
         return editions
 
+    def find_shelved_edition(self, book_id: str, first_page: Optional[list] = None,
+                             max_pages: int = SHELVED_EDITION_MAX_PAGES) -> Optional[dict]:
+        """The edition of this book that is already on your StoryGraph lists, or None.
+
+        Linking that edition keeps your reading history in one place: posting to any other edition
+        adds the book to your lists a second time. `first_page` reuses an editions page already fetched.
+        """
+        seen = set()
+        for page in range(1, max_pages + 1):
+            editions = first_page if page == 1 and first_page is not None else self.get_book_editions(book_id, page)
+            ids = {e.get("id") for e in editions or []}
+            if not editions or ids <= seen:  # past the last page
+                return None
+            seen |= ids
+            for edition in editions:
+                if edition.get("status_id"):
+                    return edition
+        return None
+
+    def get_reading_status(self, book_id: str) -> tuple[bool, Optional[int]]:
+        """(read_ok, status_id) for one book: status_id is None when it isn't on your lists."""
+        user_book = self.get_user_book(book_id)
+        if not user_book:
+            return False, None
+        return True, user_book.get("status_id")
+
+    def add_to_read_if_untracked(self, book_id: str) -> bool:
+        """Put a newly linked book on To Read, unless it is already on one of your lists.
+
+        Linking used to set To Read unconditionally, which moved books you had read or were reading
+        back to To Read. If the status can't be read, nothing is changed."""
+        ok, status_id = self.get_reading_status(book_id)
+        if not ok:
+            logger.warning("StoryGraph: could not read the status of %s; not setting To Read", book_id)
+            return False
+        if status_id:
+            logger.info("StoryGraph: %s is already on your lists (status %s); status left as is", book_id, status_id)
+            return True
+        return self.update_status(book_id, 1)
+
     def switch_edition(self, from_book_id: str, to_book_id: str) -> bool:
         """
-        Switches the currently tracked edition on StoryGraph.
+        Switches the currently tracked edition on StoryGraph, moving your reading status and history
+        from one edition to the other.
+
+        Only switches when there is something to move: the "from" edition is on your lists and the
+        "to" edition isn't. Otherwise StoryGraph would copy the empty state of an edition you don't have
+        over the one you do. Returns True when nothing needed switching.
         """
         if not from_book_id or not to_book_id or from_book_id == to_book_id:
+            return True
+
+        to_ok, to_status = self.get_reading_status(to_book_id)
+        from_ok, from_status = self.get_reading_status(from_book_id) if to_ok and not to_status else (to_ok, None)
+        if not (to_ok and from_ok):
+            logger.warning("StoryGraph: could not read edition statuses; not switching %s -> %s",
+                           from_book_id, to_book_id)
+            return False
+        if to_status:
+            logger.info("StoryGraph: %s is already on your lists; not switching editions", to_book_id)
+            return True
+        if not from_status:
+            logger.info("StoryGraph: %s isn't on your lists; no edition switch needed", from_book_id)
             return True
 
         # First get the editions page to extract a fresh CSRF token

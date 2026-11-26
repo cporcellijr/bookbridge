@@ -2793,7 +2793,8 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(saved_details.isbn, '1234567890')
         self.assertEqual(saved_details.asin, 'B000123')
         self.assertEqual(saved_details.matched_by, 'manual')
-        self.mock_storygraph_client.update_status.assert_called_once_with('sg-1', 1)
+        self.mock_storygraph_client.add_to_read_if_untracked.assert_called_once_with('sg-1')
+        self.mock_storygraph_client.update_status.assert_not_called()
 
     def test_link_storygraph_saves_selected_edition_and_pages(self):
         from src.db.models import Book
@@ -2832,7 +2833,8 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(saved_details.isbn, '1234567890')
         self.assertEqual(saved_details.asin, 'B000123')
         self.assertEqual(saved_details.matched_by, 'manual')
-        self.mock_storygraph_client.update_status.assert_called_once_with('ed-2', 1)
+        self.mock_storygraph_client.add_to_read_if_untracked.assert_called_once_with('ed-2')
+        self.mock_storygraph_client.update_status.assert_not_called()
 
     def test_link_storygraph_saves_audio_edition_as_pages_sentinel(self):
         from src.db.models import Book
@@ -2868,7 +2870,8 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(saved_details.storygraph_pages, -1)
         self.assertEqual(saved_details.storygraph_url, 'https://app.thestorygraph.com/books/sg-3')
         self.assertEqual(saved_details.matched_by, 'manual')
-        self.mock_storygraph_client.update_status.assert_called_once_with('ed-3', 1)
+        self.mock_storygraph_client.add_to_read_if_untracked.assert_called_once_with('ed-3')
+        self.mock_storygraph_client.update_status.assert_not_called()
 
     def test_clear_stale_suggestions_api(self):
         """Test the clear-stale-suggestions API endpoint."""

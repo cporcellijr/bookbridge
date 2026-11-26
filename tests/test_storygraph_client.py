@@ -495,7 +495,9 @@ class TestStorygraphRotatedSession(unittest.TestCase):
         mock_get.return_value = self._page(_storygraph_session="rotated-session")
         mock_post.return_value = Mock(status_code=200, headers={})
 
-        self.assertTrue(self.client.switch_edition("book-1", "book-2"))
+        # book-2 (the target) isn't on your lists; book-1 is currently reading.
+        with patch.object(self.client, "get_user_book", side_effect=[{"status_id": None}, {"status_id": 2}]):
+            self.assertTrue(self.client.switch_edition("book-1", "book-2"))
 
         self.assertIn("_storygraph_session=rotated-session", self._posted_cookie(mock_post))
 
@@ -510,6 +512,116 @@ class TestStorygraphRotatedSession(unittest.TestCase):
         cookie = self._posted_cookie(mock_post)
         self.assertIn("_storygraph_session=saved-session", cookie)
         self.assertIn("remember_user_token=saved-remember", cookie)
+
+
+
+def _edition_pane(ed_id, status=None, fmt="Hardcover"):
+    """An editions-page pane; one on your lists shows its status label, others the add buttons."""
+    if status:
+        status_html = f'<button class="read-status-label text-xs" title="Book marked as {status}">{status}</button>'
+    else:
+        status_html = '<button class="btn-dropdown read-status-button" aria-label="Add to your To-Read Pile">to read</button>'
+    return f"""
+    <div class="book-pane" data-book-id="{ed_id}">
+        <div class="book-title-author-and-series"><h3><a href="/books/{ed_id}">Example Book</a></h3></div>
+        <div class="edition-info"><p>Format: {fmt}</p><p>Language: English</p></div>
+        <p class="text-xs font-light">604 pages</p>
+        {status_html}
+    </div>"""
+
+
+class TestStorygraphKeepsYourEdition(unittest.TestCase):
+    """Linking must not move a book you track to another edition, or back to To Read."""
+
+    def setUp(self):
+        self.env_patcher = patch.dict(
+            os.environ,
+            {"STORYGRAPH_ENABLED": "true", "STORYGRAPH_SESSION_COOKIE": "session",
+             "STORYGRAPH_REMEMBER_USER_TOKEN": "remember"},
+            clear=False,
+        )
+        self.env_patcher.start()
+        self.client = StorygraphClient()
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
+    @patch("src.api.storygraph_client.requests.get")
+    def test_editions_carry_your_status(self, mock_get):
+        mock_get.return_value = Mock(status_code=200, headers={},
+                                     text=_edition_pane("ed-1") + _edition_pane("ed-2", "read"))
+
+        editions = self.client.get_book_editions("book-1")
+
+        self.assertEqual([e["status_id"] for e in editions], [None, 3])
+
+    @patch("src.api.storygraph_client.requests.get")
+    def test_editions_page_number_is_requested(self, mock_get):
+        mock_get.return_value = Mock(status_code=200, headers={}, text=_edition_pane("ed-1"))
+
+        self.client.get_book_editions("book-1", page=2)
+
+        self.assertTrue(mock_get.call_args.args[0].endswith("/books/book-1/editions?page=2"))
+
+    def test_find_shelved_edition_looks_past_the_first_page(self):
+        pages = {1: [{"id": "ed-1", "status_id": None}], 2: [{"id": "ed-2", "status_id": 2}]}
+        with patch.object(self.client, "get_book_editions", side_effect=lambda b, p: pages.get(p, [])):
+            found = self.client.find_shelved_edition("book-1")
+
+        self.assertEqual(found["id"], "ed-2")
+
+    def test_find_shelved_edition_stops_at_the_last_page(self):
+        # A page number past the end returns the last page again on some sites; stop either way.
+        with patch.object(self.client, "get_book_editions", return_value=[{"id": "ed-1", "status_id": None}]) as get:
+            self.assertIsNone(self.client.find_shelved_edition("book-1"))
+
+        self.assertEqual(get.call_count, 2)
+
+    def test_find_shelved_edition_reuses_the_first_page(self):
+        first = [{"id": "ed-1", "status_id": 3}]
+        with patch.object(self.client, "get_book_editions") as get:
+            self.assertEqual(self.client.find_shelved_edition("book-1", first_page=first)["id"], "ed-1")
+
+        get.assert_not_called()
+
+    @patch("src.api.storygraph_client.requests.post")
+    def test_switch_skipped_when_you_already_track_the_target(self, mock_post):
+        with patch.object(self.client, "get_user_book", return_value={"status_id": 3}):
+            self.assertTrue(self.client.switch_edition("their-pick", "your-edition"))
+
+        mock_post.assert_not_called()
+
+    @patch("src.api.storygraph_client.requests.post")
+    def test_switch_skipped_when_the_old_edition_is_not_on_your_lists(self, mock_post):
+        # This is the case that reset books to To Read: an empty edition copied over yours.
+        with patch.object(self.client, "get_user_book", side_effect=[{"status_id": None}, {"status_id": None}]):
+            self.assertTrue(self.client.switch_edition("not-yours", "new-pick"))
+
+        mock_post.assert_not_called()
+
+    @patch("src.api.storygraph_client.requests.post")
+    def test_switch_skipped_when_status_cannot_be_read(self, mock_post):
+        with patch.object(self.client, "get_user_book", return_value=None):
+            self.assertFalse(self.client.switch_edition("book-1", "book-2"))
+
+        mock_post.assert_not_called()
+
+    def test_to_read_only_for_a_book_not_on_your_lists(self):
+        for status_id, expect_update in ((None, True), (2, False), (3, False)):
+            with self.subTest(status_id=status_id), \
+                    patch.object(self.client, "get_user_book", return_value={"status_id": status_id}), \
+                    patch.object(self.client, "update_status", return_value=True) as update:
+                self.assertTrue(self.client.add_to_read_if_untracked("book-1"))
+                self.assertEqual(update.called, expect_update)
+                if expect_update:
+                    update.assert_called_once_with("book-1", 1)
+
+    def test_to_read_not_set_when_status_cannot_be_read(self):
+        with patch.object(self.client, "get_user_book", return_value=None), \
+                patch.object(self.client, "update_status") as update:
+            self.assertFalse(self.client.add_to_read_if_untracked("book-1"))
+
+        update.assert_not_called()
 
 
 if __name__ == "__main__":
