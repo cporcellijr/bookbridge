@@ -15,6 +15,7 @@ from src.utils.file_transfers import (
     IncompleteTransferError,
     response_declares_size,
     stream_response_to_path,
+    fingerprint_response,
 )
 from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.ebook_sources import (
@@ -2543,6 +2544,14 @@ class BookloreClient:
         return False
 
     def download_audiobook_track(self, book_id, track_index, output_path):
+        return self._read_audiobook_track(book_id, track_index, lambda response: stream_response_to_path(
+            response, output_path, expected_size=response_declares_size(response),
+        ))
+
+    def fingerprint_audiobook_track(self, book_id, track_index):
+        return self._read_audiobook_track(book_id, track_index, fingerprint_response) or None
+
+    def _read_audiobook_track(self, book_id, track_index, consume):
         token = self._get_fresh_token()
         if not token:
             return False
@@ -2557,16 +2566,14 @@ class BookloreClient:
                         f"track_index={track_index} status={response.status_code}"
                     )
                     return False
-                expected_size = response_declares_size(response)
                 try:
-                    return stream_response_to_path(response, output_path, expected_size=expected_size)
+                    return consume(response)
                 except IncompleteTransferError as e:
                     logger.error(
                         "❌ Grimmory audiobook track download truncated: book_id=%s track_index=%s "
-                        "path=%s got=%s expected=%s",
+                        "got=%s expected=%s",
                         book_id,
                         track_index,
-                        output_path,
                         e.actual_size,
                         e.expected_size if e.expected_size is not None else "unknown",
                         exc_info=True,
