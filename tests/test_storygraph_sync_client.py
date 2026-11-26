@@ -19,6 +19,7 @@ class TestStorygraphSyncClient(unittest.TestCase):
         self.client.resolve_book.return_value = {"book_id": "sg-1"}
         self.client.update_status.return_value = True
         self.client.update_progress.return_value = True
+        self.client.find_shelved_edition.return_value = None
 
         self.abs_client = Mock()
         self.abs_client.get_item_details.return_value = {
@@ -114,7 +115,30 @@ class TestStorygraphSyncClient(unittest.TestCase):
         self.assertEqual(saved_details.storygraph_pages, 320)
         self.assertEqual(saved_details.matched_by, "automatch")
         self.client.switch_edition.assert_called_once_with("sg-1", "ed-1")
-        self.client.update_status.assert_called_once_with("ed-1", 1)
+        self.client.add_to_read_if_untracked.assert_called_once_with("ed-1")
+        self.client.update_status.assert_not_called()
+
+    def test_automatch_links_the_edition_already_on_your_lists(self):
+        editions = [
+            {"id": "ed-1", "book_id": "ed-1", "format": "Paperback", "pages": 320, "is_audio": False,
+             "status_id": None},
+            {"id": "ed-yours", "book_id": "ed-yours", "format": "Hardcover", "pages": 604, "is_audio": False,
+             "status_id": 3},
+        ]
+        self.client.resolve_book.return_value = {"book_id": "sg-1"}
+        self.client.get_book_editions.return_value = editions
+        self.client.find_shelved_edition.return_value = editions[1]
+
+        self.sync._automatch_storygraph(_Book())
+
+        saved_details = self.database_service.save_storygraph_details.call_args.args[0]
+        self.assertEqual(saved_details.storygraph_book_id, "sg-1")
+        self.assertEqual(saved_details.storygraph_edition_id, "ed-yours")
+        self.assertEqual(saved_details.storygraph_pages, 604)
+        self.client.find_shelved_edition.assert_called_once_with("sg-1", first_page=editions)
+        self.client.switch_edition.assert_not_called()  # nothing to move: it's already yours
+        self.client.update_status.assert_not_called()  # and it isn't moved back to To Read
+        self.client.add_to_read_if_untracked.assert_not_called()
 
 
 if __name__ == "__main__":
