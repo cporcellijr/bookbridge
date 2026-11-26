@@ -114,6 +114,10 @@ def _create_or_update_library_audio_mapping(
     if not kosync_doc_id:
         return None, "Could not compute KOSync ID for ebook", 404
 
+    if web._conflicting_audio_mapping(web.database_service.get_book_by_kosync_id(kosync_doc_id),
+                                      existing_book.abs_id if existing_book else bridge_key):
+        return None, web._AUDIO_MATCH_CONFLICT, 409
+
     from src.db.models import Book
 
     default_cover = (

@@ -413,6 +413,8 @@ def match():
 
         # [DUPLICATE MERGE] Check if this ebook is already linked to another ABS ID (e.g. ebook-only entry)
         existing_book = web.database_service.get_book_by_kosync_id(kosync_doc_id)
+        if web._conflicting_audio_mapping(existing_book, abs_id):
+            return web._AUDIO_MATCH_CONFLICT, 409
         if existing_book and existing_book.abs_id != abs_id and not web._may_absorb_mapping(existing_book.abs_id):
             return web._FOREIGN_MAPPING_MESSAGE, 403
         access = web._existing_mapping_access(

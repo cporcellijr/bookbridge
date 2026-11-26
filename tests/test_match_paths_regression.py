@@ -203,6 +203,18 @@ class TestMatchPathsRegression(unittest.TestCase):
             web_server.reset_current_user_id(token)
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
+    def test_match_rejects_existing_bookorbit_audio_without_replacing_it(self, _mock_hash):
+        from src.db.models import Book
+
+        db = self.mock_container.mock_database_service
+        db.get_book_by_kosync_id.return_value = Book(abs_id="bookorbit:42", audio_source="BookOrbit")
+        result = self.client.post("/match", data={"audiobook_id": "ab-1", "ebook_filename": "book.epub"})
+        self.assertEqual(result.status_code, 409)
+        db.save_book.assert_not_called()
+        db.migrate_book_data.assert_not_called()
+        db.delete_book.assert_not_called()
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
     def test_match_route_creates_mapping(self, _mock_kosync):
         response = self.client.post(
             "/match",
@@ -228,6 +240,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.mock_container.mock_booklore_client.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
 
     def _merge_into_audiobook(self, existing):
+        existing.sync_mode = "ebook_only"
         db = self.mock_container.mock_database_service
         db.get_book_by_kosync_id.return_value = existing
         with patch("src.web_server.get_kosync_id_for_ebook", return_value="e0262d5cceb927d0aa"):
