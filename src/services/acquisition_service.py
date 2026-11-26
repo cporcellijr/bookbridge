@@ -578,6 +578,13 @@ class AcquisitionService:
                 continue
             # A reader-selected half needs revalidation just like a provider arrival.
             candidates, errors = search_reader_library(clients, kind, job["title"])
+            handles = {(r.get("arrived_source"), r.get("arrived_source_id")) for r in confirmed}
+            short_title = str(job["title"]).split(":", 1)[0].strip()
+            if (has_confirmed_handle and short_title and short_title != str(job["title"]).strip()
+                    and not any((hit.get("source"), hit.get("source_id")) in handles for hit in candidates)):
+                # A library that files the subtitle apart finds the confirmed copy only by its short title.
+                more, _ = search_reader_library(clients, kind, short_title)
+                candidates += [hit for hit in more if (hit.get("source"), hit.get("source_id")) in handles]
             eligible = []
             receipt_eligible = []
             saved_conflict = False

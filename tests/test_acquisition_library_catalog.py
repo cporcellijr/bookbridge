@@ -184,3 +184,21 @@ def test_abs_ebook_detail_failure_is_not_a_successful_empty_file_list():
             [], {"ABS": "catalog_unavailable"},
         )
         assert search_reader_library(clients, "ebook", "Title") == ([], {})
+
+
+def test_bookorbit_candidates_carry_the_subtitle_bookorbit_keeps_apart():
+    bo = MagicMock()
+    bo.is_configured.return_value = True
+    bo.search_ebooks.return_value = [{"id": 13, "title": "Short Title"}]
+    bo.get_book_detail.return_value = {
+        "title": "Short Title", "subtitle": "The True Story of Someone",
+        "files": [{"format": "epub", "filename": "book.epub", "role": "primary"},
+                  {"format": "m4b", "role": "primary"}],
+    }
+    ebooks, _ = search_reader_library(_clients(bookorbit_client=bo), "ebook", "Short Title")
+    with patch("src.services.acquisition_library_catalog.BookOrbitAudioSourceAdapter") as adapter:
+        adapter.return_value.catalog_incomplete = False
+        adapter.return_value.search.return_value = [AudioResult(
+            source="BookOrbit", source_id="14", title="Short Title", authors="")]
+        audio, _ = search_reader_library(_clients(bookorbit_client=bo), "audiobook", "Short Title")
+    assert [c.get("subtitle") for c in ebooks + audio] == ["The True Story of Someone"] * 2

@@ -39,6 +39,7 @@ def _ebook(source: str, row: dict, *, filename: str = "") -> dict | None:
         "title": row.get("title") or "", "authors": authors,
         "series_name": series_name, "series_index": series_index,
         "isbn13": row.get("isbn13") or row.get("isbn") or None,
+        **({"subtitle": row["subtitle"]} if row.get("subtitle") else {}),
     }
 
 
@@ -94,15 +95,17 @@ def search_reader_library(clients: Any, media_kind: str, query: str) -> tuple[li
                         authors = (BookOrbitClient._format_authors(detail.get("authors"))
                                    if detail.get("authors") else hit.authors)
                         isbn13 = detail.get("isbn13") or detail.get("isbn") or None
+                        subtitle = detail.get("subtitle")
                     else:
                         title, authors = hit.title, hit.authors
                         series_name, series_index = hit.series_name, hit.series_sequence
-                        isbn13 = None
+                        isbn13 = subtitle = None
                     candidates.append({
                         "source": str(hit.source), "source_id": str(hit.source_id),
                         "title": title, "authors": authors,
                         "series_name": series_name, "series_index": series_index,
                         "isbn13": isbn13,
+                        **({"subtitle": subtitle} if subtitle else {}),
                     })
             except Exception:
                 logger.warning("Acquisition audiobook catalog %s is unreachable", source, exc_info=True)
@@ -168,6 +171,7 @@ def search_reader_library(clients: Any, media_kind: str, query: str) -> tuple[li
                             "seriesName": series_name,
                             "seriesIndex": series_index,
                             "isbn13": detail.get("isbn13") or detail.get("isbn") or None,
+                            "subtitle": detail.get("subtitle"),
                         }
                     else:
                         filename = row.get("fileName") or row.get("filename") or ""

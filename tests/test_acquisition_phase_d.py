@@ -674,13 +674,24 @@ class TestPhaseDArrivals(unittest.TestCase):
             "authors": [], "isbn13": "9780399584022",
             "files": [{"id": "track-1", "format": "m4b", "role": "primary"}],
         }
+        filed = {"source": "BookOrbit", "source_id": "7264", "title": "Short Title",
+                 "subtitle": "The True Story of Someone", "authors": "", "isbn13": "9780399584022"}
+        same_short_title = {**filed, "source_id": "99", "subtitle": "Another Story"}
+        queries = []
 
-        self.refresh()
+        def library_search(_clients, _kind, query):
+            # BookOrbit's search knows the book only by its short title.
+            queries.append(query)
+            return ([filed, same_short_title] if query == "Short Title" else []), {}
+
+        with patch("src.services.acquisition_service.search_reader_library", side_effect=library_search):
+            self.refresh()
         saved = self.db.get_acquisition_job(self.reader.id, job["id"])
         receipt = self.db.get_acquisition_request(self.reader.id, receipt["id"])
         self.assertNotEqual(receipt["status"], "needs_look")
-        self.assertNotEqual(saved["audio_library_state"], "needs_review")
         self.assertEqual((receipt["arrived_source"], receipt["arrived_source_id"]), ("BookOrbit", "7264"))
+        self.assertEqual((saved["audio_source"], saved["audio_source_id"]), ("BookOrbit", "7264"))
+        self.assertIn("Short Title", queries)
 
     def test_bookorbit_subtitle_does_not_excuse_a_different_title(self):
         job = {"title": "Short Title: The True Story of Someone"}
