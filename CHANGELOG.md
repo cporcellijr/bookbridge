@@ -21,8 +21,10 @@ All notable changes to BookBridge will be documented in this file.
 - **Requested audiobooks can pair with your Audiobookshelf copy.** If you listen in Audiobookshelf and it
   scans the folder BookOrbit imports requested audiobooks into, turn on **Pair requested audiobooks with my
   Audiobookshelf copy of the same files** in your BookOrbit integration. A requested audiobook then pairs the
-  Audiobookshelf item holding the same files instead of BookOrbit's copy, and falls back to BookOrbit's copy
-  when no single item matches. Off by default; existing pairings are not moved (#585).
+  Audiobookshelf item holding the same files instead of BookOrbit's copy. If Audiobookshelf hasn't added the
+  new folder yet, BookBridge waits for it for up to 15 minutes, showing "Waiting for Audiobookshelf to add
+  this audiobook." It falls back to BookOrbit's copy when no single item matches. Off by default; existing
+  pairings are not moved (#585).
 - **More ways to make the New interface's Library your own.** Account → Display now has an **Accent colour**
   (Amber, Teal, Rose, Violet or Blue) for progress bars, highlights and the current-page marker; five more
   **shelf finishes** for the shelf styles (Walnut, Cherry, White, Glass and Pastel); and a **Library

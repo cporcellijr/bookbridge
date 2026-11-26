@@ -867,6 +867,40 @@ class TestPairAbsCopy(AdoptionBase):
         self.assertIn("found no single Audiobookshelf copy of BookOrbit audiobook 6099 (2 items share its folder)",
                       " | ".join(logs.output))
 
+    def test_waits_for_audiobookshelf_to_scan_the_folder_then_pairs_its_copy(self):
+        # #585: BookOrbit said "available" ~6 s before Audiobookshelf's folder watcher added the item.
+        copy = self.abs.get_all_audiobooks.return_value[0]
+        self.abs.get_all_audiobooks.return_value = []
+        clock = {"now": utcnow()}
+        with patch("src.services.acquisition_service.utcnow", side_effect=lambda: clock["now"]):
+            with self.assertLogs(_LOG, level="INFO") as logs:
+                self.refresh_with_abs()
+            row = self.assert_no_pairing(status="arrived")
+            self.assertEqual(row["status_detail"], "Waiting for Audiobookshelf to add this audiobook.")
+            self.assertIn(f"user {self.user.id} waits for Audiobookshelf to add BookOrbit audiobook 6099",
+                          " | ".join(logs.output))
+            self.abs.get_all_audiobooks.return_value = [copy]
+            clock["now"] += timedelta(seconds=31)
+            self.refresh_with_abs()
+        self.assert_paired_with("li_copy", "ABS")
+        self.assertIsNone(self.db.get_book("bookorbit:6099"))
+
+    def test_gives_up_waiting_after_fifteen_minutes_and_pairs_the_bookorbit_copy(self):
+        self.abs.get_all_audiobooks.return_value = []
+        clock = {"now": utcnow()}
+        with patch("src.services.acquisition_service.utcnow", side_effect=lambda: clock["now"]):
+            self.refresh_with_abs()
+            self.assert_no_pairing(status="arrived")
+            clock["now"] += timedelta(minutes=14)
+            self.refresh_with_abs()
+            self.assert_no_pairing(status="arrived")
+            clock["now"] += timedelta(minutes=2)
+            with self.assertLogs(_LOG, level="INFO") as logs:
+                self.refresh_with_abs()
+        self.assert_paired_with("bookorbit:6099", "BookOrbit")
+        self.assertIn("found no single Audiobookshelf copy of BookOrbit audiobook 6099 (0 items share its folder)",
+                      " | ".join(logs.output))
+
     def test_folder_name_alone_needs_the_same_duration(self):
         self.abs.get_all_audiobooks.return_value = [
             {"id": "li_flat", "path": "/audiobooks/Example Book", "isFile": False, "media": {"duration": 36100.0}}]

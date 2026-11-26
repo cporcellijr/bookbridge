@@ -35,6 +35,8 @@ ADOPTION_PAGE_SIZE = 100
 ADOPTION_MAX_PAGES = 20
 ADOPT_SETTING = "BOOKORBIT_ADOPT_REQUESTS"
 PAIR_ABS_SETTING = "BOOKORBIT_PAIR_ABS_COPY"
+# BookOrbit can say "available" before Audiobookshelf's folder watcher has added the item.
+ABS_COPY_WAIT = timedelta(minutes=15)
 # The reader's client bundle for the refresh in progress; a context variable keeps concurrent readers apart.
 _READER_CLIENTS: ContextVar[Any] = ContextVar("acquisition_reader_clients", default=None)
 STALLED_AFTER = timedelta(minutes=30)
@@ -72,6 +74,8 @@ _DOWNLOADED = "Downloaded, waiting for the library"
 _AUDIO_SOURCES = {"abs": "ABS", "bookorbit": "BookOrbit", "booklore": "BookLore"}
 _UNIDENTIFIED = "The arrived book could not be identified yet."
 _AUDIO_PAIRED = "That audiobook is already paired with another ebook."
+_WAITING_FOR_ABS = "Waiting for Audiobookshelf to add this audiobook."
+_ABS_COPY_PENDING: tuple = ("", None)
 _NO_EBOOK = "No single matching ebook was found in your library."
 
 
@@ -132,6 +136,8 @@ class AcquisitionService:
         self._adoption_claim_lock = Lock()
         self._job_reconciled: dict[tuple[int, str], datetime] = {}
         self.job_reconcile_interval = JOB_RECONCILE_INTERVAL
+        # shortcut: in memory, so a restart restarts the wait; persist it if restarts mid-wait matter.
+        self._abs_copy_waits: dict[tuple[int, str], datetime] = {}
 
     def _pending_jobs(self, user_id: int) -> list[dict]:
         """Unpaired jobs and outstanding scans; jobs older than ``GIVE_UP_AFTER`` are dropped."""
@@ -175,7 +181,9 @@ class AcquisitionService:
             due = [
                 row for row in self._refreshable(user_id)
                 if force or row["last_checked_at"] is None or now - row["last_checked_at"] >= (
-                    ARRIVED_REFRESH_INTERVAL if row["remote_status"] in _ARRIVED_REMOTE else REFRESH_INTERVAL
+                    ARRIVED_REFRESH_INTERVAL
+                    if row["remote_status"] in _ARRIVED_REMOTE and row["status_detail"] != _WAITING_FOR_ABS
+                    else REFRESH_INTERVAL
                 )
             ]
             shelfmark_rows = [row for row in due if row["service"] == "Shelfmark"]
@@ -1650,7 +1658,8 @@ class AcquisitionService:
         Only for a reader who switched on BOOKORBIT_PAIR_ABS_COPY and has their own Audiobookshelf. The two
         apps usually mount the shared folder at different roots, so paths are compared from the end: the
         item must share at least two trailing path parts with the BookOrbit files (folder and its parent),
-        or one part plus a duration within 1%. Anything less certain keeps the BookOrbit copy.
+        or one part plus a duration within 1%. Anything less certain keeps the BookOrbit copy. When no
+        item shares the folder yet, returns ``_ABS_COPY_PENDING`` for up to ``ABS_COPY_WAIT``.
         """
         abs_client = getattr(_READER_CLIENTS.get(), "abs_client", None)
         if client is None or abs_client is None or not abs_client.is_configured():
@@ -1678,6 +1687,19 @@ class AcquisitionService:
         if best and best[0] < 2:
             close = duration and best[2] and abs(float(best[2]) - float(duration)) <= 0.01 * float(duration)
             best = best if close else None
+        wait_key = (user_id, bookorbit_id)
+        if best is None and track is not None and not scored:
+            started = self._abs_copy_waits.get(wait_key)
+            if started is None:
+                self._abs_copy_waits[wait_key] = utcnow()
+                logger.info(
+                    "📥 Acquisition: user %s waits for Audiobookshelf to add BookOrbit audiobook %s "
+                    "(no item shares its folder yet)", user_id, bookorbit_id,
+                )
+                return _ABS_COPY_PENDING
+            if utcnow() - started < ABS_COPY_WAIT:
+                return _ABS_COPY_PENDING
+        self._abs_copy_waits.pop(wait_key, None)
         if best is None:
             logger.info(
                 "📥 Acquisition: user %s found no single Audiobookshelf copy of BookOrbit audiobook %s (%s); "
@@ -1707,6 +1729,8 @@ class AcquisitionService:
         # An existing BookOrbit pairing stays as it is; only a new one may move to the reader's ABS copy.
         if audio_source == "BookOrbit" and self._audio_book(audio_source, str(audio_id)) is None:
             abs_copy = self._abs_copy_of(user_id, str(audio_id), client)
+            if abs_copy is _ABS_COPY_PENDING:
+                return None, _WAITING_FOR_ABS
             if abs_copy is not None:
                 audio_source, audio_id, abs_duration = "ABS", abs_copy[0], abs_copy[1]
         audio_book = self._audio_book(audio_source, audio_id)
