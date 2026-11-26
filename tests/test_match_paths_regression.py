@@ -215,6 +215,28 @@ class TestMatchPathsRegression(unittest.TestCase):
         db.delete_book.assert_not_called()
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
+    def test_batch_abs_rematch_keeps_ready_alignment_only_for_same_epub(self, _mock_hash):
+        from src.db.models import Book
+
+        db = self.mock_container.mock_database_service
+        for filename, expected in (("book.epub", "active"), ("other.epub", "pending")):
+            with self.subTest(filename=filename):
+                db.get_book.return_value = Book(
+                    abs_id="ab-1", audio_source="ABS", audio_source_id="ab-1",
+                    ebook_filename="book.epub", kosync_doc_id="hash-match-1", status="active",
+                    transcript_source="smil", transcript_file="DB_MANAGED",
+                )
+                db.has_alignment.return_value = True
+                web_server._process_batch_queue([dict(
+                    abs_id="ab-1", audio_source="ABS", duration=42, ebook_filename=filename,
+                    abs_title="Example",
+                )])
+                saved = db.save_book.call_args.args[0]
+                self.assertEqual(saved.status, expected)
+                if expected == "active":
+                    self.assertEqual(saved.transcript_file, "DB_MANAGED")
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
     def test_match_route_creates_mapping(self, _mock_kosync):
         response = self.client.post(
             "/match",
