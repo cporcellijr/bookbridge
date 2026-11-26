@@ -69,6 +69,22 @@ All notable changes to BookBridge will be documented in this file.
 - **StoryGraph accepts cookies pasted decoded or URL-encoded.** Cookie-export extensions show the values in
   different forms; BookBridge now sends them in the encoded form StoryGraph set them in.
   Contributed by [@jeffhammett](https://github.com/jeffhammett) in #622.
+- **Matching never takes an ebook from another audiobook.** Pairing a second audio copy with an ebook that is
+  already paired with an audiobook used to replace that pairing and its progress. BookBridge now refuses the
+  match and keeps the existing pairing, from every match path; an ebook-only entry is still folded in as
+  before. Contributed by [@monkeCode](https://github.com/monkeCode) in #624.
+- **Match All keeps an Audiobookshelf book's alignment.** Re-matching an aligned audiobook to the same EPUB
+  through **Match All** no longer sends it back to pending, as the single-book Match already did. A changed
+  EPUB is still re-aligned. Contributed by [@monkeCode](https://github.com/monkeCode) in #625.
+- **Read-along EPUBs you already have are recognised.** A linked EPUB that already carries narration (or a
+  BookOrbit entry with read-along on) now shows as a read-along, and **Create read-along** no longer makes a
+  second one. Contributed by [@monkeCode](https://github.com/monkeCode) in #626.
+- **Library covers fall back the same way everywhere.** The hero, the grid and the book page all prefer the
+  EPUB's cover, then the provider's art, then the placeholder, and a renamed EPUB still finds its cover.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #627.
+- **A read-along made from your exact audiobook file needs no alignment.** When the audiobook is a single file
+  that is byte-for-byte the track inside a read-along EPUB, BookBridge builds its position map from the EPUB's
+  own timings instead of running Whisper or CTC. Contributed by [@monkeCode](https://github.com/monkeCode) in #623.
 - **Bridge Sync accepts the server address as you type it.** A server address with a space around it, a
   capital `HTTP://`, or no `http://` at all made Bridge Sync report "Server URL is invalid". It now tidies the
   address and defaults to `http://`, and the message shows the address it tried. Update the Bridge Sync plugin
