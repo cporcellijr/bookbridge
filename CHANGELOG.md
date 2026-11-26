@@ -67,6 +67,11 @@ All notable changes to BookBridge will be documented in this file.
   KOReader device re-sending its last position no longer overrides a more recent write to that copy by the
   sync cycle, another device or **Clear position**. A **Push progress** still counts: update the Bridge Sync
   plugin on each device (0.9.14) to get this. Contributed by [@jucor](https://github.com/jucor) in #630.
+- **Linking a book to StoryGraph keeps what you already have there.** Automatch, picking an edition and
+  pasting a URL used to set every linked book to **To Read**, so a book you had read or were reading went
+  back to To Read. Only a book that isn't on your lists is set to To Read now. Automatch links the edition you
+  have already shelved, so the book no longer appears twice, and picking an edition no longer copies an
+  empty edition over yours. Contributed by [@jeffhammett](https://github.com/jeffhammett) in #629.
 - **StoryGraph updates no longer fail as "session expired" while Test passes.** Status, progress and
   edition changes now send the session StoryGraph re-issues with each page, which its form check requires.
   Contributed by [@jeffhammett](https://github.com/jeffhammett) in #620.
