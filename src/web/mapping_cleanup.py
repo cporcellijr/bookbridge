@@ -122,6 +122,9 @@ def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
     # window.
     from src.services.shelf_watch_service import clear_shelf_watch_throttle
     clear_shelf_watch_throttle(web.database_service, book)
+    # Nor the devices' last KoSync reports (kept as digests, so all of them go).
+    from src.api.kosync_server import _device_last_reports
+    _device_last_reports.clear()
 
     is_abs_backed = (
         getattr(book, 'sync_mode', 'audiobook') != 'ebook_only'
