@@ -124,6 +124,19 @@ def no_kosync_debounce_thread(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fresh_linked_readalong_cache():
+    """Tests reuse EPUB names, so no test may see another's remembered read-along answer."""
+    def clear():
+        web_server = sys.modules.get("src.web_server")
+        if web_server is not None:
+            web_server._linked_readalong_seen.clear()
+
+    clear()
+    yield
+    clear()
+
+
+@pytest.fixture(autouse=True)
 def fast_password_hashing(request, monkeypatch):
     """Use a valid low-cost password hash except in the security contract test."""
     if request.node.get_closest_marker("production_password_hash"):

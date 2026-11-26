@@ -1670,18 +1670,37 @@ from src.web.readalong_generation_jobs import (
 
 
 
+_LINKED_READALONG_TTL = 300.0
+# Dashboard renders stat every linked EPUB (~1.6 ms each on the 9p mount), so
+# remember the local answer per filename set for a few minutes.
+_linked_readalong_seen: dict = {}
+
+
 def _has_linked_readalong(book, *, resolve_local=False):
     """Check the linked input EPUB independently of BookBridge generation jobs."""
-    parser = container.ebook_parser()
-    for name in dict.fromkeys((getattr(book, "ebook_filename", None), local_ebook_filename(book))):
-        if not isinstance(name, str) or not name.lower().endswith(".epub"):
-            continue
-        try:
-            path = parser.resolve_book_path(name) if resolve_local else parser.cached_book_path(name)
-            if embedded_audio(path):
-                return True
-        except OSError:
-            continue
+    names = tuple(
+        name for name in dict.fromkeys((getattr(book, "ebook_filename", None), local_ebook_filename(book)))
+        if isinstance(name, str) and name.lower().endswith(".epub")
+    )
+    now = time.monotonic()
+    seen = None if resolve_local else _linked_readalong_seen.get(names)
+    if seen and seen[0] > now:
+        found = seen[1]
+    else:
+        found = False
+        parser = container.ebook_parser()
+        for name in names:
+            try:
+                path = parser.resolve_book_path(name) if resolve_local else parser.cached_book_path(name)
+                if embedded_audio(path):
+                    found = True
+                    break
+            except OSError:
+                continue
+        if names:
+            _linked_readalong_seen[names] = (now + _LINKED_READALONG_TTL, found)
+    if found:
+        return True
     # BookOrbit v3 confirms the existence of an overlay EPUB on a combined
     # entry. Read the existing client cache on dashboard polls, not one HTTP
     # request per book. Disabled sync is not proof the EPUB is absent.

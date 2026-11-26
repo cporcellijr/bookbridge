@@ -224,6 +224,22 @@ class ReadalongEpubActionTestCase(unittest.TestCase):
             self.assertTrue(ws._has_linked_readalong(self.book))
         clients.bookorbit_client.get_read_aloud_sync.assert_called_once_with(77, cached_only=True)
 
+    def test_dashboard_polls_reuse_the_local_readalong_answer_until_a_fresh_check(self):
+        import src.web_server as ws
+        parser = Mock()
+        parser.cached_book_path.return_value = Path("/cache/x.epub")
+        parser.resolve_book_path.return_value = Path("/books/x.epub")
+        container = Mock(ebook_parser=Mock(return_value=parser))
+        with patch.object(ws, "container", container), \
+             patch.object(ws, "embedded_audio", return_value=("audio/a.m4a",)) as overlay:
+            self.assertTrue(ws._has_linked_readalong(self.book))
+            self.assertTrue(ws._has_linked_readalong(self.book))
+            self.assertEqual(parser.cached_book_path.call_count, 1)
+            overlay.return_value = ()
+            self.assertFalse(ws._has_linked_readalong(self.book, resolve_local=True))
+            self.assertFalse(ws._has_linked_readalong(self.book))
+        self.assertEqual(overlay.call_count, 2)
+
     # ---- duplicate concurrent requests -----------------------------------
 
     def test_refuses_a_second_request_while_one_is_in_flight(self):
