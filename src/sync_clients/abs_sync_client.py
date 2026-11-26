@@ -17,11 +17,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 class ABSSyncClient(SyncClient):
-    def __init__(self, abs_client: ABSClient, transcriber: AudioTranscriber, ebook_parser: EbookParser, alignment_service=None):
+    def __init__(self, abs_client: ABSClient, transcriber: AudioTranscriber, ebook_parser: EbookParser, alignment_service=None, database_service=None, user_id=None):
         super().__init__(ebook_parser)
         self.abs_client = abs_client
         self.transcriber = transcriber
         self.alignment_service = alignment_service
+        self.database_service = database_service
+        self.user_id = user_id
         self.abs_progress_offset = float(os.getenv("ABS_PROGRESS_OFFSET_SECONDS", 0))
         self.delta_abs_thresh = float(os.getenv("SYNC_DELTA_ABS_SECONDS", 60))
 
@@ -40,10 +42,19 @@ class ABSSyncClient(SyncClient):
         return {'audiobook'}
 
     def supports_book(self, book: Book) -> bool:
-        return (getattr(book, "audio_source", None) or "ABS") == "ABS"
+        return bool(self._audio_item_id(book))
+
+    def _audio_item_id(self, book):
+        if (getattr(book, "audio_source", None) or "ABS") == "ABS":
+            return book.abs_id
+        if self.database_service is not None and self.user_id is not None:
+            return self.database_service.resolve_companion_audio(self.user_id, book, "ABS")
+        return None
 
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
-        abs_id = book.abs_id
+        abs_id = self._audio_item_id(book)
+        if abs_id is None:
+            return None
 
         # Use bulk context if available, otherwise fetch individually
         if bulk_context and abs_id in bulk_context:
@@ -103,7 +114,7 @@ class ABSSyncClient(SyncClient):
         service_updated_at = parse_service_timestamp(abs_last_update)
         if service_updated_at is not None:
             current['service_updated_at'] = service_updated_at
-        if corrected_duration is not None:
+        if corrected_duration is not None and abs_id == book.abs_id:
             current['service_duration'] = corrected_duration
 
         return ServiceState(
@@ -236,10 +247,14 @@ class ABSSyncClient(SyncClient):
         return self.transcriber.get_previous_segment_text(book.transcript_file, abs_ts)
 
     def update_progress(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
+        item_id = self._audio_item_id(book)
+        if item_id is None:
+            return SyncResult(None, False)
+        primary = (getattr(book, "audio_source", None) or "ABS") == "ABS"
         book_title = book.abs_title or 'Unknown Book'
         if request.locator_result.percentage == 0.0:
             logger.info(f"🔄 '{book_title}' Locator percentage is 0.0% — Setting ABS progress to start of book")
-            result, final_ts = self._update_abs_progress_with_offset(book.abs_id, 0.0)
+            result, final_ts = self._update_abs_progress_with_offset(item_id, 0.0)
             updated_state = {
                 'ts': final_ts,
                 'pct': 0.0
@@ -248,7 +263,7 @@ class ABSSyncClient(SyncClient):
                 final_ts,
                 result.get("success", False),
                 updated_state,
-                error_code=self._stale_item_error_code(book.abs_id, result),
+                error_code=self._stale_item_error_code(item_id, result) if primary else None,
             )
 
         # Route database-managed books to AlignmentService and legacy books to Transcriber.
@@ -286,7 +301,7 @@ class ABSSyncClient(SyncClient):
                 book_title=book_title
             )
         if ts_for_text is not None:
-            response = self.abs_client.get_progress(book.abs_id)
+            response = self.abs_client.get_progress(item_id)
             abs_ts = response.get('currentTime') if response is not None else None
             if abs_ts is not None and ts_for_text < abs_ts and not request.allow_rewind:
                 logger.info(f"🔄 '{book_title}' Not updating ABS progress — target timestamp {ts_for_text:.2f}s is before current ABS position {abs_ts:.2f}s")
@@ -308,7 +323,7 @@ class ABSSyncClient(SyncClient):
             prev_ts = abs_ts if abs_ts is not None else 0.0
             time_listened = (ts_for_text - prev_ts) if request.credit_listening else 0.0
             result, final_ts = self._update_abs_progress_with_offset(
-                book.abs_id, ts_for_text, prev_ts, time_listened=time_listened
+                item_id, ts_for_text, prev_ts, time_listened=time_listened
             )
             # Calculate percentage from timestamp for state
             pct = self._abs_to_percentage(final_ts, book)
@@ -320,7 +335,7 @@ class ABSSyncClient(SyncClient):
                 final_ts,
                 result.get("success", False),
                 updated_state,
-                error_code=self._stale_item_error_code(book.abs_id, result),
+                error_code=self._stale_item_error_code(item_id, result) if primary else None,
             )
         logger.warning(f"⚠️ '{book_title}' Not updating ABS progress — could not find timestamp for provided text")
         return SyncResult(None, False)

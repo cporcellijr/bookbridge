@@ -20,6 +20,8 @@ def register(app: Any, web_module: Any) -> None:
     global _WEB_MODULE
     _WEB_MODULE = web_module
     rules = (
+        ('/api/companion-audio/<abs_id>', 'companion_audio', web_module.companion_audio, ['GET', 'POST', 'DELETE']),
+        ('/api/existing-audio-match-targets', 'existing_audio_match_targets', web_module.existing_audio_match_targets, ['GET']),
         ('/api/readalong-epub/<abs_id>', 'generate_readalong_epub', generate_readalong_epub, ['POST']),
         ('/api/readalong-epub/<abs_id>/status', 'readalong_epub_status', readalong_epub_status, ['GET']),
         ('/api/readalong-epub/<abs_id>/remove', 'remove_readalong_epub_route', remove_readalong_epub_route, ['POST']),

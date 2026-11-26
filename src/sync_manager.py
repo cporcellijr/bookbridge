@@ -144,6 +144,7 @@ _HIGH_CONFIDENCE_NORMALIZATION_SOURCES: frozenset[str] = frozenset({
     "cfi",
     "href_frag",
     "href_progression",
+    "shared_audio_clock",
 })
 
 # How long a follower fill that did not complete waits before it is attempted again.
@@ -2031,7 +2032,9 @@ class SyncManager:
             and 'ebook' in self.sync_clients.get(k).get_supported_sync_types()
         ]
 
-        if not has_primary_audio or not ebook_clients:
+        companions = {name: config[name] for name in ('ABS', 'BookOrbitAudio', 'BookLoreAudio')
+                      if name != primary_audio_client and name in config}
+        if not has_primary_audio or (not ebook_clients and not companions):
             return None
 
         if not book.transcript_file:
@@ -2043,6 +2046,15 @@ class SyncManager:
         # `0` default never fires; leader selection subtracts these values downstream.
         abs_ts = config[primary_audio_client].current.get('ts')
         normalized[primary_audio_client] = 0 if abs_ts is None else abs_ts
+        for companion, companion_state in companions.items():
+            if companion_state.current.get('_readalong_mirror'):
+                continue
+            companion_ts = companion_state.current.get('ts')
+            if isinstance(companion_ts, (int, float)) and math.isfinite(companion_ts) and companion_ts >= 0:
+                normalized[companion] = companion_ts
+                companion_state.current.update(_normalized_ts=companion_ts,
+                                               _normalization_source='shared_audio_clock',
+                                               _normalization_confidence='high')
 
         for client_name in ebook_clients:
             if client_name not in self.sync_clients:
@@ -6523,6 +6535,9 @@ class SyncManager:
                             and client.get_supported_sync_types() == {'audiobook'}
                             else None
                         )
+                        if (locator_source == 'alignment_direct' and client_state and
+                            client_state.current.get('_normalization_source') == 'shared_audio_clock'):
+                            target_audio_ts = leader_state.current.get('ts')
                         if target_audio_ts is not None:
                             logger.info(
                                 f"🎯 '{abs_id}' '{title_snip}' Writing '{client_name}' at the leader's "

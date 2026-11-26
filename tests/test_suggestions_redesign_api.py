@@ -105,6 +105,18 @@ def test_discovery_reads_persisted_data_without_provider_calls():
         _close(patches)
 
 
+def test_discovery_hides_a_cached_match_when_its_audio_is_linked_as_companion():
+    app, _web, db, patches = _app_and_patches()
+    try:
+        db.get_companion_suggestion_keys.return_value = {'abs-1'}
+        response = app.test_client().get('/api/suggestions/discovery?tab=pairs')
+        assert response.status_code == 200
+        assert response.get_json()['entries'] == []
+        db.get_companion_suggestion_keys.assert_called_once_with(7)
+    finally:
+        _close(patches)
+
+
 def test_discovery_rejects_unknown_query_parameters():
     app, _web, _db, patches = _app_and_patches()
     try:
@@ -416,7 +428,8 @@ def test_routes_use_the_module_that_registered_them_not_a_fresh_import():
         get_current_user_id=lambda: 7,
         current_user=lambda: None,
         _load_persisted_suggestions_cache=_pair_payload,
-        database_service=SimpleNamespace(get_all_books=lambda user_id=None: []),
+        database_service=SimpleNamespace(get_all_books=lambda user_id=None: [],
+                                         get_companion_suggestion_keys=lambda user_id: set()),
         _dashboard_visible_books_for_user=lambda books, _user: books,
         _load_match_queue=lambda: [],
         _get_ignored_suggestion_source_ids=lambda **_kw: [],

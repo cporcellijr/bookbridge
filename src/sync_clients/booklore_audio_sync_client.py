@@ -12,10 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 class BookLoreAudioSyncClient(SyncClient):
-    def __init__(self, booklore_client: BookloreClient, ebook_parser: EbookParser, alignment_service=None):
+    def __init__(self, booklore_client: BookloreClient, ebook_parser: EbookParser, alignment_service=None, database_service=None, user_id=None):
         super().__init__(ebook_parser)
         self.booklore_client = booklore_client
         self.alignment_service = alignment_service
+        self.database_service = database_service
+        self.user_id = user_id
         self.delta_abs_thresh = float(os.getenv("SYNC_DELTA_ABS_SECONDS", 60))
 
     def is_configured(self) -> bool:
@@ -28,16 +30,20 @@ class BookLoreAudioSyncClient(SyncClient):
         return {"audiobook"}
 
     def supports_book(self, book: Book) -> bool:
-        return getattr(book, "audio_source", None) == "BookLore"
+        return getattr(book, "audio_source", None) == "BookLore" or bool(self._resolve_booklore_book_id(book))
 
     def _resolve_booklore_book_id(self, book: Book) -> Optional[str]:
+        if getattr(book, "audio_source", None) != "BookLore":
+            if self.database_service is not None and self.user_id is not None:
+                return self.database_service.resolve_companion_audio(self.user_id, book, "BookLore")
+            return None
         return (
             getattr(book, "audio_provider_book_id", None)
             or getattr(book, "audio_source_id", None)
         )
 
     def _resolve_booklore_file_id(self, book: Book, info: Optional[dict] = None) -> Optional[str]:
-        file_id = getattr(book, "audio_provider_file_id", None)
+        file_id = getattr(book, "audio_provider_file_id", None) if book.audio_source == "BookLore" else None
         if file_id:
             return str(file_id)
         if not isinstance(info, dict):

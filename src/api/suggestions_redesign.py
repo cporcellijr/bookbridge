@@ -216,7 +216,10 @@ def _current_inputs(web, user_id):
     if callable(visible):
         mapped_books = visible(mapped_books, current_user)
     queue = web._load_match_queue()
-    ignored_pair_keys = web._get_ignored_suggestion_source_ids(user_id=user_id)
+    ignored_pair_keys = set(web._get_ignored_suggestion_source_ids(user_id=user_id) or ())
+    companion_keys = database.get_companion_suggestion_keys(user_id)
+    if isinstance(companion_keys, set):
+        ignored_pair_keys.update(companion_keys)
     return persisted, list(mapped_books), list(queue), list(ignored_pair_keys or [])
 
 

@@ -376,6 +376,10 @@ def suggestions_page():
         web._persist_suggestions_state(suggestions_state)
 
     active_suggestion_keys = set()
+    companion_keys = web.database_service.get_companion_suggestion_keys(web.get_current_user_id())
+    if isinstance(companion_keys, set):
+        scan_results = [item for item in scan_results
+                        if (item.get('bridge_key') or item.get('abs_id')) not in companion_keys]
     for book in web.database_service.get_all_books(user_id=web.get_current_user_id()):
         abs_id = str(getattr(book, 'abs_id', '') or '').strip()
         if abs_id:
@@ -518,9 +522,13 @@ def suggestions_scan_status():
 
 def get_suggestions():
     web = _web_server()
-    suggestions = web.database_service.get_all_pending_suggestions(user_id=web.get_current_user_id())
+    uid = web.get_current_user_id()
+    suggestions = web.database_service.get_all_pending_suggestions(user_id=uid)
+    companion_keys = web.database_service.get_companion_suggestion_keys(uid)
     result = []
     for s in suggestions:
+        if isinstance(companion_keys, set) and s.source_id in companion_keys:
+            continue
         try:
             matches = web.json.loads(s.matches_json) if s.matches_json else []
         except Exception:

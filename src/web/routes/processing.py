@@ -91,6 +91,8 @@ def job_queue_page():
         alignment_movable_ids=alignment_movable_ids,
         preflights=evidence,
     )
+    from src.web.audio_link_jobs import add_audio_link_queue_rows
+    add_audio_link_queue_rows(snapshot, books, web.database_service.get_audio_link_jobs(user_id) or [])
     if acquisition_jobs is None:
         acquisition_jobs = web.database_service.get_acquisition_jobs(user_id) if user_id is not None else []
     bridge_statuses = {book.abs_id: book.status for book in books if book.abs_id}

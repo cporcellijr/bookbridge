@@ -5,6 +5,7 @@ from ..models import (
     UserBook,
     UserBookFusionLink,
     UserBookOrbitLink,
+    UserCompanionAudio,
 )
 from src.utils.time_utils import utcnow
 from ._common import _SQL_IN_CHUNK
@@ -14,6 +15,70 @@ logger = logging.getLogger('src.db.database_service')
 
 class UserLinksMixin:
     """Database operations for user links."""
+
+    def get_companion_audio(self, user_id, abs_id, provider):
+        if user_id is None:
+            return None
+        with self.get_session() as session:
+            link = session.get(UserCompanionAudio, (user_id, abs_id, provider))
+            return (link.primary_provider, link.item_id, link.primary_item_id) if link else None
+
+    def set_companion_audio(self, user_id, abs_id, provider, item_id, primary_item_id, *, primary_provider=None):
+        with self.get_session() as session:
+            session.merge(UserCompanionAudio(
+                user_id=user_id, abs_id=abs_id, provider=provider,
+                item_id=item_id, primary_item_id=primary_item_id,
+                primary_provider=primary_provider or ('BookOrbit' if provider == 'ABS' else 'ABS'),
+            ))
+
+    def get_active_companion_audio(self, user_id):
+        """Active companion identities, keyed by visible book ID for this user."""
+        if user_id is None:
+            return {}
+        with self.get_session() as session:
+            rows = session.query(Book, UserCompanionAudio).join(
+                UserCompanionAudio, UserCompanionAudio.abs_id == Book.abs_id,
+            ).join(UserBook, UserBook.abs_id == Book.abs_id).filter(
+                UserCompanionAudio.user_id == user_id,
+                UserBook.user_id == user_id,
+                Book.sync_mode == 'audiobook',
+            ).all()
+            books_and_links = [(book, link.provider, link.item_id, link.primary_provider, link.primary_item_id)
+                               for book, link in rows]
+            for book in {row[0] for row in books_and_links}:
+                session.expunge(book)
+        active = {}
+        for book, provider, item_id, primary_provider, primary_id in books_and_links:
+            source = book.audio_source or 'ABS'
+            if source == primary_provider and primary_id == self.primary_audio_item_id(user_id, book):
+                active.setdefault(book.abs_id, {})[provider] = item_id
+        return active
+
+    def get_companion_suggestion_keys(self, user_id):
+        return {item_id if provider == 'ABS' else f'{provider.lower()}:{item_id}'
+                for links in self.get_active_companion_audio(user_id).values() for provider, item_id in links.items()}
+
+    def delete_companion_audio(self, user_id, abs_id, provider):
+        with self.get_session() as session:
+            session.query(UserCompanionAudio).filter_by(user_id=user_id, abs_id=abs_id, provider=provider).delete(synchronize_session=False)
+
+    def primary_audio_item_id(self, user_id, book):
+        source = getattr(book, 'audio_source', None) or 'ABS'
+        if source == 'BookOrbit':
+            return self.resolve_bookorbit_audio_id(user_id, book)
+        if source == 'BookLore':
+            return book.audio_provider_book_id or book.audio_source_id
+        return book.abs_id if source == 'ABS' else None
+
+    def resolve_companion_audio(self, user_id, book, provider):
+        primary = getattr(book, 'audio_source', None) or 'ABS'
+        if primary == provider or getattr(book, 'sync_mode', None) != 'audiobook':
+            return None
+        link = self.get_companion_audio(user_id, book.abs_id, provider)
+        if not link or link[0] != primary:
+            return None
+        primary_id = self.primary_audio_item_id(user_id, book)
+        return link[1] if primary_id == link[2] else None
 
     def _serialize_bookfusion_link(self, link: UserBookFusionLink) -> dict:
         return {

@@ -1,0 +1,148 @@
+            async function unlinkCompanionAudio(absId, provider, button) {
+                if (!confirm('Unlink this audiobook? The book and its alignment will stay linked.')) return;
+                const original = button.textContent;
+                button.disabled = true;
+                try {
+                    const response = await fetch('/api/companion-audio/' + encodeURIComponent(absId) + '?provider=' + encodeURIComponent(provider), {method: 'DELETE'});
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Could not unlink the audiobook.');
+                    window.location.reload();
+                } catch (error) {
+                    button.textContent = error.message;
+                    setTimeout(() => { button.textContent = original; button.disabled = false; }, 3000);
+                }
+            }
+
+            async function openCompanionAudio(absId, audioProvider, incoming = null, onLinked = null) {
+                const endpoint = incoming ? '/api/existing-audio-match-targets' : '/api/companion-audio/' + encodeURIComponent(absId);
+                const dialog = document.createElement('dialog');
+                dialog.setAttribute('aria-labelledby', 'companion-audio-title');
+                dialog.className = 'hc-modal-content companion-audio';
+                dialog.innerHTML = `
+                    <header class="hc-modal-header">
+                        <h3 id="companion-audio-title">Create link</h3>
+                        <button class="hc-modal-close" type="button" data-close aria-label="Close">×</button>
+                    </header>
+                    <section class="hc-modal-body">
+                        <p data-provider>Search the other audio library.</p>
+                        <form class="companion-search" data-search>
+                            <input type="search" aria-label="Search audiobooks" placeholder="Search by title or author">
+                            <button type="submit">Search</button>
+                        </form>
+                        <p class="companion-status" data-status role="status"></p>
+                        <div class="companion-results" data-results role="group" aria-label="Audiobooks"></div>
+                    </section>
+                    <footer class="hc-modal-footer">
+                        <button class="hc-btn-link" type="button" data-link disabled>Link audiobook</button>
+                    </footer>`;
+                const form = dialog.querySelector('[data-search]');
+                const search = form.querySelector('input');
+                const status = dialog.querySelector('[data-status]');
+                const provider = dialog.querySelector('[data-provider]');
+                const results = dialog.querySelector('[data-results]');
+                const link = dialog.querySelector('[data-link]');
+                const close = dialog.querySelector('[data-close]');
+                let linked = null;
+                let busy = false;
+                let changed = false;
+                const selected = () => results.querySelector('input:checked')?.value;
+
+                function setBusy(value) {
+                    busy = value;
+                    dialog.setAttribute('aria-busy', String(value));
+                    dialog.querySelectorAll('button, input').forEach(el => { el.disabled = value; });
+                    link.disabled = value || !selected() || selected() === linked;
+                }
+
+                async function request(path, options) {
+                    const response = await fetch(path, options);
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Request failed. Please try again.');
+                    return data;
+                }
+
+                async function load() {
+                    results.replaceChildren();
+                    setBusy(true);
+                    status.textContent = 'Searching…';
+                    try {
+                        const query = new URLSearchParams({provider: audioProvider, q: search.value.trim()});
+                        const data = await request(endpoint + '?' + query);
+                        linked = data.linked == null ? null : String(data.linked);
+                        provider.textContent = incoming ? 'Choose an existing BookBridge book.' : 'Choose an audiobook from ' + data.provider_label + '.';
+                        data.candidates.forEach(item => {
+                            const row = document.createElement('label');
+                            row.className = 'companion-result';
+                            const choice = document.createElement('input');
+                            choice.type = 'radio';
+                            choice.name = 'companion-audio-item';
+                            choice.value = String(item.id);
+                            choice.checked = choice.value === linked;
+                            const name = document.createElement('span');
+                            const authors = Array.isArray(item.authors) ? item.authors.join(', ') : item.authors;
+                            name.textContent = item.title + (authors ? ' — ' + authors : '') + (choice.checked ? ' (linked)' : '');
+                            row.append(choice, name);
+                            results.append(row);
+                        });
+                        status.textContent = data.candidates.length ? '' : 'No matches. Try another search.';
+                    } catch (error) {
+                        status.textContent = error.message;
+                    } finally {
+                        setBusy(false);
+                    }
+                }
+
+                async function save() {
+                    if (busy || !selected() || selected() === linked) return;
+                    const id = selected();
+                    setBusy(true);
+                    status.textContent = 'Adding to the job queue…';
+                    try {
+                        const result = await request('/match', {method: 'POST', body: new URLSearchParams({
+                            existing_book_id: incoming ? id : absId,
+                            audio_source: audioProvider,
+                            audio_source_id: incoming ? incoming.id : id,
+                        })});
+                        if (result.status === 'queued') {
+                            const notice = document.createElement('div');
+                            notice.className = 'companion-job-notice';
+                            notice.setAttribute('role', 'status');
+                            const queue = document.createElement('a');
+                            queue.href = '/job-queue';
+                            queue.target = '_top';
+                            queue.textContent = 'Job Queue';
+                            notice.append('Audio link queued. Check the ', queue, ' for progress.');
+                            document.body.append(notice);
+                            setTimeout(() => notice.remove(), 12000);
+                            dialog.close();
+                            return;
+                        }
+                        changed = true;
+                        if (!incoming) await load();
+                        else { linked = id; results.replaceChildren(); }
+                        status.textContent = 'Audiobook linked. The existing alignment was kept.';
+                    } catch (error) {
+                        status.textContent = error.message;
+                    } finally {
+                        setBusy(false);
+                    }
+                }
+
+                form.addEventListener('submit', event => { event.preventDefault(); if (!busy) load(); });
+                results.addEventListener('change', () => { link.disabled = !selected() || selected() === linked; });
+                link.addEventListener('click', save);
+                close.addEventListener('click', () => dialog.close());
+                dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+                dialog.addEventListener('close', () => {
+                    dialog.remove();
+                    if (changed) {
+                        if (onLinked) onLinked();
+                        else window.location.reload();
+                    }
+                }, {once: true});
+                document.body.append(dialog);
+                dialog.showModal();
+                if (incoming) search.value = incoming.title || '';
+                await load();
+                search.focus();
+            }

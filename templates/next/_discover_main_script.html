@@ -1,4 +1,5 @@
 <script>
+    {% include '_companion_audio_script.html' %}
     let selectedSuggestionId = null;
     let selectedSearchIndex = null;
     let pendingForgeOnlySubmit = false;
@@ -1472,6 +1473,7 @@
 {% else %}
                 <button type="button" class="btn btn-small btn-muted" data-act="review" title="${esc(T.reviewTitle)}" ${top ? '' : 'disabled'}>${esc(T.review)}</button>
 {% endif %}
+                <button type="button" class="btn btn-small btn-muted" data-act="link-existing">${esc({{ _('Link to existing book')|tojson }})}</button>
                 <button type="button" class="btn btn-small btn-dismiss" data-act="hide" title="${esc(T.hideTitle)}">${esc(T.hide)}</button>
                 <button type="button" class="btn btn-small btn-reject" data-act="ignore" title="${esc(T.ignorePairTitle)}">${esc(T.ignore)}</button>
             </div>
@@ -1549,6 +1551,7 @@
             </div>
             <div class="row-actions">
                 <button type="button" class="btn btn-small btn-muted" data-act="review-search" title="${esc(T.reviewTitle)}">${esc(T.review)}</button>
+                <button type="button" class="btn btn-small btn-muted" data-act="link-existing">${esc({{ _('Link to existing book')|tojson }})}</button>
             </div>
         </div>`;
     }
@@ -1874,6 +1877,15 @@
             if (act === 'show-hidden') { showHidden(); return; }
             if (act === 'clear-filters') { tabState[activeTab] = { ...DEFAULTS[activeTab], sort: tabState[activeTab].sort, group: tabState[activeTab].group }; syncControls(); saveState(); loadView(activeTab); return; }
             if (act === 'review-search') { selectSearchResult(Number(actButton.closest('.sugg-row').dataset.index)); return; }
+            if (act === 'link-existing') {
+                const row = actButton.closest('.sugg-row');
+                const audio = row.classList.contains('search-row') ? views.search?.audiobooks?.[Number(row.dataset.index)] : entryFromRow(row);
+                if (!audio) return;
+                const source = audio.audio_source || audio.source || 'ABS';
+                const id = audio.audio_source_id || audio.source_id || String(audio.bridge_key || audio.abs_id || '').replace(/^(bookorbit|booklore):/i, '');
+                if (id) openCompanionAudio(null, source, {id: String(id), title: audio.audio_title || audio.title}, () => loadView(activeTab));
+                return;
+            }
             const entry = entryFromRow(actButton.closest('.sugg-row'));
             if (!entry) return;
             if (act === 'find-audio') {

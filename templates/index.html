@@ -3851,6 +3851,8 @@
                     });
             }
 
+            {% include '_companion_audio_script.html' %}
+
             function updateReadalongStatus(card, ready) {
                 const badge = card && card.querySelector('.readalong-badge');
                 if (badge) badge.hidden = !ready;

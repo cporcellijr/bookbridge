@@ -60,6 +60,8 @@ from src.utils.ebook_utils import (
     is_linkable_ebook_filename,
 )
 from src.utils.ebook_sources import is_grimmory_source, local_ebook_filename, normalize_ebook_source
+from src.services.companion_audio import AUDIO_PROVIDERS, verify_audio_pair
+from src.web.audio_link_jobs import enqueue_lock
 from src.utils.local_ebook_metadata import read_local_ebook_metadata, read_local_ebook_series
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
@@ -1657,6 +1659,84 @@ from src.web.readalong_generation_jobs import (
 
 
 
+
+
+def companion_audio(abs_id):
+    source = request.args.get('provider')
+    if request.method == 'POST':
+        payload = request.get_json(silent=True)
+        payload = payload if isinstance(payload, dict) else {}
+        return _match_existing_audio(abs_id, payload.get('provider'), payload.get('item_id'))
+    return _match_existing_audio(abs_id, source)
+
+
+def _match_existing_audio(abs_id, provider, item_id=None):
+    book = database_service.get_book(abs_id)
+    if not book:
+        return jsonify(error="Book not found"), 404
+    user = current_user()
+    if not _user_may_modify_book(user, abs_id):
+        return _forbidden_book_response(json_response=True)
+    user_id = user.id if user is not None else database_service._default_user_id()
+    if user_id is None:
+        return jsonify(error="No active BookBridge user"), 409
+    primary = book.audio_source or 'ABS'
+    if primary not in AUDIO_PROVIDERS or book.sync_mode != 'audiobook' or not book.ebook_filename:
+        return jsonify(error="Link an EPUB and a primary audiobook first."), 409
+    secondary = provider or {'ABS': 'BookOrbit', 'BookOrbit': 'ABS'}.get(primary)
+    if not isinstance(secondary, str) or secondary not in AUDIO_PROVIDERS or primary == secondary:
+        return jsonify(error="Select another audio service."), 400
+    if request.method == 'DELETE':
+        database_service.delete_companion_audio(user_id, abs_id, secondary)
+        return jsonify(success=True)
+    if not _build_dashboard_integrations().get(AUDIO_PROVIDERS[secondary][0]):
+        return jsonify(error="The audio service is not enabled for this account."), 409
+    if request.method == 'GET':
+        query = request.args.get('q', '').strip() or book.abs_title
+        linked = database_service.resolve_companion_audio(user_id, book, secondary)
+        candidates = [dict(id=row.source_id, title=row.title, authors=row.authors)
+                      for row in get_searchable_audiobooks(query) if row.source == secondary][:20]
+        return jsonify(provider=secondary, provider_label=AUDIO_PROVIDERS[secondary][1], linked=linked, candidates=candidates)
+
+    if not isinstance(item_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,255}', item_id):
+        return jsonify(error="Select a valid audiobook."), 400
+    primary_id = database_service.primary_audio_item_id(user_id, book)
+    if not primary_id:
+        return jsonify(error="The primary audio source is not linked for this user."), 409
+    existing = database_service.get_book_by_audio_source(secondary, item_id)
+    if secondary == 'ABS' and not existing:
+        existing = database_service.get_book(item_id)
+    if existing and existing.abs_id != abs_id:
+        return jsonify(error="This audiobook already has its own mapping. Neither mapping was changed."), 409
+    linked = database_service.resolve_companion_audio(user_id, book, secondary)
+    if linked == item_id:
+        return jsonify(success=True, provider=secondary)
+    if linked:
+        return jsonify(error="Unlink the current audiobook for this service before replacing it."), 409
+    with enqueue_lock:
+        job_id = database_service.enqueue_audio_link(user_id, abs_id, dict(
+            provider=secondary, item_id=item_id, primary=primary, primary_id=primary_id,
+        ))
+    if job_id is None:
+        return jsonify(error="Another audiobook link for this service is already queued."), 409
+    return jsonify(success=True, status='queued', job_id=job_id, provider=secondary), 202
+
+
+def existing_audio_match_targets():
+    user = current_user()
+    if user is None:
+        return jsonify(error="Authentication required"), 401
+    provider = request.args.get('provider')
+    if provider not in AUDIO_PROVIDERS:
+        return jsonify(error="Select an audio service"), 400
+    query = request.args.get('q', '').strip().casefold()
+    books = database_service.get_all_books(user_id=user.id)
+    matches = [book for book in books if book.sync_mode == 'audiobook' and book.ebook_filename
+               and (book.audio_source or 'ABS') in AUDIO_PROVIDERS.keys() - {provider}
+               and query in (book.abs_title or '').casefold()]
+    matches.sort(key=lambda book: (book.abs_title or '').casefold())
+    return jsonify(candidates=[dict(id=book.abs_id, title=book.abs_title or book.ebook_filename,
+                                    authors=book.ebook_filename) for book in matches[:40]])
 
 
 from src.web.routes.readalong import generate_readalong_epub, readalong_epub_status, remove_readalong_epub_route

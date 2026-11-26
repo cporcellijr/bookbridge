@@ -16,6 +16,7 @@ from ..models import (
     ReadingSession,
     ReadingSessionBuffer,
     BookAlignment,
+    UserCompanionAudio,
     BookAlignmentBackup,
     User,
     UserBook,
@@ -852,6 +853,7 @@ class BooksMixin:
             # SQLite foreign-key enforcement is not guaranteed on established
             # installs, so remove membership rows explicitly instead of relying
             # on their ON DELETE CASCADE declarations.
+            session.query(UserCompanionAudio).filter_by(abs_id=abs_id).delete(synchronize_session=False)
             session.query(UserBookFusionLink).filter(
                 UserBookFusionLink.abs_id == abs_id
             ).delete(synchronize_session=False)

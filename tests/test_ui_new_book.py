@@ -71,7 +71,7 @@ class TestBookPage(unittest.TestCase):
             text = response.get_data(as_text=True)
             assert response.status_code == 200
             for action in ['syncNow(', 'markComplete(', 'clearPosition(', 'remapAlignment(',
-                           'generateReadalongEpub(', 'linkHardcover(event)',
+                           'generateReadalongEpub(', 'openCompanionAudio("book-1", "BookOrbit")', 'linkHardcover(event)',
                            'linkStorygraph(event)', 'linkBookFusion(event)',
                            'updateKoSyncHash(event)', 'openStorytellerModal(',
                            '/delete/book-1', '/static/js/reading-position-preview.js',
@@ -100,6 +100,59 @@ class TestBookPage(unittest.TestCase):
             assert 'index.html' in observed
         finally:
             template_rendered.disconnect(capture, self.app)
+
+    def test_companion_abs_has_a_deep_link_and_unlink_action(self):
+        self._login('ui-reader')
+        book = self.service.get_book('book-1')
+        book.audio_source = 'BookOrbit'
+        book.audio_source_id = '42'
+        self.service.save_book(book)
+        self.service.set_user_bookorbit_link(self.reader.id, 'book-1', audio_id='42')
+        self.service.set_companion_audio(self.reader.id, 'book-1', 'ABS', 'abs-companion', '42')
+        assert self.service.get_companion_suggestion_keys(self.reader.id) == {'abs-companion'}
+        with patch.dict('os.environ', {'ABS_WEB_URL': 'https://abs.example'}), \
+             patch('src.web_server._build_dashboard_integrations', return_value={'abs': True}):
+            text = self.client.get('/book/book-1').get_data(as_text=True)
+        assert 'https://abs.example/item/abs-companion' in text
+        assert 'unlinkCompanionAudio("book-1", "ABS", this)' in text
+        assert self.service.get_companion_suggestion_keys(self.admin.id) == set()
+
+    def test_standard_match_adds_each_enabled_audio_provider_to_the_same_book(self):
+        from types import SimpleNamespace
+        from src import web_server
+        from src.web.audio_link_jobs import process_audio_link
+
+        self._login('ui-reader')
+        worker = SimpleNamespace(database_service=self.service, container=web_server.container,
+                                 verify_audio_pair=lambda *_: True, logger=web_server.logger)
+        jobs = []
+        with patch('src.web_server._build_dashboard_integrations', return_value={'abs': True, 'bookorbitaudio': True, 'bookloreaudio': True}), \
+             patch('src.web_server.verify_audio_pair', side_effect=AssertionError('request verified audio')):
+            for provider, item in [('BookOrbit', '42'), ('BookLore', '43')]:
+                data = {
+                    'existing_book_id': 'book-1', 'audio_source': provider, 'audio_source_id': item,
+                }
+                response = self.client.post('/match', data=data)
+                assert response.status_code == 202, response.get_data(as_text=True)
+                jobs.append(response.json['job_id'])
+                assert self.client.post('/match', data=data).json['job_id'] == jobs[-1]
+            assert self.service.get_active_companion_audio(self.reader.id) == {}
+            assert self.service.get_audio_link_jobs(self.admin.id) == []
+            assert 'Waiting for audio verification' in self.client.get('/job-queue').get_data(as_text=True)
+            worker.container = SimpleNamespace(user_client_registry=lambda: SimpleNamespace(get_clients=lambda _: object()))
+            for job_id in jobs:
+                job = self.service.next_audio_link_job()
+                assert job.id == job_id and job.stage == 'running'
+                # An interrupted worker job is selected again after a restart.
+                assert self.service.next_audio_link_job().id == job_id
+                process_audio_link(worker, job)
+            assert {job.stage for job in self.service.get_audio_link_jobs(self.reader.id)} == {'completed'}
+            page = self.client.get('/book/book-1').get_data(as_text=True)
+            assert 'unlinkCompanionAudio("book-1", "BookOrbit", this)' in page
+            assert 'unlinkCompanionAudio("book-1", "BookLore", this)' in page
+            assert self.client.delete('/api/companion-audio/book-1?provider=BookOrbit').status_code == 200
+        assert self.service.get_active_companion_audio(self.reader.id) == {'book-1': {'BookLore': '43'}}
+        assert self.service.get_book('book-1').status == 'active'
 
     def test_app_states_link_changes_readalong_and_devices(self):
         from types import SimpleNamespace
