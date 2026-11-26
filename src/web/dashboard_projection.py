@@ -398,6 +398,7 @@ def _build_dashboard_mapping(
     bookfusion_by_book=None,
     bookorbit_authors=None,
     goodreads_by_book=None,
+    fable_by_book=None,
 ):
     web = _web_server()
     states = states_by_book.get(book.abs_id, [])
@@ -549,6 +550,17 @@ def _build_dashboard_mapping(
         "goodreads_review_count": web._coerce_dashboard_count(goodreads_details.goodreads_review_count) if goodreads_details else None,
     })
 
+    fable_details = (fable_by_book or {}).get(book.abs_id)
+    mapping.update({
+        "fable_book_id": fable_details.fable_book_id if fable_details else None,
+        "fable_linked": bool(fable_details),
+        "fable_url": fable_details.fable_url if fable_details else None,
+        "fable_title": book.abs_title if fable_details else None,
+        "fable_matched_by": fable_details.matched_by if fable_details else None,
+        "fable_rating": web._coerce_dashboard_rating(fable_details.fable_rating) if fable_details else None,
+        "fable_review_count": web._coerce_dashboard_count(fable_details.fable_review_count) if fable_details else None,
+    })
+
     bookfusion_link = (bookfusion_by_book or {}).get(book.abs_id)
     if not isinstance(bookfusion_link, dict):
         bookfusion_link = None
@@ -664,11 +676,13 @@ def _build_dashboard_mappings(
     bookfusion_by_book=None,
     bookorbit_authors=None,
     all_goodreads=None,
+    all_fable=None,
 ):
     web = _web_server()
     hardcover_by_book = {h.abs_id: h for h in (all_hardcover or [])}
     storygraph_by_book = {s.abs_id: s for s in (all_storygraph or [])}
     goodreads_by_book = {g.abs_id: g for g in (all_goodreads or [])}
+    fable_by_book = {f.abs_id: f for f in (all_fable or [])}
     states_by_book = _group_dashboard_states_by_book(all_states)
     reading_stats_by_book = reading_stats_by_book or {}
     cached_booklore_by_filename = cached_booklore_by_filename or {}
@@ -699,6 +713,7 @@ def _build_dashboard_mappings(
             bookfusion_by_book=bookfusion_by_book,
             bookorbit_authors=bookorbit_authors,
             goodreads_by_book=goodreads_by_book,
+            fable_by_book=fable_by_book,
         )
         mapping["ctc_aligned"] = book.abs_id in ctc_aligned_book_ids
         mapping["readalong_ready"] = book.abs_id in readalong_ready_book_ids

@@ -19,6 +19,7 @@ from .models import (
     HardcoverDetails,
     StorygraphDetails,
     GoodreadsDetails,
+    FableDetails,
     KosyncDocument,
     ReadingSession,
     User,
@@ -38,6 +39,7 @@ from .repositories.settings import SettingsMixin
 from .repositories.users import UsersMixin
 from .repositories.jobs import JobsMixin
 from .repositories.goodreads import GoodreadsMixin
+from .repositories.fable import FableMixin
 from .repositories.user_links import UserLinksMixin
 from .repositories.memberships import MembershipsMixin
 from .repositories.kosync_progress import KoSyncProgressMixin
@@ -62,6 +64,7 @@ class DatabaseService(
     UsersMixin,
     JobsMixin,
     GoodreadsMixin,
+    FableMixin,
     UserLinksMixin,
     MembershipsMixin,
     KoSyncProgressMixin,
@@ -627,6 +630,7 @@ class DatabaseService(
                     session.query(HardcoverDetails).filter(HardcoverDetails.abs_id == old_abs_id).delete(synchronize_session=False)
                     session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == old_abs_id).delete(synchronize_session=False)
                     session.query(GoodreadsDetails).filter(GoodreadsDetails.abs_id == old_abs_id).delete(synchronize_session=False)
+                    session.query(FableDetails).filter(FableDetails.abs_id == old_abs_id).delete(synchronize_session=False)
                 except Exception: pass
                 
                 logger.info(f"✅ Migrated data from '{old_abs_id}' to '{new_abs_id}'")

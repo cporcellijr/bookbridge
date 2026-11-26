@@ -65,6 +65,7 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "STORYGRAPH_SESSION_COOKIE", "STORYGRAPH_REMEMBER_USER_TOKEN", "STORYGRAPH_ENABLED",
     "GOODREADS_ENABLED", "GOODREADS_SESSION_COOKIE",
     "GOODREADS_COOKIE_REFRESH_URL", "GOODREADS_COOKIE_REFRESH_TOKEN", "GOODREADS_BROWSER_URL",
+    "FABLE_ENABLED", "FABLE_EMAIL", "FABLE_PASSWORD",
     # Shelfmark (the server URL stays global; each reader signs in as themselves)
     "SHELFMARK_USER", "SHELFMARK_PASSWORD", "SHELFMARK_AUDIOBOOK_LIBRARY_ID",
 })
@@ -271,6 +272,11 @@ PER_USER_FIELD_GROUPS = [
         ("GOODREADS_COOKIE_REFRESH_TOKEN", N_("Cookie refresher token"), "secret"),
         ("GOODREADS_BROWSER_URL", N_("Signed-in Selenium URL (optional)"), "text"),
     ]),
+    (N_("Fable"), [
+        ("FABLE_ENABLED", N_("Enabled"), "bool"),
+        ("FABLE_EMAIL", N_("Account email"), "text"),
+        ("FABLE_PASSWORD", N_("Account password"), "secret"),
+    ]),
     (N_("Shelfmark"), [
         ("SHELFMARK_USER", N_("Username"), "text"),
         ("SHELFMARK_PASSWORD", N_("Password"), "secret"),
@@ -305,6 +311,7 @@ SERVICE_ENABLE_KEYS = frozenset({
     "HARDCOVER_ENABLED",
     "STORYGRAPH_ENABLED",
     "GOODREADS_ENABLED",
+    "FABLE_ENABLED",
 })
 
 _FALSEY_SETTING_VALUES = frozenset({"false", "0", "no", "off"})

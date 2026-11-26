@@ -42,6 +42,7 @@ Pick an app:
 | [Hardcover](hardcover.md) | Progress, finished books, highlights, lists |
 | [StoryGraph](storygraph.md) | Progress and finished books |
 | [Goodreads](goodreads.md) | Progress and finished books |
+| [Fable](fable.md) | Progress and finished books |
 | **Getting books** | |
 | [Shelfmark](shelfmark.md) | Requests for a missing audiobook or ebook |
 

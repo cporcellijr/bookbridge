@@ -564,9 +564,37 @@ stop working until BookBridge is updated.
     - Books are matched by ISBN, ASIN or title and author, and you can pick the edition from the
       book's page.
 
+### Fable
+
+Fable is a **write-only tracker**, like Hardcover, StoryGraph and Goodreads: it receives your
+progress and finished books but never leads a sync.
+
+Fable has no public API, so BookBridge signs in with your Fable email and password the way
+Fable's own apps do, and uses their app API. Fable can change it at any time, so updates may
+stop until BookBridge is updated.
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Enable | `FABLE_ENABLED` | `false` | Turns on Fable updates. |
+| Account email | `FABLE_EMAIL` | empty | The email you sign in to Fable with. |
+| Account password | `FABLE_PASSWORD` | empty | Your Fable password. Stored encrypted, like other passwords. |
+| Update Cooldown (minutes) | `FABLE_UPDATE_COOLDOWN_MINS` | `60` | Global. Same meaning as StoryGraph's cooldown. |
+
+??? note "More about Fable"
+
+    - **Lists:** past 2% a book moves to Currently Reading, and at 99% to Finished. Want to Read is only set
+      on a book that isn't on any of your lists yet. A Finished or Did Not Finish book is never moved back.
+    - **Matching:** Fable lists each edition as its own book, so BookBridge first looks for the book on your own
+      Fable lists (by ISBN, or title and author), then searches Fable by ISBN, ASIN, then title and author.
+      Change the match from the book's page with a Fable URL, ID or search text.
+    - **Sign-in:** BookBridge keeps the signed-in session in memory and renews it with Fable's refresh token,
+      so your password is only sent again after a restart or when the session can't be renewed. After a
+      rejected sign-in it waits 30 minutes before trying again.
+    - Your rating and reviews are never posted; the book's Fable rating is shown on its card.
+
 ### Progress Trackers
 
-Hardcover, StoryGraph and Goodreads are independent - enable any of them on their cards in
+Hardcover, StoryGraph, Goodreads and Fable are independent - enable any of them on their cards in
 **Settings → Services**. Each reader then picks which they use, and supplies their own
 token/cookies, under **Account → My Integrations**. Admins can also manage those values under
 **Settings → Users → Integrations**.
@@ -760,7 +788,7 @@ keeps its own value until you change that control; the changed value then goes t
 | When to check / Check every / Wait until you pause | Reading & Sync → How often each app is checked | `*_POLL_MODE`, `*_POLL_SECONDS`, `*_POLL_WAIT_FOR_SETTLE` for Storyteller, Grimmory (+ audiobooks), BookOrbit (+ audiobooks), Kavita, CWA Kobo sync and BookFusion |
 | Sync highlights every (minutes) | Reading & Sync → Highlights & notes | `BOOKORBIT_`, `BOOKLORE_`, `READEST_` and `HARDCOVER_ANNOTATION_SYNC_MINUTES` (the highlight timer always ran on the shortest of these) |
 | "Up Next" shelf | Library & Matching → "Up Next" shelf | `BOOKORBIT_`, `BOOKLORE_` and `KAVITA_SHELF_WATCH_ENABLED` / `_NAME` / `_THRESHOLD` / `_RESCAN_HOURS` |
-| Wait before posting progress (minutes) | Reading & Sync → Posting to trackers | `HARDCOVER_`, `STORYGRAPH_` and `GOODREADS_UPDATE_COOLDOWN_MINS` |
+| Wait before posting progress (minutes) | Reading & Sync → Posting to trackers | `HARDCOVER_`, `STORYGRAPH_`, `GOODREADS_` and `FABLE_UPDATE_COOLDOWN_MINS` |
 
 When the services currently disagree, the control shows the fastest custom check timer,
 "on" if any service has a switch on, the shortest highlight interval and the longest tracker
@@ -1066,6 +1094,15 @@ settings read only at startup, which restart the app when saved in Settings.
 | [`GOODREADS_COOKIE_REFRESH_TOKEN`](#goodreads) | empty | each reader |  |
 | [`GOODREADS_BROWSER_URL`](#goodreads) | empty | each reader |  |
 | [`GOODREADS_UPDATE_COOLDOWN_MINS`](#goodreads) | `60` | server |  |
+
+### Fable { #every-setting-fable }
+
+| Variable | Default | Applies to | Restart |
+| --- | --- | --- | --- |
+| [`FABLE_ENABLED`](#fable) | `false` | server and each reader |  |
+| [`FABLE_EMAIL`](#fable) | empty | each reader |  |
+| [`FABLE_PASSWORD`](#fable) | empty | each reader |  |
+| [`FABLE_UPDATE_COOLDOWN_MINS`](#fable) | `60` | server |  |
 
 ### AI { #every-setting-ai }
 

@@ -99,6 +99,7 @@ nav:
           - Hardcover: apps/hardcover.md
           - StoryGraph: apps/storygraph.md
           - Goodreads: apps/goodreads.md
+          - Fable: apps/fable.md
       - Getting books:
           - Shelfmark: apps/shelfmark.md
   - Using BookBridge:

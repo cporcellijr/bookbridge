@@ -164,6 +164,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_storygraph_details.return_value = []
         self.mock_database_service.get_all_goodreads_details.return_value = []
+        self.mock_database_service.get_all_fable_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_reading_stats.return_value = {}
         self.mock_database_service.get_booklore_book.return_value = None
@@ -214,6 +215,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         hardcover=False,
         storygraph=False,
         goodreads=False,
+        fable=False,
     ):
         clients_dict = {
             'ABS': Mock(is_configured=Mock(return_value=True)),
@@ -225,6 +227,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             'Hardcover': Mock(is_configured=Mock(return_value=hardcover)),
             'StoryGraph': Mock(is_configured=Mock(return_value=storygraph)),
             'Goodreads': Mock(is_configured=Mock(return_value=goodreads)),
+            'Fable': Mock(is_configured=Mock(return_value=fable)),
         }
         self.mock_container.mock_sync_clients.items.return_value = clients_dict.items()
 
@@ -418,6 +421,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_storygraph_details.return_value = []
         self.mock_database_service.get_all_goodreads_details.return_value = []
+        self.mock_database_service.get_all_fable_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
 
         # Mock the sync_clients call for integrations
@@ -2726,6 +2730,28 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('linkGoodreads(event)', html)
         self.assertIn('https://www.goodreads.com/book/show/123', html)
         self.assertIn('42%', html)
+
+    def test_fable_card_renders_saved_link_progress_and_rating(self):
+        from src.db.models import Book, FableDetails, State
+
+        self._set_dashboard_integrations(fable=True)
+        self.mock_database_service.get_all_books.return_value = [
+            Book(abs_id='abs-fable-1', abs_title='Fable Book', ebook_filename='book.epub')
+        ]
+        self.mock_database_service.get_all_states.return_value = [
+            State(abs_id='abs-fable-1', client_name='fable', percentage=0.42, last_updated=1)
+        ]
+        self.mock_database_service.get_all_fable_details.return_value = [
+            FableDetails('abs-fable-1', '0a1b2c3d-1111-4222-8333-444455556666',
+                         'https://fable.co/book/fable-book', fable_rating=4.1, fable_review_count=12)
+        ]
+
+        html = self._render_index_template_source()
+
+        self.assertIn('linkFable(event)', html)
+        self.assertIn('https://fable.co/book/fable-book', html)
+        self.assertIn('42%', html)
+        self.assertIn('rating-badge-fb', html)
 
     def test_api_storygraph_resolve_uses_abs_metadata(self):
         from src.db.models import Book

@@ -25,7 +25,7 @@ How positions move between your apps.
 
 - **When BookBridge syncs:** the full check every 5 minutes, instant sync for Audiobookshelf and KOReader, and how long to wait after the last KOReader page turn.
 - **How often each app is checked:** give apps that can't notify BookBridge their own, faster timer.
-- **Posting to trackers:** when Hardcover, StoryGraph and Goodreads get your progress.
+- **Posting to trackers:** when Hardcover, StoryGraph, Goodreads and Fable get your progress.
 - **Highlights & notes, Finished books, Protecting your place:** copying highlights between devices, marking a finished book finished everywhere, and the guards that stop an out-of-date device pulling you backwards.
 - **Reading sessions, Reading history & stats:** how sessions are counted and shared.
 

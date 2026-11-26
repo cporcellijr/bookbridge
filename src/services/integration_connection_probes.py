@@ -531,6 +531,28 @@ def _test_storygraph(enabled: bool, session_cookie: str, remember_user_token: st
     return {"ok": False, "message": f"StoryGraph returned {r.status_code}"}
 
 
+def _test_fable(enabled: bool, email: str, password: str) -> dict:
+    """Test a Fable login by signing in, without posting anything."""
+    from src.api.fable_client import FableClient
+
+    if not enabled:
+        return {"ok": False, "message": "Fable is disabled"}
+    if not email or not password:
+        return {"ok": False, "message": "Missing Fable email or password"}
+    credentials = {
+        "FABLE_ENABLED": "true",
+        "FABLE_EMAIL": email,
+        "FABLE_PASSWORD": password,
+        "__allow_global_fallback__": False,
+    }
+    client = FableClient(credentials, user_id=-1, enforce_global_gate=False)
+    try:
+        client.check_connection()
+    except RuntimeError:
+        return {"ok": False, "message": "Fable sign-in failed; check the email and password"}
+    return {"ok": True, "message": "Fable login accepted"}
+
+
 def _test_goodreads(enabled: bool, cookie: str, refresher_url: str, token: str, browser_url: str = "") -> dict:
     """Test a Goodreads account without saving a cookie or posting progress."""
     from src.api.goodreads_client import GoodreadsClient

@@ -44,6 +44,7 @@ def api_status():
     all_hardcover = web.database_service.get_all_hardcover_details()
     all_storygraph = web.database_service.get_all_storygraph_details()
     all_goodreads = web.database_service.get_all_goodreads_details()
+    all_fable = web.database_service.get_all_fable_details()
     all_reading_stats = web.database_service.get_all_reading_stats(user_id=user_id)
     integrations = web._build_dashboard_integrations()
     cached_booklore_by_filename = web._viewer_booklore_index(integrations)
@@ -54,6 +55,7 @@ def api_status():
         all_hardcover=all_hardcover,
         all_storygraph=all_storygraph,
         all_goodreads=all_goodreads,
+        all_fable=all_fable,
         reading_stats_by_book=all_reading_stats,
         cached_booklore_by_filename=cached_booklore_by_filename,
     )

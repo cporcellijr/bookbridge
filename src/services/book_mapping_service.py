@@ -181,6 +181,12 @@ class BookMappingService:
                 goodreads._automatch(book)
             except Exception as e:
                 logger.warning("Shelf-watch: Goodreads automatch failed for '%s': %s", book.abs_id, e, exc_info=True)
+        fable = sync_clients.get('Fable')
+        if fable and fable.is_configured():
+            try:
+                fable._automatch(book)
+            except Exception as e:
+                logger.warning("Shelf-watch: Fable automatch failed for '%s': %s", book.abs_id, e, exc_info=True)
 
     def _user_may_modify(self, user_id: Optional[int], abs_id: str) -> bool:
         """Whether ``user_id`` may rewrite the mapping ``abs_id`` (system, admin, sole claimant or unclaimed).

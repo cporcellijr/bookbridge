@@ -53,7 +53,7 @@
             {% endif %}
             </div>
 
-            {% if mapping.storygraph_rating is not none or mapping.goodreads_rating is not none %}
+            {% if mapping.storygraph_rating is not none or mapping.goodreads_rating is not none or mapping.fable_rating is not none %}
             <div class="rating-badges" aria-label="{{ _('Book ratings') }}">
                 {% if mapping.storygraph_rating is not none %}
                 <span class="rating-badge rating-badge-sg"
@@ -67,6 +67,13 @@
                     title="Goodreads: {{ '%.2f' | format(mapping.goodreads_rating) }}{% if mapping.goodreads_review_count %} {{ ngettext('based on %(num)s review', 'based on %(num)s reviews', mapping.goodreads_review_count, num='{:,}'.format(mapping.goodreads_review_count)) }}{% endif %}">
                     <span class="rating-source">GR</span>
                     <span class="rating-value">{{ '%.1f' | format(mapping.goodreads_rating) }}</span>
+                </span>
+                {% endif %}
+                {% if mapping.fable_rating is not none %}
+                <span class="rating-badge rating-badge-fb"
+                    title="Fable: {{ '%.2f' | format(mapping.fable_rating) }}{% if mapping.fable_review_count %} {{ ngettext('based on %(num)s review', 'based on %(num)s reviews', mapping.fable_review_count, num='{:,}'.format(mapping.fable_review_count)) }}{% endif %}">
+                    <span class="rating-source">FB</span>
+                    <span class="rating-value">{{ '%.1f' | format(mapping.fable_rating) }}</span>
                 </span>
                 {% endif %}
             </div>
@@ -393,6 +400,28 @@
                         {% if mapping.goodreads_book_id %}
                         {% if mapping.states.goodreads is defined %}
                         {{ '%.0f' | format(mapping.states.goodreads.percentage|default(0)) }}%
+                        {% else %}0%{% endif %}
+                        {% else %}<span class="link-icon">+</span>{% endif %}
+                    </span>
+                </div>
+                {% endif %}
+
+                {% if integrations.fable %}
+                <div class="service-item progress-item-hc">
+                    <a href="{% if mapping.fable_book_id %}{{ mapping.fable_url }}{% else %}#{% endif %}"
+                        {% if mapping.fable_book_id %}target="_blank" rel="noopener noreferrer"{% endif %}
+                        title="{% if mapping.fable_book_id %}Open in Fable{% else %}Link to Fable{% endif %}"
+                        class="hc-link {% if not mapping.fable_book_id %}cursor-pointer{% endif %}"
+                        {% if not mapping.fable_book_id %}data-abs-id="{{ mapping.abs_id }}" onclick="linkFable(event); return false;"{% endif %}>
+                        <img src="/static/fable.svg" alt="FB"
+                            class="service-icon {% if not mapping.fable_book_id %}grayscale-muted{% endif %}">
+                    </a>
+                    <span class="service-name">Fable</span>
+                    <span class="service-value cursor-pointer color-inherit" title="Click to edit Fable link"
+                        data-abs-id="{{ mapping.abs_id }}" onclick="linkFable(event)">
+                        {% if mapping.fable_book_id %}
+                        {% if mapping.states.fable is defined %}
+                        {{ '%.0f' | format(mapping.states.fable.percentage|default(0)) }}%
                         {% else %}0%{% endif %}
                         {% else %}<span class="link-icon">+</span>{% endif %}
                     </span>
@@ -3778,6 +3807,43 @@
             </div>
         </div>
         <script src="/static/js/goodreads-modal.js"></script>
+        <div id="fable-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="closeFableModal()"></div>
+            <div class="hc-modal-content">
+                <div class="hc-modal-header">
+                    <h3>Link to Fable</h3>
+                    <button class="hc-modal-close" onclick="closeFableModal()" aria-label="Close">×</button>
+                </div>
+                <div class="hc-modal-body">
+                    <div id="fb-loading" class="hc-loading" style="display:none;">
+                        <div class="hc-loading-spinner"></div>
+                        <div class="hc-loading-text">Searching Fable...</div>
+                    </div>
+                    <div id="fb-found" style="display:none;">
+                        <div class="hc-book-info">
+                            <div class="hc-book-title" id="fb-title"></div>
+                            <div class="hc-book-author" id="fb-author"></div>
+                        </div>
+                        <p class="hc-text-muted"><a id="fb-found-url" href="#" target="_blank" rel="noopener noreferrer">Open in Fable</a></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showFableManualInput(); return false;">Wrong book? Enter a URL, ID, or search text</a></p>
+                    </div>
+                    <div id="fb-manual" style="display:none;">
+                        <p>Enter a Fable URL, book ID, or search text:</p>
+                        <input type="text" id="fb-input" placeholder="https://fable.co/book/...">
+                        <button onclick="resolveFableManualInput()">Resolve</button>
+                    </div>
+                    <div id="fb-error" style="display:none;">
+                        <p id="fb-error-msg" class="hc-text-error"></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showFableManualInput(); return false;">Try a URL or search text</a></p>
+                    </div>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="closeFableModal()">Cancel</button>
+                    <button id="fb-link-btn" class="hc-btn-link" onclick="linkSelectedFableBook()" disabled>Link Book</button>
+                </div>
+            </div>
+        </div>
+        <script src="/static/js/fable-modal.js"></script>
         <!-- Storyteller Link Modal -->
         <div id="st-modal" class="hidden">
             <div class="st-modal-content">

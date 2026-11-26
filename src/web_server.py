@@ -80,6 +80,7 @@ from src.services.alignment_workers import AlignmentWorkerCoordinator
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
 from src.api.storygraph_routes import storygraph_bp, init_storygraph_routes
 from src.api.goodreads_routes import goodreads_bp, init_goodreads_routes
+from src.api.fable_routes import fable_bp, init_fable_routes
 from src.api.bookfusion_upload_client import extract_epub_metadata, _S3_TIMEOUT_LARGE
 from src.version import APP_VERSION, get_update_status
 from src.db.models import State, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
@@ -481,6 +482,8 @@ def setup_dependencies(app, test_container=None):
     app.register_blueprint(storygraph_bp)
     init_goodreads_routes(database_service, container)
     app.register_blueprint(goodreads_bp)
+    init_fable_routes(database_service, container)
+    app.register_blueprint(fable_bp)
 
     # Token-authenticated admin API (disabled unless ADMIN_API_TOKEN is set)
     init_admin_api(
@@ -957,6 +960,7 @@ _USER_TEST_SERVICES = {
     "Hardcover": "hardcover",
     "StoryGraph": "storygraph",
     "Goodreads": "goodreads",
+    "Fable": "fable",
     "Shelfmark": "shelfmark",
 }
 
@@ -1840,7 +1844,7 @@ from src.web.connection_tests import (
 
 from src.services.integration_connection_probes import (
     _test_conn_error, _build_test_url, _test_llm_provider,
-    _test_openai_compatible, _test_whispercpp, _test_ollama, _ollama_show_info, _test_abs, _test_kosync, _test_storyteller, _test_booklore, _test_bookorbit, _test_kavita, _test_cwa, _test_hardcover, _test_readest, _test_bookfusion, _test_shelfmark, _test_storygraph, _test_goodreads, _test_telegram,
+    _test_openai_compatible, _test_whispercpp, _test_ollama, _ollama_show_info, _test_abs, _test_kosync, _test_storyteller, _test_booklore, _test_bookorbit, _test_kavita, _test_cwa, _test_hardcover, _test_readest, _test_bookfusion, _test_shelfmark, _test_storygraph, _test_goodreads, _test_fable, _test_telegram,
 )
 
 

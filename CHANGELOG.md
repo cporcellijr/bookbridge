@@ -8,6 +8,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Fable is now a tracker.** Like Hardcover, StoryGraph and Goodreads, BookBridge can post your progress and
+  finished books to [Fable](https://fable.co): turn it on under **Settings → Services → Fable**, then enter your
+  Fable email and password under **Account → My Integrations → Fable**. Books move to Currently Reading and
+  Finished as you read, are matched to the copy already on your Fable lists first, and can be
+  relinked from the book's page. The book's Fable rating shows on its card. Fable has no public API, so this uses
+  the same sign-in and app API as Fable's own apps.
+
 - **Requested books pair as soon as BookOrbit files them.** BookBridge now listens for BookOrbit's request
   updates, so a finished request pairs within seconds instead of at the next sync. It pairs exactly the book
   BookOrbit says it filed for the request: a same-titled copy already in your library is no longer picked while

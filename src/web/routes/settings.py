@@ -96,6 +96,7 @@ def settings():
             'HARDCOVER_ANNOTATION_SYNC',
             'STORYGRAPH_ENABLED',
             'GOODREADS_ENABLED',
+            'FABLE_ENABLED',
             'TELEGRAM_ENABLED',
             'SUGGESTIONS_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_ENABLED',
