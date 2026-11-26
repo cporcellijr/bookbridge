@@ -62,7 +62,7 @@ from src.utils.source_fingerprint import AcquiredPaths, SourceAudioChanged, veri
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger, redact_url_secrets
 from src.utils.progress_metadata import state_metadata_kwargs
 from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename, normalize_href
-from src.utils.verified_smil_audio import audio_matches_single_embedded_track, embedded_audio
+from src.utils.epub_readalong import audio_matches_single_embedded_track, embedded_audio
 from src.utils.fixed_page_progress import coerce_page, is_cbz_book, is_cbz_filename
 from src.utils.ebook_sources import (
     is_grimmory_source,

@@ -1126,3 +1126,11 @@ def test_connection_test_reports_a_refused_api_key():
         result = web_server._test_bookorbit(True, "http://mock", "", "", "bok_bad")
     assert result["ok"] is False
     assert "API key refused" in result["message"]
+
+
+def test_cached_only_read_aloud_sync_never_makes_a_request(client):
+    """#626: dashboard polls read BookOrbit's read-along status from the detail cache only."""
+    client._detail_cache["12"] = (time.time(), {"id": 12, "readAloudSync": {"state": "enabled"}})
+    with patch.object(client, "_make_request", side_effect=AssertionError("HTTP on a dashboard poll")):
+        assert client.get_read_aloud_sync(12, cached_only=True)["state"] == "enabled"
+        assert client.get_read_aloud_sync(99, cached_only=True) is None

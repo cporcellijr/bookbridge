@@ -1,5 +1,6 @@
 """Identify playable media overlays and, conservatively, their audio clock."""
 
+import hashlib
 import posixpath
 from functools import lru_cache
 from pathlib import Path
@@ -59,3 +60,18 @@ def embedded_audio(path):
         return _embedded_audio(path, (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
     except (OSError, TypeError, ValueError):
         return ()
+
+
+def audio_matches_single_embedded_track(epub_path, audio_path):
+    """Byte equality of one complete track proves a common zero-based clock."""
+    members = embedded_audio(epub_path)
+    if len(members) != 1:
+        return False
+    try:
+        with ZipFile(epub_path) as archive:
+            if archive.getinfo(members[0]).file_size != Path(audio_path).stat().st_size:
+                return False
+            with archive.open(members[0]) as embedded, open(audio_path, "rb") as external:
+                return hashlib.file_digest(embedded, "sha256").digest() == hashlib.file_digest(external, "sha256").digest()
+    except (OSError, BadZipFile, KeyError, RuntimeError, TypeError, ValueError):
+        return False
