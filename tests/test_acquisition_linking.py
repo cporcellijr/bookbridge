@@ -374,13 +374,12 @@ class TestPairing(LinkingBase):
 
 
 class TestCreateMappingDoesNotDuplicate(LinkingBase):
-    def test_same_ebook_audio_copy_replaces_the_existing_mapping_instead_of_adding_a_second(self):
+    def test_same_ebook_audio_copy_is_refused_and_the_existing_mapping_kept(self):
         """Pins what a scan or review approval does when BookOrbit holds a second audio copy.
 
-        create_audio_mapping_from_match finds the old mapping by the ebook's KOSync hash
-        (find_duplicate_mapping is not limited to ebook-only rows) and absorbs it, so the
-        ABS mapping is destroyed rather than doubled. Two rows exist only for two different
-        ebook files. The acquisition linker therefore refuses before ever calling it.
+        create_audio_mapping_from_match finds the old mapping by the ebook's KOSync hash and,
+        since #624, refuses: the ABS mapping and its alignment are neither destroyed nor
+        doubled. Two rows exist only for two different ebook files.
         """
         self.save_mapping(
             "abs-1", audio_source="ABS", audio_source_id="abs-1", ebook_filename="Example Book.epub",
@@ -389,9 +388,9 @@ class TestCreateMappingDoesNotDuplicate(LinkingBase):
             audio_source="BookOrbit", audio_source_id="6099", audio_title="Example Book",
             ebook_filename="Example Book.epub", ebook_source="BookOrbit", ebook_source_id="2167",
             user_id=self.user.id)
-        self.assertEqual(saved.abs_id, "bookorbit:6099")
-        self.assertIsNone(self.db.get_book("abs-1"))
-        self.assertEqual([b.abs_id for b in self.db.get_all_books()], ["bookorbit:6099"])
+        self.assertIsNone(saved)
+        self.assertEqual(self.db.get_book("abs-1").audio_source_id, "abs-1")
+        self.assertEqual([b.abs_id for b in self.db.get_all_books()], ["abs-1"])
 
 
 class TestCycle(LinkingBase):

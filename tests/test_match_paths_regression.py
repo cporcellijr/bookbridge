@@ -215,6 +215,26 @@ class TestMatchPathsRegression(unittest.TestCase):
         db.delete_book.assert_not_called()
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
+    def test_bookfusion_match_rejects_an_ebook_paired_with_another_audiobook(self, _mock_hash):
+        from src.db.models import Book
+
+        db = self.mock_container.mock_database_service
+        db.get_book.return_value = None
+        db.get_book_by_kosync_id.return_value = Book(abs_id="bookorbit:42", audio_source="BookOrbit",
+                                                     sync_mode="audiobook")
+
+        def link(book, _bookfusion_id):
+            book.kosync_doc_id = "hash-bf-1"
+
+        with patch("src.web.mapping_creation._link_bookfusion_ebook_source", side_effect=link):
+            saved, message, code = web_server._create_or_update_bookfusion_progress_mapping(
+                audio_source_id="ab-1", audio_title="Example", bookfusion_id="bf-77")
+        self.assertEqual((saved, code), (None, 409))
+        self.assertEqual(message, web_server._AUDIO_MATCH_CONFLICT)
+        db.save_book.assert_not_called()
+        db.delete_book.assert_not_called()
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
     def test_batch_abs_rematch_keeps_ready_alignment_only_for_same_epub(self, _mock_hash):
         from src.db.models import Book
 
