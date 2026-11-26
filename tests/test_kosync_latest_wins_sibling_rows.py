@@ -18,13 +18,16 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from sqlalchemy.exc import OperationalError
+
 from tests._tmpdirs import process_test_dir
 TEST_DIR = process_test_dir('test_kosync_latest_wins_sibling_rows')
 os.environ['DATA_DIR'] = TEST_DIR
 
 from src.api import kosync_server
 from src.db.models import (
-    Book, KosyncDocument, KosyncUserProgress, ReadingSession, Setting, State, UserCredential,
+    Book, KosyncDeviceReport, KosyncDocument, KosyncUserProgress, ReadingSession, Setting, State,
+    UserCredential,
 )
 from src.utils.ebook_utils import LRUCache
 from src.utils.kosync_headers import hash_kosync_key
@@ -58,8 +61,8 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         from src import web_server
         self.db = web_server.database_service
         with self.db.get_session() as session:
-            for model in (ReadingSession, KosyncDocument, KosyncUserProgress, State, Setting,
-                          UserCredential, Book):
+            for model in (ReadingSession, KosyncDocument, KosyncUserProgress, KosyncDeviceReport, State,
+                          Setting, UserCredential, Book):
                 session.query(model).delete()
         for name in ('_start_manifest_prebuilder', '_load_persisted_manifest',
                      '_record_kosync_event', '_update_grouped_kosync_session'):
@@ -81,18 +84,18 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
     def _h(self):
         return {"x-auth-user": "ju", "x-auth-key": hash_kosync_key("key")}
 
-    def _put(self, doc, pct, device, read_started_at=None):
+    def _put(self, doc, pct, device, read_started_at=None, headers=None):
         payload = {
             "document": doc, "percentage": pct,
             "progress": "/body/DocFragment[%d]/body/p[1].0" % int(pct * 100), **device,
         }
         if read_started_at is not None:
             payload["_bridge_observed_at"] = read_started_at
-        r = self.client.put("/syncs/progress", headers=self._h(), json=payload)
+        r = self.client.put("/syncs/progress", headers=headers or self._h(), json=payload)
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
 
-    def _get(self, doc):
-        r = self.client.get("/syncs/progress/" + doc, headers=self._h())
+    def _get(self, doc, headers=None):
+        r = self.client.get("/syncs/progress/" + doc, headers=headers or self._h())
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         return r.get_json()["percentage"]
 
@@ -113,7 +116,7 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
                 "restart": 0.0, "resend": 0.40, "restart_resend": 0.0, "rewind_resend": 0.40,
                 "resend_markers_kept": True, "resend_during_cycle": (200, 0.40),
                 "resend_keeps_row_time": True, "resend_same_copy": 0.40,
-                "back_after_deferred": 0.6012345678}
+                "back_after_deferred": 0.6012345678, "back_after_lost_report": 0.40}
 
     def test_an_older_higher_row_does_not_undo_a_newer_bridge_write(self):
         """The phone read hash B to 60%. An hour later ABS moved back to 40% and the
@@ -583,6 +586,131 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         state = self.db.get_state(ABS_ID, "kosync", user_id=self.user.id)
         self.assertAlmostEqual(float(state.percentage), self.expected["resend_same_copy"], places=4)
 
+    def _restart(self):
+        """BookBridge restarts: a new DatabaseService on the same file, and everything the
+        KoSync server keeps in memory starts empty, for the rest of the test."""
+        from src.db.database_service import DatabaseService
+        fresh = DatabaseService(str(self.db.db_path))
+        self.addCleanup(fresh.db_manager.close)
+        emptied = {name: LRUCache(capacity=value.capacity) if isinstance(value, LRUCache) else type(value)()
+                   for name, value in vars(kosync_server).items()
+                   if name.startswith("_") and not name.startswith("__")
+                   and isinstance(value, (dict, set, LRUCache))}
+        for name, value in {**emptied, "_database_service": fresh,
+                            "_kosync_device_session_registry": None}.items():
+            p = patch.object(kosync_server, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_a_re_send_after_a_restart_does_not_undo_what_was_written_since(self):
+        """Same as a re-send after a second Kobo wrote copy A, with BookBridge restarted
+        before the first Kobo re-sends its 60%."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_A, 0.40, {"device": "Kobo 2", "device_id": "kobo-2"})
+        self._aged(DOC_A, minutes=30)
+        with self.db.get_session() as s:  # kept in the database, not in some other process-wide store
+            self.assertEqual(s.query(KosyncDeviceReport).filter_by(
+                document_hash=DOC_A, user_id=self.user.id, device_id="kobo-1").count(), 1)
+        self._restart()
+        self._put(DOC_A, self.RESENT, KOBO)
+        self.assertAlmostEqual(self._get(DOC_A), self.expected["resend_same_copy"], places=4)
+        state = self.db.get_state(ABS_ID, "kosync", user_id=self.user.id)
+        self.assertAlmostEqual(float(state.percentage), self.expected["resend_same_copy"], places=4)
+
+    def test_the_last_reports_are_kept_per_reader(self):
+        """Two readers each read copy A on a Kobo, both with the device id "kobo-1" (60% and
+        30%), then each reader's second Kobo wrote copy A. Each first Kobo re-sends its own
+        position: each is recognised from that reader's report."""
+        other = self.db.get_user_by_username("sarah") or self.db.create_user("sarah", "pw", role="user")
+        for key, value in (("KOSYNC_USER", "sa"), ("KOSYNC_KEY", "key2"), ("KOSYNC_FURTHEST_WINS", "false")):
+            self.db.set_user_credential(other.id, key, value)
+        self.db.link_user_book(other.id, ABS_ID)
+        sarah = {"x-auth-user": "sa", "x-auth-key": hash_kosync_key("key2")}
+        kobo_2 = {"device": "Kobo 2", "device_id": "kobo-2"}
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._put(DOC_A, 0.30, KOBO, headers=sarah)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_A, 0.40, kobo_2)
+        self._put(DOC_A, 0.20, kobo_2, headers=sarah)
+        self._aged(DOC_A, minutes=30)
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._put(DOC_A, 0.30, KOBO, headers=sarah)
+        self.assertAlmostEqual(self._get(DOC_A), self.expected["resend_same_copy"], places=4)
+        self.assertAlmostEqual(self._get(DOC_A, headers=sarah), 0.20, places=4)  # sarah is latest-wins
+
+    def test_a_report_that_cannot_be_kept_does_not_fail_the_put(self):
+        """The database refuses the device's report (locked) after its position was saved:
+        the PUT answers 200 and the State takes the position all the same."""
+        self._put(DOC_A, 0.40, KOBO)
+        locked = OperationalError("INSERT", {}, Exception("database is locked"))
+        with patch.object(self.db, "upsert_kosync_device_report", side_effect=locked):
+            self._put(DOC_A, 0.62, KOBO)
+        state = self.db.get_state(ABS_ID, "kosync", user_id=self.user.id)
+        self.assertAlmostEqual(float(state.percentage), 0.62, places=4)
+
+    def test_a_device_back_where_it_was_after_a_report_it_could_not_keep_is_newer(self):
+        """The Kobo reported 40%, then 95%, whose report could not be kept (locked): the
+        table still holds its 40%. Nobody else wrote copy A, so the Kobo going back to
+        exactly its 40% is its newest move."""
+        self._put(DOC_A, 0.40, KOBO)
+        locked = OperationalError("INSERT", {}, Exception("database is locked"))
+        with patch.object(self.db, "upsert_kosync_device_report", side_effect=locked):
+            self._put(DOC_A, 0.95, KOBO)
+        self._put(DOC_A, 0.40, KOBO)
+        self.assertAlmostEqual(self._get(DOC_A), self.expected["back_after_lost_report"], places=4)
+
+    def test_a_report_that_cannot_be_read_is_taken_as_new(self):
+        """Same as a re-send after a second Kobo wrote copy A, but the device's last report
+        cannot be read (locked): the re-send is taken, as any PUT."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_A, 0.40, {"device": "Kobo 2", "device_id": "kobo-2"})
+        self._aged(DOC_A, minutes=30)
+        locked = OperationalError("SELECT", {}, Exception("database is locked"))
+        with patch.object(self.db, "get_kosync_device_report", side_effect=locked):
+            self._put(DOC_A, self.RESENT, KOBO)
+        self.assertAlmostEqual(self._get(DOC_A), self.RESENT, places=4)
+
+    def test_deleting_a_books_kosync_data_forgets_the_devices_last_reports(self):
+        """KoSync progress must not outlive a mapping (#358): nor may the last reports. The
+        Kobo read A to 60%; the book's KoSync data was deleted and copy A linked again; a
+        second Kobo reported 40% there. The first Kobo's 60% is a first report, not a re-send."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self.db.delete_kosync_data_for_book(ABS_ID)
+        self.db.save_kosync_document(KosyncDocument(document_hash=DOC_A, linked_abs_id=ABS_ID,
+                                                    percentage=0, user_id=self.user.id))
+        self._put(DOC_A, 0.40, {"device": "Kobo 2", "device_id": "kobo-2"})
+        self._aged(DOC_A, minutes=30)
+        self._put(DOC_A, self.RESENT, KOBO)
+        self.assertAlmostEqual(self._get(DOC_A), self.RESENT, places=4)
+
+    def test_deleting_a_mapping_forgets_its_devices_last_reports(self):
+        """Delete Mapping deletes the book (which unlinks its copies) before its cleanup, so
+        the book's hashes may no longer be found there: the reports on copies no book links
+        any more go; another book's stay."""
+        import src.web_server as web_server
+        doc_c = hashlib.md5(b"c.epub").hexdigest()
+        self.db.save_book(Book(abs_id="book-2", abs_title="Book 2", ebook_filename="c.epub",
+                               kosync_doc_id=doc_c, status="active"))
+        self.db.link_user_book(self.user.id, "book-2")
+        self.db.save_kosync_document(KosyncDocument(document_hash=doc_c, linked_abs_id="book-2",
+                                                    percentage=0, user_id=self.user.id))
+        self._put(doc_c, 0.30, KOBO)
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._put(DOC_B, 0.40, PHONE)
+        book = self.db.get_book(ABS_ID)
+        self.db.delete_book(ABS_ID)
+        data_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(data_dir), True)
+        with patch.object(web_server, "uc", return_value=MagicMock()), \
+                patch.object(web_server, "DATA_DIR", data_dir, create=True), \
+                patch.object(web_server, "container", MagicMock()), \
+                patch("src.services.shelf_watch_service.clear_shelf_watch_throttle"):
+            web_server.cleanup_mapping_resources(book)
+        with self.db.get_session() as s:
+            self.assertEqual({r.document_hash for r in s.query(KosyncDeviceReport)}, {doc_c})
+
     def test_a_re_send_after_the_copys_rows_were_deleted_is_taken_as_before(self):
         """The copy's rows were deleted and copy A linked again, the book's State at 40%:
         no row holds a report for copy A any more. The Kobo's re-send of its 60% is taken,
@@ -594,23 +722,6 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         self._cycle_saves_state(0.40)
         self._put(DOC_A, self.RESENT, KOBO)
         self.assertAlmostEqual(self._get(DOC_A), self.RESENT, places=4)
-
-    def test_deleting_a_mapping_forgets_the_devices_last_reports(self):
-        """KoSync progress must not outlive a mapping (#358): nor may the last reports."""
-        import src.web_server as web_server
-        self._put(DOC_A, self.RESENT, KOBO)
-        fake_db = MagicMock()
-        fake_db.get_all_books.return_value = []
-        fake_db.delete_kosync_data_for_book.return_value = (0, 0)
-        data_dir = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, str(data_dir), True)
-        with patch.object(web_server, "uc", return_value=MagicMock()), \
-                patch.object(web_server, "DATA_DIR", data_dir, create=True), \
-                patch.object(web_server, "database_service", fake_db), \
-                patch.object(web_server, "container", MagicMock()), \
-                patch("src.services.shelf_watch_service.clear_shelf_watch_throttle"):
-            web_server.cleanup_mapping_resources(self.db.get_book(ABS_ID))
-        self.assertEqual(len(kosync_server._device_last_reports.cache), 0)
 
     def test_the_same_percentage_at_another_place_is_newer(self):
         """Same as a re-send after a second Kobo wrote copy A, but at another locator."""
@@ -675,17 +786,6 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         self._put(doc_c, self.RESENT, KOBO)
         self.assertEqual(self.db.get_kosync_document(doc_c).linked_abs_id, "book-2")
 
-    def test_the_last_reports_are_bounded_and_keep_no_device_strings(self):
-        """Devices choose the hash, device id and locator, up to the request size: the store
-        keeps a bounded number of fixed-size entries."""
-        with patch.object(kosync_server, "_device_last_reports", LRUCache(capacity=2)):
-            for n in range(3):
-                self._put(DOC_A, self.RESENT, {"device": "Kobo", "device_id": "k" * 100_000 + str(n)})
-            store = kosync_server._device_last_reports
-            self.assertEqual(len(store.cache), 2)
-            for key, (locator, _) in store.cache.items():
-                self.assertEqual((len(key), len(locator)), (32, 32))
-
     def _held_then_latest_wins(self):
         """Furthest-wins on: the Kobo reads A to 50%, the book moves on to 80%, and the Kobo
         reports 55%, which is held (saved to the copy only). Then furthest-wins goes off."""
@@ -734,7 +834,8 @@ class TestFurthestWinsSiblingRows(TestLatestWinsSiblingRows):
                 "restart": 0.60, "resend": 0.6012345678, "restart_resend": 0.6012345678,
                 "rewind_resend": 0.6012345678, "resend_markers_kept": False,
                 "resend_during_cycle": (200, 0.6012345678), "resend_keeps_row_time": False,
-                "resend_same_copy": 0.6012345678, "back_after_deferred": 0.70}
+                "resend_same_copy": 0.6012345678, "back_after_deferred": 0.70,
+                "back_after_lost_report": 0.95}
 
     def setUp(self):
         super().setUp()

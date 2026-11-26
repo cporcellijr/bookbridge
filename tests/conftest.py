@@ -116,7 +116,6 @@ def no_kosync_debounce_thread(monkeypatch):
             kosync_server._kosync_open_sessions.clear()
         with kosync_server._kosync_debounce_lock:
             kosync_server._kosync_debounce.clear()
-        kosync_server._device_last_reports.clear()
 
     monkeypatch.setattr(kosync_server, "_start_kosync_debounce_thread", lambda: None)
     clear_kosync_queues()

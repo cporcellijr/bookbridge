@@ -2027,41 +2027,38 @@ def _resent_position_time(doc_hash: str, user_id, device_id, progress, percentag
     return None
 
 
-# The position each device last reported, per (user_id, document hash, device_id). A
-# re-send is recognised from it once the sync cycle or another device has written that
-# copy, and the reader's row no longer shows it. In memory only: after a restart, a
-# re-send is recognised only while the row still holds it. Devices choose these strings,
-# up to the request size, so the store keeps digests, and a bounded number of them: a
-# report it has dropped is simply not recognised, as before.
-_device_last_reports = LRUCache(capacity=4096)
-
-
-def _device_report(user_id, doc_hash, device_id, progress):
-    """A report's key and locator in the store, as digests."""
-    return (hashlib.sha256(repr((user_id, doc_hash, device_id)).encode()).digest(),
-            hashlib.sha256(str(progress or "").encode()).digest())
-
-
 def _resent_over_newer_report(user_id, doc_hash: str, device_id, progress, percentage) -> bool:
-    """Whether a device re-sends its last report on a copy that someone has written since:
-    called when the reader's row no longer shows that report, but still holds one. A copy
-    not linked yet, or a reader with no KoSync State, is handled as any PUT (it gets one)."""
-    key, locator = _device_report(user_id, doc_hash, device_id, progress)
-    last = _device_last_reports.get(key)
-    if last is None or last[0] != locator or abs(last[1] - float(percentage)) >= 1e-6:
+    """Whether a device re-sends its last report (kept in kosync_device_reports) on a copy
+    that another device or the sync cycle has written since: called when the reader's row
+    no longer shows that report. A copy not linked yet, or a reader with no KoSync State,
+    is handled as any PUT (it gets one), and so is a report that cannot be read."""
+    try:
+        last = _database_service.get_kosync_device_report(doc_hash, device_id, user_id)
+    except Exception as e:
+        logger.warning("KOSync: Could not read the last report of '%s' for doc %s: %s", device_id, doc_hash, e)
+        return False
+    if last is None or last[0] != str(progress or "") or abs(last[1] - float(percentage)) >= 1e-6:
         return False
     doc = _database_service.get_kosync_document(doc_hash)
     book_id = getattr(doc, "linked_abs_id", None)
+    row_device = getattr(_reader_progress_row(doc_hash, doc, user_id), "device_id", None)
     return bool(
-        book_id and getattr(_reader_progress_row(doc_hash, doc, user_id), "device_id", None)
+        book_id and row_device and row_device != device_id
         and _database_service.get_state(book_id, "kosync", user_id=user_id) is not None
     )
 
 
 def _record_device_report(user_id, doc_hash: str, device_id, progress, percentage) -> None:
     if device_id:
-        key, locator = _device_report(user_id, doc_hash, device_id, progress)
-        _device_last_reports.put(key, (locator, float(percentage)))
+        # The position is saved by now. If this fails, the table keeps the device's previous
+        # report until its next one is kept: this one is not recognised when re-sent, and the
+        # device going back to exactly the previous one is ignored while the reader's row for
+        # that copy was last written by another device or the sync cycle.
+        try:
+            _database_service.upsert_kosync_device_report(doc_hash, device_id, str(progress or ""),
+                                                          float(percentage), user_id)
+        except Exception as e:
+            logger.warning("KOSync: Could not keep the last report of '%s' for doc %s: %s", device_id, doc_hash, e)
 
 
 def _forward_reading_threshold() -> float:

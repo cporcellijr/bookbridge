@@ -117,6 +117,18 @@ class KosyncUserProgress(Base):
                 f"user_id={self.user_id}, pct={self.percentage})>")
 
 
+class KosyncDeviceReport(Base):
+    """The position each KOReader device last reported on a hash, per reader: a re-send is
+    recognised from it once the reader's KosyncUserProgress row no longer shows it."""
+    __tablename__ = 'kosync_device_reports'
+
+    document_hash = Column(String(32), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    device_id = Column(String(64), primary_key=True)
+    progress = Column(String(512), nullable=False)  # the locator as text, "" when none was sent
+    percentage = Column(Float, nullable=False)
+
+
 class KosyncXpathOrderCache(Base):
     """
     Persistent cache of already-resolved XPath <-> character-index pairs for one EPUB.

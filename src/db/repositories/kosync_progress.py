@@ -5,6 +5,7 @@ from ..models import (
     Book,
     State,
     KosyncDocument,
+    KosyncDeviceReport,
     KosyncUserProgress,
     KosyncXpathOrderCache,
 )
@@ -72,6 +73,39 @@ class KoSyncProgressMixin:
             session.refresh(row)
             session.expunge(row)
             return row
+
+    def get_kosync_device_report(self, document_hash: str, device_id: str, user_id: int = None):
+        """A device's last report on a hash, as (progress, percentage), or None (also when
+        no user resolves, as for ``get_user_kosync_progress``)."""
+        uid = self._resolve_uid(user_id)
+        if uid is None:
+            return None
+        with self.get_session() as session:
+            return session.query(KosyncDeviceReport.progress, KosyncDeviceReport.percentage).filter_by(
+                document_hash=document_hash, user_id=uid, device_id=device_id).first()
+
+    def upsert_kosync_device_report(self, document_hash: str, device_id: str, progress: str,
+                                    percentage: float, user_id: int = None) -> None:
+        """Keep a device's last report on a hash. No-op when no user resolves, as for
+        ``upsert_user_kosync_progress``."""
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        uid = self._resolve_uid(user_id)
+        if uid is None:
+            return
+        values = {"progress": progress, "percentage": percentage}
+        with self.get_session() as session:
+            session.execute(sqlite_insert(KosyncDeviceReport).values(
+                document_hash=document_hash, user_id=uid, device_id=device_id, **values,
+            ).on_conflict_do_update(index_elements=["document_hash", "user_id", "device_id"], set_=values))
+
+    def delete_unlinked_kosync_device_reports(self) -> None:
+        """Forget the devices' last reports on every hash no book is linked to (never or no
+        longer: a deleted book's hashes are unlinked by then)."""
+        with self.get_session() as session:
+            linked = session.query(KosyncDocument.document_hash).filter(KosyncDocument.linked_abs_id.isnot(None))
+            session.query(KosyncDeviceReport).filter(
+                KosyncDeviceReport.document_hash.notin_(linked)).delete(synchronize_session=False)
 
     def _mark_hash_progress_written(self, session, document_hash: str) -> None:
         """Mark every book a KoSync document hash is linked to (or is the doc id of) as written."""
@@ -200,7 +234,7 @@ class KoSyncProgressMixin:
             return True
 
     def delete_kosync_data_for_book(self, abs_id: str) -> tuple[int, int]:
-        """Delete every KoSync document and per-user progress row for a book.
+        """Delete every KoSync document, per-user progress row and device report for a book.
 
         Called when a mapping is removed. KoSync progress must not outlive the
         mapping: the document hash is derived from the EPUB's content, so
@@ -233,6 +267,8 @@ class KoSyncProgressMixin:
                 .filter(KosyncUserProgress.document_hash.in_(hashes))
                 .delete(synchronize_session=False)
             )
+            session.query(KosyncDeviceReport).filter(
+                KosyncDeviceReport.document_hash.in_(hashes)).delete(synchronize_session=False)
             documents_deleted = (
                 session.query(KosyncDocument)
                 .filter(KosyncDocument.document_hash.in_(hashes))
