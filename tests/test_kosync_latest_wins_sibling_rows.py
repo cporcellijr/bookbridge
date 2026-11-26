@@ -38,6 +38,8 @@ DOC_A = hashlib.md5(b"a.epub").hexdigest()
 DOC_B = hashlib.md5(b"b.epub").hexdigest()
 BOT = {"device": "abs-sync-bot", "device_id": "abs-sync-bot"}
 KOBO = {"device": "Kobo", "device_id": "kobo-1"}
+# Bridge Sync marks KOReader's interactive push ("Push progress" in its menu) deliberate.
+KOBO_DELIBERATE = {**KOBO, "metadata": {"deliberate": True}}
 PHONE = {"device": "Phone", "device_id": "phone-1"}
 
 
@@ -710,6 +712,38 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
             web_server.cleanup_mapping_resources(book)
         with self.db.get_session() as s:
             self.assertEqual({r.document_hash for r in s.query(KosyncDeviceReport)}, {doc_c})
+
+    def test_a_deliberate_push_after_the_cycle_wrote_that_copy_is_taken(self):
+        """As above, but the reader pushed the Kobo's 60% from KOReader's menu, which Bridge
+        Sync marks deliberate: a position chosen now is taken."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_A, 0.40, BOT, read_started_at=time.time())
+        self._cycle_saves_state(0.40)
+        self._put(DOC_A, self.RESENT, KOBO_DELIBERATE)
+        self.assertAlmostEqual(self._get(DOC_A), self.RESENT, places=4)
+        state = self.db.get_state(ABS_ID, "kosync", user_id=self.user.id)
+        self.assertAlmostEqual(float(state.percentage), self.RESENT, places=4)
+
+    def test_a_deliberate_push_after_another_device_wrote_that_copy_is_taken(self):
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_A, 0.40, {"device": "Kobo 2", "device_id": "kobo-2"})
+        self._aged(DOC_A, minutes=30)
+        self._put(DOC_A, self.RESENT, KOBO_DELIBERATE)
+        self.assertAlmostEqual(self._get(DOC_A), self.RESENT, places=4)
+        state = self.db.get_state(ABS_ID, "kosync", user_id=self.user.id)
+        self.assertAlmostEqual(float(state.percentage), self.RESENT, places=4)
+
+    def test_a_malformed_mark_is_no_mark(self):
+        """Devices choose the metadata: anything but {"deliberate": true} is no mark, and no error."""
+        for doc, metadata in ((DOC_A, ["deliberate"]), (DOC_B, {"deliberate": "true"})):
+            self._put(doc, self.RESENT, KOBO)
+            self._aged(doc, hours=1)
+            self._put(doc, 0.40, {"device": "Kobo 2", "device_id": "kobo-2"})
+            self._aged(doc, minutes=30)
+            self._put(doc, self.RESENT, {**KOBO, "metadata": metadata})
+            self.assertAlmostEqual(self._get(doc), self.expected["resend_same_copy"], places=4)
 
     def test_a_re_send_after_the_copys_rows_were_deleted_is_taken_as_before(self):
         """The copy's rows were deleted and copy A linked again, the book's State at 40%:

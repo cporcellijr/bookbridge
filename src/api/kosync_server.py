@@ -2438,8 +2438,8 @@ def kosync_put_progress():
                 resent_at = _resent_position_time(doc_hash, request_user_id, device_id, progress, percentage)
                 if resent_at is None and _resent_over_newer_report(
                     request_user_id, doc_hash, device_id, progress, percentage,
-                ):
-                    # The row no longer shows this report: what the copy holds now is more recent.
+                ) and not (isinstance(data.get("metadata"), dict) and data["metadata"].get("deliberate") is True):
+                    # The row no longer shows this report: the copy is newer. Not for a push Bridge Sync marks deliberate.
                     logger.info(
                         "KOSync: Ignored progress re-sent by '%s' for doc %s (%.2f%%): this copy has "
                         "been written since that device reported it", device, doc_hash, float(percentage) * 100,
