@@ -52,6 +52,9 @@ def generate_readalong_epub(abs_id: str):
     if not web._user_may_modify_book(user, abs_id):
         return web._forbidden_book_response(json_response=True)
 
+    if web._has_linked_readalong(book, resolve_local=True) or abs_id in (web.database_service.get_readalong_ready_book_ids() or ()):
+        return web.jsonify({"success": True, "status": "existing"})
+
     if getattr(book, "sync_mode", "audiobook") == "ebook_only":
         return web.jsonify({
             "success": False,

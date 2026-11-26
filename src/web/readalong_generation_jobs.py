@@ -88,6 +88,10 @@ def _readalong_epub_worker(abs_id: str, job_id: Optional[int] = None) -> None:
             _update_job(last_error="Book no longer exists")
             return
 
+        if web._has_linked_readalong(book, resolve_local=True):
+            _update_job(last_error="This book already has a linked read-along EPUB.")
+            return
+
         alignment_service = getattr(web.manager, "alignment_service", None) if web.manager else None
         if alignment_service is None:
             _update_job(last_error="Alignment service unavailable")

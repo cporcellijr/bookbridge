@@ -438,11 +438,11 @@
                                 {% if mapping.ctc_aligned %}disabled title="{{ _('This book already has a CTC alignment map') }}"{% endif %}
                                 onclick='remapAlignment({{ mapping.abs_id|tojson }}, this)'>{% if mapping.ctc_aligned %}✓ {{ _('Already using CTC') }}{% else %}🎯 {{ _('Remap alignment') }}{% endif %}</button>
                             <button type="button" role="menuitem" class="reset-menu-item readalong-generate-btn"
-                                {% if mapping.readalong_ready %}disabled {% endif %}{% if not mapping.readalong_eligible %}title="{{ mapping.readalong_ineligible_reason }}"{% endif %}
+                                {% if mapping.readalong_ready %}hidden {% endif %}{% if not mapping.readalong_eligible %}title="{{ mapping.readalong_ineligible_reason }}"{% endif %}
                                 onclick='generateReadalongEpub({{ mapping.abs_id|tojson }}, this)'>📖 {{ _('Create read-along EPUB') }}</button>
                             {% if mapping.readalong_audio_ok %}
                             <button type="button" role="menuitem" class="reset-menu-item readalong-remove-btn"
-                                {% if not mapping.readalong_ready %}disabled {% endif %}onclick='removeReadalongEpub({{ mapping.abs_id|tojson }}, this)'>🗑️ {{ _('Remove read-along EPUB') }}</button>
+                                {% if not mapping.readalong_generated %}hidden {% endif %}onclick='removeReadalongEpub({{ mapping.abs_id|tojson }}, this)'>🗑️ {{ _('Remove read-along EPUB') }}</button>
                             {% endif %}
                         </div>
                     </div>
@@ -3536,7 +3536,7 @@
                             const card = document.querySelector(`.book-card[data-abs-id="${book.abs_id}"]`);
                             if (!card) return;
                             updateCtcAlignmentStatus(card, book.ctc_aligned === true);
-                            updateReadalongStatus(card, book.readalong_ready === true);
+                            updateReadalongStatus(card, book.readalong_ready === true, book.readalong_generated === true);
 
                             // Update progress percentage text
                             const progressPercent = card.querySelector('.progress-percent');
@@ -3851,14 +3851,15 @@
                     });
             }
 
-            function updateReadalongStatus(card, ready) {
+            function updateReadalongStatus(card, ready, generated) {
                 const badge = card && card.querySelector('.readalong-badge');
                 if (badge) badge.hidden = !ready;
-                const menu = card?.querySelector('.reset-menu > button')?._menu || card;
-                // Skip a button mid-action (⏳): its own handler settles it when the request ends.
-                menu?.querySelectorAll('.readalong-generate-btn, .readalong-remove-btn').forEach(b => {
-                    if (!b.textContent.startsWith('⏳')) b.disabled = b.classList.contains('readalong-generate-btn') ? ready : !ready;
-                });
+                const owner = card?.querySelector('.reset-menu > button');
+                const menu = owner?._menu || card?.querySelector('.reset-menu-dropdown');
+                const create = menu?.querySelector('.readalong-generate-btn');
+                if (create) create.hidden = ready;
+                const remove = menu?.querySelector('.readalong-remove-btn');
+                if (remove && generated !== undefined) remove.hidden = !generated;
             }
 
             function _setReadalongBadge(absId, ready) {
@@ -4010,7 +4011,11 @@
                     headers: { 'Content-Type': 'application/json' }
                 }).then(response => response.json())
                     .then(data => {
-                        if (data.success) {
+                        if (data.success && data.status === 'existing') {
+                            _setReadalongBadge(absId, true);
+                            btn.innerHTML = originalText;
+                            btn.disabled = false;
+                        } else if (data.success) {
                             btn.innerHTML = '⏳ ' + {{ _('Generating… (this can take minutes)')|tojson }};
                             setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
                         } else {

@@ -767,7 +767,8 @@ def _build_dashboard_progress_rows(books, all_states):
         rows.append({
             "abs_id": abs_id,
             "ctc_aligned": abs_id in ctc_aligned_book_ids,
-            "readalong_ready": abs_id in readalong_ready_book_ids,
+            "readalong_ready": abs_id in readalong_ready_book_ids or web._has_linked_readalong(book),
+            "readalong_generated": abs_id in readalong_ready_book_ids,
             "unified_progress": min(max_progress, 100.0),
             "last_sync": web._format_dashboard_last_sync(latest_update_time),
             "last_sync_unix": latest_update_time,
