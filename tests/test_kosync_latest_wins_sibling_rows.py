@@ -409,6 +409,17 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         self.assertAlmostEqual(self._get(DOC_B), self.expected["resend"], places=4)
         self.assertAlmostEqual(self._get(DOC_A), self.expected["resend"], places=4)
 
+    def test_a_deliberate_push_of_the_position_the_row_holds_is_new(self):
+        """As above, but the reader pushed the Kobo's 60% from KOReader's menu, which Bridge
+        Sync marks deliberate: a position chosen now, not a re-send."""
+        self._put(DOC_A, self.RESENT, KOBO)
+        self._aged(DOC_A, hours=1)
+        self._put(DOC_B, 0.40, PHONE)
+        self._aged(DOC_B, minutes=30)
+        self._put(DOC_A, self.RESENT, KOBO_DELIBERATE)
+        self.assertAlmostEqual(self._get(DOC_B), self.RESENT, places=4)
+        self.assertAlmostEqual(self._get(DOC_A), self.RESENT, places=4)
+
     def test_a_device_that_moved_is_newer_again(self):
         """Same as above, but the Kobo turned a page: that is a new position."""
         self._put(DOC_A, self.RESENT, KOBO)
@@ -884,3 +895,12 @@ class TestFurthestWinsSiblingRows(TestLatestWinsSiblingRows):
         })
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         self.assertAlmostEqual(self._get(DOC_A), 0.60, places=4)
+
+    def test_a_deliberate_rewind_is_still_refused(self):
+        """Bridge Sync's deliberate mark changes nothing here: a second Kobo read hash A to
+        60%, and the first Kobo's push of 40% from KOReader's menu does not take it back."""
+        self._put(DOC_A, self.RESENT, {"device": "Kobo 2", "device_id": "kobo-2"})
+        self._put(DOC_A, 0.40, KOBO_DELIBERATE)
+        self.assertAlmostEqual(self._get(DOC_A), self.RESENT, places=4)
+        state = self.db.get_state(ABS_ID, "kosync", user_id=self.user.id)
+        self.assertAlmostEqual(float(state.percentage), self.RESENT, places=4)
