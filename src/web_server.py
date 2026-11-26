@@ -60,6 +60,7 @@ from src.utils.ebook_utils import (
     is_linkable_ebook_filename,
 )
 from src.utils.ebook_sources import is_grimmory_source, local_ebook_filename, normalize_ebook_source
+from src.utils.epub_readalong import embedded_audio
 from src.utils.local_ebook_metadata import read_local_ebook_metadata, read_local_ebook_series
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
@@ -1667,6 +1668,35 @@ from src.web.readalong_generation_jobs import (
 
 
 
+
+
+def _has_linked_readalong(book, *, resolve_local=False):
+    """Check the linked input EPUB independently of BookBridge generation jobs."""
+    parser = container.ebook_parser()
+    for name in dict.fromkeys((getattr(book, "ebook_filename", None), local_ebook_filename(book))):
+        if not isinstance(name, str) or not name.lower().endswith(".epub"):
+            continue
+        try:
+            path = parser.resolve_book_path(name) if resolve_local else parser.cached_book_path(name)
+            if embedded_audio(path):
+                return True
+        except OSError:
+            continue
+    # BookOrbit v3 confirms the existence of an overlay EPUB on a combined
+    # entry. Read the existing client cache on dashboard polls, not one HTTP
+    # request per book. Disabled sync is not proof the EPUB is absent.
+    if getattr(book, 'ebook_source', None) == 'BookOrbit' and getattr(book, 'ebook_source_id', None):
+        try:
+            clients = uc()
+            ebook_client = clients.sync_clients.get('BookOrbit')
+            entry = ebook_client.resolve_bookorbit_book_id(book) if ebook_client else None
+            if entry is not None:
+                sync = clients.bookorbit_client.get_read_aloud_sync(entry, cached_only=not resolve_local)
+                if isinstance(sync, dict) and sync.get('state') == 'enabled':
+                    return True
+        except Exception:
+            logger.debug('Could not inspect BookOrbit read-along status', exc_info=True)
+    return False
 
 
 from src.web.routes.readalong import generate_readalong_epub, readalong_epub_status, remove_readalong_epub_route

@@ -759,8 +759,8 @@ class ReadalongDashboardMappingTestCase(unittest.TestCase):
         footer_start = html.index('class="card-footer"', html.index('data-abs-id="book-ready-ra"'))
         self.assertNotIn('ctc-alignment-badge', html[footer_start:html.index('class="quick-actions"', footer_start)])
 
-    def test_generate_and_remove_buttons_grey_out_by_readalong_state(self):
-        """A book with a read-along greys out Create; one without greys out Remove."""
+    def test_generate_and_remove_buttons_follow_readalong_state(self):
+        """A generated read-along hides Create; a plain ebook hides Remove."""
         ready = _make_book(abs_id="book-ready-ra", abs_title="Ready Book")
         plain = _make_book(abs_id="book-plain-ra", abs_title="Plain Book")
         self.mock_database_service.get_all_books.return_value = [ready, plain]
@@ -772,10 +772,10 @@ class ReadalongDashboardMappingTestCase(unittest.TestCase):
             idx = html.index(call)
             return html[html.rindex("<button", 0, idx):idx]
 
-        self.assertIn("disabled", button('generateReadalongEpub("book-ready-ra", this)'))
-        self.assertNotIn("disabled", button('removeReadalongEpub("book-ready-ra", this)'))
-        self.assertNotIn("disabled", button('generateReadalongEpub("book-plain-ra", this)'))
-        self.assertIn("disabled", button('removeReadalongEpub("book-plain-ra", this)'))
+        self.assertIn("hidden", button('generateReadalongEpub("book-ready-ra", this)'))
+        self.assertNotIn("hidden", button('removeReadalongEpub("book-ready-ra", this)'))
+        self.assertNotIn("hidden", button('generateReadalongEpub("book-plain-ra", this)'))
+        self.assertIn("hidden", button('removeReadalongEpub("book-plain-ra", this)'))
 
     def test_ineligible_button_is_clickable_so_the_click_is_never_swallowed(self):
         """An INELIGIBLE book's button keeps its reason as a hover title but is

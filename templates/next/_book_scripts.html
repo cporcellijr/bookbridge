@@ -345,14 +345,15 @@
                     });
             }
 
-            function updateReadalongStatus(card, ready) {
+            function updateReadalongStatus(card, ready, generated) {
                 const badge = card && card.querySelector('.readalong-badge');
                 if (badge) badge.hidden = !ready;
-                const menu = card?.querySelector('.reset-menu > button')?._menu || card;
-                // Skip a button mid-action (⏳): its own handler settles it when the request ends.
-                menu?.querySelectorAll('.readalong-generate-btn, .readalong-remove-btn').forEach(b => {
-                    if (!b.textContent.startsWith('⏳')) b.disabled = b.classList.contains('readalong-generate-btn') ? ready : !ready;
-                });
+                const owner = card?.querySelector('.reset-menu > button');
+                const menu = owner?._menu || card?.querySelector('.reset-menu-dropdown');
+                const create = menu?.querySelector('.readalong-generate-btn');
+                if (create) create.hidden = ready;
+                const remove = menu?.querySelector('.readalong-remove-btn');
+                if (remove && generated !== undefined) remove.hidden = !generated;
             }
 
             function _setReadalongBadge(absId, ready) {
@@ -443,7 +444,11 @@
                     headers: { 'Content-Type': 'application/json' }
                 }).then(response => response.json())
                     .then(data => {
-                        if (data.success) {
+                        if (data.success && data.status === 'existing') {
+                            _setReadalongBadge(absId, true);
+                            btn.innerHTML = originalText;
+                            btn.disabled = false;
+                        } else if (data.success) {
                             btn.innerHTML = '⏳ ' + {{ _('Generating… (this can take minutes)')|tojson }};
                             setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
                         } else {

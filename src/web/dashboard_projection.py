@@ -701,7 +701,8 @@ def _build_dashboard_mappings(
             goodreads_by_book=goodreads_by_book,
         )
         mapping["ctc_aligned"] = book.abs_id in ctc_aligned_book_ids
-        mapping["readalong_ready"] = book.abs_id in readalong_ready_book_ids
+        mapping["readalong_generated"] = book.abs_id in readalong_ready_book_ids
+        mapping["readalong_ready"] = mapping["readalong_generated"] or web._has_linked_readalong(book)
         mapping["last_sync_leader"], mapping["last_sync_leader_at"] = sync_markers.get(book.abs_id, (None, 0))
         mapping["last_sync_leader_when"] = _format_dashboard_last_sync(mapping["last_sync_leader_at"])
         mapping["format_strip"] = _build_format_strip(mapping)
