@@ -1214,4 +1214,282 @@ do
         "an unreadable history must not stop the status exchange")
 end
 
+do
+    -- KOReader's KOSync (plugins/kosync.koplugin/main.lua, v2026.07.1), reduced to what the mark
+    -- rests on: updateProgress reruns itself once online (willRerunWhenOnline), reads getMetadata
+    -- (nil unless "Send document metadata" is on), sends it with KOSyncClient.update_progress and,
+    -- when that fails, queues an item holding that same table; closing the book offline queues
+    -- getMetadata; drainQueue resends each queued item's metadata with the client.
+    local sent, queue, reruns, failing, offline = {}, {}, {}, false, false
+    local NetworkMgr = require("ui/network/manager")   -- the stub preloaded above: KOSync holds that same table
+    function NetworkMgr:willRerunWhenOnline(callback)   -- true while offline: the callback runs once online
+        if not offline then return false end
+        reruns[#reruns + 1] = callback
+        return true
+    end
+    local Client = {}
+    function Client:new() return setmetatable({}, { __index = self }) end
+    function Client:update_progress(_user, _key, _document, metadata, _progress, _percentage, _device, _id, callback)
+        if failing then return callback(false, 500) end
+        sent[#sent + 1] = { metadata = metadata }
+        callback(true, 200)
+    end
+    package.preload["KOSyncClient"] = function() return Client end
+    local raw_update, raw_rerun = Client.update_progress, NetworkMgr.willRerunWhenOnline
+    local KOSync = {}
+    KOSync.__index = KOSync
+    function KOSync:getMetadata()
+        if not self.settings.send_metadata then return end
+        return { filename = "a.epub", title = "A" }
+    end
+    function KOSync:updateProgress(ensure_networking, interactive, on_suspend)
+        if ensure_networking and NetworkMgr:willRerunWhenOnline(function()
+            self:updateProgress(ensure_networking, interactive, on_suspend)
+        end) then
+            return
+        end
+        local metadata = self:getMetadata()
+        local queue_item = { metadata = metadata, progress = "/body/p[1].0", percentage = 0.5 }
+        local client = require("KOSyncClient"):new()
+        pcall(client.update_progress, client, "reader", "key", "digest", metadata, queue_item.progress,
+            queue_item.percentage, "Kobo", "device-1", function(ok)
+                if not ok then queue[#queue + 1] = queue_item end
+            end)
+        return "pushed"   -- KOReader's answers nothing; a patch over it may
+    end
+    function KOSync:_onCloseDocument()
+        queue[#queue + 1] = { metadata = self:getMetadata() }
+    end
+    function KOSync:onKOSyncToggleAutoSync(_toggle, from_menu)
+        if self.toggle_fails then error("toggle failed") end
+        self.settings.auto_sync = not self.settings.auto_sync
+        if not self.settings.auto_sync and from_menu then
+            self:updateProgress(true, true)   -- "push the current progress now so as not to lose it"
+        end
+        return true
+    end
+    function KOSync:drainQueue()
+        local client = require("KOSyncClient"):new()
+        for _, item in ipairs(queue) do
+            client:update_progress("reader", "key", "digest", item.metadata, item.progress, item.percentage,
+                "Kobo", "device-1", function() end)
+        end
+        queue = {}
+    end
+    local function new_kosync(enabled)
+        local kosync = setmetatable({ settings = { send_metadata = false } }, KOSync)
+        local reader = BridgeSync:new{ is_enabled = enabled, ui = { kosync = kosync } }
+        reader:onReaderReady()
+        return kosync, reader
+    end
+    local function last_mark()
+        local metadata = sent[#sent].metadata
+        return metadata and metadata.deliberate
+    end
+    local function as_sent_by_kosync(metadata)   -- KOSync's own metadata: nothing added
+        local keys = 0
+        for _ in pairs(metadata or {}) do keys = keys + 1 end
+        return metadata == nil or (keys == 2 and metadata.filename == "a.epub" and metadata.title == "A")
+    end
+
+    local kosync = new_kosync(true)
+    kosync:updateProgress(true, true)   -- the menu's "Push progress"
+    assert(last_mark() == true, "an interactive push must be marked, even without document metadata")
+    kosync.settings.send_metadata = true
+    kosync:updateProgress(true, true)
+    assert(last_mark() == true and sent[#sent].metadata.title == "A",
+        "the mark must keep KOSync's own metadata")
+    kosync:updateProgress(false, false)   -- the periodic push, Wi-Fi going off
+    assert(sent[#sent].metadata and as_sent_by_kosync(sent[#sent].metadata),
+        "an automatic push must send KOSync's metadata unchanged")
+    kosync.settings.send_metadata = false
+    kosync:updateProgress(true, false, true)   -- going to sleep
+    assert(sent[#sent].metadata == nil, "an automatic push must send no metadata when KOSync sends none")
+    assert(kosync:updateProgress(true, true) == "pushed" and kosync:updateProgress(false, false) == "pushed",
+        "a push must answer what KOSync's updateProgress answers")
+
+    -- A failed interactive push is queued unmarked: sent later, it may be older than a position
+    -- reported meanwhile, which a deliberate push (dated when it arrives) would outrank.
+    failing = true
+    kosync.settings.send_metadata = true
+    kosync:updateProgress(true, true)
+    kosync.settings.send_metadata = false
+    kosync:updateProgress(false, false)
+    failing = false
+    kosync:_onCloseDocument()   -- offline
+    assert(#queue == 3 and queue[1].metadata and as_sent_by_kosync(queue[1].metadata),
+        "a failed interactive push must be queued with KOSync's own metadata, unmarked")
+    local before = #sent
+    kosync:drainQueue()
+    assert(#sent == before + 3, "the queue must be drained")
+    assert(sent[before + 1].metadata and as_sent_by_kosync(sent[before + 1].metadata),
+        "a queued interactive push must be sent later unmarked")
+    assert(sent[before + 2].metadata == nil, "a queued retry of an automatic push must stay unmarked")
+    assert(sent[before + 3].metadata == nil, "closing the book offline must queue an unmarked push")
+    kosync:updateProgress(true, true)
+    assert(last_mark() == true, "after a failed push, a live interactive push must still be marked")
+
+    offline = true
+    kosync:updateProgress(true, true)
+    kosync:updateProgress(true, false, true)
+    offline = false
+    reruns[1]()
+    assert(last_mark() == true, "an interactive push rerun once online must be marked")
+    reruns[2]()
+    assert(sent[#sent].metadata == nil, "an automatic push rerun once online must stay unmarked")
+
+    -- Switching automatic sync off from the menu pushes to keep the place, not one the reader chose.
+    kosync.settings.auto_sync = true
+    local before_toggle = #sent
+    assert(kosync:onKOSyncToggleAutoSync(nil, true) == true, "the toggle must answer as KOSync does")
+    assert(#sent == before_toggle + 1 and sent[#sent].metadata == nil,
+        "the push made when automatic sync is switched off must not be marked")
+    kosync:updateProgress(true, true)
+    assert(last_mark() == true, "a menu push after it must be marked again")
+    kosync.toggle_fails = true
+    assert(not pcall(kosync.onKOSyncToggleAutoSync, kosync, nil, true), "an error in KOSync's toggle must still be raised")
+    kosync.toggle_fails = nil
+    kosync:updateProgress(true, true)
+    assert(last_mark() == true, "after a toggle that raised, the menu's push must be marked again")
+    kosync.settings.auto_sync, offline = true, true
+    local before_offline = #sent
+    kosync:onKOSyncToggleAutoSync(nil, true)
+    assert(#sent == before_offline, "switched off offline, KOSync's push must wait to be online")
+    offline = false
+    reruns[#reruns]()
+    assert(#sent == before_offline + 1 and sent[#sent].metadata == nil,
+        "switched off offline, that push must not be marked when re-run once online")
+    offline = true
+    kosync:updateProgress(true, true)
+    offline = false
+    reruns[#reruns]()
+    assert(last_mark() == true, "an offline menu push must still be marked when re-run once online")
+
+    local raising = new_kosync(true)
+    raising.getMetadata = function() error("no document") end
+    assert(not pcall(raising.updateProgress, raising, true, true), "an error in KOSync's push must still be raised")
+    kosync:updateProgress(false, false)
+    assert(sent[#sent].metadata == nil, "after an interactive push that raised, automatic pushes must stay unmarked")
+
+    new_kosync(false):updateProgress(true, true)
+    assert(sent[#sent].metadata == nil, "with Bridge Sync off, KOSync's pushes must be left alone")
+    local switched, switched_reader = new_kosync(true)
+    switched_reader.is_enabled = false
+    switched:updateProgress(true, true)
+    assert(sent[#sent].metadata == nil, "Bridge Sync switched off mid-book must mark nothing")
+    local opened_off, opened_off_reader = new_kosync(false)
+    opened_off_reader.is_enabled = true
+    opened_off:updateProgress(true, true)
+    assert(last_mark() == true, "Bridge Sync switched on mid-book must mark the menu's push")
+
+    -- One pass-through wrapper each per session: more pushes and books never stack another.
+    local client_wrapper, rerun_wrapper = Client.update_progress, NetworkMgr.willRerunWhenOnline
+    assert(client_wrapper ~= raw_update and rerun_wrapper ~= raw_rerun, "both wrappers must be installed by now")
+    kosync:updateProgress(true, true)
+    local again = new_kosync(true)
+    again:updateProgress(true, true)
+    again.settings.auto_sync = true
+    again:onKOSyncToggleAutoSync(nil, true)
+    assert(Client.update_progress == client_wrapper and NetworkMgr.willRerunWhenOnline == rerun_wrapper,
+        "more pushes and books must not stack another wrapper")
+    BridgeSync:new{ is_enabled = true, ui = {} }:onReaderReady()   -- KOSync not loaded
+end
+
+do
+    -- KOReader v2026.03 and older: no KOSync:getMetadata, and KOSyncClient:update_progress has no
+    -- metadata parameter (username, password, document, progress, percentage, device, device_id,
+    -- callback); a push that raises is lost (no queue).
+    local sent, errors = {}, {}
+    local Client = {}
+    function Client:new() return setmetatable({}, { __index = self }) end
+    function Client:update_progress(_user, _key, _document, progress, _percentage, _device, _id, callback)
+        sent[#sent + 1] = { progress = progress }
+        callback(true, 200)
+    end
+    package.loaded["KOSyncClient"] = Client
+    local KOSync = {}
+    KOSync.__index = KOSync
+    function KOSync:updateProgress(_ensure_networking, _interactive)
+        local client = require("KOSyncClient"):new()
+        local ok, err = pcall(client.update_progress, client, "reader", "key", "digest", self.progress, 0.5,
+            "Kobo", "device-1", function() end)
+        if not ok then errors[#errors + 1] = tostring(err) end
+    end
+    -- A nil progress passes the metadata slot's own check: only the missing getMetadata keeps it untouched.
+    for _, case in ipairs({ { progress = "/body/DocFragment[3]/body/p[1].0" }, { progress = 42 }, {} }) do
+        local progress = case.progress
+        local kosync = setmetatable({ progress = progress }, KOSync)
+        BridgeSync:new{ is_enabled = true, ui = { kosync = kosync } }:onReaderReady()
+        kosync:updateProgress(true, true)
+        kosync:updateProgress(false, false)
+        assert(#errors == 0, "KOReader v2026.03's pushes must not fail: " .. tostring(errors[1]))
+        assert(sent[#sent - 1].progress == progress and sent[#sent].progress == progress,
+            "KOReader v2026.03's pushes must go out as KOSync sends them, progress " .. tostring(progress))
+    end
+end
+
+do
+    -- Another wrapper of KOSyncClient.update_progress, installed on its first use from inside
+    -- KOSync:updateProgress, as bookbridge's 2-bookbridge-sync-all.lua (wrapClient) does.
+    local sent, seen = {}, 0
+    local Client = {}
+    function Client:new() return setmetatable({}, { __index = self }) end
+    function Client:update_progress(_user, _key, _document, metadata, _progress, _pct, _device, _id, callback)
+        sent[#sent + 1] = { metadata = metadata }
+        callback(true, 200)
+    end
+    package.loaded["KOSyncClient"] = Client
+    local KOSync = {}
+    KOSync.__index = KOSync
+    function KOSync:getMetadata() end
+    function KOSync:updateProgress(_ensure_networking, _interactive)
+        local C = require("KOSyncClient")
+        if not C._other_patch then
+            local original = C.update_progress
+            C._other_patch = true
+            C.update_progress = function(...)
+                seen = seen + 1
+                return original(...)
+            end
+        end
+        local client = C:new()
+        pcall(client.update_progress, client, "reader", "key", "digest", self:getMetadata(), "/body/p[1].0", 0.5,
+            "Kobo", "device-1", function() end)
+    end
+    local kosync = setmetatable({}, KOSync)
+    BridgeSync:new{ is_enabled = true, ui = { kosync = kosync } }:onReaderReady()
+    kosync:updateProgress(true, true)   -- the session's first push is the menu's
+    kosync:updateProgress(false, false)
+    kosync:updateProgress(true, true)
+    assert(seen == 3, "a wrapper installed during an interactive push must see every later push, saw " .. seen)
+    assert(sent[1].metadata.deliberate and sent[2].metadata == nil and sent[3].metadata.deliberate,
+        "only interactive pushes must be marked")
+end
+
+do
+    -- A client whose fourth argument is not metadata (a progress string, a page number) is called
+    -- exactly as KOSync calls it, even while an interactive push is marked.
+    local sent = {}
+    local Client = {}
+    function Client:new() return setmetatable({}, { __index = self }) end
+    function Client:update_progress(_user, _key, _document, progress, _percentage, _device, _id, callback)
+        sent[#sent + 1] = progress
+        callback(true, 200)
+    end
+    package.loaded["KOSyncClient"] = Client
+    local KOSync = {}
+    KOSync.__index = KOSync
+    function KOSync:getMetadata() end
+    function KOSync:updateProgress(_ensure_networking, _interactive)
+        local client = require("KOSyncClient"):new()
+        client:update_progress("reader", "key", "digest", self.progress, 0.5, "Kobo", "device-1", function() end)
+    end
+    for _, progress in ipairs({ "/body/DocFragment[3]/body/p[1].0", 42 }) do
+        local kosync = setmetatable({ progress = progress }, KOSync)
+        BridgeSync:new{ is_enabled = true, ui = { kosync = kosync } }:onReaderReady()
+        local ok, err = pcall(kosync.updateProgress, kosync, true, true)
+        assert(ok and sent[#sent] == progress, "a push with no metadata slot must go out untouched: " .. tostring(err))
+    end
+end
+
 print("BridgeSync Lua init regression test passed")

@@ -106,6 +106,8 @@ def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
     # previously done for ebook-only mappings alone.
     try:
         docs_deleted, progress_deleted = web.database_service.delete_kosync_data_for_book(book.abs_id)
+        # Nor the devices' last reports: Delete Mapping has unlinked the book's hashes by now.
+        web.database_service.delete_unlinked_kosync_device_reports()
         if docs_deleted or progress_deleted:
             web.logger.info(
                 f"🗑️ Deleted KOSync data for mapping '{book.abs_id}': "

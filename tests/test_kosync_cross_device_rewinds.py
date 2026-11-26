@@ -34,6 +34,13 @@ class _FakeDatabase:
         )
         self.saved = []
         self.user_progress_updates = []
+        self.device_reports = {}
+
+    def get_kosync_device_report(self, document_hash, device_id, user_id=None):
+        return self.device_reports.get((document_hash, device_id, user_id))
+
+    def upsert_kosync_device_report(self, document_hash, device_id, progress, percentage, user_id=None):
+        self.device_reports[(document_hash, device_id, user_id)] = (progress, percentage)
 
     def get_kosync_document(self, _document_hash):
         return self.doc
