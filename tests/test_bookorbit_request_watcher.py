@@ -150,6 +150,26 @@ class TestBookOrbitRequestWatcher(unittest.TestCase):
                 self.watcher._supervise(2)
             client_cls.assert_not_called()
 
+    def test_reader_disabled_while_connected_gets_no_check_and_is_disconnected(self):
+        sock = FakeSocket()
+
+        def session(_s):
+            self.db.get_user.return_value = SimpleNamespace(id=2, active=0)  # admin disables the account
+            sock.handlers[(CHANGED_EVENT, NAMESPACE)]()
+            self.watcher._fire_due()
+
+        sock.on_wait = session
+        with patch("src.services.bookorbit_request_watcher.socketio.Client", return_value=sock):
+            self.watcher._supervise(2)
+        self.assertEqual(self.changes, [])
+        self.assertTrue(sock.disconnected)
+
+    def test_reader_whose_bookorbit_was_switched_off_gets_no_check(self):
+        self.watcher._schedule(2)
+        self.registry.get_clients.return_value = SimpleNamespace(bookorbit_client=bookorbit_client(configured=False))
+        self.watcher._fire_due()
+        self.assertEqual(self.changes, [])
+
     def test_user_scan_supervises_only_active_readers(self):
         self.db.list_users.return_value = [SimpleNamespace(id=1, active=1), SimpleNamespace(id=2, active=0)]
         spawned = []

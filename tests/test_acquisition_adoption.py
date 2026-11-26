@@ -691,6 +691,25 @@ class TestCycle(AdoptionBase):
         self.bo.list_requests.assert_called_once()
         self.assertEqual(self.rows()[0]["status"], "paired")
 
+    def test_a_bookorbit_change_adopts_a_new_request_inside_the_scan_interval(self):
+        registry = MagicMock()
+        registry.get_clients.return_value = MagicMock(bookorbit_client=self.bo, shelfmark_client=None)
+        manager = self.manager(registry)
+        manager._refresh_acquisition_requests(self.user.id)  # scanned moments ago, nothing to adopt
+        self.assertEqual(self.rows(), [])
+        self.serve(_item(31))  # the reader's own BookOrbit request then finishes
+        manager._refresh_acquisition_requests(self.user.id)
+        self.assertEqual(self.rows(), [])  # the regular check keeps its ten-minute spacing
+        manager._refresh_acquisition_requests(self.user.id, force=True)
+        self.assertEqual(self.rows()[0]["status"], "paired")
+
+    def test_a_forced_check_never_runs_a_second_concurrent_scan(self):
+        self.service._adoption_active[self.user.id] = True
+        self.serve(_item(31))
+        self.assertFalse(self.service._claim_adoption(self.user.id, force=True))
+        self.service.refresh_user(self.user.id, self.bo, force=True)
+        self.bo.list_requests.assert_not_called()
+
     def test_user_without_the_opt_in_makes_no_http_call(self):
         self.opt_in(self.user, "false")
         self.serve(_item(31))

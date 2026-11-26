@@ -5607,7 +5607,7 @@ class SyncManager:
             return
         user_token = credentials_token = None
         try:
-            if not acquisition.has_work(user_id):
+            if not acquisition.has_work(user_id, force=force):
                 return
             bundle = registry.get_clients(user_id)
             client, shelfmark = (
@@ -5616,7 +5616,7 @@ class SyncManager:
             )
             # Durable jobs with already-owned halves can pair without either
             # acquisition provider, using the reader's ordinary library clients.
-            if client is None and shelfmark is None and not acquisition.has_work(user_id):
+            if client is None and shelfmark is None and not acquisition.has_work(user_id, force=force):
                 return
             user_token = set_current_user_id(user_id)
             credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))

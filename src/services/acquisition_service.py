@@ -137,10 +137,14 @@ class AcquisitionService:
         """Unpaired jobs and outstanding scans; jobs older than ``GIVE_UP_AFTER`` are dropped."""
         return self.database_service.get_unpaired_acquisition_jobs(user_id, utcnow() - GIVE_UP_AFTER)
 
-    def has_work(self, user_id: int) -> bool:
-        """Work can exist without any provider receipt (both halves already owned)."""
+    def has_work(self, user_id: int, force: bool = False) -> bool:
+        """Work can exist without any provider receipt (both halves already owned).
+
+        ``force`` (BookOrbit announced a change) makes an opted-in reader's adoption scan due now.
+        """
         pending = getattr(self.database_service, "get_unpaired_acquisition_jobs", None)
-        return bool(self._refreshable(user_id)) or (bool(self._pending_jobs(user_id)) if pending else False) or self._adoption_due(user_id)
+        return (bool(self._refreshable(user_id)) or (bool(self._pending_jobs(user_id)) if pending else False)
+                or self._adoption_due(user_id, force=force))
 
     def _refreshable(self, user_id: int) -> list[dict]:
         return self.database_service.get_refreshable_acquisition_requests(user_id, utcnow() - GIVE_UP_AFTER)
@@ -161,7 +165,7 @@ class AcquisitionService:
                 client = None
         now = utcnow()
         clients_token = _READER_CLIENTS.set(library_clients)
-        claimed = client is not None and self._claim_adoption(user_id)
+        claimed = client is not None and self._claim_adoption(user_id, force=force)
         try:
             if claimed:
                 try:
@@ -900,20 +904,20 @@ class AcquisitionService:
         }
         return str(resolve_setting(credentials, key, "false")).strip().lower() in _TRUTHY_SETTING_VALUES
 
-    def _adoption_due(self, user_id: int) -> bool:
+    def _adoption_due(self, user_id: int, force: bool = False) -> bool:
         if not self._adoption_enabled(user_id):
             return False
         with self._adoption_claim_lock:
             if self._adoption_active.get(user_id, False):
                 return False
             last = self._adoption_scanned.get(user_id)
-            return last is None or utcnow() - last >= ADOPTION_SCAN_INTERVAL
+            return force or last is None or utcnow() - last >= ADOPTION_SCAN_INTERVAL
 
-    def _claim_adoption(self, user_id: int) -> bool:
+    def _claim_adoption(self, user_id: int, force: bool = False) -> bool:
         """Atomically claim this user's scan interval before performing any remote calls.
 
         Rejects if a scan is already active for this user regardless of elapsed time,
-        or if the interval has not yet passed.
+        or (unless ``force``) if the interval has not yet passed.
         """
         if not self._adoption_enabled(user_id):
             return False
@@ -922,7 +926,7 @@ class AcquisitionService:
             if self._adoption_active.get(user_id, False):
                 return False
             last = self._adoption_scanned.get(user_id)
-            if last is not None and now - last < ADOPTION_SCAN_INTERVAL:
+            if not force and last is not None and now - last < ADOPTION_SCAN_INTERVAL:
                 return False
             self._adoption_scanned[user_id] = now
             self._adoption_active[user_id] = True

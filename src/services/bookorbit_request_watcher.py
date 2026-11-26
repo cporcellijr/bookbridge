@@ -74,9 +74,25 @@ class BookOrbitRequestWatcher:
                 del self._due[user_id]
         for user_id in ready:
             try:
+                # An account disabled (or BookOrbit switched off) while connected must not act on events.
+                active, client = self._bookorbit_client(user_id)
+                if not active or client is None:
+                    self._disconnect(user_id)
+                    continue
                 self._on_change(user_id)
             except Exception:
                 logger.warning("BookOrbit requests: checking user %s's requests failed", user_id, exc_info=True)
+
+    def _disconnect(self, user_id: int) -> None:
+        """Close the user's connection; their supervisor then re-checks the account and exits or idles."""
+        with self._lock:
+            sio = self._sockets.get(user_id)
+        if sio is not None:
+            logger.info("📡 BookOrbit requests: stopped watching user %s (account disabled or BookOrbit off)", user_id)
+            try:
+                sio.disconnect()
+            except Exception as e:
+                logger.debug("BookOrbit requests: error closing user %s's connection: %s", user_id, e)
 
     def _debounce_loop(self) -> None:
         # One thread runs every check, so a reader's checks never overlap each other.
