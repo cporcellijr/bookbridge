@@ -77,6 +77,16 @@ class TestFableSyncClient(unittest.TestCase):
         self.assertEqual((details.fable_book_id, details.matched_by), (YOURS, "your_list"))
         self.client.search_books.assert_not_called()
 
+    def test_a_sequel_never_matches_the_first_book(self):
+        # Fable only had book 1; "Unicorn Breeder 2" fuzzy-matched it at 0.94 in the live probe.
+        self.abs_client.get_item_details.return_value = {"media": {"metadata": {
+            "title": "Example Book 2", "authorName": "Example Author"}}}
+        self.client.library.return_value = [dict(self.candidate, isbn="1", shelf="finished")]
+        self.assertIsNone(self.sync._automatch(self.book))
+        self.client.search_books.return_value = [dict(self.candidate, title="Example Book 2: A Novel")]
+        self.sync._clear_match_miss("a1")
+        self.assertEqual(self.sync._automatch(self.book).fable_book_id, BOOK_ID)
+
     def test_your_lists_need_the_author_for_a_title_match(self):
         self.abs_client.get_item_details.return_value = {"media": {"metadata": {"title": "Example Book"}}}
         self.client.library.return_value = [
