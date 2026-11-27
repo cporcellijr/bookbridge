@@ -637,7 +637,7 @@ class TestAcquisitionMigration(unittest.TestCase):
 
         cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
         cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["a481d26f019e"])
+        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["f4a8c2e6b1d9"])
 
 
 class TestSettingRegistration(unittest.TestCase):

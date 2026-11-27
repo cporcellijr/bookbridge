@@ -34,6 +34,12 @@ def _tracker_automatch_worker():
                     goodreads._automatch(book)
                 except Exception as e:
                     web.logger.warning("Deferred Goodreads automatch failed for '%s': %s", abs_id, e, exc_info=True)
+            fable = sync_clients.get("Fable")
+            if fable and fable.is_configured():
+                try:
+                    fable._automatch(book)
+                except Exception as e:
+                    web.logger.warning("Deferred Fable automatch failed for '%s': %s", abs_id, e, exc_info=True)
         except Exception as e:
             web.logger.error("Deferred tracker automatch worker error: %s", e, exc_info=True)
         finally:

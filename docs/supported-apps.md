@@ -1,5 +1,5 @@
 ---
-description: "Which apps BookBridge works with and what it syncs with each: Audiobookshelf, KOReader, Calibre-Web Automated, BookOrbit, Grimmory, Storyteller, Kavita, BookFusion, Readest, Hardcover, StoryGraph and Goodreads."
+description: "Which apps BookBridge works with and what it syncs with each: Audiobookshelf, KOReader, Calibre-Web Automated, BookOrbit, Grimmory, Storyteller, Kavita, BookFusion, Readest, Hardcover, StoryGraph, Goodreads and Fable."
 ---
 
 # Supported apps
@@ -22,6 +22,7 @@ Every app is optional. Turn on the ones you use in **Settings**, and add more la
 | [**Hardcover**](configuration.md#hardcover) | Reading tracker | Sent one way, with status | Sent one way, as private notes (opt-in) | Lists as KOReader collections |
 | [**StoryGraph**](configuration.md#storygraph) | Reading tracker | Sent one way, with status | No | Edition picking |
 | [**Goodreads**](configuration.md#goodreads) | Reading tracker | Sent one way, with shelf moves | No | |
+| [**Fable**](configuration.md#fable) | Reading tracker | Sent one way, with list moves | No | |
 
 "Two-way" means the app can be the one you moved forward in, and BookBridge carries that position to the others. "Sent one way" means BookBridge updates the app but never reads a position back from it, so a tracker never decides where you are.
 
@@ -39,4 +40,4 @@ Every app is optional. Turn on the ones you use in **Settings**, and add more la
 - **BookOrbit highlights** use BookOrbit's own KOReader sync login, so set those credentials in Settings as well.
 - **Calibre-Web Automated** progress works through CWA's Kobo sync: BookBridge reads and writes the bookmark CWA keeps for your Kobo. It is off until you turn it on.
 - **Watched shelves and collections** (Grimmory, BookOrbit, Kavita) link anything you drop into them. See [Automatic ways books get added](user-guide.md#automatic-ways-books-get-added).
-- **Trackers** (Hardcover, StoryGraph, Goodreads) follow whichever app you read in. See [Progress trackers](configuration.md#progress-trackers) for each one's sign-in.
+- **Trackers** (Hardcover, StoryGraph, Goodreads, Fable) follow whichever app you read in. See [Progress trackers](configuration.md#progress-trackers) for each one's sign-in.

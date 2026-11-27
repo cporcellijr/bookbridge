@@ -19,7 +19,8 @@
                 'Calibre-Web Automated': 'CWA_ENABLED',
                 'Hardcover': 'HARDCOVER_ENABLED',
                 'StoryGraph': 'STORYGRAPH_ENABLED',
-                'Goodreads': 'GOODREADS_ENABLED'
+                'Goodreads': 'GOODREADS_ENABLED',
+                'Fable': 'FABLE_ENABLED'
             } %}
             {% set gate_key = gate_keys.get(group) %}
             {% set gate_globally_off = gate_key in service_enable_keys
@@ -78,7 +79,8 @@
                 'Calibre-Web Automated': 'CWA_ENABLED',
                 'Hardcover': 'HARDCOVER_ENABLED',
                 'StoryGraph': 'STORYGRAPH_ENABLED',
-                'Goodreads': 'GOODREADS_ENABLED'
+                'Goodreads': 'GOODREADS_ENABLED',
+                'Fable': 'FABLE_ENABLED'
             } %}
             {# Gates whose blank value means ON. Audiobookshelf predates per-service
                toggles, so an untouched account must keep syncing to it rather than

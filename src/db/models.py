@@ -242,6 +242,7 @@ class Book(Base):
     hardcover_details = relationship("HardcoverDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     storygraph_details = relationship("StorygraphDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     goodreads_details = relationship("GoodreadsDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
+    fable_details = relationship("FableDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     alignment = relationship("BookAlignment", back_populates="book", uselist=False, cascade="all, delete-orphan")
     reading_sessions = relationship("ReadingSession", back_populates="book", passive_deletes="all")
 
@@ -410,6 +411,43 @@ class GoodreadsDetails(Base):
         self.goodreads_rating = goodreads_rating
         self.goodreads_review_count = goodreads_review_count
         self.goodreads_rating_updated_at = goodreads_rating_updated_at
+        self.isbn = isbn
+        self.asin = asin
+        self.matched_by = matched_by
+
+
+class FableDetails(Base):
+    """A BookBridge book's Fable match and cached metadata."""
+
+    __tablename__ = 'fable_details'
+
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
+    fable_book_id = Column(String(255), nullable=False)
+    fable_url = Column(String(1000))
+    fable_pages = Column(Integer)
+    fable_rating = Column(Float)
+    fable_review_count = Column(Integer)
+    fable_rating_updated_at = Column(Float)
+    isbn = Column(String(255))
+    asin = Column(String(255))
+    matched_by = Column(String(50))
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    book = relationship("Book", back_populates="fable_details")
+
+    def __init__(self, abs_id: str, fable_book_id: str, fable_url: str = None,
+                 fable_pages: int = None, fable_rating: float = None,
+                 fable_review_count: int = None,
+                 fable_rating_updated_at: float = None, isbn: str = None,
+                 asin: str = None, matched_by: str = None):
+        self.abs_id = abs_id
+        self.fable_book_id = fable_book_id
+        self.fable_url = fable_url
+        self.fable_pages = fable_pages
+        self.fable_rating = fable_rating
+        self.fable_review_count = fable_review_count
+        self.fable_rating_updated_at = fable_rating_updated_at
         self.isbn = isbn
         self.asin = asin
         self.matched_by = matched_by

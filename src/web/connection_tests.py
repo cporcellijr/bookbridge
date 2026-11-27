@@ -8,7 +8,7 @@ from src.services.integration_connection_probes import (
     _test_abs, _test_kosync, _test_storyteller, _test_booklore,
     _test_bookorbit, _test_kavita, _test_cwa, _test_hardcover,
     _test_readest, _test_bookfusion, _test_shelfmark, _test_storygraph,
-    _test_goodreads, _test_telegram,
+    _test_goodreads, _test_fable, _test_telegram,
 )
 
 
@@ -109,6 +109,11 @@ def _run_test_connection(service: str, payload: dict):
             _coerce_test_str(data.get('GOODREADS_COOKIE_REFRESH_URL')),
             _coerce_test_str(data.get('GOODREADS_COOKIE_REFRESH_TOKEN')),
             _coerce_test_str(data.get('GOODREADS_BROWSER_URL')),
+        ),
+        'fable': lambda data: _test_fable(
+            _coerce_test_bool(data.get('FABLE_ENABLED')),
+            _coerce_test_str(data.get('FABLE_EMAIL')),
+            _coerce_test_str(data.get('FABLE_PASSWORD')),
         ),
         'shelfmark': lambda data: _test_shelfmark(
             _coerce_test_str(data.get('SHELFMARK_USER')),

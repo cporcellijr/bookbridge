@@ -972,6 +972,46 @@
                 </div>
             </div>
 
+{% if settings_next %}
+            <div class="settings-section" data-svc="fable" data-service-page="fable">
+{% else %}
+            <div class="settings-section" data-svc="fable">
+{% endif %}
+                {% set fable_enabled = get_bool('FABLE_ENABLED') %}
+                <div class="section-header">
+                    <div class="svc-left">
+{% if not settings_next %}
+                        <span class="svc-chev">▶</span>
+{% endif %}
+                        <div class="svc-chip">FB</div>
+                        <div class="svc-title">
+                            <h3>Fable <span class="tracker-tag">{{ _('write-only tracker') }}</span></h3>
+                            <div class="svc-desc">{{ _('Shelf and percentage progress') }}</div>
+                        </div>
+                    </div>
+                    <div class="header-tail">
+                        <span class="pill off">{{ _('Per-user login') }}</span>
+                        <div class="toggle-switch-wrapper">
+                            <span class="toggle-label">{{ _('Enable') }}</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle_fable" name="FABLE_ENABLED"
+                                    onchange="toggleSection('fable_body', this.checked)" {% if fable_enabled %}checked{% endif %}>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div id="fable_body" class="section-body {% if not fable_enabled %}collapsed{% endif %}">
+                    <div class="form-group full-width">
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            {% trans trimmed settings_url=url_for('settings') %}🔒 Set each user's Fable email and password in
+                            <a href="{{ settings_url }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>.
+                            Fable has no public API; BookBridge signs in the way Fable's own apps do.{% endtrans %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             </div><!-- /integrations panel -->
 
             <div class="tab-panel" data-panel="sync">
@@ -1048,7 +1088,7 @@
                     <div class="form-group full-width">
                         <label>{{ _('Wait before posting progress (minutes)') }}</label>
                         <input type="number" name="ALL_APPS_TRACKER_COOLDOWN_MINS" min="0" value="{{ merged_values.ALL_APPS_TRACKER_COOLDOWN_MINS }}">
-                        <div class="help-text">{{ _('Hardcover, StoryGraph and Goodreads get your progress once you have made no new progress for this long; new progress restarts the wait. Finishing a book posts straight away. 0 posts on every sync.') }}</div>
+                        <div class="help-text">{{ _('Hardcover, StoryGraph, Goodreads and Fable get your progress once you have made no new progress for this long; new progress restarts the wait. Finishing a book posts straight away. 0 posts on every sync.') }}</div>
                     </div>
                 </div>
             </div>

@@ -26,6 +26,7 @@ CANONICAL_SERVICES = [
     "Hardcover",
     "StoryGraph",
     "Goodreads",
+    "Fable",
 ]
 
 

@@ -278,6 +278,7 @@ def account_display_page():
             all_hardcover=web.database_service.get_all_hardcover_details(),
             all_storygraph=web.database_service.get_all_storygraph_details(),
             all_goodreads=web.database_service.get_all_goodreads_details(),
+            all_fable=web.database_service.get_all_fable_details(),
             reading_stats_by_book=web.database_service.get_all_reading_stats(user_id=user.id),
             cached_booklore_by_filename=web._viewer_booklore_index(integrations),
             claim_times_by_book=web.database_service.get_book_claim_times(user_id=user.id),

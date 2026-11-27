@@ -50,6 +50,8 @@ TRACKERS = {
                    '_storygraph_cooldown', '_storygraph_cooldown_lock'),
     'Goodreads': ('_handle_goodreads_cooldown', 'GOODREADS_UPDATE_COOLDOWN_MINS',
                   '_goodreads_cooldown', '_goodreads_cooldown_lock'),
+    'Fable': ('_handle_fable_cooldown', 'FABLE_UPDATE_COOLDOWN_MINS',
+              '_fable_cooldown', '_fable_cooldown_lock'),
 }
 
 

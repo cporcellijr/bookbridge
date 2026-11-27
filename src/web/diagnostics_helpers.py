@@ -38,6 +38,7 @@ def _run_diagnostics_send(
         'hardcover': _flag(lambda: web.container.hardcover_client().is_configured()),
         'storygraph': _flag(lambda: web.container.storygraph_client().is_configured()),
         'goodreads': _flag(lambda: web.container.goodreads_client().is_configured()),
+        'fable': _flag(lambda: web.container.fable_client().is_configured()),
         'slash_books': web.os.path.isdir(web.os.environ.get('EBOOK_IMPORT_DIR', '/books')),
     }
     try:
