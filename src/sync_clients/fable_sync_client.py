@@ -2,7 +2,6 @@
 
 import logging
 import os
-import re
 import threading
 import time
 
@@ -11,7 +10,7 @@ from src.db.models import Book, FableDetails, State
 from src.services.llm_matching import craft_search_terms, judge_best_candidate, tracker_match_enabled
 from src.sync_clients.sync_client_interface import ServiceState, SyncClient, SyncResult, UpdateProgressRequest
 from src.utils.ebook_utils import resolve_ebook_identifiers
-from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title
+from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title, same_volume
 
 
 logger = logging.getLogger(__name__)
@@ -21,14 +20,6 @@ _MATCH_MISS_RETRY_SECONDS = 6 * 3600
 _SHELVED_LOOKUPS = 5
 # Lists a book reaches by being read through; progress never moves it back off them.
 _DONE_SHELVES = {"finished", "did_not_finish"}
-
-
-def _same_volume(title: str, candidate: str) -> bool:
-    """Whether two titles carry the same trailing volume number ("Book 2" is not "Book")."""
-    def volume(text: str) -> str | None:
-        match = re.search(r"(\d+)\s*$", clean_book_title(text))
-        return match.group(1) if match else None
-    return volume(title) == volume(candidate)
 
 
 class FableSyncClient(SyncClient):
@@ -100,7 +91,8 @@ class FableSyncClient(SyncClient):
         for item in ordered:
             if calculate_similarity(target, clean_book_title(item.get("title", ""))) < min_title_similarity:
                 continue
-            if not _same_volume(title, item.get("title", "")):
+            # Title-based picks (a similarity floor) must also be the same volume.
+            if min_title_similarity and not same_volume(title, item.get("title", "")):
                 continue
             if not author or not item.get("author") or calculate_similarity(
                 author, item["author"]) >= author_match_floor():
@@ -138,7 +130,7 @@ class FableSyncClient(SyncClient):
         target = clean_book_title(title)
         close = [item for item in candidates
                  if calculate_similarity(target, clean_book_title(item.get("title", ""))) >= max(min_title_similarity, 0.65)
-                 and _same_volume(title, item.get("title", ""))
+                 and (not min_title_similarity or same_volume(title, item.get("title", "")))
                  and (not author or not item.get("author")
                       or calculate_similarity(author, item["author"]) >= author_match_floor())]
         for item in close[:_SHELVED_LOOKUPS]:

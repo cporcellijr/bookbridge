@@ -8,7 +8,7 @@ from urllib.parse import quote, unquote, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title
+from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title, same_volume
 from src.utils.user_config import resolve_setting
 
 _AUDIO_FORMAT_MAP = (
@@ -651,7 +651,9 @@ class StorygraphClient:
         candidates = []
         if isbn:
             candidates.extend(self.search_books(isbn, ""))
-        candidates.extend(self.search_books(title, author))
+        # An ISBN hit is trusted; a title hit must also be the same volume.
+        candidates.extend(item for item in self.search_books(title, author)
+                          if same_volume(title, item.get("title", "")))
 
         if not candidates:
             return None

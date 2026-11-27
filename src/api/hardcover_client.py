@@ -20,7 +20,7 @@ from datetime import date
 import requests
 
 from src.utils.logging_utils import get_persistent_condition_logger
-from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title
+from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title, same_volume
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -505,6 +505,8 @@ class HardcoverClient:
         best_match_has_author = False
 
         for book in candidates:
+            if not same_volume(title, book["title"]):
+                continue
             # Score match
             candidate_title = clean_book_title(book["title"])
             title_score = calculate_similarity(clean_input_title, candidate_title)

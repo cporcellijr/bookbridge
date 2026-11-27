@@ -10,7 +10,7 @@ from src.db.models import Book, GoodreadsDetails, State
 from src.services.llm_matching import craft_search_terms, judge_best_candidate, tracker_match_enabled
 from src.sync_clients.sync_client_interface import ServiceState, SyncClient, SyncResult, UpdateProgressRequest
 from src.utils.ebook_utils import resolve_ebook_identifiers
-from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title
+from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title, same_volume
 
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,9 @@ class GoodreadsSyncClient(SyncClient):
             target, clean_book_title(item.get("title", ""))), reverse=True)
         for item in ordered:
             if calculate_similarity(target, clean_book_title(item.get("title", ""))) < min_title_similarity:
+                continue
+            # Title-based picks (a similarity floor) must also be the same volume.
+            if min_title_similarity and not same_volume(title, item.get("title", "")):
                 continue
             if not author or not item.get("author") or calculate_similarity(
                 author, item["author"]) >= author_match_floor():

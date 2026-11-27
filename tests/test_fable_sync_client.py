@@ -79,8 +79,7 @@ class TestFableSyncClient(unittest.TestCase):
 
     def test_a_sequel_never_matches_the_first_book(self):
         # Fable only had book 1; "Unicorn Breeder 2" fuzzy-matched it at 0.94 in the live probe.
-        self.abs_client.get_item_details.return_value = {"media": {"metadata": {
-            "title": "Example Book 2", "authorName": "Example Author"}}}
+        self.sync._match_metadata = Mock(return_value=("Example Book 2", "Example Author", "", ""))
         self.client.library.return_value = [dict(self.candidate, isbn="1", shelf="finished")]
         self.assertIsNone(self.sync._automatch(self.book))
         self.client.search_books.return_value = [dict(self.candidate, title="Example Book 2: A Novel")]

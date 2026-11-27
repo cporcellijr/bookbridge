@@ -39,6 +39,18 @@ def clean_book_title(title: str) -> str:
         
     return title.strip()
 
+def same_volume(title: str, candidate: str) -> bool:
+    """Whether two titles carry the same trailing volume number after cleaning.
+
+    Fuzzy title scores rate "Book 2" close to "Book"; a series volume must not
+    match its neighbour, so title-based matchers check this as well.
+    """
+    def volume(text: str) -> str | None:
+        match = re.search(r"(\d+)\s*$", clean_book_title(text or ""))
+        return match.group(1) if match else None
+    return volume(title) == volume(candidate)
+
+
 def calculate_similarity(a: str, b: str) -> float:
     """
     Calculates the similarity ratio between two strings using SequenceMatcher.

@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urlparse
 
 import requests
 
-from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title
+from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title, same_volume
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -236,6 +236,8 @@ class FableClient:
         """Prefer an ISBN hit, then a title match with the shared author gate."""
         for query in filter(None, (isbn, f"{title} {author}".strip())):
             candidates = self.search_books(query)
+            if query != isbn:
+                candidates = [item for item in candidates if same_volume(title, item.get("title", ""))]
             if not candidates:
                 continue
             clean_title = clean_book_title(title)
