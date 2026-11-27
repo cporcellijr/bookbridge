@@ -70,6 +70,24 @@ class TestPropagateCompletion(unittest.TestCase):
             mock_abs_client.abs_client.mark_finished.assert_called_once_with("test-book")
             mock_record_write.assert_called_once_with("ABS", "test-book")
 
+    def test_abs_companion_marks_its_own_item_finished(self):
+        """A companion ABS copy is finished by its ABS item id, not the book id (#628)."""
+        from src.sync_clients.abs_sync_client import ABSSyncClient
+
+        mgr = _make_minimal_manager()
+        book = _make_book(abs_id="bridge-book")
+        book.audio_source = "BookOrbit"
+        book.sync_mode = "audiobook"
+        client = ABSSyncClient(MagicMock(), MagicMock(), MagicMock(), database_service=MagicMock(), user_id=7)
+        client.database_service.resolve_companion_audio.return_value = "remote-abs"
+        client.abs_client.mark_finished.return_value = True
+
+        with patch("src.services.write_tracker.record_write") as mock_record_write:
+            mgr._propagate_completion(book, {"ABS": client}, "BookOrbitAudio", "bridge-book", "Test Book")
+
+        client.abs_client.mark_finished.assert_called_once_with("remote-abs")
+        mock_record_write.assert_called_once_with("ABS", "remote-abs")
+
     def test_abs_failure_does_not_record_write(self):
         """ABS failure does not record the write and logs a warning."""
         mgr = _make_minimal_manager()

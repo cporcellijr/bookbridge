@@ -596,7 +596,7 @@ class ABSClient:
                             exc_info=True,
                         )
                     else:
-                        logger.error("ABS audio fingerprint rejected an incomplete response: %s", e)
+                        logger.error("ABS audio fingerprint rejected an incomplete response: %s", e, exc_info=True)
                     return False
         except Exception as e:
             error = str(e).replace(stream_url, stream_url.split("?", 1)[0])

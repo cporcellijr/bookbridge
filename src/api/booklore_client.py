@@ -2581,7 +2581,7 @@ class BookloreClient:
                             exc_info=True,
                         )
                     else:
-                        logger.error("Grimmory audio fingerprint rejected an incomplete response: %s", e)
+                        logger.error("Grimmory audio fingerprint rejected an incomplete response: %s", e, exc_info=True)
                     return False
         except Exception as e:
             logger.error(f"❌ Grimmory audiobook track download error: {e}", exc_info=True)

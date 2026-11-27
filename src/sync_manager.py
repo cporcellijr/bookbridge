@@ -571,11 +571,14 @@ class SyncManager:
                 continue
             try:
                 if client_name.lower() == 'abs':
-                    success = client.abs_client.mark_finished(abs_id)
+                    # A companion ABS copy has its own item id, not the book's.
+                    item_id = getattr(client, '_audio_item_id', lambda _book: abs_id)(book)
+                    item_id = item_id if isinstance(item_id, str) else abs_id
+                    success = client.abs_client.mark_finished(item_id)
                     if success:
                         try:
                             from src.services.write_tracker import record_write
-                            record_write('ABS', abs_id)
+                            record_write('ABS', item_id)
                         except ImportError:
                             pass
                         logger.info(f"🏁 '{abs_id}' '{title_snip}' completion propagated to '{client_name}'")
