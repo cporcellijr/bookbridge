@@ -60,6 +60,10 @@ All notable changes to BookBridge will be documented in this file.
   found a tracker book by title, "Book 2" could match "Book", so progress for book 2 went to book 1. A match
   by title now has to carry the same volume number; matches by ISBN are unchanged.
 
+- **The StoryGraph link dialog shows the book you linked.** StoryGraph changed its book pages, so BookBridge
+  read every book's title as blank. Reopening the dialog on a linked book then searched again instead of
+  showing your link, and pasting a StoryGraph URL linked a book with no title. Titles read correctly again.
+
 - **A requested book pairs with your Calibre (CWA) copy.** When the other half of a requested book was an
   ebook in Calibre-Web Automated, the pairing failed with "The pairing could not be saved" once the new file
   arrived, because BookBridge tried to fetch the ebook from Grimmory. It now fetches it from your CWA.
