@@ -38,6 +38,8 @@
     .integrations-wrap .nav { max-width: 560px; margin: 0 auto 16px; }
     .integrations-wrap .nav a { color: var(--accent); text-decoration: none; font-size: 13px; margin-right: 16px; }
     .integrations-wrap .note { color: var(--muted); font-size: 12px; background: rgba(0, 0, 0, .2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 18px; }
+    .integrations-wrap .integrations-save-bar { position: sticky; bottom: 16px; z-index: 5; display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 18px; padding: 12px; background: rgba(20, 20, 20, .92); border: 1px solid rgba(102, 126, 234, .3); border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); }
+    .integrations-wrap .integrations-dirty { margin-right: auto; color: #aab4f5; font-size: 13px; font-weight: 600; }
 </style>
 {% endblock %}
 
@@ -260,7 +262,10 @@
                 </div>
             </div>
             {% endfor %}
-            <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save integrations') }}</button>
+            <div class="integrations-save-bar">
+                <span class="integrations-dirty" id="integrationsDirty" hidden>{{ _('Unsaved changes') }}</span>
+                <button type="submit" class="btn btn-primary">{{ _('Save integrations') }}</button>
+            </div>
         </form>
     </div>
 </div>

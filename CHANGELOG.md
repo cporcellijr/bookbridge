@@ -56,6 +56,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Save integrations stays in view and shows when something is unsaved.** On **My Integrations** and an
+  admin's per-user integrations page, in both interfaces, the Save integrations bar now stays at the bottom of
+  the screen while you scroll. It is greyed out until you change something, then lights up with
+  **Unsaved changes**. Undoing every change, or saving, greys it out again, so flipping a switch such as
+  Grimmory's no longer looks saved when it isn't. Linking BookFusion also keeps its switch and saved state
+  in step on both pages. (#632)
+
 - **A sequel no longer links to the first book on Hardcover, StoryGraph or Goodreads.** When BookBridge
   found a tracker book by title, "Book 2" could match "Book", so progress for book 2 went to book 1. A match
   by title now has to carry the same volume number; matches by ISBN are unchanged.

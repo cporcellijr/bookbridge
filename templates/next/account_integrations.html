@@ -265,17 +265,6 @@
 {% block scripts %}{% include "next/_account_integrations_scripts.html" %}
 <script>
 (function () {
-    const form = document.querySelector('.integrations-wrap form');
-    const note = document.getElementById('integrationsDirty');
-    if (!form || !note) return;
-    const mark = function () { note.hidden = false; };
-    form.addEventListener('input', mark);
-    form.addEventListener('change', mark);
-}());
-</script>
-
-<script>
-(function () {
     const menu = document.querySelector('.settings-rail-nav .settings-menu');
     if (!menu) return;
     const links = Array.from(menu.querySelectorAll('.settings-tab[href^="#"]'));

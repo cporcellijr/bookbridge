@@ -464,19 +464,48 @@ class TestSettingsPhoneSectionBar(unittest.TestCase):
 
 
 class TestIntegrationsSaveBar(unittest.TestCase):
-    """Both New integrations forms retain one sticky Save action."""
+    """Both integrations forms, Classic and New, keep one sticky Save action (#632)."""
 
     def test_both_integrations_forms_keep_one_save_button_and_dirty_note(self):
-        for page in ('account_integrations', 'admin_user_integrations'):
-            with self.subTest(page=page):
-                template = (ROOT / 'templates/next' / f'{page}.html').read_text(encoding='utf-8')
-                self.assertIn('class="integrations-save-bar"', template)
-                self.assertIn('id="integrationsDirty"', template)
-                self.assertEqual(template.count('type="submit"'), 1)
+        for folder in ('templates', 'templates/next'):
+            for page in ('account_integrations', 'admin_user_integrations'):
+                with self.subTest(folder=folder, page=page):
+                    template = (ROOT / folder / f'{page}.html').read_text(encoding='utf-8')
+                    self.assertIn('class="integrations-save-bar"', template)
+                    self.assertIn('id="integrationsDirty" hidden', template)
+                    self.assertEqual(template.count('type="submit"'), 1)
+                    # The old note-only tracker never cleared on revert; the shared script replaces it.
+                    self.assertNotIn("note.hidden = false", template)
 
     def test_integrations_save_bar_is_sticky(self):
         css = (ROOT / 'static/css/next-p6.css').read_text(encoding='utf-8')
         self.assertIn('.integrations-wrap .integrations-save-bar { position: sticky;', css)
+        self.assertIn('.integrations-save-bar .btn-primary:not(:disabled) { background: var(--info-bg);', css)
+        self.assertIn('.integrations-save-bar .btn:disabled {', css)
+        for page in ('account_integrations', 'admin_user_integrations'):
+            with self.subTest(page=page):
+                classic = (ROOT / 'templates' / f'{page}.html').read_text(encoding='utf-8')
+                self.assertIn('.integrations-wrap .integrations-save-bar { position: sticky;', classic)
+
+    def test_both_script_partials_load_the_shared_save_state(self):
+        for page in ('account_integrations', 'admin_user_integrations'):
+            with self.subTest(page=page):
+                partial = (ROOT / 'templates/next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
+                self.assertEqual(partial.count('<script src="/static/js/integrations-save.js"></script>'), 1)
+
+    def test_bookfusion_link_marks_its_switch_saved(self):
+        partial = (ROOT / 'templates/next/_account_integrations_scripts.html').read_text(encoding='utf-8')
+        linked = partial.split('if (result.ok && data.ok) {', 1)[1].split('return;', 1)[0]
+        self.assertIn("enabled.dispatchEvent(new Event('integrations-saved', { bubbles: true }));", linked)
+
+    def test_save_state_behaviour(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node.js required for the save bar behaviour check')
+        import subprocess
+        result = subprocess.run([node, str(ROOT / 'tests' / 'test_integrations_save_bar.js')],
+                                capture_output=True, text=True, timeout=15, cwd=ROOT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class TestIntegrationsLayout(TestP6RenderedRoutes):
@@ -516,6 +545,30 @@ class TestIntegrationsLayout(TestP6RenderedRoutes):
                     self.assertIn('class="settings-back" href="/account"', rail)
                 else:
                     self.assertIn('class="settings-back" href="/admin/users"', rail)
+
+    def test_rendered_save_bar_starts_enabled_for_no_script_and_loads_shared_state(self):
+        routes = ("/account/integrations", f"/admin/users/{self.reader.id}/integrations")
+        for mode in ("classic", "new"):
+            pages = self.get_pages(self.admin, mode)
+            for route in routes:
+                with self.subTest(mode=mode, route=route):
+                    markup = pages[route]
+                    bar = markup.split('<div class="integrations-save-bar">', 1)[1].split("</div>", 1)[0]
+                    self.assertIn('<span class="integrations-dirty" id="integrationsDirty" hidden>Unsaved changes</span>', bar)
+                    self.assertIn('<button type="submit" class="btn btn-primary">Save integrations</button>', bar)
+                    self.assertEqual(markup.count('src="/static/js/integrations-save.js'), 1)
+
+    def test_successful_save_renders_the_saved_value_as_the_clean_baseline(self):
+        self.get_pages(self.reader, "new")
+        for mode in ("classic", "new"):
+            with self.subTest(mode=mode):
+                self.db.set_user_credential(self.reader.id, "UI_MODE", mode)
+                self.app.jinja_env.cache.clear()
+                response = self.client.post("/account/integrations", data={"BOOKLORE_USER": "reader-" + mode})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(self.db.get_user_credentials(self.reader.id).get("BOOKLORE_USER"), "reader-" + mode)
+                self.assertRegex(response.get_data(as_text=True),
+                                 r'name="BOOKLORE_USER" value="reader-' + mode + '"')
 
     def test_integrations_styles_and_observer_live_outside_pinned_scripts(self):
         for page in ("account_integrations", "admin_user_integrations"):

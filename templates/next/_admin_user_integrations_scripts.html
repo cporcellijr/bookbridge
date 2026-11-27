@@ -1,3 +1,4 @@
+<script src="/static/js/integrations-save.js"></script>
 <script>
         const TEST_URL_BASE = {{ url_for('admin_user_test_connection', user_id=target_user.id, service='__service__')|tojson }};
         const ABS_LIB_URL = {{ url_for('admin_user_abs_libraries', user_id=target_user.id)|tojson }};
@@ -41,7 +42,16 @@
                 })
                     .then(r => r.json())
                     .then(data => {
-                        if (data.ok) { status.textContent = {{ _('BookFusion linked to this user. Save or refresh to see the stored token.')|tojson }}; return; }
+                        if (data.ok) {
+                            const enabled = document.querySelector('input[name="BOOKFUSION_ENABLED"]');
+                            if (enabled) {
+                                enabled.checked = true;
+                                toggleIntegrationGroup(enabled);
+                                enabled.dispatchEvent(new Event('integrations-saved', { bubbles: true }));
+                            }
+                            status.textContent = {{ _('BookFusion linked to this user.')|tojson }};
+                            return;
+                        }
                         if (data.error === 'authorization_pending' || data.error === 'slow_down') {
                             const nextInterval = data.error === 'slow_down' ? intervalSeconds + 5 : intervalSeconds;
                             pollBookFusionToken(deviceCode, nextInterval, deadlineMs, status);

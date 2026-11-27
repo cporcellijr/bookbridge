@@ -1,3 +1,4 @@
+<script src="/static/js/integrations-save.js"></script>
 <script>
         const TEST_URL_BASE = {{ url_for('account_test_connection', service='__service__')|tojson }};
         const ABS_LIB_URL = {{ url_for('account_abs_libraries')|tojson }};
@@ -193,6 +194,8 @@
                             if (enabled) {
                                 enabled.checked = true;
                                 toggleIntegrationGroup(enabled);
+                                // Linking saved BOOKFUSION_ENABLED=true server-side.
+                                enabled.dispatchEvent(new Event('integrations-saved', { bubbles: true }));
                             }
                             setBookFusionLinked(true);
                             setBookFusionStatus({{ _('BookFusion linked for this account.')|tojson }});
