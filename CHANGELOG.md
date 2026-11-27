@@ -13,7 +13,14 @@ All notable changes to BookBridge will be documented in this file.
   Fable email and password under **Account → My Integrations → Fable**. Books move to Currently Reading and
   Finished as you read, are matched to the copy already on your Fable lists first, and can be
   relinked from the book's page. The book's Fable rating shows on its card. Fable has no public API, so this uses
-  the same sign-in and app API as Fable's own apps.
+  the same sign-in and app API as Fable's own apps. Contributed by [@jeffhammett](https://github.com/jeffhammett) in #631.
+
+- **Add a second audiobook copy to a book you already have.** If the same audiobook is in more than one of
+  Audiobookshelf, BookOrbit and Grimmory, open the book in the New interface and use **Create link** on the
+  other audio app, or **Link to existing book** on a Discover suggestion. BookBridge checks in the Job Queue
+  that both copies have the same audio files in the same order, then keeps your position in both, so you can
+  listen in either app. Each reader links their own copies, and **Unlink** removes the link without touching
+  the book or its alignment. Contributed by [@monkeCode](https://github.com/monkeCode) in #628.
 
 - **Requested books pair as soon as BookOrbit files them.** BookBridge now listens for BookOrbit's request
   updates, so a finished request pairs within seconds instead of at the next sync. It pairs exactly the book
