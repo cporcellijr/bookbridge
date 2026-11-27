@@ -616,6 +616,17 @@ class TestStorygraphKeepsYourEdition(unittest.TestCase):
                 if expect_update:
                     update.assert_called_once_with("book-1", 1)
 
+    @patch("src.api.storygraph_client.requests.post")
+    @patch("src.api.storygraph_client.requests.get")
+    def test_to_read_not_set_while_the_session_is_known_expired(self, mock_get, mock_post):
+        # A signed-out book page loads (200) without a status label, like a book not on your lists.
+        mock_get.return_value = Mock(status_code=200, headers={}, text='<meta name="csrf-token" content="t">')
+        self.client._auth_expired_cookie = self.client._session_cookie()
+
+        self.assertFalse(self.client.add_to_read_if_untracked("book-1"))
+
+        mock_post.assert_not_called()
+
     def test_to_read_not_set_when_status_cannot_be_read(self):
         with patch.object(self.client, "get_user_book", return_value=None), \
                 patch.object(self.client, "update_status") as update:

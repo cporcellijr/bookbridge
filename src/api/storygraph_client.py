@@ -486,6 +486,10 @@ class StorygraphClient:
 
     def get_reading_status(self, book_id: str) -> tuple[bool, Optional[int]]:
         """(read_ok, status_id) for one book: status_id is None when it isn't on your lists."""
+        # A signed-out book page still loads but shows no status, which would read as "not on your lists".
+        cookie_fingerprint = self._session_cookie()
+        if cookie_fingerprint and self._auth_expired_cookie == cookie_fingerprint:
+            return False, None
         user_book = self.get_user_book(book_id)
         if not user_book:
             return False, None
