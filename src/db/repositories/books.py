@@ -804,7 +804,7 @@ class BooksMixin:
         if doc_id:
             candidate = self.get_book_by_kosync_id(doc_id)
             candidate_id = getattr(candidate, "abs_id", None)
-            if candidate_id and candidate_id != keep_abs_id:
+            if candidate_id and candidate_id != keep_abs_id and candidate.sync_mode == "ebook_only":
                 return candidate_id
         return self._find_ebook_only_duplicate(keep_book)
 

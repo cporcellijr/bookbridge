@@ -176,11 +176,22 @@ class StorygraphSyncClient(SyncClient):
             logger.warning("StoryGraph: failed to fetch editions for automatch %s: %s", book_id, exc, exc_info=True)
             editions = []
 
-        chosen_edition = None
-        for edition in editions:
-            if edition.get('pages') and edition.get('pages') > 0 and not edition.get('is_audio'):
-                chosen_edition = edition
-                break
+        # The edition already on your lists wins: posting to any other one adds the book a second time.
+        shelved_edition = None
+        if editions:
+            try:
+                shelved_edition = self.storygraph_client.find_shelved_edition(book_id, first_page=editions)
+            except Exception as exc:
+                logger.warning("StoryGraph: failed to look for your edition of %s: %s", book_id, exc, exc_info=True)
+            if not isinstance(shelved_edition, dict):
+                shelved_edition = None
+
+        chosen_edition = shelved_edition
+        if not chosen_edition:
+            for edition in editions:
+                if edition.get('pages') and edition.get('pages') > 0 and not edition.get('is_audio'):
+                    chosen_edition = edition
+                    break
         if not chosen_edition:
             for edition in editions:
                 if edition.get('pages') and edition.get('pages') > 0:
@@ -193,7 +204,7 @@ class StorygraphSyncClient(SyncClient):
             edition_id = str(chosen_edition.get('id') or chosen_edition.get('book_id') or book_id)
             pages = chosen_edition.get('pages')
 
-        if edition_id != book_id:
+        if edition_id != book_id and not shelved_edition:
             switched = self.storygraph_client.switch_edition(book_id, edition_id)
             if not switched:
                 logger.warning(
@@ -233,9 +244,9 @@ class StorygraphSyncClient(SyncClient):
             logger.warning("StoryGraph: failed to save automatch details for %s: %s", book.abs_id, exc, exc_info=True)
             return
 
-        if set_initial_status:
+        if set_initial_status and not shelved_edition:  # an edition on your lists keeps its status
             try:
-                self.storygraph_client.update_status(edition_id, 1)
+                self.storygraph_client.add_to_read_if_untracked(edition_id)
             except Exception as exc:
                 logger.warning("StoryGraph: failed to set initial status after automatch for %s: %s", edition_id, exc, exc_info=True)
 

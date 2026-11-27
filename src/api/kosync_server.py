@@ -2019,12 +2019,48 @@ def _resent_position_time(doc_hash: str, user_id, device_id, progress, percentag
     row = _reader_progress_row(doc_hash, _database_service.get_kosync_document(doc_hash), user_id)
     if (
         row is not None and device_id and getattr(row, "device_id", None) == device_id
-        and (getattr(row, "progress", None) or "") == (progress or "")
+        and str(getattr(row, "progress", None) or "") == str(progress or "")  # a client may send a page number
         and getattr(row, "percentage", None) is not None
         and abs(float(row.percentage) - float(percentage)) < 1e-6
     ):
         return getattr(row, "timestamp", None)
     return None
+
+
+def _resent_over_newer_report(user_id, doc_hash: str, device_id, progress, percentage) -> bool:
+    """Whether a device re-sends its last report (kept in kosync_device_reports) on a copy
+    that another device or the sync cycle has written since: called when the reader's row
+    no longer shows that report. A copy not linked yet, or a reader with no KoSync State,
+    is handled as any PUT (it gets one), and so is a report that cannot be read."""
+    try:
+        last = _database_service.get_kosync_device_report(doc_hash, device_id, user_id)
+    except Exception as e:
+        logger.warning("KOSync: Could not read the last report of '%s' for doc %s: %s", device_id, doc_hash, e,
+                       exc_info=True)
+        return False
+    if last is None or last[0] != str(progress or "") or abs(last[1] - float(percentage)) >= 1e-6:
+        return False
+    doc = _database_service.get_kosync_document(doc_hash)
+    book_id = getattr(doc, "linked_abs_id", None)
+    row_device = getattr(_reader_progress_row(doc_hash, doc, user_id), "device_id", None)
+    return bool(
+        book_id and row_device and row_device != device_id
+        and _database_service.get_state(book_id, "kosync", user_id=user_id) is not None
+    )
+
+
+def _record_device_report(user_id, doc_hash: str, device_id, progress, percentage) -> None:
+    if device_id:
+        # The position is saved by now. If this fails, the table keeps the device's previous
+        # report until its next one is kept: this one is not recognised when re-sent, and the
+        # device going back to exactly the previous one is ignored while the reader's row for
+        # that copy was last written by another device or the sync cycle.
+        try:
+            _database_service.upsert_kosync_device_report(doc_hash, device_id, str(progress or ""),
+                                                          float(percentage), user_id)
+        except Exception as e:
+            logger.warning("KOSync: Could not keep the last report of '%s' for doc %s: %s", device_id, doc_hash, e,
+                           exc_info=True)
 
 
 def _forward_reading_threshold() -> float:
@@ -2192,10 +2228,12 @@ def kosync_put_progress():
         put_book = _database_service.get_book(kosync_doc.linked_abs_id)
     if put_book and not _kosync_user_may_access_book(put_book):
         if not is_internal:
-            _database_service.upsert_user_kosync_progress(
-                doc_hash, percentage, progress=progress, device=device,
-                device_id=device_id, timestamp=now, user_id=request_user_id,
-            )
+            with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+                _database_service.upsert_user_kosync_progress(
+                    doc_hash, percentage, progress=progress, device=device,
+                    device_id=device_id, timestamp=now, user_id=request_user_id,
+                )
+                _record_device_report(request_user_id, doc_hash, device_id, progress, percentage)
         return _defer_kosync_book_access(doc_hash, put_book, source="put", discover=may_match)
 
     # Optional "furthest wins" protection
@@ -2284,10 +2322,12 @@ def kosync_put_progress():
                     doc_hash, put_book, user_id=request_user_id,
                     exact=getattr(put_book, "kosync_doc_id", None) == doc_hash,
                 )
-            _database_service.upsert_user_kosync_progress(
-                doc_hash, percentage, progress=progress, device=device,
-                device_id=device_id, timestamp=now, user_id=request_user_id,
-            )
+            with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+                if _database_service.upsert_user_kosync_progress(
+                    doc_hash, percentage, progress=progress, device=device,
+                    device_id=device_id, timestamp=now, user_id=request_user_id,
+                ) is not None:  # Kept nowhere without accounts: then it is no report to compare with.
+                    _record_device_report(request_user_id, doc_hash, device_id, progress, percentage)
             logger.info(
                 "KOSync: Held progress from '%s' for doc %s (%.2f%%): '%s' is at %.2f%% and "
                 "this copy hasn't been sent that position yet",
@@ -2345,6 +2385,9 @@ def kosync_put_progress():
                     "(user has higher: %.2f%% vs new %.2f%%): awaiting fresh forward reading",
                     device, doc_hash, baseline_pct * 100, new_pct * 100,
                 )
+                # Still this device's last report: a later re-send must be compared with it.
+                with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+                    _record_device_report(request_user_id, doc_hash, device_id, progress, percentage)
                 return jsonify({
                     "document": doc_hash,
                     "timestamp": int(datetime_to_epoch(baseline.timestamp)) if baseline and baseline.timestamp else int(datetime_to_epoch(now))
@@ -2397,9 +2440,18 @@ def kosync_put_progress():
     with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
         if not is_internal:
             # Dated when it becomes readable: a cycle read that missed it started earlier.
-            # With latest-wins, a position the device re-sends keeps the time it was first reported.
-            if not furthest_wins:
+            # With latest-wins, a position the device re-sends keeps the time it was first reported, unless marked deliberate.
+            if not (furthest_wins or isinstance(data.get("metadata"), dict) and data["metadata"].get("deliberate") is True):
                 resent_at = _resent_position_time(doc_hash, request_user_id, device_id, progress, percentage)
+                if resent_at is None and _resent_over_newer_report(
+                    request_user_id, doc_hash, device_id, progress, percentage,
+                ):
+                    # The row no longer shows this report: what the copy holds now is more recent.
+                    logger.info(
+                        "KOSync: Ignored progress re-sent by '%s' for doc %s (%.2f%%): this copy has "
+                        "been written since that device reported it", device, doc_hash, float(percentage) * 100,
+                    )
+                    return jsonify({"document": doc_hash, "timestamp": int(datetime_to_epoch(now))}), 200
             progress_timestamp = kosync_doc.timestamp = resent_at or utcnow()
         if is_internal and read_started_at is not None and put_book and not furthest_wins:
             rows = _database_service.get_user_kosync_progress_for_book(
@@ -2427,6 +2479,8 @@ def kosync_put_progress():
             doc_hash, percentage, progress=progress, device=device,
             device_id=device_id, timestamp=progress_timestamp, user_id=request_user_id,
         )
+        if not is_internal:
+            _record_device_report(request_user_id, doc_hash, device_id, progress, percentage)
     if not is_internal and not resent_at:
         _record_recent_external_kosync_put(doc_hash, device, device_id, percentage, now_ts, request_user_id)
 

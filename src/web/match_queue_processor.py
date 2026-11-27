@@ -275,6 +275,10 @@ def _process_batch_queue(queue_items):
             web._claim_book_for_user_id(web.get_current_user_id(), item['abs_id'])
             continue
 
+        if web._conflicting_audio_mapping(web.database_service.get_book_by_kosync_id(kosync_doc_id), item['abs_id']):
+            web.logger.warning("Batch Match skipped '%s': %s", web.sanitize_log_data(item['abs_id']), web._AUDIO_MATCH_CONFLICT)
+            continue
+
         item_details = clients.abs_client.get_item_details(item['abs_id'])
         chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
         storyteller_manifest = web.ingest_storyteller_transcripts(
@@ -283,6 +287,23 @@ def _process_batch_queue(queue_items):
             chapters
         )
         transcript_source = web._storyteller_transcript_source(storyteller_uuid, storyteller_manifest)
+
+        resolved_status = "pending"
+        if current_book_entry is not None:
+            web._preserve_or_reset_mapping_status(
+                current_book_entry,
+                kosync_doc_id=kosync_doc_id,
+                ebook_filename=ebook_filename,
+                audio_source_id=item['abs_id'],
+                storyteller_uuid=storyteller_uuid or None,
+                ebook_source=item.get('ebook_source'),
+                ebook_source_id=item.get('ebook_source_id'),
+            )
+            resolved_status = current_book_entry.status or "pending"
+            if resolved_status == "active":
+                storyteller_manifest = storyteller_manifest or current_book_entry.transcript_file
+                transcript_source = transcript_source or current_book_entry.transcript_source
+                storyteller_uuid = storyteller_uuid or current_book_entry.storyteller_uuid
 
         # Create Book object and save to database service
         book = Book(
@@ -297,7 +318,7 @@ def _process_batch_queue(queue_items):
             ebook_filename=ebook_filename,
             kosync_doc_id=kosync_doc_id,
             transcript_file=storyteller_manifest,
-            status="pending",
+            status=resolved_status,
             duration=duration,
             transcript_source=transcript_source,
             storyteller_uuid=storyteller_uuid or None,

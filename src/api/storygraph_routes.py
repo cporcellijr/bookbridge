@@ -318,10 +318,9 @@ def link_storygraph(abs_id):
         try:
             database_service.save_storygraph_details(details)
             try:
-                # Set status to "Currently Reading" (2) instead of "To Read" (1) if it's already in progress?
-                # For now, stick to the request's pattern which uses update_status(book_id, 1) in existing code.
-                # Actually, the existing code uses update_status(book_id, 1).
-                storygraph_client.update_status(edition_id or book_id, 1)
+                # To Read only for a book that isn't on your lists yet; a book you've read or are
+                # reading keeps its status.
+                storygraph_client.add_to_read_if_untracked(edition_id or book_id)
             except Exception as exc:
                 logger.warning("Failed to set StoryGraph status: %s", exc, exc_info=True)
             return jsonify({"success": True, "title": title})
@@ -352,7 +351,7 @@ def link_storygraph(abs_id):
     try:
         database_service.save_storygraph_details(details)
         try:
-            storygraph_client.update_status(str(resolved["book_id"]), 1)
+            storygraph_client.add_to_read_if_untracked(str(resolved["book_id"]))
         except Exception as exc:
             logger.warning("Failed to set StoryGraph status: %s", exc, exc_info=True)
         flash(f"Linked StoryGraph: {resolved.get('title') or resolved['book_id']}", "success")

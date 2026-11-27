@@ -192,6 +192,54 @@ class ReadalongEpubActionTestCase(unittest.TestCase):
         # of an empty/idle-looking one.
         self.assertEqual(saved_job.stage, "queued")
 
+    def test_linked_readalong_epub_is_reported_without_generating_another(self):
+        # #626: a read-along EPUB made elsewhere has no BookBridge job, yet it exists.
+        import src.web_server as ws
+        with patch.object(ws, "_has_linked_readalong", return_value=True) as linked, \
+             patch("src.web_server._spawn_user_background") as mock_spawn:
+            resp = self.client.post('/api/readalong-epub/rl-book-1')
+        self.assertEqual(resp.get_json(), {"success": True, "status": "existing"})
+        linked.assert_called_once_with(self.book, resolve_local=True)
+        mock_spawn.assert_not_called()
+        self.mock_database_service.save_job.assert_not_called()
+
+    def test_worker_stops_when_the_linked_epub_is_already_a_readalong(self):
+        import src.web_server as ws
+        with patch.object(ws, "_has_linked_readalong", return_value=True), \
+             patch.object(ws, "uc", return_value=self._worker_clients()), \
+             patch.object(ws, "deliver_readalong_epub") as mock_deliver:
+            ws._readalong_epub_worker("rl-book-1", 42)
+        mock_deliver.assert_not_called()
+        self.mock_database_service.update_job_by_id.assert_called_once_with(
+            42, last_error="This book already has a linked read-along EPUB.")
+
+    def test_linked_readalong_reads_bookorbit_status_from_cache_only_on_dashboard_polls(self):
+        import src.web_server as ws
+        self.book.ebook_source, self.book.ebook_source_id = "BookOrbit", "77"
+        clients = self._worker_clients()
+        clients.sync_clients["BookOrbit"].resolve_bookorbit_book_id.return_value = 77
+        clients.bookorbit_client.get_read_aloud_sync.return_value = {"state": "enabled"}
+        with patch.object(ws, "uc", return_value=clients), \
+             patch.object(ws, "embedded_audio", return_value=()):
+            self.assertTrue(ws._has_linked_readalong(self.book))
+        clients.bookorbit_client.get_read_aloud_sync.assert_called_once_with(77, cached_only=True)
+
+    def test_dashboard_polls_reuse_the_local_readalong_answer_until_a_fresh_check(self):
+        import src.web_server as ws
+        parser = Mock()
+        parser.cached_book_path.return_value = Path("/cache/x.epub")
+        parser.resolve_book_path.return_value = Path("/books/x.epub")
+        container = Mock(ebook_parser=Mock(return_value=parser))
+        with patch.object(ws, "container", container), \
+             patch.object(ws, "embedded_audio", return_value=("audio/a.m4a",)) as overlay:
+            self.assertTrue(ws._has_linked_readalong(self.book))
+            self.assertTrue(ws._has_linked_readalong(self.book))
+            self.assertEqual(parser.cached_book_path.call_count, 1)
+            overlay.return_value = ()
+            self.assertFalse(ws._has_linked_readalong(self.book, resolve_local=True))
+            self.assertFalse(ws._has_linked_readalong(self.book))
+        self.assertEqual(overlay.call_count, 2)
+
     # ---- duplicate concurrent requests -----------------------------------
 
     def test_refuses_a_second_request_while_one_is_in_flight(self):
@@ -759,8 +807,8 @@ class ReadalongDashboardMappingTestCase(unittest.TestCase):
         footer_start = html.index('class="card-footer"', html.index('data-abs-id="book-ready-ra"'))
         self.assertNotIn('ctc-alignment-badge', html[footer_start:html.index('class="quick-actions"', footer_start)])
 
-    def test_generate_and_remove_buttons_grey_out_by_readalong_state(self):
-        """A book with a read-along greys out Create; one without greys out Remove."""
+    def test_generate_and_remove_buttons_follow_readalong_state(self):
+        """A generated read-along hides Create; a plain ebook hides Remove."""
         ready = _make_book(abs_id="book-ready-ra", abs_title="Ready Book")
         plain = _make_book(abs_id="book-plain-ra", abs_title="Plain Book")
         self.mock_database_service.get_all_books.return_value = [ready, plain]
@@ -772,10 +820,27 @@ class ReadalongDashboardMappingTestCase(unittest.TestCase):
             idx = html.index(call)
             return html[html.rindex("<button", 0, idx):idx]
 
-        self.assertIn("disabled", button('generateReadalongEpub("book-ready-ra", this)'))
-        self.assertNotIn("disabled", button('removeReadalongEpub("book-ready-ra", this)'))
-        self.assertNotIn("disabled", button('generateReadalongEpub("book-plain-ra", this)'))
-        self.assertIn("disabled", button('removeReadalongEpub("book-plain-ra", this)'))
+        self.assertIn("hidden", button('generateReadalongEpub("book-ready-ra", this)'))
+        self.assertNotIn("hidden", button('removeReadalongEpub("book-ready-ra", this)'))
+        self.assertNotIn("hidden", button('generateReadalongEpub("book-plain-ra", this)'))
+        self.assertIn("hidden", button('removeReadalongEpub("book-plain-ra", this)'))
+
+    def test_linked_readalong_epub_hides_create_and_offers_no_remove(self):
+        # #626: Remove belongs to BookBridge-generated output only.
+        import src.web_server as ws
+        linked = _make_book(abs_id="book-linked-ra", abs_title="Linked Book", ebook_filename="linked.epub",
+                            original_ebook_filename="linked.epub")
+        self.mock_database_service.get_all_books.return_value = [linked]
+        self.mock_database_service.get_readalong_ready_book_ids.return_value = set()
+        with patch.object(ws, "_has_linked_readalong", side_effect=lambda book, **_: book.abs_id == "book-linked-ra"):
+            html = self.client.get('/').get_data(as_text=True)
+
+        def button(call):
+            idx = html.index(call)
+            return html[html.rindex("<button", 0, idx):idx]
+
+        self.assertIn("hidden", button('generateReadalongEpub("book-linked-ra", this)'))
+        self.assertIn("hidden", button('removeReadalongEpub("book-linked-ra", this)'))
 
     def test_ineligible_button_is_clickable_so_the_click_is_never_swallowed(self):
         """An INELIGIBLE book's button keeps its reason as a hover title but is

@@ -114,6 +114,10 @@ class TestCrossUserMappingGuard(unittest.TestCase):
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value=HASH)
     def test_admin_may_still_merge(self, _hash):
+        # Only an ebook-only row is ever folded in; another audiobook's pairing is refused (#624).
+        alice = self.svc.get_book("ab-alice")
+        alice.sync_mode = "ebook_only"
+        self.svc.save_book(alice)
         self._login("admin", "secret")
 
         r = self.client.post("/match", data={"audiobook_id": "ab-bob", "ebook_filename": "book.epub"})

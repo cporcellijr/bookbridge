@@ -60,8 +60,8 @@ from src.utils.ebook_utils import (
     is_linkable_ebook_filename,
 )
 from src.utils.ebook_sources import is_grimmory_source, local_ebook_filename, normalize_ebook_source
-from src.services.companion_audio import AUDIO_PROVIDERS, verify_audio_pair
-from src.web.audio_link_jobs import enqueue_lock
+from src.services.companion_audio import verify_audio_pair
+from src.utils.epub_readalong import embedded_audio
 from src.utils.local_ebook_metadata import read_local_ebook_metadata, read_local_ebook_series
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
@@ -1152,6 +1152,16 @@ from src.web.audio_source_adapters import (
 )
 
 
+_AUDIO_MATCH_CONFLICT = "This ebook is already linked to another audiobook. The existing link was not changed."
+
+
+def _conflicting_audio_mapping(candidate, target_id):
+    return bool(
+        isinstance(getattr(candidate, 'abs_id', None), str)
+        and candidate.abs_id != target_id and getattr(candidate, 'sync_mode', None) != 'ebook_only'
+    )
+
+
 from src.web import mapping_creation as _mapping_creation
 _mapping_creation._WEB_MODULE = sys.modules[__name__]
 from src.web.mapping_creation import (
@@ -1661,82 +1671,52 @@ from src.web.readalong_generation_jobs import (
 
 
 
-def companion_audio(abs_id):
-    source = request.args.get('provider')
-    if request.method == 'POST':
-        payload = request.get_json(silent=True)
-        payload = payload if isinstance(payload, dict) else {}
-        return _match_existing_audio(abs_id, payload.get('provider'), payload.get('item_id'))
-    return _match_existing_audio(abs_id, source)
+_LINKED_READALONG_TTL = 300.0
+# Dashboard renders stat every linked EPUB (~1.6 ms each on the 9p mount), so
+# remember the local answer per filename set for a few minutes.
+_linked_readalong_seen: dict = {}
 
 
-def _match_existing_audio(abs_id, provider, item_id=None):
-    book = database_service.get_book(abs_id)
-    if not book:
-        return jsonify(error="Book not found"), 404
-    user = current_user()
-    if not _user_may_modify_book(user, abs_id):
-        return _forbidden_book_response(json_response=True)
-    user_id = user.id if user is not None else database_service._default_user_id()
-    if user_id is None:
-        return jsonify(error="No active BookBridge user"), 409
-    primary = book.audio_source or 'ABS'
-    if primary not in AUDIO_PROVIDERS or book.sync_mode != 'audiobook' or not book.ebook_filename:
-        return jsonify(error="Link an EPUB and a primary audiobook first."), 409
-    secondary = provider or {'ABS': 'BookOrbit', 'BookOrbit': 'ABS'}.get(primary)
-    if not isinstance(secondary, str) or secondary not in AUDIO_PROVIDERS or primary == secondary:
-        return jsonify(error="Select another audio service."), 400
-    if request.method == 'DELETE':
-        database_service.delete_companion_audio(user_id, abs_id, secondary)
-        return jsonify(success=True)
-    if not _build_dashboard_integrations().get(AUDIO_PROVIDERS[secondary][0]):
-        return jsonify(error="The audio service is not enabled for this account."), 409
-    if request.method == 'GET':
-        query = request.args.get('q', '').strip() or book.abs_title
-        linked = database_service.resolve_companion_audio(user_id, book, secondary)
-        candidates = [dict(id=row.source_id, title=row.title, authors=row.authors)
-                      for row in get_searchable_audiobooks(query) if row.source == secondary][:20]
-        return jsonify(provider=secondary, provider_label=AUDIO_PROVIDERS[secondary][1], linked=linked, candidates=candidates)
-
-    if not isinstance(item_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,255}', item_id):
-        return jsonify(error="Select a valid audiobook."), 400
-    primary_id = database_service.primary_audio_item_id(user_id, book)
-    if not primary_id:
-        return jsonify(error="The primary audio source is not linked for this user."), 409
-    existing = database_service.get_book_by_audio_source(secondary, item_id)
-    if secondary == 'ABS' and not existing:
-        existing = database_service.get_book(item_id)
-    if existing and existing.abs_id != abs_id:
-        return jsonify(error="This audiobook already has its own mapping. Neither mapping was changed."), 409
-    linked = database_service.resolve_companion_audio(user_id, book, secondary)
-    if linked == item_id:
-        return jsonify(success=True, provider=secondary)
-    if linked:
-        return jsonify(error="Unlink the current audiobook for this service before replacing it."), 409
-    with enqueue_lock:
-        job_id = database_service.enqueue_audio_link(user_id, abs_id, dict(
-            provider=secondary, item_id=item_id, primary=primary, primary_id=primary_id,
-        ))
-    if job_id is None:
-        return jsonify(error="Another audiobook link for this service is already queued."), 409
-    return jsonify(success=True, status='queued', job_id=job_id, provider=secondary), 202
-
-
-def existing_audio_match_targets():
-    user = current_user()
-    if user is None:
-        return jsonify(error="Authentication required"), 401
-    provider = request.args.get('provider')
-    if provider not in AUDIO_PROVIDERS:
-        return jsonify(error="Select an audio service"), 400
-    query = request.args.get('q', '').strip().casefold()
-    books = database_service.get_all_books(user_id=user.id)
-    matches = [book for book in books if book.sync_mode == 'audiobook' and book.ebook_filename
-               and (book.audio_source or 'ABS') in AUDIO_PROVIDERS.keys() - {provider}
-               and query in (book.abs_title or '').casefold()]
-    matches.sort(key=lambda book: (book.abs_title or '').casefold())
-    return jsonify(candidates=[dict(id=book.abs_id, title=book.abs_title or book.ebook_filename,
-                                    authors=book.ebook_filename) for book in matches[:40]])
+def _has_linked_readalong(book, *, resolve_local=False):
+    """Check the linked input EPUB independently of BookBridge generation jobs."""
+    names = tuple(
+        name for name in dict.fromkeys((getattr(book, "ebook_filename", None), local_ebook_filename(book)))
+        if isinstance(name, str) and name.lower().endswith(".epub")
+    )
+    now = time.monotonic()
+    seen = None if resolve_local else _linked_readalong_seen.get(names)
+    if seen and seen[0] > now:
+        found = seen[1]
+    else:
+        found = False
+        parser = container.ebook_parser()
+        for name in names:
+            try:
+                path = parser.resolve_book_path(name) if resolve_local else parser.cached_book_path(name)
+                if embedded_audio(path):
+                    found = True
+                    break
+            except OSError:
+                continue
+        if names:
+            _linked_readalong_seen[names] = (now + _LINKED_READALONG_TTL, found)
+    if found:
+        return True
+    # BookOrbit v3 confirms the existence of an overlay EPUB on a combined
+    # entry. Read the existing client cache on dashboard polls, not one HTTP
+    # request per book. Disabled sync is not proof the EPUB is absent.
+    if getattr(book, 'ebook_source', None) == 'BookOrbit' and getattr(book, 'ebook_source_id', None):
+        try:
+            clients = uc()
+            ebook_client = clients.sync_clients.get('BookOrbit')
+            entry = ebook_client.resolve_bookorbit_book_id(book) if ebook_client else None
+            if entry is not None:
+                sync = clients.bookorbit_client.get_read_aloud_sync(entry, cached_only=not resolve_local)
+                if isinstance(sync, dict) and sync.get('state') == 'enabled':
+                    return True
+        except Exception:
+            logger.debug('Could not inspect BookOrbit read-along status', exc_info=True)
+    return False
 
 
 from src.web.routes.readalong import generate_readalong_epub, readalong_epub_status, remove_readalong_epub_route
@@ -2260,6 +2240,8 @@ def create_app(test_container=None):
     suggestions_routes.register(app, sys.modules[__name__])
     from src.web.routes import readalong as readalong_routes
     readalong_routes.register(app, sys.modules[__name__])
+    from src.web.routes import audio_links as audio_link_routes
+    audio_link_routes.register(app, sys.modules[__name__])
     from src.web.routes import me as me_routes
     me_routes.register(app, sys.modules[__name__])
     from src.web.routes import covers as covers_routes

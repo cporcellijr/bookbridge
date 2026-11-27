@@ -833,7 +833,7 @@ class BookOrbitClient:
     # Read-along progress sync (BookOrbit v3.0.0+)
     # ------------------------------------------------------------------
 
-    def get_read_aloud_sync(self, book_id, force: bool = False) -> Optional[dict]:
+    def get_read_aloud_sync(self, book_id, force: bool = False, *, cached_only: bool = False) -> Optional[dict]:
         """BookOrbit's own read-along sync status for one book entry, or None.
 
         v3.0.0 added an internal audiobook<->EPUB progress sync that runs within a
@@ -848,7 +848,15 @@ class BookOrbitClient:
         and a caller polling for the result must see fresh data, not whatever
         was cached up to an hour ago.
         """
-        detail = self.get_book_detail(book_id, force=force)
+        if cached_only:
+            keys = [book_id, str(book_id)]
+            if str(book_id).isdigit():
+                keys.append(int(book_id))
+            with self._cache_lock:
+                hits = [self._detail_cache[key] for key in keys if key in self._detail_cache]
+            detail = max(hits, key=lambda entry: entry[0])[1] if hits else None
+        else:
+            detail = self.get_book_detail(book_id, force=force)
         if not isinstance(detail, dict):
             return None
         sync = detail.get("readAloudSync")

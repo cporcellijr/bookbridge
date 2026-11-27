@@ -20,8 +20,6 @@ def register(app: Any, web_module: Any) -> None:
     global _WEB_MODULE
     _WEB_MODULE = web_module
     rules = (
-        ('/api/companion-audio/<abs_id>', 'companion_audio', web_module.companion_audio, ['GET', 'POST', 'DELETE']),
-        ('/api/existing-audio-match-targets', 'existing_audio_match_targets', web_module.existing_audio_match_targets, ['GET']),
         ('/api/readalong-epub/<abs_id>', 'generate_readalong_epub', generate_readalong_epub, ['POST']),
         ('/api/readalong-epub/<abs_id>/status', 'readalong_epub_status', readalong_epub_status, ['GET']),
         ('/api/readalong-epub/<abs_id>/remove', 'remove_readalong_epub_route', remove_readalong_epub_route, ['POST']),
@@ -53,6 +51,9 @@ def generate_readalong_epub(abs_id: str):
     user = web.current_user()
     if not web._user_may_modify_book(user, abs_id):
         return web._forbidden_book_response(json_response=True)
+
+    if web._has_linked_readalong(book, resolve_local=True) or abs_id in (web.database_service.get_readalong_ready_book_ids() or ()):
+        return web.jsonify({"success": True, "status": "existing"})
 
     if getattr(book, "sync_mode", "audiobook") == "ebook_only":
         return web.jsonify({

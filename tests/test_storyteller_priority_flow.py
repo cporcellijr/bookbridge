@@ -475,6 +475,28 @@ def test_read_along_smil_with_a_slip_still_uses_ctc(tmp_path, monkeypatch):
     assert book.transcript_source == "ctc"
 
 
+@pytest.mark.parametrize("identical, expected_source", [(True, "smil"), (False, "ctc")])
+def test_byte_identical_single_track_builds_the_map_from_smil_without_ctc(tmp_path, monkeypatch,
+                                                                          identical, expected_source):
+    """#623: a read-along whose one embedded track IS the audiobook file already has the
+    audiobook's clock, so CTC and Whisper never run; any other audio still goes through CTC."""
+    with patch("src.sync_manager.embedded_audio", return_value=("audio/track.m4b",)), \
+         patch("src.sync_manager.audio_matches_single_embedded_track", return_value=identical), \
+         patch.object(SyncManager, "_ctc_local_audio_paths", return_value=[str(tmp_path / "a.m4b")]):
+        book, transcriber, alignment_service, _checked, _preview, _transcript = _run_read_along_job(
+            tmp_path, monkeypatch, slips=[], skip_ctc_setting=None)
+
+    assert book.transcript_source == expected_source
+    if identical:
+        transcriber.transcribe_from_smil.assert_called_once()
+        assert transcriber.transcribe_from_smil.call_args.kwargs.get("verified_single_track") is True
+        alignment_service.align_and_store.assert_called_once()
+        alignment_service.align_forced_and_store.assert_not_called()
+        transcriber.process_audio.assert_not_called()
+    else:
+        alignment_service.align_forced_and_store.assert_called()
+
+
 @pytest.mark.parametrize("preview", [
     [],
     # Matched words only in the first third of the audio: too little to check for slips.

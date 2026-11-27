@@ -2546,12 +2546,12 @@ class BookloreClient:
     def download_audiobook_track(self, book_id, track_index, output_path):
         return self._read_audiobook_track(book_id, track_index, lambda response: stream_response_to_path(
             response, output_path, expected_size=response_declares_size(response),
-        ))
+        ), output_path=output_path)
 
     def fingerprint_audiobook_track(self, book_id, track_index):
         return self._read_audiobook_track(book_id, track_index, fingerprint_response) or None
 
-    def _read_audiobook_track(self, book_id, track_index, consume):
+    def _read_audiobook_track(self, book_id, track_index, consume, *, output_path=None):
         token = self._get_fresh_token()
         if not token:
             return False
@@ -2569,15 +2569,19 @@ class BookloreClient:
                 try:
                     return consume(response)
                 except IncompleteTransferError as e:
-                    logger.error(
-                        "❌ Grimmory audiobook track download truncated: book_id=%s track_index=%s "
-                        "got=%s expected=%s",
-                        book_id,
-                        track_index,
-                        e.actual_size,
-                        e.expected_size if e.expected_size is not None else "unknown",
-                        exc_info=True,
-                    )
+                    if output_path is not None:
+                        logger.error(
+                            "❌ Grimmory audiobook track download truncated: book_id=%s track_index=%s "
+                            "path=%s got=%s expected=%s",
+                            book_id,
+                            track_index,
+                            output_path,
+                            e.actual_size,
+                            e.expected_size if e.expected_size is not None else "unknown",
+                            exc_info=True,
+                        )
+                    else:
+                        logger.error("Grimmory audio fingerprint rejected an incomplete response: %s", e)
                     return False
         except Exception as e:
             logger.error(f"❌ Grimmory audiobook track download error: {e}", exc_info=True)

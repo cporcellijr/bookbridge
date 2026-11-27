@@ -259,6 +259,17 @@ class EbookParser:
         """All directories to search for ebook files: BOOKS_DIR + extra libraries."""
         return [self.books_dir, *self.extra_book_dirs]
 
+    def cached_book_path(self, filename):
+        """Resolve a known local file without scanning a mounted library."""
+        if not is_plain_basename(filename):
+            return None
+        with self._path_cache_lock:
+            cached = self._path_cache.get(filename)
+        if cached is not None and cached.is_file():
+            return cached
+        candidate = safe_cache_path(self.epub_cache_dir, filename)
+        return candidate if candidate and candidate.is_file() else None
+
     def resolve_book_path(self, filename):
         # 0. A name carrying a folder ("Author/Book.epub") is looked up only at that
         #    exact path inside a library root: the glob scans below would follow its

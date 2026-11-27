@@ -116,6 +116,11 @@ class TestBookPage(unittest.TestCase):
         assert 'https://abs.example/item/abs-companion' in text
         assert 'unlinkCompanionAudio("book-1", "ABS", this)' in text
         assert self.service.get_companion_suggestion_keys(self.admin.id) == set()
+        assert self.service.find_book_by_companion_audio(self.reader.id, 'ABS', 'abs-companion').abs_id == 'book-1'
+        assert self.service.find_book_by_companion_audio(self.admin.id, 'ABS', 'abs-companion') is None
+        self.service.set_user_bookorbit_link(self.reader.id, 'book-1', audio_id='99')
+        assert self.service.find_book_by_companion_audio(self.reader.id, 'ABS', 'abs-companion') is None
+        assert self.service.get_companion_suggestion_keys(self.reader.id) == set()
 
     def test_standard_match_adds_each_enabled_audio_provider_to_the_same_book(self):
         from types import SimpleNamespace
@@ -153,6 +158,55 @@ class TestBookPage(unittest.TestCase):
             assert self.client.delete('/api/companion-audio/book-1?provider=BookOrbit').status_code == 200
         assert self.service.get_active_companion_audio(self.reader.id) == {'book-1': {'BookLore': '43'}}
         assert self.service.get_book('book-1').status == 'active'
+
+    def test_audio_link_routes_scope_search_and_reject_invalid_requests(self):
+        from types import SimpleNamespace
+
+        self.service.save_book(Book(abs_id='private', abs_title='Private book', ebook_filename='private.epub'))
+        self.service.link_user_book(self.admin.id, 'private')
+        self._login('ui-reader')
+        targets = self.client.get('/api/existing-audio-match-targets?provider=BookOrbit')
+        assert [row['id'] for row in targets.json['candidates']] == ['book-1']
+        assert self.client.get('/api/companion-audio/private?provider=BookOrbit').status_code == 403
+        candidates = [SimpleNamespace(source=source, source_id=item_id, title='Match', authors='Author')
+                      for source, item_id in [('ABS', 'ignored'), ('BookOrbit', '42')]]
+        with patch('src.web_server._build_dashboard_integrations', return_value={'bookorbitaudio': True}), \
+             patch('src.web_server.get_searchable_audiobooks', return_value=candidates) as search:
+            response = self.client.get('/api/companion-audio/book-1?provider=BookOrbit&q=Match')
+            assert [row['id'] for row in response.json['candidates']] == ['42']
+            search.assert_called_once_with('Match')
+            assert self.client.post('/api/companion-audio/book-1', json={
+                'provider': 'BookOrbit', 'item_id': 'invalid/id',
+            }).status_code == 400
+        assert self.service.get_audio_link_jobs(self.reader.id) == []
+
+    def test_audio_link_worker_rejects_mismatched_audio_and_can_retry_idempotently(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from src.web.audio_link_jobs import process_audio_link
+
+        db = self.service
+        uid = self.reader.id
+        inputs = dict(provider='BookOrbit', item_id='42', primary='ABS', primary_id='book-1')
+        verify = Mock(side_effect=[False, True])
+        clients = Mock()
+        worker = SimpleNamespace(database_service=db, verify_audio_pair=verify, logger=Mock(),
+                                 container=SimpleNamespace(user_client_registry=lambda: clients))
+        first = db.enqueue_audio_link(uid, 'book-1', inputs)
+        process_audio_link(worker, db.next_audio_link_job())
+        failed = next(job for job in db.get_audio_link_jobs(uid) if job.id == first)
+        assert failed.stage == 'failed' and 'different audio bytes' in failed.last_error
+        assert db.get_active_companion_audio(uid) == {}
+
+        retry = db.enqueue_audio_link(uid, 'book-1', inputs)
+        assert retry != first
+        job = db.next_audio_link_job()
+        assert job.id == retry
+        process_audio_link(worker, job)
+        process_audio_link(worker, job)  # replay after the link was saved
+        assert verify.call_count == 2
+        assert db.get_active_companion_audio(uid) == {'book-1': {'BookOrbit': '42'}}
+        assert next(job for job in db.get_audio_link_jobs(uid) if job.id == retry).stage == 'completed'
 
     def test_app_states_link_changes_readalong_and_devices(self):
         from types import SimpleNamespace

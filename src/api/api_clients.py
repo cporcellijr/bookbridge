@@ -571,12 +571,12 @@ class ABSClient:
         """Download file from stream_url to output_path."""
         return self._read_file(stream_url, lambda response: stream_response_to_path(
             response, output_path, expected_size=response_declares_size(response), min_size=1024,
-        ))
+        ), output_path=output_path)
 
     def fingerprint_file(self, stream_url):
         return self._read_file(stream_url, lambda response: fingerprint_response(response, min_size=1024)) or None
 
-    def _read_file(self, stream_url, consume):
+    def _read_file(self, stream_url, consume, *, output_path=None):
         self._update_session_headers()
         try:
             logger.info(f"⬇️ ABS: Downloading file from {stream_url.split('?', 1)[0]}...")
@@ -587,12 +587,16 @@ class ABSClient:
                 try:
                     return consume(r)
                 except IncompleteTransferError as e:
-                    logger.error(
-                        "❌ ABS Download truncated: got %s bytes, expected %s",
-                        e.actual_size,
-                        e.expected_size if e.expected_size is not None else "unknown",
-                        exc_info=True,
-                    )
+                    if output_path is not None:
+                        logger.error(
+                            "❌ ABS Download truncated: got %s bytes, expected %s (%s)",
+                            e.actual_size,
+                            e.expected_size if e.expected_size is not None else "unknown",
+                            output_path,
+                            exc_info=True,
+                        )
+                    else:
+                        logger.error("ABS audio fingerprint rejected an incomplete response: %s", e)
                     return False
         except Exception as e:
             error = str(e).replace(stream_url, stream_url.split("?", 1)[0])

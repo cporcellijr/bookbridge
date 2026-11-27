@@ -58,6 +58,21 @@ class UserLinksMixin:
         return {item_id if provider == 'ABS' else f'{provider.lower()}:{item_id}'
                 for links in self.get_active_companion_audio(user_id).values() for provider, item_id in links.items()}
 
+    def find_book_by_companion_audio(self, user_id, provider, item_id):
+        """Resolve an event only against a current link owned by this reader."""
+        if user_id is None or not item_id:
+            return None
+        with self.get_session() as session:
+            book = session.query(Book).join(UserCompanionAudio, UserCompanionAudio.abs_id == Book.abs_id).join(
+                UserBook, UserBook.abs_id == Book.abs_id,
+            ).filter(UserBook.user_id == user_id, UserCompanionAudio.user_id == user_id,
+                     UserCompanionAudio.provider == provider, UserCompanionAudio.item_id == item_id).first()
+            if book:
+                session.expunge(book)
+        if book and self.resolve_companion_audio(user_id, book, provider) == item_id:
+            return book
+        return None
+
     def delete_companion_audio(self, user_id, abs_id, provider):
         with self.get_session() as session:
             session.query(UserCompanionAudio).filter_by(user_id=user_id, abs_id=abs_id, provider=provider).delete(synchronize_session=False)

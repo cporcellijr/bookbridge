@@ -3303,7 +3303,73 @@ end
 
 function BridgeSync:onReaderReady()
     self:startSession()
+    self:_markDeliberateKOSyncPushes()
     return false
+end
+
+-- Runs f(...) with target[key] set, puts it back afterwards, also when f raises; returns what f returns.
+local function withFlag(target, key, f, ...)
+    if not target then return f(...) end
+    local was = target[key]
+    target[key] = true
+    local results = table.pack(pcall(f, ...))
+    target[key] = was
+    if not results[1] then error(results[2], 0) end
+    return table.unpack(results, 2, results.n)
+end
+
+-- KOSync's interactive pushes (its menu, a gesture) carry metadata.deliberate, so BookBridge takes a
+-- position the reader chose even when it repeats this device's last report. Only the request is marked,
+-- a copy: KOSync queues its own metadata when the push fails, and a retry sent later may be older than
+-- what was reported meanwhile. One pass-through wrapper per session, never removed (a wrapper another
+-- patch puts over it stays), marks while Client._bridgesync_deliberate is set.
+local function deliberateKOSyncClient()
+    local found, Client = pcall(require, "KOSyncClient")
+    if not found or type(Client) ~= "table" then return nil end
+    if not Client._bridgesync_marking then
+        local update_progress = Client.update_progress
+        Client._bridgesync_marking = true
+        Client.update_progress = function(client, user, key, document, metadata, ...)
+            if Client._bridgesync_deliberate and (metadata == nil or type(metadata) == "table") then
+                local marked = {}
+                for name, value in pairs(metadata or {}) do marked[name] = value end
+                marked.deliberate = true
+                metadata = marked
+            end
+            return update_progress(client, user, key, document, metadata, ...)
+        end
+    end
+    return Client
+end
+
+-- The push KOSync makes when its automatic sync is switched off keeps the place rather than choosing
+-- one: NetworkMgr._bridgesync_keeping is set while it runs, also when KOSync re-runs it once online
+-- (one pass-through wrapper on willRerunWhenOnline per session, never removed).
+local function keepingKOSyncPushes()
+    if not NetworkMgr._bridgesync_rerun_keeping then
+        local will_rerun = NetworkMgr.willRerunWhenOnline
+        NetworkMgr._bridgesync_rerun_keeping = true
+        NetworkMgr.willRerunWhenOnline = function(manager, callback, ...)
+            local rerun = NetworkMgr._bridgesync_keeping and callback
+            if rerun then callback = function(...) return withFlag(NetworkMgr, "_bridgesync_keeping", rerun, ...) end end
+            return will_rerun(manager, callback, ...)
+        end
+    end
+    return NetworkMgr
+end
+
+function BridgeSync:_markDeliberateKOSyncPushes()
+    local kosync = self.ui and self.ui.kosync
+    -- KOReader before v2026.07 sends no metadata (KOSync:getMetadata came with it): nothing to mark.
+    if not kosync or type(kosync.getMetadata) ~= "function" then return end
+    local update_progress, toggle = kosync.updateProgress, kosync.onKOSyncToggleAutoSync
+    kosync.updateProgress = function(k, ensure_networking, interactive, ...)
+        local Client = interactive and not NetworkMgr._bridgesync_keeping and self.is_enabled and deliberateKOSyncClient()
+        return withFlag(Client, "_bridgesync_deliberate", update_progress, k, ensure_networking, interactive, ...)
+    end
+    kosync.onKOSyncToggleAutoSync = toggle and function(...)
+        return withFlag(self.is_enabled and keepingKOSyncPushes(), "_bridgesync_keeping", toggle, ...)
+    end
 end
 
 function BridgeSync:onCloseDocument()

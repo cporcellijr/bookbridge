@@ -273,6 +273,25 @@ def test_audio_mapping_absorbs_an_existing_ebook_only_entry():
     assert saved.transcript_file == 'stale-transcript.json'
 
 
+def test_audio_mapping_refuses_an_ebook_already_paired_with_another_audiobook():
+    """#624: the duplicate merge no longer folds an audiobook pairing in, so this
+    path must refuse too; saving would leave two rows on one KOSync hash."""
+    svc, db, _bl, _ep, _abs = _build_service()
+    db.get_book_by_kosync_id.return_value = Book(
+        abs_id='bookorbit:42', audio_source='BookOrbit', sync_mode='audiobook',
+        kosync_doc_id='abcdef0123456789',
+    )
+
+    saved = svc.create_audio_mapping_from_match(
+        audio_source='ABS', audio_source_id='ab-1', audio_title="Winter's Tale",
+        ebook_filename='test.epub', ebook_source='Grimmory', ebook_source_id='5951',
+    )
+
+    assert saved is None
+    db.save_book.assert_not_called()
+    db.absorb_duplicate_mapping.assert_not_called()
+
+
 def test_audio_mapping_does_not_absorb_itself_on_a_re_match():
     """Re-matching the same book must not try to absorb its own row."""
     existing = Book(

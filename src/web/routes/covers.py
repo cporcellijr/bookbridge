@@ -73,33 +73,21 @@ def _serve_cover_locked(filename):
 
     book = web.database_service.get_book_by_kosync_id(doc_hash)
 
-    # 2. Try to extract
-
-    if book and book.ebook_filename:
-        # We need the full path to the book. ebook_parser resolves it usually.
-        # extract_cover expects a path or filename that can be resolved.
-        # Let's pass what we have.
-        try:
-             # Find actual file path using EbookParser resolution if needed,
-             # but extract_cover in my implementation takes 'filepath' and calls Path(filepath).
-             # If book.ebook_filename is just a name, we might need to resolve it.
-             # container.ebook_parser().resolve_book_path(book.ebook_filename)
-
-             # Actually, let's let EbookParser handle resolution or pass full path if we know it.
-             # EbookParser.extract_cover currently does `Path(filepath)`.
-             # It doesn't call `resolve_book_path` internally in the code I wrote?
-             # Let's double check my implementation of extract_cover.
-             # I wrote: `filepath = Path(filepath); book = epub.read_epub(str(filepath))`
-             # So it expects a valid path. I should resolve it first.
-
-             parser = web.container.ebook_parser()
-             full_book_path = parser.resolve_book_path(book.ebook_filename)
-
-             if parser.extract_cover(full_book_path, cover_path):
-                 web._cover_fresh_until[doc_hash] = web.time.time() + web._COVER_FRESH_TTL_SECONDS
-                 return web._send_cover_cached(filename)
-        except Exception as e:
-            web.logger.debug(f"Lazy cover extraction failed: {e}")
+    # A provider rename can leave the downloaded EPUB under its original name.
+    if book:
+        parser = web.container.ebook_parser()
+        candidates = dict.fromkeys((getattr(book, 'ebook_filename', None),
+                                    getattr(book, 'original_ebook_filename', None)))
+        for name in candidates:
+            if not isinstance(name, str) or not name:
+                continue
+            try:
+                path = parser.resolve_book_path(name)
+                if parser.extract_cover(path, cover_path):
+                    web._cover_fresh_until[doc_hash] = web.time.time() + web._COVER_FRESH_TTL_SECONDS
+                    return web._send_cover_cached(filename)
+            except Exception as e:
+                web.logger.debug("Lazy cover extraction failed: %s", e)
 
     return "Cover not found", 404
 

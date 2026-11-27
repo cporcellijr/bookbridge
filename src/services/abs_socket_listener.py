@@ -292,7 +292,7 @@ class ABSSocketListener:
             return
 
         # Check if this is an active book in our database
-        book = self._db.get_book(library_item_id)
+        book, _ = self._resolve_progress_book(library_item_id)
         if not book:
             logger.debug(
                 f"ABS Socket.IO: Progress event for '{library_item_id[:12]}...' "
@@ -363,7 +363,10 @@ class ABSSocketListener:
                 del self._pending[abs_id]
 
         for abs_id in to_fire:
-            book = self._db.get_book(abs_id)
+            book, companion_owner = self._resolve_progress_book(abs_id)
+            if not book or book.status != 'active':
+                continue
+            bridge_id = book.abs_id if companion_owner is not None else abs_id
             title = book.abs_title if book else abs_id[:12]
             # Resolve the user(s) this event belongs to. A per-user listener
             # already knows its user. The global listener (user_id=None) must fan
@@ -374,7 +377,9 @@ class ABSSocketListener:
             # same one the per-user poller reads) so our own ebook pushes don't
             # echo back as "external" changes (a feedback loop). A legacy/admin
             # book with no ownership rows stays [None] — unchanged.
-            if self._user_id is not None:
+            if companion_owner is not None:
+                target_user_ids = [companion_owner]
+            elif self._user_id is not None:
                 target_user_ids = [self._user_id]
             else:
                 target_user_ids = self._resolve_claimant_user_ids(book)
@@ -395,16 +400,27 @@ class ABSSocketListener:
                 # Instrumentation only (issue #215 phase 0).
                 try:
                     observation_trail.record_observation(
-                        "ABS", abs_id, self._last_progress.get(abs_id), source="socket", user_id=target_user_id,
+                        "ABS", bridge_id, self._last_progress.get(abs_id), source="socket", user_id=target_user_id,
                     )
                 except Exception as trail_err:
                     logger.debug(f"Could not record ABS observation: {trail_err}", exc_info=True)
                 logger.info(f"⚡ Socket.IO: ABS progress changed for '{title}'{self._scope_suffix} — triggering sync")
                 threading.Thread(
                     target=self._sync_manager.sync_cycle,
-                    kwargs={"target_abs_id": abs_id, "user_id": target_user_id},
+                    kwargs={"target_abs_id": bridge_id, "user_id": target_user_id},
                     daemon=True,
                 ).start()
+
+    def _resolve_progress_book(self, item_id):
+        book = self._db.get_book(item_id)
+        if book:
+            return book, None
+        owner = self._user_id if self._user_id is not None else self._db._default_user_id()
+        if isinstance(owner, int):
+            book = self._db.find_book_by_companion_audio(owner, 'ABS', item_id)
+            if book:
+                return book, owner
+        return None, None
 
     def _resolve_claimant_user_ids(self, book) -> list:
         """User ids to instant-sync for a global-listener event.

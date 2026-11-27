@@ -15,7 +15,6 @@ are taken verbatim from that scan.
 
 import hashlib
 import os
-import shutil
 import unittest
 
 import pytest
@@ -208,7 +207,6 @@ def test_upload_without_device_identity_is_rejected(database):
 # ---------------------------------------------------------------------------
 
 from tests._tmpdirs import process_test_dir
-TEST_DIR = process_test_dir('test_koreader_book_status_sync')
 _LEAKY_ENV = ('DATA_DIR', 'KOSYNC_USER', 'KOSYNC_KEY')
 
 
@@ -221,12 +219,11 @@ class TestKoreaderStatusEndpoints(unittest.TestCase):
         # restored: the next file to build an app would otherwise get this
         # class's database and see the wrong rows (failure mode #17).
         cls._prior_env = {key: os.environ.get(key) for key in _LEAKY_ENV}
-        os.environ['DATA_DIR'] = TEST_DIR
+        # A fresh folder per entry: a shuffled run can re-enter this class while the
+        # previous app still holds its log file open, which Windows will not delete.
+        os.environ['DATA_DIR'] = process_test_dir('test_koreader_book_status_sync')
         os.environ['KOSYNC_USER'] = 'testuser'
         os.environ['KOSYNC_KEY'] = 'testpass'
-        if os.path.exists(TEST_DIR):
-            shutil.rmtree(TEST_DIR)
-        os.makedirs(TEST_DIR, exist_ok=True)
 
         from src import web_server
         web_server.app, _ = web_server.create_app()

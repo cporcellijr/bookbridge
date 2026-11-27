@@ -414,6 +414,47 @@ class TestNewLibrary(unittest.TestCase):
         self.assertGreaterEqual(html.count('src="/covers/thumb/coverlibrarybook.jpg?v=a-b" alt=""'), 2)
         self.assertNotIn('data-thumb-url="/covers/thumb/coverlibrarybook.jpg"', html)
         self.assertIn('data-thumb-url="/covers/thumb/coverlibraryfinished.jpg" alt="" hidden', html)
+        # A ready thumbnail that later 404s falls back to the EPUB cover, not provider art (#627).
+        self.assertIn('data-cover-original="/covers/coverlibrarybook.jpg"', html)
+
+    def test_hero_without_a_ready_thumbnail_shows_the_epub_cover(self):
+        # #627: the server-rendered Hero is never observed by the grid loader, so a
+        # hidden pending thumbnail stayed blank. It now asks for the EPUB cover itself.
+        from src import web_server
+
+        book = self.service.get_book("library-book")
+        book.kosync_doc_id = "herohash"
+        self.service.save_book(book)
+        self.service.save_state(State(abs_id="library-book", client_name="abs", percentage=.42,
+            timestamp=1512, last_updated=1793800300, user_id=self.reader.id))
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        web_server._thumb_versions.clear()
+        html = self.client.get("/").get_data(as_text=True)
+        hero = re.search(r'<section id="library-hero"[^>]*>.*?</section>', html, re.S).group()
+        cover = re.search(r'<img class="cover-image"[^>]*>', hero).group()
+        self.assertIn('src="/covers/herohash.jpg"', cover)
+        self.assertNotIn("hidden", cover.split("onerror=")[0])
+        self.assertNotIn("data-cover-original", cover)
+
+    def test_classic_cover_falls_back_to_the_placeholder_after_provider_art(self):
+        from src import web_server
+
+        original = web_server._build_dashboard_mappings
+
+        def covers(*args, **kwargs):
+            mappings, progress = original(*args, **kwargs)
+            for mapping in mappings:
+                mapping["kosync_doc_id"] = "cover" + mapping["abs_id"].replace("-", "")
+                mapping["cover_url"] = "/api/cover-proxy/" + mapping["abs_id"]
+            return mappings, progress
+
+        self._login("ui-reader")
+        with patch.object(web_server, "_build_dashboard_mappings", side_effect=covers):
+            self.service.set_user_credential(self.reader.id, "UI_MODE", "classic")
+            classic = self.client.get("/").get_data(as_text=True)
+        self.assertIn("this.onerror=function(){this.style.display='none';"
+                      "this.nextElementSibling.classList.remove('hidden');}", classic)
 
     def test_book_drawer_eases_in_instead_of_flashing_dark(self):
         # The drawer opens before its frame loads; an instant dim + empty panel flashed black.

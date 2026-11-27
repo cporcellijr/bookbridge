@@ -359,6 +359,18 @@ class BookMappingService:
         # can never receive progress while the device downloads the bytes twice.
         # Guard whatever absorb_duplicate_mapping would fold in: the hash holder or,
         # failing that, an ebook-only row for the same provider ebook.
+        stale = (
+            self.database_service.get_book_by_kosync_id(kosync_doc_id)
+            if kosync_doc_id else None
+        )
+        # The merge folds in only ebook-only rows; another audiobook's pairing is left alone.
+        if (isinstance(getattr(stale, "abs_id", None), str) and stale.abs_id != target_book.abs_id
+                and getattr(stale, "sync_mode", None) != "ebook_only"):
+            logger.info(
+                "🔒 Refused to pair '%s': its ebook is already linked to audiobook '%s'",
+                sanitize_log_data(target_book.abs_id), sanitize_log_data(stale.abs_id),
+            )
+            return None
         duplicate_id = self.database_service.find_duplicate_mapping(target_book)
         if duplicate_id and not self._user_may_modify(user_id, duplicate_id):
             logger.info(
@@ -366,10 +378,6 @@ class BookMappingService:
                 sanitize_log_data(duplicate_id),
             )
             return None
-        stale = (
-            self.database_service.get_book_by_kosync_id(kosync_doc_id)
-            if kosync_doc_id else None
-        )
         if stale is not None and getattr(stale, "abs_id", None) != target_book.abs_id:
             for field in ("storyteller_uuid", "transcript_source", "transcript_file",
                           "abs_ebook_item_id"):

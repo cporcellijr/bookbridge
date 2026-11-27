@@ -1550,7 +1550,7 @@
                             if (!cards) return;
                             cards.forEach(card => {
                                 updateCtcAlignmentStatus(card, book.ctc_aligned === true);
-                                updateReadalongStatus(card, book.readalong_ready === true);
+                                updateReadalongStatus(card, book.readalong_ready === true, book.readalong_generated === true);
 
                             // Clear progress leaves 0% reset snapshots, so only a state above 0 counts as a position.
                             const hasPosition = Object.values(book.states || {}).some(s => s.percentage > 0);

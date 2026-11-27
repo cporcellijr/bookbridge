@@ -21,8 +21,10 @@ All notable changes to BookBridge will be documented in this file.
 - **Requested audiobooks can pair with your Audiobookshelf copy.** If you listen in Audiobookshelf and it
   scans the folder BookOrbit imports requested audiobooks into, turn on **Pair requested audiobooks with my
   Audiobookshelf copy of the same files** in your BookOrbit integration. A requested audiobook then pairs the
-  Audiobookshelf item holding the same files instead of BookOrbit's copy, and falls back to BookOrbit's copy
-  when no single item matches. Off by default; existing pairings are not moved (#585).
+  Audiobookshelf item holding the same files instead of BookOrbit's copy. If Audiobookshelf hasn't added the
+  new folder yet, BookBridge waits for it for up to 15 minutes, showing "Waiting for Audiobookshelf to add
+  this audiobook." It falls back to BookOrbit's copy when no single item matches. Off by default; existing
+  pairings are not moved (#585).
 - **More ways to make the New interface's Library your own.** Account → Display now has an **Accent colour**
   (Amber, Teal, Rose, Violet or Blue) for progress bars, highlights and the current-page marker; five more
   **shelf finishes** for the shelf styles (Walnut, Cherry, White, Glass and Pastel); and a **Library
@@ -59,14 +61,39 @@ All notable changes to BookBridge will be documented in this file.
 - **A KOReader device going to sleep no longer undoes a newer position.** With furthest-wins off, KOReader
   re-sends its last position on every sleep, disconnect and close; BookBridge now treats a repeat of the same
   position from the same device as a re-send, so it no longer outranks a place you reached since on another
-  copy or in another app. A **Push progress** without turning a page counts as a re-send too.
-  Contributed by [@jucor](https://github.com/jucor) in #619.
+  copy or in another app. A **Push progress** without turning a page counts as a re-send too, unless the
+  device runs Bridge Sync 0.9.14 (see below). Contributed by [@jucor](https://github.com/jucor) in #619.
+- **A re-sent position no longer undoes a more recent one on the same copy.** With furthest-wins off, a
+  KOReader device re-sending its last position no longer overrides a more recent write to that copy by the
+  sync cycle, another device or **Clear position**. A **Push progress** still counts: update the Bridge Sync
+  plugin on each device (0.9.14) to get this. Contributed by [@jucor](https://github.com/jucor) in #630.
+- **Linking a book to StoryGraph keeps what you already have there.** Automatch, picking an edition and
+  pasting a URL used to set every linked book to **To Read**, so a book you had read or were reading went
+  back to To Read. Only a book that isn't on your lists is set to To Read now. Automatch links the edition you
+  have already shelved, so the book no longer appears twice, and picking an edition no longer copies an
+  empty edition over yours. Contributed by [@jeffhammett](https://github.com/jeffhammett) in #629.
 - **StoryGraph updates no longer fail as "session expired" while Test passes.** Status, progress and
   edition changes now send the session StoryGraph re-issues with each page, which its form check requires.
   Contributed by [@jeffhammett](https://github.com/jeffhammett) in #620.
 - **StoryGraph accepts cookies pasted decoded or URL-encoded.** Cookie-export extensions show the values in
   different forms; BookBridge now sends them in the encoded form StoryGraph set them in.
   Contributed by [@jeffhammett](https://github.com/jeffhammett) in #622.
+- **Matching never takes an ebook from another audiobook.** Pairing a second audio copy with an ebook that is
+  already paired with an audiobook used to replace that pairing and its progress. BookBridge now refuses the
+  match and keeps the existing pairing, from every match path; an ebook-only entry is still folded in as
+  before. Contributed by [@monkeCode](https://github.com/monkeCode) in #624.
+- **Match All keeps an Audiobookshelf book's alignment.** Re-matching an aligned audiobook to the same EPUB
+  through **Match All** no longer sends it back to pending, as the single-book Match already did. A changed
+  EPUB is still re-aligned. Contributed by [@monkeCode](https://github.com/monkeCode) in #625.
+- **Read-along EPUBs you already have are recognised.** A linked EPUB that already carries narration (or a
+  BookOrbit entry with read-along on) now shows as a read-along, and **Create read-along** no longer makes a
+  second one. Contributed by [@monkeCode](https://github.com/monkeCode) in #626.
+- **Library covers fall back the same way everywhere.** The hero, the grid and the book page all prefer the
+  EPUB's cover, then the provider's art, then the placeholder, and a renamed EPUB still finds its cover.
+  Contributed by [@monkeCode](https://github.com/monkeCode) in #627.
+- **A read-along made from your exact audiobook file needs no alignment.** When the audiobook is a single file
+  that is byte-for-byte the track inside a read-along EPUB, BookBridge builds its position map from the EPUB's
+  own timings instead of running Whisper or CTC. Contributed by [@monkeCode](https://github.com/monkeCode) in #623.
 - **Bridge Sync accepts the server address as you type it.** A server address with a space around it, a
   capital `HTTP://`, or no `http://` at all made Bridge Sync report "Server URL is invalid". It now tidies the
   address and defaults to `http://`, and the message shows the address it tried. Update the Bridge Sync plugin
