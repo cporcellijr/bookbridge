@@ -277,6 +277,28 @@ class TestStorygraphClient(unittest.TestCase):
         self.assertEqual(res["book_id"], "abc-123-def")
         
     @patch("src.api.storygraph_client.requests.get")
+    def test_book_page_title_comes_from_the_title_block(self, mock_get):
+        # Trimmed from a live book page (2026-11-27): no h1, the title is an h3, and the
+        # series line above it links the series name too.
+        html = """
+        <div class="book-title-author-and-series">
+        <p class="font-semibold"><a href="/series/3662800">Stay In Tonight</a> <a href="/series/3662800">#1</a></p>
+        <h3 class="font-semibold text-2xl md:w-11/12 inline items-center">
+                  Stay In Tonight
+                </h3>
+        <p class="font-body"><a href="/authors/d24da1e8-4334-4577-8b8c-2fa4b30e5558">Anya Merchant</a></p>
+        </div>
+        <h3 class="text-lg font-semibold mb-4">About SGAI</h3>
+        """
+        mock_get.return_value = Mock(status_code=200, text=html, headers={})
+        details = self.client.get_book_details("364724cc-d209-4cb3-bae6-1963e6d501a4")
+        self.assertEqual((details["title"], details["author"]), ("Stay In Tonight", "Anya Merchant"))
+        # A bare linked id resolves to that book instead of falling through to a search.
+        self.client.search_books = Mock(return_value=[])
+        resolved = self.client.resolve_book_from_input("364724cc-d209-4cb3-bae6-1963e6d501a4")
+        self.assertEqual(resolved["book_id"], "364724cc-d209-4cb3-bae6-1963e6d501a4")
+
+    @patch("src.api.storygraph_client.requests.get")
     def test_get_book_editions_audio_detection(self, mock_get):
         html = """
         <div class="book-pane" data-book-id="ed-1">

@@ -599,14 +599,16 @@ class StorygraphClient:
         title = ""
         author = ""
 
-        for selector in ("h1", "[data-testid='book-title']", ".book-title"):
+        # The book page puts the title in an h3 inside the title/author/series block.
+        for selector in (".book-title-author-and-series h3", "h1", "[data-testid='book-title']", ".book-title"):
             node = soup.select_one(selector)
             if node:
                 title = node.get_text(" ", strip=True)
                 if title:
                     break
 
-        for selector in ("a[href^='/authors/']", ".book-author a", ".contributors a"):
+        for selector in (".book-title-author-and-series a[href^='/authors/']", "a[href^='/authors/']",
+                         ".book-author a", ".contributors a"):
             node = soup.select_one(selector)
             if node:
                 author = node.get_text(" ", strip=True)
