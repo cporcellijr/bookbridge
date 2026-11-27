@@ -848,6 +848,56 @@ class TestLatestWinsSiblingRows(unittest.TestCase):
         self.assertAlmostEqual(float(self.db.get_state(ABS_ID, "kosync", user_id=self.user.id).percentage), 0.80)
         self.db.set_user_credential(self.user.id, "KOSYNC_FURTHEST_WINS", "false")
 
+    def test_a_device_back_where_it_was_before_a_refused_report_is_newer(self):
+        """Furthest-wins on: the Kobo reads A to 40%, a second Kobo to 80%, the first gets
+        80% and reports 60%, which furthest-wins refuses. Then furthest-wins goes off and the
+        first Kobo goes back to 40%: its last report was 60%, so 40% is new movement."""
+        self.db.set_user_credential(self.user.id, "KOSYNC_FURTHEST_WINS", "true")
+        self._put(DOC_A, 0.40, KOBO)
+        self._put(DOC_A, 0.80, {"device": "Kobo 2", "device_id": "kobo-2"})
+        self._get(DOC_A)
+        self._put(DOC_A, 0.60, KOBO)
+        self.assertAlmostEqual(self._get(DOC_A), 0.80, places=4)
+        self.db.set_user_credential(self.user.id, "KOSYNC_FURTHEST_WINS", "false")
+        self._aged(DOC_A, minutes=5)
+        self._put(DOC_A, 0.40, KOBO)
+        self.assertAlmostEqual(self._get(DOC_A), 0.40, places=4)
+
+    def test_deferred_and_held_reports_are_kept_under_the_state_lock(self):
+        """A device's progress and its last report are written together under the lock the
+        accepted path holds, so a concurrent PUT cannot slip between them."""
+        lock = self.db.kosync_state_lock
+        held = []
+
+        def lock_held_elsewhere():
+            outcome = []
+
+            def try_lock():
+                got = lock.acquire(blocking=False)
+                if got:
+                    lock.release()  # an RLock must be released by the thread that took it
+                outcome.append(got)
+
+            probe = threading.Thread(target=try_lock)
+            probe.start()
+            probe.join()
+            return not outcome[0]
+
+        real = self.db.upsert_kosync_device_report
+
+        def watched(*args, **kwargs):
+            held.append(lock_held_elsewhere())
+            return real(*args, **kwargs)
+
+        with patch.object(self.db, "upsert_kosync_device_report", side_effect=watched):
+            self._held_then_latest_wins()
+            with patch.object(kosync_server, "_kosync_user_may_access_book", return_value=False), \
+                    patch.object(kosync_server, "_defer_kosync_book_access",
+                                 side_effect=lambda *_a, **_k: (kosync_server.jsonify({}), 200)):
+                self._put(DOC_A, 0.70, KOBO)
+        self.assertGreaterEqual(len(held), 3)
+        self.assertTrue(all(held), held)
+
     def test_a_device_back_where_it_was_before_a_held_report_is_newer(self):
         self._held_then_latest_wins()
         self._aged(DOC_A, minutes=5)

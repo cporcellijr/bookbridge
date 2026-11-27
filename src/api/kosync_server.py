@@ -2228,11 +2228,12 @@ def kosync_put_progress():
         put_book = _database_service.get_book(kosync_doc.linked_abs_id)
     if put_book and not _kosync_user_may_access_book(put_book):
         if not is_internal:
-            _database_service.upsert_user_kosync_progress(
-                doc_hash, percentage, progress=progress, device=device,
-                device_id=device_id, timestamp=now, user_id=request_user_id,
-            )
-            _record_device_report(request_user_id, doc_hash, device_id, progress, percentage)
+            with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+                _database_service.upsert_user_kosync_progress(
+                    doc_hash, percentage, progress=progress, device=device,
+                    device_id=device_id, timestamp=now, user_id=request_user_id,
+                )
+                _record_device_report(request_user_id, doc_hash, device_id, progress, percentage)
         return _defer_kosync_book_access(doc_hash, put_book, source="put", discover=may_match)
 
     # Optional "furthest wins" protection
@@ -2321,11 +2322,12 @@ def kosync_put_progress():
                     doc_hash, put_book, user_id=request_user_id,
                     exact=getattr(put_book, "kosync_doc_id", None) == doc_hash,
                 )
-            if _database_service.upsert_user_kosync_progress(
-                doc_hash, percentage, progress=progress, device=device,
-                device_id=device_id, timestamp=now, user_id=request_user_id,
-            ) is not None:  # Kept nowhere without accounts: then it is no report to compare with.
-                _record_device_report(request_user_id, doc_hash, device_id, progress, percentage)
+            with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+                if _database_service.upsert_user_kosync_progress(
+                    doc_hash, percentage, progress=progress, device=device,
+                    device_id=device_id, timestamp=now, user_id=request_user_id,
+                ) is not None:  # Kept nowhere without accounts: then it is no report to compare with.
+                    _record_device_report(request_user_id, doc_hash, device_id, progress, percentage)
             logger.info(
                 "KOSync: Held progress from '%s' for doc %s (%.2f%%): '%s' is at %.2f%% and "
                 "this copy hasn't been sent that position yet",
@@ -2383,6 +2385,9 @@ def kosync_put_progress():
                     "(user has higher: %.2f%% vs new %.2f%%): awaiting fresh forward reading",
                     device, doc_hash, baseline_pct * 100, new_pct * 100,
                 )
+                # Still this device's last report: a later re-send must be compared with it.
+                with getattr(_database_service, "kosync_state_lock", None) or nullcontext():
+                    _record_device_report(request_user_id, doc_hash, device_id, progress, percentage)
                 return jsonify({
                     "document": doc_hash,
                     "timestamp": int(datetime_to_epoch(baseline.timestamp)) if baseline and baseline.timestamp else int(datetime_to_epoch(now))
