@@ -9,6 +9,7 @@ from ..models import (
     TranscriptionPreflight,
     BookSyncMarker,
     JOB_KIND_READALONG,
+    JOB_KIND_AUDIO_LINK,
 )
 import logging
 
@@ -16,6 +17,43 @@ logger = logging.getLogger('src.db.database_service')
 
 class JobsMixin:
     """Database operations for jobs."""
+
+    def enqueue_audio_link(self, user_id, abs_id, inputs):
+        with self.get_session() as session:
+            jobs = session.query(Job).filter_by(abs_id=abs_id, kind=JOB_KIND_AUDIO_LINK,
+                                               audio_link_user_id=user_id).filter(Job.stage.in_(('queued', 'running')))
+            for job in jobs:
+                if job.audio_link_inputs['provider'] == inputs['provider']:
+                    return job.id if job.audio_link_inputs == inputs else None
+            job = Job(abs_id=abs_id, kind=JOB_KIND_AUDIO_LINK, stage='queued', last_attempt=time.time())
+            job.audio_link_user_id = user_id
+            job.audio_link_inputs = inputs
+            session.add(job)
+            session.flush()
+            return job.id
+
+    def next_audio_link_job(self):
+        """Called only by the single local worker; retry interrupted work after restart."""
+        with self.get_session() as session:
+            job = session.query(Job).filter_by(kind=JOB_KIND_AUDIO_LINK).filter(
+                Job.stage.in_(('queued', 'running'))).order_by(Job.id).first()
+            if job:
+                job.stage = 'running'
+                job.last_attempt = time.time()
+                session.flush()
+                session.expunge(job)
+            return job
+
+    def get_audio_link_jobs(self, user_id):
+        if user_id is None:
+            return []
+        with self.get_session() as session:
+            query = session.query(Job).filter_by(kind=JOB_KIND_AUDIO_LINK, audio_link_user_id=user_id)
+            jobs = (query.filter(Job.stage.in_(('queued', 'running'))).all() +
+                    query.filter(Job.stage.in_(('completed', 'failed'))).order_by(Job.id.desc()).limit(25).all())
+            for job in jobs:
+                session.expunge(job)
+            return jobs
 
     def record_sync_marker(self, abs_id: str, leader_client: str, synced_at: float, user_id: int = None) -> None:
         """Record the leader of a sync that reached at least one follower."""

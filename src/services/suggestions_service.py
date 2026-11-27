@@ -2253,6 +2253,9 @@ class SuggestionsService:
         from src.utils.user_context import get_current_user_id
         scan_user_id = get_current_user_id()
         matched_bridge_keys = set()
+        companion_keys = self.database_service.get_companion_suggestion_keys(scan_user_id)
+        if isinstance(companion_keys, set):
+            matched_bridge_keys.update(companion_keys)
         for book in self.database_service.get_all_books(user_id=scan_user_id):
             abs_id = getattr(book, "abs_id", None)
             if abs_id:

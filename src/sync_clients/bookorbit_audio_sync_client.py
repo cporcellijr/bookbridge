@@ -43,11 +43,9 @@ class BookOrbitAudioSyncClient(SyncClient):
         return {"audiobook"}
 
     def supports_book(self, book: Book) -> bool:
-        if getattr(book, "audio_source", None) != "BookOrbit":
-            return False
-        if self._database_service is not None and self._user_id is not None:
-            return bool(self._database_service.resolve_bookorbit_audio_id(self._user_id, book))
-        return True
+        if self._database_service is None or self._user_id is None:
+            return getattr(book, "audio_source", None) == "BookOrbit"
+        return bool(self._resolve_book_id(book))
 
     @staticmethod
     def _coerce_id(value):
@@ -66,11 +64,16 @@ class BookOrbitAudioSyncClient(SyncClient):
         """
         # Per-user resolution first
         if self._database_service is not None and self._user_id is not None:
-            resolved = self._database_service.resolve_bookorbit_audio_id(self._user_id, book)
+            if getattr(book, "audio_source", None) == "BookOrbit":
+                resolved = self._database_service.resolve_bookorbit_audio_id(self._user_id, book)
+            else:
+                resolved = self._database_service.resolve_companion_audio(self._user_id, book, "BookOrbit")
             if resolved:
                 return self._coerce_id(resolved)
             return None
         # Legacy fallback: shared Book fields
+        if getattr(book, "audio_source", None) != "BookOrbit":
+            return None
         return self._coerce_id(
             getattr(book, "audio_provider_book_id", None)
             or getattr(book, "audio_source_id", None)

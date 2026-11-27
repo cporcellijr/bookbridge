@@ -87,6 +87,29 @@ def test_abs_prefers_target_audio_ts_and_skips_alignment_lookup():
     assert result.location == 333.0
 
 
+def test_abs_companion_reads_and_writes_the_readers_remote_item():
+    client, transport, _, _ = _abs_client_and_mocks()
+    client.database_service = MagicMock()
+    client.user_id = 7
+    client.database_service.resolve_companion_audio.return_value = 'remote-abs'
+    book = Book(abs_id='bridge-book', audio_source='BookOrbit', ebook_filename='book.epub', duration=1000,
+                transcript_file='DB_MANAGED')
+    transport.get_progress.return_value = {'currentTime': 100.0}
+    transport.update_progress.return_value = {'success': True}
+
+    assert client.get_service_state(book, None).current['ts'] == 100.0
+    result = client.update_progress(book, UpdateProgressRequest(
+        LocatorResult(percentage=0.3), target_audio_ts=300.0,
+    ))
+    assert result.success
+    assert {call.args for call in transport.get_progress.call_args_list} == {('remote-abs',)}
+    transport.update_progress.assert_called_once_with('remote-abs', 300.0, 0)
+    client.database_service.resolve_companion_audio.assert_called_with(7, book, 'ABS')
+    client.database_service.resolve_companion_audio.return_value = None
+    assert not client.supports_book(book)
+    assert client.get_service_state(book, None) is None
+
+
 def test_abs_back_compat_falls_back_to_alignment_lookup_when_no_target_audio_ts():
     """(2) target_audio_ts=None reproduces today's get_time_for_text path."""
     client, abs_client, _transcriber, alignment_service = _abs_client_and_mocks()
@@ -538,6 +561,31 @@ def test_target_audio_ts_none_when_audio_client_leads():
     assert request.target_audio_ts is None
 
 
+def test_companion_leads_and_updates_epub_when_primary_audio_is_offline():
+    manager = _base_manager()
+    reader = _StubClient({'audiobook', 'ebook'})
+    manager.sync_clients = {'ABS': _StubClient({'audiobook'}),
+                            'BookOrbitAudio': _StubClient({'audiobook'}), 'KoSync': reader}
+    manager.sync_clients['ABS'].update_progress.return_value = SyncResult(success=False)
+    book = Book(abs_id='abs-1', abs_title='Shared audio', status='active', duration=1000,
+                transcript_file='DB_MANAGED', ebook_filename='book.epub', audio_source='ABS',
+                sync_mode='audiobook')
+    _wire_database(manager, book)
+    manager.database_service.resolve_companion_audio.return_value = 'orbit-copy'
+    manager._fetch_states_parallel = MagicMock(return_value={
+        'BookOrbitAudio': _state({'pct': 0.7, 'ts': 700.0}, previous_pct=0.2, delta=500, threshold=60),
+        'KoSync': _state({'pct': 0.2}, previous_pct=0.2),
+    })
+    locator = LocatorResult(percentage=0.7, match_index=7000, cfi='epubcfi(/6/4!/4/2:0)')
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(return_value=(locator, 'anchor'))
+
+    manager._sync_cycle_internal(target_abs_id=book.abs_id)
+
+    assert manager._resolve_alignment_locator_from_abs_timestamp.call_args.args[1] == 700.0
+    reader.update_progress.assert_called_once()
+    assert reader.update_progress.call_args.args[1].locator_result.cfi == locator.cfi
+
+
 def test_combined_audiobook_ebook_follower_gets_no_target_audio_ts():
     """The audio gate is exact set equality, not membership.
 
@@ -806,4 +854,3 @@ def test_idle_retry_survives_a_tie_with_the_follower_that_took_the_write():
     manager._sync_cycle_internal()
 
     assert bl.update_progress.call_count == 1
-

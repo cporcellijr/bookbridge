@@ -278,6 +278,28 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
             target_abs_id="owned-book", user_id=3
         )
 
+    def test_companion_progress_routes_to_link_owner_and_suppresses_remote_id_echo(self):
+        from src.services.write_tracker import record_write
+
+        self.listener._user_id = 7
+        self.mock_db.get_book.return_value = None
+        self.mock_db.find_book_by_companion_audio.return_value = self._make_active_book('bridge-id', user_id=3)
+        event = {'id': 'progress', 'data': {'libraryItemId': 'abs-copy', 'currentTime': 20}}
+        self.listener._handle_progress_event(event)
+        self.mock_db.find_book_by_companion_audio.assert_called_once_with(7, 'ABS', 'abs-copy')
+        self.mock_sync.queue_suggestion.assert_not_called()
+        self.assertIn('abs-copy', self.listener._pending)
+        self.listener._pending['abs-copy'] = time.time() - 2
+        self.listener._check_and_fire()
+        self.mock_sync.sync_cycle.assert_called_once_with(target_abs_id='bridge-id', user_id=7)
+
+        record_write('ABS', 'abs-copy', user_id=7)
+        self.listener._handle_progress_event(event)
+        self.assertIn('abs-copy', self.listener._pending)
+        self.listener._pending['abs-copy'] = time.time() - 2
+        self.listener._check_and_fire()
+        self.mock_sync.sync_cycle.assert_called_once()
+
     def test_global_listener_suppresses_owner_scoped_self_write(self):
         """A self-write recorded under the resolved owner is suppressed by the
         global listener (the is_own_write check uses the same owner namespace)."""

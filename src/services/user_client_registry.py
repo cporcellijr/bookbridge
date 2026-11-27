@@ -170,14 +170,14 @@ class UserClientRegistry:
             )
 
         sync_clients = {
-            "ABS": ABSSyncClient(abs_client, self.transcriber, ep, align),
+            "ABS": ABSSyncClient(abs_client, self.transcriber, ep, align, db, user_id),
             "ABSEbook": ABSEbookSyncClient(abs_client, ep),
             "KoSync": KoSyncSyncClient(kosync_client, ep),
             "Kavita": KavitaSyncClient(kavita_kosync_client, ep),
             "Storyteller": StorytellerSyncClient(storyteller_client, ep, db),
             "BookLore": BookloreSyncClient(booklore_client, ep),
             "BookFusion": BookFusionSyncClient(bookfusion_client, ep, database_service=db, user_id=user_id),
-            "BookLoreAudio": BookLoreAudioSyncClient(booklore_client, ep, alignment_service=align),
+            "BookLoreAudio": BookLoreAudioSyncClient(booklore_client, ep, alignment_service=align, database_service=db, user_id=user_id),
             "BookOrbit": BookOrbitSyncClient(bookorbit_client, ep, database_service=db, user_id=user_id),
             "BookOrbitAudio": BookOrbitAudioSyncClient(bookorbit_client, ep, alignment_service=align, database_service=db, user_id=user_id),
             "CWA": CWASyncClient(cwa_sync_api, cwa_client, ep),

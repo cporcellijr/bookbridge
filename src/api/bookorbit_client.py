@@ -38,6 +38,7 @@ from src.utils.file_transfers import (
     IncompleteTransferError,
     response_declares_size,
     stream_response_to_path,
+    fingerprint_response,
 )
 from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.user_config import resolve_setting
@@ -1972,6 +1973,14 @@ class BookOrbitClient:
         Audio files run to hundreds of MB, so this never buffers the body in
         memory the way download_book does for ebooks.
         """
+        return self._read_book_file(file_id, lambda response: stream_response_to_path(
+            response, output_path, expected_size=response_declares_size(response),
+        ))
+
+    def fingerprint_file(self, file_id):
+        return self._read_book_file(file_id, fingerprint_response) or None
+
+    def _read_book_file(self, file_id, consume):
         token = self._get_fresh_token()
         if not token:
             return False
@@ -1994,9 +2003,8 @@ class BookOrbitClient:
                             file_id, resp.status_code,
                         )
                         return False
-                    expected_size = response_declares_size(resp)
                     try:
-                        return stream_response_to_path(resp, output_path, expected_size=expected_size)
+                        return consume(resp)
                     except IncompleteTransferError as e:
                         logger.error(
                             "BookOrbit file download incomplete: file_id=%s got=%s expected=%s",

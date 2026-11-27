@@ -145,6 +145,7 @@ _HIGH_CONFIDENCE_NORMALIZATION_SOURCES: frozenset[str] = frozenset({
     "cfi",
     "href_frag",
     "href_progression",
+    "shared_audio_clock",
 })
 
 # How long a follower fill that did not complete waits before it is attempted again.
@@ -2032,7 +2033,9 @@ class SyncManager:
             and 'ebook' in self.sync_clients.get(k).get_supported_sync_types()
         ]
 
-        if not has_primary_audio or not ebook_clients:
+        companions = {name: config[name] for name in ('ABS', 'BookOrbitAudio', 'BookLoreAudio')
+                      if name != primary_audio_client and name in config}
+        if not companions and (not has_primary_audio or not ebook_clients):
             return None
 
         if not book.transcript_file:
@@ -2042,8 +2045,18 @@ class SyncManager:
         normalized = {}
         # The key is present with an explicit None for an unstarted audiobook, so the
         # `0` default never fires; leader selection subtracts these values downstream.
-        abs_ts = config[primary_audio_client].current.get('ts')
-        normalized[primary_audio_client] = 0 if abs_ts is None else abs_ts
+        if has_primary_audio:
+            abs_ts = config[primary_audio_client].current.get('ts')
+            normalized[primary_audio_client] = 0 if abs_ts is None else abs_ts
+        for companion, companion_state in companions.items():
+            if companion_state.current.get('_readalong_mirror'):
+                continue
+            companion_ts = companion_state.current.get('ts')
+            if isinstance(companion_ts, (int, float)) and math.isfinite(companion_ts) and companion_ts >= 0:
+                normalized[companion] = companion_ts
+                companion_state.current.update(_normalized_ts=companion_ts,
+                                               _normalization_source='shared_audio_clock',
+                                               _normalization_confidence='high')
 
         for client_name in ebook_clients:
             if client_name not in self.sync_clients:
@@ -6053,16 +6066,13 @@ class SyncManager:
                     book, decision_config, time.time(), schedule_followup=tracker_followup
                 )
 
-                # Check for ABS offline condition (only for audiobook mode)
-                # Check for ABS offline condition (only for audiobook mode)
+                # The primary may be offline while companions or ebook readers are available.
                 if not (hasattr(book, 'sync_mode') and book.sync_mode == 'ebook_only'):
                     primary_audio_client = self._get_primary_audio_client_name(book)
                     audio_state = decision_config.get(primary_audio_client) if primary_audio_client else None
                     if audio_state is None:
-                        # Fallback logic: If ABS is missing but we have ebook clients, try to sync them as ebook-only
-                        ebook_clients_active = [k for k in decision_config.keys() if k != primary_audio_client]
-                        if ebook_clients_active:
-                             logger.info(f"'{abs_id}' '{title_snip}' Primary audio source not found/offline, falling back to ebook-only sync between {ebook_clients_active}")
+                        if decision_config:
+                             logger.info(f"'{abs_id}' '{title_snip}' Primary audio source not found/offline, continuing with {list(decision_config)}")
                         else:
                              logger.debug(f"'{abs_id}' '{title_snip}' Primary audio source offline and no other clients, skipping")
                              continue
@@ -6555,6 +6565,9 @@ class SyncManager:
                             and client.get_supported_sync_types() == {'audiobook'}
                             else None
                         )
+                        if (locator_source == 'alignment_direct' and client_state and
+                            client_state.current.get('_normalization_source') == 'shared_audio_clock'):
+                            target_audio_ts = leader_state.current.get('ts')
                         if target_audio_ts is not None:
                             logger.info(
                                 f"🎯 '{abs_id}' '{title_snip}' Writing '{client_name}' at the leader's "

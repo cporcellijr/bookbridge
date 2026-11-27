@@ -802,7 +802,7 @@ class TestSettingAndMigration(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         cfg = Config(str(root / "alembic.ini"))
         cfg.set_main_option("script_location", str(root / "alembic"))
-        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["k26d20261126"])
+        self.assertEqual(ScriptDirectory.from_config(cfg).get_heads(), ["a481d26f019e"])
 
 
 class TestPairAbsCopy(AdoptionBase):

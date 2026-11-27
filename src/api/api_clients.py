@@ -10,6 +10,7 @@ from src.utils.file_transfers import (
     IncompleteTransferError,
     response_declares_size,
     stream_response_to_path,
+    fingerprint_response,
 )
 from src.utils.kosync_headers import (
     hash_kosync_key,
@@ -568,6 +569,14 @@ class ABSClient:
 
     def download_file(self, stream_url, output_path):
         """Download file from stream_url to output_path."""
+        return self._read_file(stream_url, lambda response: stream_response_to_path(
+            response, output_path, expected_size=response_declares_size(response), min_size=1024,
+        ), output_path=output_path)
+
+    def fingerprint_file(self, stream_url):
+        return self._read_file(stream_url, lambda response: fingerprint_response(response, min_size=1024)) or None
+
+    def _read_file(self, stream_url, consume, *, output_path=None):
         self._update_session_headers()
         try:
             logger.info(f"⬇️ ABS: Downloading file from {stream_url.split('?', 1)[0]}...")
@@ -575,20 +584,19 @@ class ABSClient:
             headers = {"Accept-Encoding": "identity"}
             with self.session.get(stream_url, headers=headers, stream=True, timeout=120) as r:
                 r.raise_for_status()
-                expected_bytes = response_declares_size(r)
                 try:
-                    # Anything at or below 1 KiB is an error page, not a media file.
-                    return stream_response_to_path(
-                        r, output_path, expected_size=expected_bytes, min_size=1024,
-                    )
+                    return consume(r)
                 except IncompleteTransferError as e:
-                    logger.error(
-                        "❌ ABS Download truncated: got %s bytes, expected %s (%s)",
-                        e.actual_size,
-                        e.expected_size if e.expected_size is not None else "unknown",
-                        output_path,
-                        exc_info=True,
-                    )
+                    if output_path is not None:
+                        logger.error(
+                            "❌ ABS Download truncated: got %s bytes, expected %s (%s)",
+                            e.actual_size,
+                            e.expected_size if e.expected_size is not None else "unknown",
+                            output_path,
+                            exc_info=True,
+                        )
+                    else:
+                        logger.error("ABS audio fingerprint rejected an incomplete response: %s", e)
                     return False
         except Exception as e:
             error = str(e).replace(stream_url, stream_url.split("?", 1)[0])

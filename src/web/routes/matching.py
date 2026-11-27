@@ -42,6 +42,10 @@ def match():
         abs_id = (web.request.form.get('audiobook_id') or '').strip()
         audio_source = (web.request.form.get('audio_source') or ('ABS' if abs_id else '')).strip() or None
         audio_source_id = (web.request.form.get('audio_source_id') or abs_id).strip() or None
+        existing_book_id = (web.request.form.get('existing_book_id') or '').strip()
+        if existing_book_id:
+            from src.web.routes.audio_links import match_existing_audio
+            return match_existing_audio(web, existing_book_id, audio_source, audio_source_id)
         audio_title = (web.request.form.get('audio_title') or '').strip() or None
         audio_cover_url = (web.request.form.get('audio_cover_url') or '').strip() or None
         audio_provider_book_id = (web.request.form.get('audio_provider_book_id') or audio_source_id or '').strip() or None

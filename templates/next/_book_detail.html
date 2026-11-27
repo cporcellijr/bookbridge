@@ -11,7 +11,7 @@
     'failed_permanent': pgettext('book state', 'failed_permanent')
 }.get(mapping.status, mapping.status) %}
 {% set app_labels = {'abs': _('Audiobookshelf'), 'absebook': _('Audiobookshelf Ebook'), 'kosync': _('KoSync'), 'storyteller': _('Storyteller'), 'booklore': _('Grimmory'), 'bookloreaudio': _('Grimmory Audio'), 'bookorbit': _('BookOrbit'), 'bookorbitaudio': _('BookOrbit Audio'), 'kavita': _('Kavita'), 'cwa': _('CWA Kobo Sync'), 'hardcover': _('Hardcover'), 'storygraph': _('StoryGraph'), 'goodreads': _('Goodreads'), 'bookfusion': _('BookFusion')} %}
-{% macro app(key, label, url=none, tracker=false, action=none, linked=false) %}
+{% macro app(key, label, url=none, tracker=false, action=none, linked=false, audio_provider=none) %}
 {% if integrations.get(key) %}
 {% set state = mapping.states.get(key, {}) %}
 {% set raw = book_states.get(key) %}
@@ -25,6 +25,10 @@
 {% if action %}<button type="button" data-abs-id="{{ mapping.abs_id }}" data-title="{{ mapping.display_title }}" data-hash="{{ mapping.kosync_doc_id }}" data-has-local-epub="{{ 'true' if mapping.has_local_epub else 'false' }}" data-has-storyteller="{{ 'true' if mapping.storyteller_uuid else 'false' }}" onclick="{{ action }}(event)">{{ _('Change link') if linked else _('Link') }}</button>{% endif %}
 {% if key == 'storyteller' %}<button type="button" onclick='openStorytellerModal({{ mapping.abs_id|tojson }}, {{ mapping.display_title|tojson }})'>{{ _('Fix Link') if mapping.storyteller_legacy_link else (_('Change link') if mapping.storyteller_uuid else _('Link')) }}</button>{% endif %}
 {% if key == 'bookfusion' and linked %}<button type="button" data-bookfusion-unlink>{{ _('Unlink') }}</button>{% endif %}
+{% if audio_provider and mapping.ebook_filename and mapping.sync_mode == 'audiobook' and mapping.audio_source in ('ABS', 'BookOrbit', 'BookLore') and mapping.audio_source != audio_provider %}
+{% if audio_provider in mapping.linked_audio_providers|default({}) %}<button type="button" onclick='unlinkCompanionAudio({{ mapping.abs_id|tojson }}, {{ audio_provider|tojson }}, this)'>{{ _('Unlink') }}</button>
+{% else %}<button type="button" onclick='openCompanionAudio({{ mapping.abs_id|tojson }}, {{ audio_provider|tojson }})'>{{ _('Create link') }}</button>{% endif %}
+{% endif %}
 </div>
 {% endif %}
 {% endmacro %}
@@ -58,9 +62,11 @@
 <div class="book-info"></div>
 </section>
 <section class="book-section"><h2>{{ _('Your apps') }}</h2>
-{% if mapping.audio_source == 'BookLore' %}{{ app('bookloreaudio', _('Grimmory Audio'), mapping.audio_url) }}{% endif %}
-{% if mapping.audio_source == 'BookOrbit' %}{{ app('bookorbitaudio', _('BookOrbit Audio'), mapping.bookorbit_audio_url) }}{% endif %}
-{% if mapping.sync_mode != 'ebook_only' %}{{ app('abs', _('Audiobookshelf'), mapping.abs_url) }}{% endif %}
+{% if mapping.sync_mode != 'ebook_only' %}
+{{ app('bookloreaudio', _('Grimmory Audio'), mapping.audio_url if mapping.audio_source == 'BookLore' else mapping.grimmory_audio_url, audio_provider='BookLore') }}
+{{ app('bookorbitaudio', _('BookOrbit Audio'), mapping.bookorbit_audio_url, audio_provider='BookOrbit') }}
+{{ app('abs', _('Audiobookshelf'), mapping.abs_url, audio_provider='ABS') }}
+{% endif %}
 {{ app('absebook', _('Audiobookshelf Ebook'), get_val('ABS_WEB_URL') or get_user_val('ABS_SERVER')) }}
 {{ app('kosync', _('KoSync'), action='updateKoSyncHash', linked=true) }}
 {{ app('storyteller', _('Storyteller'), get_user_val('STORYTELLER_API_URL') if mapping.storyteller_uuid else none) }}

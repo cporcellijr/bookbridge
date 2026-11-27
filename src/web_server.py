@@ -60,6 +60,7 @@ from src.utils.ebook_utils import (
     is_linkable_ebook_filename,
 )
 from src.utils.ebook_sources import is_grimmory_source, local_ebook_filename, normalize_ebook_source
+from src.services.companion_audio import verify_audio_pair
 from src.utils.epub_readalong import embedded_audio
 from src.utils.local_ebook_metadata import read_local_ebook_metadata, read_local_ebook_series
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
@@ -2239,6 +2240,8 @@ def create_app(test_container=None):
     suggestions_routes.register(app, sys.modules[__name__])
     from src.web.routes import readalong as readalong_routes
     readalong_routes.register(app, sys.modules[__name__])
+    from src.web.routes import audio_links as audio_link_routes
+    audio_link_routes.register(app, sys.modules[__name__])
     from src.web.routes import me as me_routes
     me_routes.register(app, sys.modules[__name__])
     from src.web.routes import covers as covers_routes

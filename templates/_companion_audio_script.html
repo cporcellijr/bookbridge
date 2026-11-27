@@ -1,0 +1,159 @@
+            async function unlinkCompanionAudio(absId, provider, button) {
+                if (!confirm({{ _('Unlink this audiobook? The book and its alignment will stay linked.')|tojson }})) return;
+                const original = button.textContent;
+                button.disabled = true;
+                try {
+                    const response = await fetch('/api/companion-audio/' + encodeURIComponent(absId) + '?provider=' + encodeURIComponent(provider), {method: 'DELETE'});
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || {{ _('Could not unlink the audiobook.')|tojson }});
+                    window.location.reload();
+                } catch (error) {
+                    button.textContent = error.message;
+                    setTimeout(() => { button.textContent = original; button.disabled = false; }, 3000);
+                }
+            }
+
+            async function openCompanionAudio(absId, audioProvider, incoming = null, onLinked = null) {
+                const endpoint = incoming ? '/api/existing-audio-match-targets' : '/api/companion-audio/' + encodeURIComponent(absId);
+                const dialog = document.createElement('dialog');
+                dialog.setAttribute('aria-labelledby', 'companion-audio-title');
+                dialog.className = 'hc-modal-content companion-audio';
+                dialog.innerHTML = `
+                    <header class="hc-modal-header">
+                        <h3 id="companion-audio-title"></h3>
+                        <button class="hc-modal-close" type="button" data-close>×</button>
+                    </header>
+                    <section class="hc-modal-body">
+                        <p data-provider></p>
+                        <form class="companion-search" data-search>
+                            <input type="search">
+                            <button type="submit"></button>
+                        </form>
+                        <p class="companion-status" data-status role="status"></p>
+                        <div class="companion-results" data-results role="group"></div>
+                    </section>
+                    <footer class="hc-modal-footer">
+                        <button class="hc-btn-link" type="button" data-link disabled></button>
+                    </footer>`;
+                const form = dialog.querySelector('[data-search]');
+                const search = form.querySelector('input');
+                const status = dialog.querySelector('[data-status]');
+                const provider = dialog.querySelector('[data-provider]');
+                const results = dialog.querySelector('[data-results]');
+                const link = dialog.querySelector('[data-link]');
+                const close = dialog.querySelector('[data-close]');
+                dialog.querySelector('h3').textContent = {{ _('Create link')|tojson }};
+                close.setAttribute('aria-label', {{ _('Close')|tojson }});
+                provider.textContent = {{ _('Search the other audio library.')|tojson }};
+                search.setAttribute('aria-label', {{ _('Search audiobooks')|tojson }});
+                search.placeholder = {{ _('Search by title or author')|tojson }};
+                form.querySelector('button').textContent = {{ _('Search')|tojson }};
+                results.setAttribute('aria-label', {{ _('Audiobooks')|tojson }});
+                link.textContent = {{ _('Link audiobook')|tojson }};
+                let linked = null;
+                let busy = false;
+                let changed = false;
+                const selected = () => results.querySelector('input:checked')?.value;
+
+                function setBusy(value) {
+                    busy = value;
+                    dialog.setAttribute('aria-busy', String(value));
+                    dialog.querySelectorAll('button, input').forEach(el => { el.disabled = value; });
+                    link.disabled = value || !selected() || selected() === linked;
+                }
+
+                async function request(path, options) {
+                    const response = await fetch(path, options);
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || {{ _('Request failed. Please try again.')|tojson }});
+                    return data;
+                }
+
+                async function load() {
+                    results.replaceChildren();
+                    setBusy(true);
+                    status.textContent = {{ _('Searching…')|tojson }};
+                    try {
+                        const query = new URLSearchParams({provider: audioProvider, q: search.value.trim()});
+                        const data = await request(endpoint + '?' + query);
+                        linked = data.linked == null ? null : String(data.linked);
+                        provider.textContent = incoming ? {{ _('Choose an existing BookBridge book.')|tojson }} :
+                            {{ _('Choose an audiobook from %(provider)s.', provider='__provider__')|tojson }}.replace('__provider__', () => data.provider_label);
+                        data.candidates.forEach(item => {
+                            const row = document.createElement('label');
+                            row.className = 'companion-result';
+                            const choice = document.createElement('input');
+                            choice.type = 'radio';
+                            choice.name = 'companion-audio-item';
+                            choice.value = String(item.id);
+                            choice.checked = choice.value === linked;
+                            const name = document.createElement('span');
+                            const authors = Array.isArray(item.authors) ? item.authors.join(', ') : item.authors;
+                            name.textContent = item.title + (authors ? ' — ' + authors : '') + (choice.checked ? ' ' + {{ _('(linked)')|tojson }} : '');
+                            row.append(choice, name);
+                            results.append(row);
+                        });
+                        status.textContent = data.candidates.length ? '' : {{ _('No matches. Try another search.')|tojson }};
+                    } catch (error) {
+                        status.textContent = error.message;
+                    } finally {
+                        setBusy(false);
+                    }
+                }
+
+                async function save() {
+                    if (busy || !selected() || selected() === linked) return;
+                    const id = selected();
+                    setBusy(true);
+                    status.textContent = {{ _('Adding to the job queue…')|tojson }};
+                    try {
+                        const result = await request('/match', {method: 'POST', body: new URLSearchParams({
+                            existing_book_id: incoming ? id : absId,
+                            audio_source: audioProvider,
+                            audio_source_id: incoming ? incoming.id : id,
+                        })});
+                        if (result.status === 'queued') {
+                            const notice = document.createElement('div');
+                            notice.className = 'companion-job-notice';
+                            notice.setAttribute('role', 'status');
+                            const queue = document.createElement('a');
+                            queue.href = '/job-queue';
+                            queue.target = '_top';
+                            queue.textContent = {{ _('Job Queue')|tojson }};
+                            const message = {{ _('Audio link queued. Check %(queue)s for progress.', queue='__queue__')|tojson }};
+                            const [before, after] = message.split('__queue__');
+                            notice.append(before, queue, after || '');
+                            document.body.append(notice);
+                            setTimeout(() => notice.remove(), 12000);
+                            dialog.close();
+                            return;
+                        }
+                        changed = true;
+                        if (!incoming) await load();
+                        else { linked = id; results.replaceChildren(); }
+                        status.textContent = {{ _('Audiobook linked. The existing alignment was kept.')|tojson }};
+                    } catch (error) {
+                        status.textContent = error.message;
+                    } finally {
+                        setBusy(false);
+                    }
+                }
+
+                form.addEventListener('submit', event => { event.preventDefault(); if (!busy) load(); });
+                results.addEventListener('change', () => { link.disabled = !selected() || selected() === linked; });
+                link.addEventListener('click', save);
+                close.addEventListener('click', () => dialog.close());
+                dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+                dialog.addEventListener('close', () => {
+                    dialog.remove();
+                    if (changed) {
+                        if (onLinked) onLinked();
+                        else window.location.reload();
+                    }
+                }, {once: true});
+                document.body.append(dialog);
+                dialog.showModal();
+                if (incoming) search.value = incoming.title || '';
+                await load();
+                search.focus();
+            }

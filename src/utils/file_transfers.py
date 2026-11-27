@@ -8,6 +8,7 @@ and never drops reusable-looking bytes into a cache directory.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -77,7 +78,7 @@ def _staging_file(destination: Path) -> Any:
 
 
 def _validate_size(
-    destination: Path,
+    destination: Path | str,
     actual_size: int,
     expected_size: Optional[int],
     min_size: int,
@@ -101,6 +102,20 @@ def _validate_size(
             actual_size=actual_size,
             expected_size=expected_size,
         )
+
+
+def fingerprint_response(response: Any, *, min_size: int = 0) -> tuple[int, bytes]:
+    """Return (byte count, SHA-256) for a complete body without saving it."""
+    if response.status_code != 200 or response.headers.get('Content-Range'):
+        raise IncompleteTransferError('Expected a complete HTTP 200 response')
+    digest = hashlib.sha256()
+    size = 0
+    for chunk in response.iter_content(chunk_size=1024 * 1024):
+        if chunk:
+            digest.update(chunk)
+            size += len(chunk)
+    _validate_size('audio stream', size, response_declares_size(response), min_size)
+    return size, digest.digest()
 
 
 def _discard(temporary_path: Optional[Path]) -> None:

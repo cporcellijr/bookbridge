@@ -5,7 +5,7 @@ SQLAlchemy ORM models for abs-kosync-bridge database.
 import logging
 import os
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Numeric, Index, Boolean, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Numeric, Index, Boolean, UniqueConstraint, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -476,6 +476,7 @@ class State(Base):
 # an in-flight read-along job as done).
 JOB_KIND_ALIGNMENT = "alignment"
 JOB_KIND_READALONG = "readalong"
+JOB_KIND_AUDIO_LINK = "audio_link"
 
 
 class Job(Base):
@@ -497,6 +498,8 @@ class Job(Base):
     # leaves it NULL, and callers treat
     # None the same as "no stage recorded" rather than an error.
     stage = Column(String(50), nullable=True)
+    audio_link_user_id = Column(Integer, nullable=True)
+    audio_link_inputs = Column(JSON, nullable=True)
     recovery_identity = Column(String(64), nullable=True)
     # Remote alignment worker lease (see src/services/alignment_workers.py). Set
     # only on the job row a remote worker claimed; every later job row for the
@@ -1408,6 +1411,19 @@ class UserBookFusionLink(Base):
 
     def __repr__(self):
         return f"<UserBookFusionLink(user_id={self.user_id}, abs_id='{self.abs_id}', bookfusion_id='{self.bookfusion_id}')>"
+
+
+class UserCompanionAudio(Base):
+    """Verified audio links per user and provider, bound to the primary item."""
+
+    __tablename__ = 'user_companion_audio'
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
+    provider = Column(String(32), primary_key=True)
+    item_id = Column(String(255), nullable=False)
+    primary_provider = Column(String(32), nullable=False)
+    primary_item_id = Column(String(255), nullable=False)
+    __table_args__ = (Index('ix_user_companion_audio_item', 'user_id', 'provider', 'item_id', unique=True),)
 
 
 class UserBookOrbitLink(Base):

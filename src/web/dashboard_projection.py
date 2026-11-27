@@ -681,6 +681,8 @@ def _build_dashboard_mappings(
     ctc_aligned_book_ids = web.database_service.get_ctc_aligned_book_ids()
     readalong_alignment_book_ids = web.database_service.get_readalong_alignment_book_ids()
     readalong_ready_book_ids = web.database_service.get_readalong_ready_book_ids()
+    companions = web.database_service.get_active_companion_audio(web.get_current_user_id())
+    companions = companions if isinstance(companions, dict) else {}
     sync_markers = web.database_service.get_sync_markers()
     mappings = []
     total_duration = 0
@@ -701,6 +703,18 @@ def _build_dashboard_mappings(
             goodreads_by_book=goodreads_by_book,
         )
         mapping["ctc_aligned"] = book.abs_id in ctc_aligned_book_ids
+        links = companions.get(book.abs_id, {})
+        mapping['linked_audio_providers'] = links
+        for provider, item_id in links.items():
+            if provider == 'ABS':
+                base = _public_link_base('ABS_WEB_URL', web.manager.abs_client.base_url)
+                mapping['abs_url'] = f'{base}/item/{item_id}' if base else None
+            elif provider == 'BookOrbit':
+                base = _public_link_base('BOOKORBIT_WEB_URL', web.os.environ.get('BOOKORBIT_SERVER') or '')
+                mapping['bookorbit_audio_url'] = f'{base}/book/{item_id}' if base else None
+            elif provider == 'BookLore':
+                base = _public_link_base('BOOKLORE_WEB_URL', web.manager.booklore_client.base_url)
+                mapping['grimmory_audio_url'] = f'{base}/book/{item_id}?tab=view' if base else None
         mapping["readalong_generated"] = book.abs_id in readalong_ready_book_ids
         mapping["readalong_ready"] = mapping["readalong_generated"] or web._has_linked_readalong(book)
         mapping["last_sync_leader"], mapping["last_sync_leader_at"] = sync_markers.get(book.abs_id, (None, 0))

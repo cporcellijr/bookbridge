@@ -1,6 +1,7 @@
 """C09 helpers extracted from web_server with no behavior change."""
 
 from importlib import import_module
+from src.web.audio_link_jobs import dispatch_audio_links
 
 _WEB_MODULE = None
 
@@ -19,6 +20,7 @@ def sync_daemon():
         web.schedule.every(int(web.SYNC_PERIOD_MINS)).minutes.do(web.manager.run_sync_for_all_users)
         web.schedule.every(int(web.SYNC_PERIOD_MINS)).minutes.do(web._mirror_kosync_logins_from_grimmory)
         web.schedule.every(1).minutes.do(web.manager.check_pending_jobs)
+        web.schedule.every(30).seconds.do(dispatch_audio_links, web)
         web.schedule.every(1).minutes.do(web._suggestions_auto_scan_tick)
         web.schedule.every(1).minutes.do(web.manager.flush_reading_sessions_for_all_users)
         web.schedule.every(int(web.SYNC_PERIOD_MINS)).minutes.do(web._reconcile_aligned_shelf)
