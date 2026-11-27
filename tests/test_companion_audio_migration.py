@@ -36,7 +36,7 @@ def test_upgrade_preserves_existing_branch_data(tmp_path, previous):
                     (document_hash, user_id, device_id, progress, percentage)
                     VALUES ('0123456789abcdef0123456789abcdef', 1, 'reader-device', '/body/p[1].0', 0.5)"""))
 
-        command.upgrade(cfg, 'head')
+        command.upgrade(cfg, MERGE)
 
         assert {'user_companion_audio', 'kosync_device_reports'} <= set(sa.inspect(engine).get_table_names())
         with engine.connect() as conn:
