@@ -83,7 +83,7 @@ class FableClient:
         try:
             resp = requests.post(f"{url}?key={_FIREBASE_API_KEY}", timeout=self.timeout, **kwargs)
         except requests.RequestException as exc:
-            logger.warning("Fable sign-in request failed: %s", type(exc).__name__)
+            logger.warning("Fable sign-in request failed: %s", type(exc).__name__, exc_info=True)
             return None
         try:
             data = resp.json()
@@ -154,7 +154,7 @@ class FableClient:
                     headers={"Authorization": f"JWT {token}", "Accept": "application/json"},
                 )
             except requests.RequestException as exc:
-                logger.warning("Fable request failed: %s", type(exc).__name__)
+                logger.warning("Fable request failed: %s", type(exc).__name__, exc_info=True)
                 return None
             if resp.status_code == 401 and attempt == 0:
                 # The ID token was revoked early (e.g. a password change): renew it once.
